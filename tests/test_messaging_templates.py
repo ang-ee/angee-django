@@ -885,7 +885,8 @@ def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
     """The loader restores a stated ``created_at`` through the owner's write, past the closed ``update()``."""
 
     del db
-    row = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One", "2020-01-02 03:04:05")
+    row = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One",
+           "2020-01-02 03:04:05")
     assert _load(row, headers=[*_LAYOUT_HEADERS, "created_at"]).created == 1
     with system_context(reason="tests.messaging_templates.read"):
         loaded = MessageTemplate.objects.get(key="base")

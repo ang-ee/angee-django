@@ -188,5 +188,7 @@ who may not create or write the override a `PERMISSION_DENIED` GraphQL error; an
 unreadable or missing row, a row that is not a shipped default (`not_a_baseline`)
 and an override of none (`no_baseline`) come back in band as `ok: false`.
 
-`message_template_preview(template, brand_kit)` returns a row's preview to a
-caller who may preview it, in the named kit or the default one.
+`message_template_preview(template, brand_kit)` returns a row's preview, in the
+named kit or the default one, to a caller who may preview it. It refuses as the
+verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
+reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.

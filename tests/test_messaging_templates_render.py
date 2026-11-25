@@ -1141,8 +1141,12 @@ def test_preview_is_an_administrators_read(plain: Any, kit: Any) -> None:
     assert preview["rendered"]["plain_text"] == "Hi Ana, from Acme.\n" and preview["warnings"] == []
     themed = result_data(execute_schema(schema, _PREVIEW, {**variables, "kit": public_id_of(other)}, user=admin))
     assert themed["message_template_preview"]["rendered"]["plain_text"] == "Hi Ana, from Other.\n"
-    for refused in (member, AnonymousUser()):
-        assert execute_schema(schema, _PREVIEW, variables, user=refused).errors
+    refusals = {}
+    for name, refused in (("member", member), ("anonymous", AnonymousUser())):
+        (error,) = execute_schema(schema, _PREVIEW, variables, user=refused).errors
+        refusals[name] = (error.extensions["code"], error.message)
+    assert refusals["member"][0] == "PERMISSION_DENIED"
+    assert refusals["anonymous"] == ("PERMISSION_DENIED", "Authentication required.")
     broken = _mail("{% if %}", key="tests.broken")
     result = result_data(execute_schema(schema, _PREVIEW, {"id": public_id_of(broken), "kit": None}, user=admin))
     assert result["message_template_preview"]["rendered"] is None

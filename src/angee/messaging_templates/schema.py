@@ -13,7 +13,9 @@ with the codes ``not_a_baseline`` and ``no_baseline``). A row's
 ``is_effective``, ``is_overridden`` and ``has_updated_default`` are read from its
 siblings and filter through the model's ``hasura_filter_expressions``.
 ``message_template_preview`` renders a row with its sample for a caller who may
-preview it (``MessageTemplate.preview``), in the kit it names or the default one.
+preview it (``MessageTemplate.preview``), in the kit it names or the default one;
+it refuses as the verbs do: a signed-out caller gets the session's GraphQL error,
+and a reader who may not preview the row a ``PERMISSION_DENIED`` GraphQL error.
 """
 
 from __future__ import annotations
@@ -139,7 +141,7 @@ class MessageTemplatePreviewQuery:
     ) -> TemplatePreview:
         """Render the row with its sample in the named kit, or the default one, and say what it warns about."""
 
-        row = authorized_permission_target(info, MessageTemplate, template, "preview")
+        row = authorized_permission_target(info, MessageTemplate, template, "read")
         kit = None if brand_kit is None else require_instance_for_id(
             BrandKit, brand_kit, queryset=BrandKit.objects.with_actor(session_user(info)),
         )

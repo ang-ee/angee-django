@@ -748,12 +748,14 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def preview(self, *, kit: Any | None = None) -> TemplatePreview:
         """Render this row with its ``sample`` and say what a sender should know about it.
 
-        A template renders whole, a layout around its handler's fixed body,
-        subject and preheader, and a block or part alone, its sample as its
-        arguments. ``rendered`` is ``None`` when the walk or the render raised, and
-        the one warning is then ``render_error``.
+        Requires ``preview`` on the row before anything else (named system work
+        always may); ``PermissionDenied`` otherwise. A template renders whole, a
+        layout around its handler's fixed body, subject and preheader, and a block
+        or part alone, its sample as its arguments. ``rendered`` is ``None`` when
+        the walk or the render raised, and the one warning is then ``render_error``.
         """
 
+        self.require_access("preview")
         try:
             walk = type(self).template_walker().walk(self)
             rendered = render_message(walk, self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
