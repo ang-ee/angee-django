@@ -105,7 +105,9 @@ For a host theme that accepts the shared palette customisation
 root and answers the theme's options with the default kit's ten colours over the
 build's options for that theme, else over the theme's defaults: the build's
 font, radius, density, elevation and logo treatment stay (`brandKitOptions` in
-`web/src/appearance.ts`). It sends no read for a fixed theme or no theme, and
+`web/src/appearance.ts`). It sends no read for a fixed theme or no theme, which is
+what `createApp` asks about for a theme whose options decline the host appearance
+source (Fyltr and Ledger), and
 answers nothing with no default kit, after a failed read, for a kit the theme's
 parser refuses, or for build options of another version or that the parser
 refuses. The theme derives every token from those inputs, dark
@@ -114,7 +116,9 @@ default, so a kit equal to the theme's defaults changes nothing. A kit's contras
 warnings are about mail; the app shows none. The kit's name, logos and fonts do
 not reach the app.
 
-An administrator's save refetches the read, so their own app re-themes at once.
+Mail takes the default kit whatever theme the app wears; the app takes it only on a
+theme that accepts the host appearance source. An administrator's save refetches the
+read, so their own app on such a theme re-themes at once.
 The kit has no live root, so a changed kit reaches another open session on its
 next load, which first repaints from the device's boot cache.
 
