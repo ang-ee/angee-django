@@ -54,7 +54,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
-| Message template CPU-time bounds, skipped otherwise since they depend on the machine and its load: run whenever `src/angee/messaging_templates/` changes and at integration, serially, and report the times with the load | `ANGEE_TIMED_TESTS=1 env -u DATABASE_URL uv run --locked python -m pytest -q -s -n 0 tests/test_messaging_templates_render.py` |
+| Message template CPU-time bounds, skipped otherwise since they depend on the machine and its load: run whenever `src/angee/messaging_templates/` changes and at integration, serially, and report the times with the load | `ANGEE_TIMED_TESTS=1 env -u DATABASE_URL uv run --locked python -m pytest -q -s -n 0 tests/test_messaging_templates_render.py tests/test_messaging_templates_console.py` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |

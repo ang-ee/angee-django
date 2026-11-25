@@ -119,11 +119,12 @@ live in code docstrings.
     `keep_message_template_override` mutations. The resource's insert takes
     `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
     decides `create` before any work, refuses a shipped default's identity
-    (`shipped_default`), and seeds the row with what that language reads for the
-    key today, or with the kind's `defaults` when nothing resolves the key. Each
-    row projects `permissions` (`delete`, `preview`, `write`),
+    (`shipped_default`) and an existing one, and seeds the row from its key's
+    content: what that language reads for the key today, else the key's row in
+    another language; only a key with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
     `carries_message_fields` and, to a reader who may preview it, `backlinks`:
-    the rows naming its kind and key, read once per listed kind. The mutations
+    the rows naming its kind and key, a read for one record's page. The mutations
     refuse as the framework's actions do: a signed-out caller gets the session's
     GraphQL error, a caller who may not create or write the override a
     `PERMISSION_DENIED` GraphQL error, and a row that is not a shipped default

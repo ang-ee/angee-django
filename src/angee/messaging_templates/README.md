@@ -236,22 +236,28 @@ every row. Nobody but a resource load writes a baseline
 
 The `message_templates` resource lists, reads, inserts, edits and deletes rows.
 Its insert takes `kind`, `key`, `language` and `name`, and
-`MessageTemplate.objects.create_own` does the rest: it decides `create` on the
-candidate row before anything is cleaned, read or written, refuses an identity a
-shipped default holds in that language (`shipped_default`: override it instead),
-and seeds the row with what a recipient in that language reads for the key
-today, so a new row changes nobody's mail. Only a key nothing resolves starts
-from its kind's starting row (`MessageTemplateKindHandler.defaults`; a template
-starts in the `base` layout, with an empty preheader its preview warns about).
+`MessageTemplate.objects.create_own` does the rest. It decides `create` on the
+candidate row before it cleans, reads or writes anything; with an
+`idempotency_key`, the provenance claim reads and records first, in the same
+transaction, which a refusal rolls back, and the refusal is the same. It then
+refuses, before it seeds or walks anything, an identity a shipped default holds
+in that language (`shipped_default`: override it instead) and one the deployment
+already has. The row is seeded from its key's content: what a recipient in that
+language reads for the key today, else the key's row in another language
+(English first, then by code). Only a key with no row at all starts from its
+kind's starting row (`MessageTemplateKindHandler.defaults`; a template starts in
+the `base` layout, with an empty preheader its preview warns about), so a new row
+puts no starter text live on a key that already has content.
 
 Each row reports `permissions` (of `delete`, `preview` and `write`, those its
 reader holds), `carries_message_fields` (whether its kind fills the subject,
 preheader and layout) and `backlinks`: the rows, in any language, naming its
 kind and key (a template its layout, any row a block or part it includes), or
-null for a reader who may not preview it. A list reads them once per kind it
-lists, for the listed rows its reader may preview, through the reader's own
-scope, and checks each naming row once; a member's list reads and checks nothing
-for them.
+null for a reader who may not preview it. `backlinks` is a read for one record's
+page, not for a list: a read costs a fixed number of statements, one read per
+kind for the rows its reader may preview through the reader's own scope, but it
+checks every row holding a listed block's or part's name, each once, on every
+read. A member's read reads and checks nothing for it.
 
 `override_message_template` and `keep_message_template_override` take a row's id
 and return an `ActionResult` naming the override. They refuse as the framework's
