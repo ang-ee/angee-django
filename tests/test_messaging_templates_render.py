@@ -507,7 +507,8 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
         pytest.param('<td nowrap title="{{ a }}">x</td>', False, id="s1-admitted-bare-attribute"),
         pytest.param("<title>{% include 'parts/p' only %}</title>", True, id="title-element-include"),
         pytest.param("<title>{% for a in b %}{{ a }}{% endfor %}</title>", True, id="title-element-for"),
-        pytest.param("<title>{{ subject }}{% if a %} {{ a }}{% endif %}</title>", False, id="admitted-title-element"),
+        pytest.param("<title>{{ subject }}{# a note #} {{ a }}</title>", False, id="admitted-title-element"),
+        pytest.param("<title>{% if v %}</title>{% endif %}<p>{{ w }}</p>", True, id="title-if"),
         pytest.param("<{{ tag }}>x</{{ tag }}>", True, id="span-starts-a-tag"),
         pytest.param("<a{{ tag }}>x</a>", True, id="span-in-a-tag-name"),
         pytest.param('<p {{ name }}="x">x</p>', True, id="span-in-an-attribute-name"),
@@ -611,7 +612,7 @@ SPELLING_ADMITTED: list[tuple[str, bool]] = [
     ("<p>AT&T, Q&A, R&D &amp; 5 &lt; 6</p>", False),
     ("<p>AT&T", False),
     ('<p title="a &amp; &lt;b&gt; &quot;c&quot;">x</p>', False),
-    ("<title>{{ subject }}{% if a %} {{ a }}{% endif %}</title><style>.a{color:{{ brand.dark.text }}}</style>", False),
+    ("<title>{{ subject }} {{ a }}</title><style>.a{color:{{ brand.dark.text }}}</style>", False),
     ("<!doctype html><html><head><title>{{ subject }}</title></head><body>{{ x }}</body></html>", True),
     ("<!DOCTYPE html><p>x</p>", True),
 ]
@@ -753,6 +754,16 @@ def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
              "</o:OfficeDocumentSettings></xml><![endif]-->"
     assert check_html(office, expression, document=True) == []
     assert check_html(office.replace("xml>", "xmp>"), expression, document=True) != []
+
+
+def test_a_title_holds_outputs_and_comments_only() -> None:
+    """An if in a title let a value's truthiness leave out </title>, so the rest of the mail, the layout's footer and
+    its stop link among it, became window-title text: refused; outputs and notes stay."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    assert check_html("<title>{% if v %}</title>{% endif %}<p>{{ w }}</p>", expression) == [
+        "{% if %} in a <title> element"]
+    assert check_html("<title>{{ subject }}{# a note #} {{ name|upper }}</title>", expression) == []
 
 
 def test_a_self_closing_style_is_refused_by_rule_4(plain: Any) -> None:

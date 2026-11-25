@@ -328,11 +328,13 @@ class _HtmlChecker(HTMLParser):
             if name in LINK_ATTRIBUTES:
                 self.check_link(tag, name, value, ids)
             elif name == "style":
-                self.check_spans(f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True)
+                self.check_spans(
+                    f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True, comments=True,
+                )
             else:
                 self.check_spans(
                     f"the {name} attribute of <{tag}>", ids, None if name in OUTPUT_ATTRIBUTES else frozenset(),
-                    conditions=True,
+                    conditions=True, comments=True,
                 )
         return None
 
@@ -383,12 +385,14 @@ class _HtmlChecker(HTMLParser):
 
     def check_spans(
         self, where: str, ids: list[int], outputs: frozenset[tuple[str, ...]] | None, *, conditions: bool,
+        comments: bool,
     ) -> None:
-        """Refuse a span ``where`` does not admit: outputs in ``outputs`` (``None``: any), conditions, comments."""
+        """Refuse a span ``where`` does not admit: outputs in ``outputs`` (``None``: any); ``if`` tags unless
+        ``conditions``; ``{# #}`` comments unless ``comments``."""
 
         for index in ids:
             token = self.spans[index]
-            if token.token_type == TokenType.COMMENT and conditions:
+            if token.token_type == TokenType.COMMENT and comments:
                 continue
             if token.token_type == TokenType.BLOCK:
                 command = (token.contents.split() or [""])[0]
@@ -418,9 +422,12 @@ class _HtmlChecker(HTMLParser):
                 f"{self.text[at:at + 20]!r}" + (f" in <{self.cdata_elem}>" if self.cdata_elem else ""),
             )
         if self.cdata_elem == "style":
-            self.check_spans("a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False)
+            self.check_spans(
+                "a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False, comments=False,
+            )
         elif self.cdata_elem == "title":
-            self.check_spans("a <title> element", self.span_ids(data), None, conditions=True)
+            # No if: a branch could leave out </title> and hold the rest of the mail in the title.
+            self.check_spans("a <title> element", self.span_ids(data), None, conditions=False, comments=True)
 
     def handle_entityref(self, name: str) -> None:
         self.character_reference(1 + len(name))
