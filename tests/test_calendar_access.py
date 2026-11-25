@@ -220,29 +220,49 @@ def test_free_busy_viewers_learn_only_that_busy_time_changed(world: SimpleNamesp
 
 
 _INSERT_OVERRIDE = """
-mutation ($calendar: ID!, $series: ID!, $original: DateTime!, $start: DateTime!, $end: DateTime!) {
+mutation ($calendar: ID!, $series: ID!, $original: DateTime!, $start: DateTime!, $end: DateTime!, $key: String) {
   insert_calendar_events_one(object: {
     calendar: $calendar, series: $series, original_start: $original, title: "Moved", start: $start, end: $end
-  }) { id visibility transparency }
+  }, idempotency_key: $key) { id visibility transparency }
 }
 """
 
 
-def test_an_override_inserted_without_visibility_or_transparency_takes_its_masters(world: SimpleNamespace) -> None:
-    w = world
+def _weekly_override(w: SimpleNamespace) -> tuple[CalendarEvent, dict[str, Any]]:
+    """A private, free weekly master, and the variables moving its second occurrence without either value."""
+
     with system_context(reason="tests.calendar.access.setup"):
         master = CalendarEvent.objects.create(
             calendar=w.calendar, title="Weekly", recurrence="FREQ=WEEKLY", visibility=EventVisibility.PRIVATE,
             transparency=EventTransparency.FREE, start=_utc(20, 9), end=_utc(20, 10),
         )
-    variables = {
+    return master, {
         "calendar": w.calendar.sqid, "series": master.sqid, "original": _utc(27, 9).isoformat(),
         "start": _utc(27, 10).isoformat(), "end": _utc(27, 11).isoformat(),
     }
 
+
+def test_an_override_inserted_without_visibility_or_transparency_takes_its_masters(world: SimpleNamespace) -> None:
+    w = world
+    _master, variables = _weekly_override(w)
+
     inserted = result_data(execute_schema(_console(), _INSERT_OVERRIDE, variables, user=w.holder))
     assert inserted["insert_calendar_events_one"]["visibility"] == "PRIVATE"
     assert inserted["insert_calendar_events_one"]["transparency"] == "FREE"
+
+
+def test_a_keyed_override_retry_replays_though_its_masters_defaults_were_filled_in(world: SimpleNamespace) -> None:
+    """A key holds the request as sent: the defaults the backend fills from the master do not make its retry differ."""
+
+    w = world
+    master, variables = _weekly_override(w)
+    variables["key"] = "moved-occurrence"
+
+    first = result_data(execute_schema(_console(), _INSERT_OVERRIDE, variables, user=w.holder))
+
+    assert result_data(execute_schema(_console(), _INSERT_OVERRIDE, variables, user=w.holder)) == first
+    with system_context(reason="tests.calendar.access.count"):
+        assert CalendarEvent._base_manager.filter(series=master).count() == 1
 
 
 _INSERT = """

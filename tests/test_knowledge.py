@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from asgiref.sync import async_to_sync
@@ -21,7 +22,9 @@ from rebac import (
 )
 
 from angee.base.models.locks import StaleRevisionError
+from angee.base.permissions import require_save_allowed
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.knowledge import models as knowledge_models
 from angee.knowledge import schema as knowledge_schema
 from angee.knowledge.models import (
     SectionNotFoundError,
@@ -525,3 +528,51 @@ def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision
         )
         assert saved.revision == stored.revision + 1
         assert (saved.title, saved.body) == ("Accepted title", "Accepted body")
+
+
+def test_write_body_refuses_a_reader_before_the_title_is_validated(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller who may not write the page gets the save's own refusal, and the title's validators never run."""
+
+    alice = create_user("alice")
+    bob = create_user("bob")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Draft")
+        MarkdownPage.objects.write_body(page, "Original")
+    _grant(vault, "viewer", bob)
+    spy = Mock(side_effect=ValidationError("Not a title.", code="invalid"))
+    monkeypatch.setattr(MarkdownPage._meta.get_field("title"), "validators", [spy])
+
+    with actor_context(bob):
+        with pytest.raises(PermissionDenied) as refused:
+            MarkdownPage.objects.write_body(page, "Vandalised", title="Renamed")
+        row = MarkdownPage.objects.get(pk=page.pk)
+        row.body, row.title = "Vandalised", "Renamed"
+        with pytest.raises(PermissionDenied) as saved:
+            row.save(update_fields={"body", "title"})
+
+    assert str(refused.value) == str(saved.value)
+    spy.assert_not_called()
+    stored = MarkdownPage._base_manager.get(pk=page.pk)
+    assert (stored.title, stored.body) == ("Draft", "Original")
+
+
+def test_write_body_decides_the_title_save_on_the_fields_it_writes(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The decision is asked for the partial save ``write_body`` makes, the body and the title, not a full one."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Draft")
+    decided: list[Any] = []
+
+    def recording(instance: Any, *, update_fields: Any = None) -> None:
+        decided.append(update_fields)
+        require_save_allowed(instance, update_fields=update_fields)
+
+    monkeypatch.setattr(knowledge_models, "require_save_allowed", recording)
+
+    with actor_context(alice):
+        MarkdownPage.objects.write_body(page, "Body", title="Titled")
+
+    assert decided == [{"body", "title"}]

@@ -181,6 +181,25 @@ def _history_documents(installed: tuple[type[models.Model], ...]) -> Mapping[str
 _ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)
 
 
+def _same_content[ChangesetT: models.Model](claimed: ChangesetT, fingerprint: str) -> ChangesetT:
+    """Return a completed claim of the same content; a key already used for other content is a conflict."""
+
+    if cast(Any, claimed).fingerprint != fingerprint:
+        raise CreationKeyConflict("This idempotency key was already used for different content.")
+    return claimed
+
+
+def _created_row[CreatedT: models.Model](
+    claimed: models.Model, model: type[CreatedT], unavailable: Exception,
+) -> CreatedT:
+    """Return the row a completed claim created, refusing one of another model."""
+
+    created = cast(Any, claimed).created_row
+    if not isinstance(created, model):
+        raise unavailable
+    return created
+
+
 class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT]):
     """Atomic idempotency claims on logical write boundaries."""
 
@@ -215,9 +234,7 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
             existing = self.model._base_manager.filter(scope=scope, key=key).first()
             if existing is None:
                 raise
-            if existing.fingerprint != fingerprint:
-                raise CreationKeyConflict("This idempotency key was already used for different content.")
-            return existing
+            return _same_content(existing, fingerprint)
         return None
 
     def claim_created[CreatedT: models.Model](
@@ -236,9 +253,26 @@ class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT])
         creation values and validates the receipt's result identity.
         """
         replay = self.claim(scope, key, fingerprint=creation_fingerprint(values))
-        if replay is None:
+        return None if replay is None else _created_row(replay, model, unavailable)
+
+    def replay_created[CreatedT: models.Model](
+        self,
+        scope: str,
+        key: str,
+        *,
+        values: Any,
+        model: type[CreatedT],
+        unavailable: Exception,
+    ) -> CreatedT | None:
+        """Return the row an earlier claim of ``(scope, key)`` created, reading without claiming.
+
+        ``None`` when the key is unclaimed, including a key no claim could hold.
+        ``values`` is fingerprinted only when a claim exists; content other
+        than the claim's is a conflict. The caller owns every refusal specific
+        to the returned row.
+        """
+
+        existing = self.model._base_manager.filter(scope=scope, key=key).first()
+        if existing is None:
             return None
-        created = replay.created_row
-        if not isinstance(created, model):
-            raise unavailable
-        return created
+        return _created_row(_same_content(existing, creation_fingerprint(values)), model, unavailable)

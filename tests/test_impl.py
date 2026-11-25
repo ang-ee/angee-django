@@ -8,11 +8,14 @@ from enum import Enum
 from typing import Annotated, Literal
 
 import pytest
+from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
+from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.hooks import resolve_hook, resolve_hooks
@@ -29,7 +32,7 @@ from angee.base.schemas.forms import config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import OAuthClient, VcsBridge
+from tests.conftest import OAuthClient, VcsBridge, Vendor
 from tests.tables import model_tables
 
 
@@ -1323,3 +1326,43 @@ def test_optional_cross_addon_hooks_are_inactive_when_unset(settings, name):
         assert _verifier() is None
     elif name == "ANGEE_PROFILING_PERMISSION":
         assert not profiling_permitted(object())
+
+
+def _registry_without(field: ImplClassField, key: str) -> dict[str, dict[str, str]]:
+    """The field's registry setting with ``key`` taken out, as when its providing addon leaves."""
+
+    registry = getattr(settings, field.registry_setting)
+    return {field.registry_setting: {name: path for name, path in registry.items() if name != key}}
+
+
+@pytest.mark.django_db
+def test_a_stored_row_saves_its_key_after_the_registry_drops_it() -> None:
+    """Only a new row's key is refused: a stored row saves, fully or in part, as it always did."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.stale.create"):
+        row = backend_model.objects.create(slug="stale", label="Stale", backend_class="local")
+    with override_settings(**_registry_without(backend_model._meta.get_field("backend_class"), "local")):
+        with system_context(reason="test.impl.stale.save"):
+            row.label = "Renamed"
+            row.save()
+            row.save(update_fields=["label"])
+    assert backend_model._base_manager.get(pk=row.pk).label == "Renamed"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("registered", (True, False), ids=("registered", "dropped"))
+def test_a_config_only_save_is_validated_against_the_rows_implementation(registered: bool) -> None:
+    """Writing only ``config`` still validates it, whether or not the key's implementation is still registered."""
+
+    with system_context(reason="test.impl.config.create"):
+        Vendor.objects.get_or_create(slug="github", defaults={"display_name": "GitHub"})
+        row = VcsBridge.objects.create_capability(display_name="Config bridge", backend_class="github")
+    stored = VcsBridge._base_manager.get(pk=row.pk).config
+    dropped = {} if registered else _registry_without(VcsBridge._meta.get_field("backend_class"), "github")
+    with override_settings(**dropped), system_context(reason="test.impl.config.save"):
+        loaded = VcsBridge._base_manager.get(pk=row.pk)
+        loaded.config = {"not_a_github_option": 1}
+        with pytest.raises((ValidationError, ImproperlyConfigured)):
+            loaded.save(update_fields=["config"])
+    assert VcsBridge._base_manager.get(pk=row.pk).config == stored

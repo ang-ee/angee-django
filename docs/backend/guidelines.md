@@ -973,7 +973,17 @@ data through REBAC, never a queryset bypass.
   [`AgentSessionManager.start`](../../src/angee/agents/models.py) does.
   Manual factories needing an explicit relationship preflight call native
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
-  retain the verified actor on the instance.
+  retain the verified actor on the instance. A factory or verb that validates
+  a row before saving it decides that save first, so a caller the save would
+  refuse runs none of its field validators, `clean()`, uniqueness or constraint
+  checks: `require_access("create")` or `rebac.check_new` when the create gate
+  reads only the candidate's own fields, and
+  [`require_save_allowed`](../../src/angee/base/permissions.py) (REBAC's
+  `check_save` rehearsal) when it reads what `save()` sets (an owner, a scope,
+  a user). The rule's limit: validation a model performs in its own `save()`,
+  before the save gate, runs before the decision; a model that needs the
+  guarantee moves that validation to `clean()`. REBAC deciding a save before
+  validating and writing it will close the limit.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
@@ -1772,9 +1782,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `expected_revision: Int`; a stale value fails with `STALE_REVISION`.
   With the [provenance write adapter](../../src/angee/provenance/graphql.py) installed,
   `insert_<resource>_one` also accepts `idempotency_key: String`; replaying the same
-  actor/resource-scoped key and content returns the readable original, and
-  changed content fails with
-  `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
+  actor/resource-scoped key and content returns the readable original, looked up
+  before the create is decided again, and changed content fails with
+  `CREATION_KEY_CONFLICT`. Content is the request's input as sent, whatever the
+  backend fills in before inserting; an anonymous caller's key is refused, since
+  anonymous callers share one actor. A first attempt is decided before its key is claimed;
+  a backend that decides inside its own factory claims before that factory runs. Neither token belongs in `_set` or `object`.
   The [Hasura adapter](../../src/angee/graphql/data/hasura.py) composes native
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
@@ -1846,15 +1859,30 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `extensions.validationErrors` (keys follow the schema naming, snake_case on Hasura resources), but GraphQL input-coercion errors
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
-- **Create writes validate the final input contract.** `hasura_model_resource`
-  creation prepares one instance and `full_clean`s it before persistence; the
-  locked Strawberry version then persists through `manager.create(**kwargs)`, so
-  the prepared instance is not the saved instance. Model and input defaults must
-  agree: required fields and defaults come from the final input contract, never
-  a second list in a consumer form; model-owned defaults belong in `clean()` and
-  `save()` ([`Cadence`](../../src/angee/nexus/models.py)); a required field
-  that `clean()` defaults declares `blank=True` so field validation defers to
-  that owner while the column stays non-null; and an optional create-input field
+- **Create writes are decided, then validate the final input contract.**
+  `hasura_model_resource` creation decodes the input's public ids once, prepares
+  the row's values with strawberry-django's own preparation, and decides the
+  row its manager would build by rehearsing that row's `save()` through REBAC's
+  gates (`require_save_allowed`, over `check_save`). Only then does the resolver
+  prepare its instance again and `full_clean` it before persistence. A caller
+  who may not create the row gets the save's refusal, and none of the row's
+  field validators, `clean()`, uniqueness or constraint checks runs for them.
+  The rule's limit: validation a model performs in its own `save()`, before
+  the save gate, runs before the decision and answers that caller; a model that
+  needs the guarantee moves that validation to `clean()`. REBAC deciding a save
+  before validating and writing it will close the limit and retire the
+  rehearsal. For a caller who may create, a `ValidationError` a
+  model's `save()` raises comes before the field errors `full_clean` reports,
+  and an admitted insert rehearses its save once more. A default the create
+  permission reads is set by `save()`, which the decision sees, not only by
+  `clean()`, which it does not. The locked Strawberry version then persists
+  through `manager.create(**kwargs)`, so the instance it validated is not the
+  saved instance. Model and input defaults must agree: required fields and defaults
+  come from the final input contract, never a second list in a consumer form;
+  model-owned defaults belong in `clean()` and `save()`
+  ([`Cadence`](../../src/angee/nexus/models.py)); a required field that
+  `clean()` defaults declares `blank=True` so field validation defers to that
+  owner while the column stays non-null; and an optional create-input field
   over a non-null column defaults to `strawberry.UNSET`, never `None`. Factory
   invariants shared by ORM and GraphQL creation belong on the queryset's
   cooperative `insert()`, which ordinary `create()` composes; creation that needs

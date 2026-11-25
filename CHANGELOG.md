@@ -10,6 +10,42 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
+  `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
+  `angee.calendar`: **Changed behaviour.**
+  A generic GraphQL insert, and the verbs that validate a row before saving it (an
+  integration's creation, a scheduled record task, a page title saved with its body,
+  a product promoted from a project, a project or initiative report, a captured need),
+  now ask REBAC whether the caller may make that save before validating the row
+  (`angee.base.permissions.require_save_allowed`, over REBAC's `check_save`); a caller
+  it refuses gets the save's `PermissionDenied` text, and no field validator, `clean()`,
+  uniqueness check or constraint check runs for them. A dashboard snapshot validates its
+  widget queries only once its write is decided.
+  - The rule's limit: validation a model performs in its own `save()`, before the save
+    gate, runs before the decision and still answers a refused caller. A model that
+    needs the guarantee moves that validation to `clean()`. REBAC deciding a save before
+    validating and writing it will close the limit and retire the rehearsal.
+  - For a caller who may save, a `ValidationError` a model's `save()` raises now comes
+    before the field errors `full_clean` reports, and an admitted insert rehearses its
+    save once more.
+  - An implementation key outside its field's choices is refused when a new row is
+    validated or inserted, as a field error naming the key; a stored row saves its key
+    as before. An integration's creation decides its caller before it reports a seeded
+    default whose catalogue row is missing.
+  - An idempotency key's earlier creation is still replayed while the caller can read
+    it, looked up before the create is decided again; a first attempt is decided before
+    its key is claimed. The key's content is the request's input as sent, which the
+    provenance adapter no longer decodes, so a backend that fills values before it
+    inserts still replays its retry. `AngeeHasuraWriteBackend.creation_values` is
+    removed, and a key an Angee backend claimed before the upgrade answers its retry
+    with `CREATION_KEY_CONFLICT`. An anonymous caller's key is refused as a field error
+    on `idempotency_key`: anonymous callers share one actor.
+  - **Upgrade:** a write backend that overrides `insert` or `_create_row` accepts
+    `*, claim=None` and, where it decides, asks `claim()` before it writes, returning
+    the row it returns as the earlier creation. Otherwise a keyed insert into it raises
+    `TypeError`, or `RuntimeError` when the override accepts `claim` but never asks it;
+    either way nothing is kept, and a keyless insert is served as before.
+
 - `@angee/ui`: A record form's create no longer displays a field its save
   cannot write that holds an empty object. What a record form displays reads
   its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a

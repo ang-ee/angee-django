@@ -29,6 +29,7 @@ from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
+    CreationClaim,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
     hasura_model_resource,
@@ -420,9 +421,11 @@ class RetrievalResultType:
 class VaultWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create a vault owned by the requesting user."""
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Create a vault owned by the requesting user, claimed before the factory decides."""
 
+        if claim is not None and (replay := claim()) is not None:
+            return replay
         user = get_current_user(info)
         fields = dict(data)
         # The factory stamps attribution; the shared backend already validated scope.
@@ -433,10 +436,12 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
 class PageWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create a page in a vault the requesting user can write."""
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Create a page in a vault the requesting user can write, claimed before the factory decides."""
 
         del info
+        if claim is not None and (replay := claim()) is not None:
+            return replay
         vault = require_instance_for_id(Vault, data["vault"])
         parent = None
         if data.get("parent") is not None:
