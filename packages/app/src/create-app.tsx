@@ -364,6 +364,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
   // (docs/frontend/appearance.md, "Host and user precedence").
   const hostTheme = appearance?.themeId ? themeDefinitions.get(appearance.themeId) ?? null : null;
   const sourceTheme = hostTheme?.options?.acceptsHostAppearanceSource === false ? null : hostTheme;
+  // Asked about no theme, the source gets no build options, and the session frame wears none of its answer.
+  const sourceBuild = sourceTheme ? appearance?.options : undefined;
   // Fixed per app, so the session frame calls the same hooks on every render.
   const useHostAppearance = composed.hostAppearance?.useOptions ?? useBuildAppearance;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
@@ -673,8 +675,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   /** The session frame: the only writer of the host appearance source's answer into the provider's host. */
   function HostAppearanceFrame({ children }: { children: ReactNode }): ReactNode {
-    // Asked about no theme, the source gets no build options either; the build's stand whole.
-    const read = useHostAppearance(sourceTheme, sourceTheme ? appearance?.options : undefined);
+    const answer = useHostAppearance(sourceTheme, sourceBuild);
+    // No theme asked about: the build's appearance stands whole and nothing is held, whatever the source answers.
+    const read = sourceTheme ? answer : BUILD_APPEARANCE;
     const host = useMemo(() => read.options || read.pending
       ? { ...appearance, ...(read.options ? { options: read.options } : {}), ...(read.pending ? { pending: true } : {}) }
       : appearance, [read.options, read.pending]);

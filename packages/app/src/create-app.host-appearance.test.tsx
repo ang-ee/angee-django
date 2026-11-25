@@ -40,6 +40,12 @@ const fixed = defineThemeContribution({ definition: defineTheme({
   contractVersion: 1, id: "notebook.fixed", labelKey: "fixed.label", descriptionKey: "fixed.description", revision: 1,
   tokens: { shared: {}, light: { "--brand": "#0a0a0a" }, dark: {} },
 }) });
+/** A theme whose options are its own, written without the shared factory: it says nothing, so it accepts. */
+const handwritten = defineThemeContribution({ definition: defineTheme({
+  contractVersion: 1, id: "notebook.handwritten", labelKey: "handwritten.label", descriptionKey: "handwritten.description", revision: 1,
+  tokens: { shared: {}, light: {}, dark: {} },
+  options: { version: 1, defaults: {}, parse: () => ({}), resolve: () => ({}) },
+}) });
 
 /** A theme's options with one colour changed: what a source answers, or what a build states. */
 function optionsOf(theme: typeof paper, patch: Record<string, string>): ThemeOptionsEnvelope {
@@ -122,7 +128,7 @@ function hostApp({ source, search = "", root = {}, shell, appearance, schemas = 
       {
         id: "identity",
         icons: { "notebook-mark": () => null },
-        themes: [paper, ink, fixed, letterhead],
+        themes: [paper, ink, fixed, letterhead, handwritten],
         menus: { identity: { label: "Identity", icon: "notebook-mark", route: "notes.home", ...root } },
       },
       ...(source ? [{ id: "brand", hostAppearance: source }] : []),
@@ -199,6 +205,8 @@ describe("the host appearance source", () => {
     { case: "the deployment's theme", shell: { theme: ink.definition.id },
       appearance: { themeId: paper.definition.id, options: BUILD }, asked: { theme: ink.definition.id, build: undefined } },
     { case: "a fixed theme", appearance: { themeId: fixed.definition.id }, asked: { theme: fixed.definition.id, build: undefined } },
+    { case: "a theme whose own options say nothing", appearance: { themeId: handwritten.definition.id },
+      asked: { theme: handwritten.definition.id, build: undefined } },
     { case: "no theme", appearance: { themeId: null }, asked: { theme: null, build: undefined } },
     { case: "no theme for the build's theme that declines it, and none of the build's options",
       appearance: { themeId: letterhead.definition.id, options: LETTERHEAD_BUILD }, asked: { theme: null, build: undefined } },
@@ -221,6 +229,10 @@ describe("the host appearance source", () => {
   test.each([
     { source: "that dresses every customisable theme", installed: dressing() },
     { source: "whose read never answers", installed: stalled },
+    // Sources that never look at the theme: the decline holds without their help.
+    { source: "that answers options whatever it is asked",
+      installed: { useOptions: () => ({ options: optionsOf(letterhead, { brand: SOURCE_BRAND }), pending: false }) } },
+    { source: "that is pending whatever it is asked", installed: { useOptions: () => ({ pending: true }) } },
   ])("a theme that declines the source wears the build's options whole and unheld, under a source $source", async ({ installed }) => {
     const appearance = { themeId: letterhead.definition.id, colorScheme: "light" as const, options: LETTERHEAD_BUILD };
     root().style.setProperty("--brand", "#010203");

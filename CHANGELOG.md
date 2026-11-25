@@ -26,9 +26,10 @@ live in code docstrings.
     `createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`,
     `@angee/ui`'s new optional `ThemeOptionsDefinition.acceptsHostAppearanceSource`
     (default true; `defineTheme` refuses a non-boolean). `createApp` then asks the source
-    about no theme and no build options, so the build's options for its own theme apply
-    whole. The flag is not in the options envelope: no options version changes. Fyltr and
-    Ledger decline; Default and Angee accept.
+    about no theme and no build options and wears none of its answer, so the build's
+    options for its own theme apply whole, unheld. The flag is not in the options
+    envelope: no options version changes. Fyltr and Ledger decline; Default and Angee
+    accept.
   - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
     colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
   - Everyone, signed in or not, reads the default kit's ten colours, and nothing else

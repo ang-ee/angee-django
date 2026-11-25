@@ -42,9 +42,9 @@ install-one `hostAppearance` manifest key
 it about the host theme: the selected app's, else the build's, locked or not. A
 theme whose options decline the source (`acceptsHostAppearanceSource: false`, as
 Fyltr and Ledger state) is not put to it: the source is asked about no theme and no
-build options, so it sends no read and never holds the first paint or the boot
-cache, and the theme wears the build's options when it is the build's own theme,
-else its own defaults. The
+build options, and `createApp` wears none of its answer, so the source never holds
+the first paint or the boot cache, and the theme wears the build's options when it
+is the build's own theme, else its own defaults. The
 options it answers replace the build's options for that theme; when it answers
 none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
 is that source. While the source's first read is on its way, the provider keeps
