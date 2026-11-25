@@ -1253,6 +1253,7 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.nexus",
         "angee.spaces",
         "angee.tags",
+        "angee.brandkit",
         "angee.checklists",
         "angee.agents",
         "angee.knowledge",

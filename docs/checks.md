@@ -175,12 +175,15 @@ table expression against the nesting limit, and django-zed-rebac's permission re
 `WITH RECURSIVE` of many id-set expressions, exceed it and report `VIEWs and/or subqueries
 nested too deep`. Python reports its library as
 `uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`. uv's managed
-CPython 3.14.9 bundles SQLite 3.53.1 and 3.14.10 bundles 3.54.1, so the
-[reusable checks](../.github/workflows/reusable-checks.yml) default to 3.14.9 until those
-reads fit the limit or a SQLite release lifts it. A distribution's system Python links the
-distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1); CI sets
-`UV_PYTHON_PREFERENCE: only-managed` for that reason. Locally, run the SQLite suite with
-`--managed-python --python 3.14.9`.
+CPython 3.14.9 bundles SQLite 3.53.1 and 3.14.10 bundles 3.54.1, so the repository's
+[`.python-version`](../.python-version) names 3.14.9 until those reads fit the limit or a
+SQLite release lifts it. uv reads it for every `uv run` and `uv sync` in the checkout,
+locally and in CI, and recreates a virtual environment built on another patch release; the
+[reusable checks](../.github/workflows/reusable-checks.yml) pass it to the composed-stack
+lane, which runs uv from the stack root above the checkout. A distribution's system Python
+links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1); CI sets
+`UV_PYTHON_PREFERENCE: only-managed` for that reason, and locally `--managed-python` does
+the same.
 
 ### Local PostgreSQL Prerequisites
 

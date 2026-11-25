@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     "angee.scheduling",
     "angee.sequence",
     "angee.tags",
+    "angee.brandkit",
     "angee.checklists",
     "angee.uom",
     "angee.messaging",
@@ -128,7 +129,7 @@ else:
             f"SQLite {sqlite3.sqlite_version} cannot run the SQLite suite, which needs SQLite 3.53: "
             "older releases reject an ORDER BY naming an outer query's column, and 3.54 refuses "
             "django-zed-rebac's permission reads (VIEWs and/or subqueries nested too deep). "
-            "Run it on uv's managed CPython 3.14.9: --managed-python --python 3.14.9."
+            "Run it on the uv-managed CPython that .python-version names: uv run --managed-python."
         )
     DATABASES = {
         "default": {
