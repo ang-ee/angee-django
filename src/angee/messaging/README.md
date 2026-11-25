@@ -67,18 +67,15 @@ starts opens a thread of its own; inbound mail joins it only through those
 threading headers, never by its subject, which groups inbound mail with inbound
 mail alone ([`ThreadManager.resolve`](managers.py)).
 
-The console composes through the `compose_message` mutation ([`schema.py`](schema.py)),
-a verb over `compose` rather than the messages resource's insert, which decides
-`create` on a message instead of `reply`, replays before it decides and
-fingerprints the request as sent. It answers `parent` or sends on `channel`, takes
-a required `idempotency_key` and `queued`, and returns an `ActionResult` whose
-`id` is the message, fresh or replayed. A refusal of its arguments or of the
-channel's present state binds under the argument it names; who may send is
-`PERMISSION_DENIED`. A sender reads back what delivery made of it on the
-message: `status`, `scheduled_at` and [`Message.delivery_attempts`](models.py)
-for every reader, and why it last failed, [`Message.delivery_error`](models.py),
-only with `send_held`, as `delivery_actions`. A channel's `permissions` answer
-`reply`.
+The console composes through the `compose_message` mutation, a verb over
+`compose` rather than a generic insert (its docstring in [`schema.py`](schema.py)
+says why). It answers `parent` or sends on `channel`, takes a required
+`idempotency_key` and `queued`, and returns an `ActionResult` whose `id` is the
+message, fresh or replayed. Readers of a message read back its `status`,
+`scheduled_at` and [`Message.delivery_attempts`](models.py); those who hold
+`send_held` also read why delivery last failed,
+[`Message.delivery_error`](models.py), as they read `delivery_actions`. A
+channel's `permissions` answer `reply`.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from

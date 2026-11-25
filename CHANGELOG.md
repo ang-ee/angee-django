@@ -12,22 +12,15 @@ live in code docstrings.
 
 - `angee.messaging`: **The console composes a message and reads back its
   delivery.**
-  - **New.** The console mutation `compose_message` writes one outgoing message
-    through `Message.objects.compose`: an answer to `parent`, or a new email on
-    `channel` to `to`, `cc` and `bcc`, with `subject`, `text`, `attachments`,
-    `queued` and `scheduled_at`. Its `idempotency_key` and `queued` are
-    required. It returns an `ActionResult` whose `id` is the message, and a
-    keyed replay returns the original whatever its delivery became. A refusal
-    of the arguments or of the channel's present state is in band under the
-    argument it names; a refusal of who may send is `PERMISSION_DENIED`, and an
-    answer to a message the caller cannot read is `not_found` in band.
-  - **New.** `MessageType.delivery_attempts` (`Message.delivery_attempts`) reads
-    the provider attempts delivery counted, for every reader of the message;
-    `MessageType.delivery_error` (`Message.delivery_error(permissions)`) reads
-    why delivery last failed, only for a viewer holding `send_held`, as
-    `delivery_actions` is, and is null for every other reader.
-  - **New.** `ChannelType.permissions` answers `reply`, the permission to answer
-    and send on the channel.
+  - **New.** The console mutation `compose_message`, a keyed verb over
+    `Message.objects.compose` that answers a message or sends a new email.
+  - **New.** `MessageType.delivery_attempts` (`Message.delivery_attempts`) and
+    `MessageType.delivery_error` (`Message.delivery_error(permissions)`, read
+    only with `send_held`): what delivery made of a message. `Message.local_fact`
+    and `Message.local_fact_annotation` read a local fact on a row and in SQL.
+  - **New.** `ChannelType.permissions`, answering `reply`.
+  - **Changed.** On SQLite, `delivery_actions` no longer reads a delivery conflict
+    whose stored provider id looks like JSON (`"0"`, `"null"`) as no conflict.
   - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
     `rebac sync`.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
