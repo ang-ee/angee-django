@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ADDON = ROOT / "src/angee/messaging_templates"
 MODULE = "tests/test_messaging_templates_render.py"
-PROPERTIES = "never_becomes_markup"
+PROPERTIES = "never_becomes"
 
 type Edit = tuple[str, str, str]
 
@@ -32,6 +32,14 @@ _SAFE_MARKS: list[Edit] = [
     ("engine.py", 'charged.__dict__["is_safe"] = writes_markup', "pass"),
 ]
 """The two rules that each keep a cut line break escaped: either alone still holds."""
+
+_START_TAGS: Edit = ("html_checks.py", "if tag not in MAIL_ELEMENTS and not office:", "if False:")
+_END_TAGS: Edit = (
+    "html_checks.py", "elif tag not in MAIL_ELEMENTS and not (self.office and tag in OFFICE_ELEMENTS)",
+    "elif False and not (self.office and tag in OFFICE_ELEMENTS)")
+_LINK_ELEMENT: Edit = ("html_checks.py", '    "img",\n})', '    "img", "link",\n})')
+_LINK_ON_ANY: Edit = ("html_checks.py", "if name in LINK_ATTRIBUTES and tag not in LINK_ATTRIBUTES[name]:", "if False:")
+"""Rules that each hold half of a list: an element off it needs its end tag, a link element its link attribute."""
 
 MUTATIONS: dict[str, tuple[bool, list[Edit]]] = {
     "M0 no mutation": (False, []),
@@ -53,8 +61,7 @@ MUTATIONS: dict[str, tuple[bool, list[Edit]]] = {
     ]),
     "M6 admit < in title and style": (True, [(
         "html_checks.py", '        if "<" in data:', '        if "<" in data and not self.cdata_elem:')]),
-    "M7 drop the element list": (True, [(
-        "html_checks.py", "if tag not in MAIL_ELEMENTS and not office:", "if False:")]),
+    "M7 drop the element list for start tags": (False, [_START_TAGS]),
     "M8 drop rule 8": (True, [
         ("html_checks.py", "    if checker.cdata_elem:\n", "    if False:\n"),
         ("html_checks.py", '    elif checker.rawdata and not checker.rawdata.startswith("&"):', "    elif False:"),
@@ -83,19 +90,20 @@ MUTATIONS: dict[str, tuple[bool, list[Edit]]] = {
     "M19 a link's host is its first character": (False, [(
         "engine.py", 'LINK_HOST.fullmatch(re.split(r"[/?#]", rest[2:], maxsplit=1)[0])',
         'rest[2:3] not in ("", "/", "?", "#")')]),
-    "M20 an end tag names any element": (False, [(
-        "html_checks.py", "elif tag not in MAIL_ELEMENTS and not (self.office and tag in OFFICE_ELEMENTS)",
-        "elif False and not (self.office and tag in OFFICE_ELEMENTS)")]),
+    "M20 an end tag names any element": (False, [_END_TAGS]),
     "M21 a value keeps bidirectional overrides": (False, [(
         "walker.py", 'return UNPRINTED.sub("", value)', 'return re.sub(f"[{CONTROL_CHARACTERS}]", "", value)')]),
-    "M22 a link attribute on any element": (False, [(
-        "html_checks.py", "if name in LINK_ATTRIBUTES and tag not in LINK_ATTRIBUTES[name]:", "if False:")]),
+    "M22 a link attribute on any element": (False, [_LINK_ON_ANY]),
     "M23 the walk gathers past the caps": (False, [(
         "walker.py", "if over := _over_caps(walk.root_name, piece, *total):", "if False:")]),
     "F2 the markup filter runs with autoescape off": (True, [(
         "engine.py", "        result = function(value, *args, **kwargs)",
         '        result = function(value, *args, **({**kwargs, "autoescape": False} if writes_markup else kwargs))')]),
-    "E link is a mail element": (True, [("html_checks.py", '    "img",\n})', '    "img", "link",\n})')]),
+    "E link is a mail element": (False, [_LINK_ELEMENT]),
+    "M24 drop the element list for start and end tags": (True, [_START_TAGS, _END_TAGS]),
+    "E2 link is a mail element, and a link attribute goes on any element": (True, [_LINK_ELEMENT, _LINK_ON_ANY]),
+    "M25 a subject keeps an encoded word": (True, [(
+        "walker.py", 'line = ENCODED_WORD_OPENER.sub("= ?", line)', "line = line")]),
     "L a link attribute takes any one output": (True, [(
         "html_checks.py", 'if value != f"\\x00{ids[0]}\\x00" or not filters or filters[-1] != "url":',
         'if value != f"\\x00{ids[0]}\\x00":')]),
