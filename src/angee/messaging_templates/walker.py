@@ -155,6 +155,9 @@ class WalkedKind(Protocol):
     @property
     def holds_content(self) -> bool: ...
 
+    @property
+    def conditional_comments(self) -> bool: ...
+
     def template_name(self, key: str) -> str: ...
 
     def layout_name(self, row: Any) -> str | None: ...
@@ -358,6 +361,16 @@ LINK_ATTRIBUTES = frozenset({"href", "src"})
 OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
 CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
 
+OFFICE_ELEMENTS = re.compile(r"xml|o:[a-z]+")
+"""What Word reads inside Outlook's conditional comments: the ``xml`` island and Office (``o:``) settings."""
+
+MSO_COMMENT = re.compile(r"\[if mso\]>(?P<markup>.*)<!\[endif\]", re.DOTALL)
+"""The data of ``<!--[if mso]>…<![endif]-->``: markup classic Outlook alone renders."""
+REVEALED_OPENS = "[if !mso]><!"
+"""The data of ``<!--[if !mso]><!-->``, which opens markup every client but classic Outlook renders."""
+REVEALED_CLOSES = "<![endif]"
+"""The data of ``<!--<![endif]-->``, which closes it."""
+
 _PLACEHOLDER = re.compile("\x00(\\d+)\x00")
 _SPAN_OPENS_TAG = re.compile("<[/!?]?\x00")
 
@@ -369,12 +382,24 @@ def _written(value: str) -> str:
 
 
 class _HtmlChecker(HTMLParser):
-    """Read an HTML form whose template spans are placeholders, and record what a mail may not carry."""
+    """Read an HTML form whose template spans are placeholders, and record what a mail may not carry.
 
-    def __init__(self, spans: Sequence[Token], expression: Callable[[str], FilterExpression | None]) -> None:
+    ``text`` is what it is fed. ``conditional_comments`` admits Outlook's
+    conditional comments (a layout's); ``office`` reads the markup inside one.
+    """
+
+    def __init__(
+        self, spans: Sequence[Token], expression: Callable[[str], FilterExpression | None], text: str, *,
+        conditional_comments: bool = False, office: bool = False,
+    ) -> None:
         super().__init__(convert_charrefs=False)
         self.spans = spans
         self.expression = expression
+        self.text = text
+        self.line_starts = [0, *(index + 1 for index, character in enumerate(text) if character == "\n")]
+        self.conditional_comments = conditional_comments
+        self.office = office
+        self.revealed = False
         self.refusals: list[str] = []
 
     def refuse(self, reason: str) -> None:
@@ -406,6 +431,8 @@ class _HtmlChecker(HTMLParser):
             return self.refuse("template code in a tag name")
         if tag in REFUSED_ELEMENTS:
             self.refuse(f"<{tag}> is not allowed in a mail")
+        if (":" in tag or tag == "xml") and not (self.office and OFFICE_ELEMENTS.fullmatch(tag)):
+            self.refuse(f"<{tag}> is not allowed in a mail: xml and Office settings sit in Outlook's comments")
         if any("\x00" in name or "\x00" in (value or "") for name, value in attrs):
             self.check_spelling(tag, attrs, endings)
         for name, raw_value in attrs:
@@ -509,7 +536,32 @@ class _HtmlChecker(HTMLParser):
             self.check_spans("a <title> element", self.span_ids(data), None, conditions=True)
 
     def handle_comment(self, data: str) -> None:
-        self.refuse("an HTML comment, conditional ones included, is not allowed in a mail")
+        """Admit, in a layout, Outlook's conditional comments alone: static, balanced, their markup checked."""
+
+        if not self.conditional_comments:
+            return self.refuse("an HTML comment is not allowed in a mail; a layout alone holds Outlook's")
+        line, column = self.getpos()
+        if not self.text.startswith(f"<!--{data}-->", self.line_starts[line - 1] + column):
+            return self.refuse("an HTML comment is written <!--…-->")
+        if "\x00" in data:
+            return self.refuse("template code in an HTML comment: Outlook's comments are static")
+        if data in (REVEALED_OPENS, REVEALED_CLOSES):
+            if self.revealed is (data == REVEALED_OPENS):
+                return self.refuse("<!--[if !mso]><!--> and <!--<![endif]--> come in pairs, one pair at a time")
+            self.revealed = data == REVEALED_OPENS
+            return None
+        if (comment := MSO_COMMENT.fullmatch(data)) is None:
+            return self.refuse(
+                "an HTML comment in a layout is <!--[if mso]>…<![endif]--> or the <!--[if !mso]><!-->…"
+                "<!--<![endif]--> pair",
+            )
+        if self.revealed:
+            return self.refuse("an Outlook comment sits inside <!--[if !mso]><!-->…<!--<![endif]-->")
+        self.refusals.extend(
+            f"in an Outlook comment: {refusal}"
+            for refusal in _checked(_HtmlChecker([], self.expression, comment["markup"], office=True))
+        )
+        return None
 
     def handle_decl(self, decl: str) -> None:
         if "\x00" in decl or not decl.lower().startswith("doctype"):
@@ -522,13 +574,20 @@ class _HtmlChecker(HTMLParser):
         self.refuse("a processing instruction is not allowed in a mail")
 
 
-def check_html(form: str, expression: Callable[[str], FilterExpression | None]) -> list[str]:
+def check_html(
+    form: str, expression: Callable[[str], FilterExpression | None], *, conditional_comments: bool = False,
+) -> list[str]:
     """Return what an HTML form holds that a mail may not, its template spans read as placeholders.
 
     Refused: the elements in :data:`REFUSED_ELEMENTS`; the attributes in
     :data:`REFUSED_ATTRIBUTES` and every ``on*``; an ``if`` an attribute value does
-    not hold whole; template code in a tag name or an attribute name, and any
-    HTML comment; a start tag holding template code that is not written plainly
+    not hold whole; template code in a tag name or an attribute name; any HTML
+    comment but, with ``conditional_comments`` (a layout), Outlook's
+    ``<!--[if mso]>…<![endif]-->`` and the ``<!--[if !mso]><!-->…<!--<![endif]-->``
+    pair, balanced, with no template code inside, the markup of the first checked
+    as any other and ``xml`` and Office (``o:``) settings admitted there alone;
+    ``xml`` and namespaced elements anywhere else; a start tag holding template
+    code that is not written plainly
     (:meth:`_HtmlChecker.check_spelling`); in ``href`` or ``src`` anything but one
     output whose last filter is ``url``, or a static link
     :func:`~angee.messaging_templates.engine.url` leaves as ``html.parser`` decodes
@@ -536,10 +595,9 @@ def check_html(form: str, expression: Callable[[str], FilterExpression | None]) 
     in ``style`` an output but :data:`STYLE_OUTPUTS`; in a ``<style>`` element a
     span but :data:`STYLE_ELEMENT_OUTPUTS`; in a ``<title>`` element or any other
     attribute an output outside :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a
-    tag other than an ``if`` family one. A form ends where it started, in text:
-    ``html.parser`` drops an unfinished tag at the end of its input and never
-    closes a raw-text element, while the next row's text would continue it.
-    ``expression`` compiles one output span to its ``FilterExpression``.
+    tag other than an ``if`` family one. A form ends where it started, in text
+    (:func:`_checked`). ``expression`` compiles one output span to its
+    ``FilterExpression``.
     """
 
     spans: list[Token] = []
@@ -554,15 +612,28 @@ def check_html(form: str, expression: Callable[[str], FilterExpression | None]) 
         last = end
     parts.append(form[last:])
     text = "".join(parts)
-    checker = _HtmlChecker(spans, expression)
+    checker = _HtmlChecker(spans, expression, text, conditional_comments=conditional_comments)
     if _SPAN_OPENS_TAG.search(text):
         checker.refuse("template code where a tag starts")
-    checker.feed(text)
+    refusals = _checked(checker)
+    if checker.revealed:
+        refusals.append("<!--[if !mso]><!--> is never closed with <!--<![endif]-->")
+    return list(dict.fromkeys(refusals))
+
+
+def _checked(checker: _HtmlChecker) -> list[str]:
+    """Feed ``checker`` its text and return its refusals; the text ends where it started, in text.
+
+    ``html.parser`` drops an unfinished tag at the end of its input and never
+    closes a raw-text element, while the next row's text would continue it.
+    """
+
+    checker.feed(checker.text)
     if checker.cdata_elem or checker.rawdata:
         where = f"<{checker.cdata_elem}>" if checker.cdata_elem else repr(checker.rawdata[:20])
         checker.refuse(f"it ends inside {where}: a form ends in text, outside any tag, comment or <style> or <title>")
     checker.close()
-    return list(dict.fromkeys(checker.refusals))
+    return checker.refusals
 
 
 def compiled_expression(engine: MessageTemplateEngine) -> Callable[[str], FilterExpression | None]:
@@ -1278,8 +1349,9 @@ class TemplateWalker:
             includes |= rules.includes
             pieces[piece] = template
         if RowPiece.HTML in pieces:
-            refusals.extend(f"{name}: {reason}" for reason in check_html(forms.html, compiled_expression(
-                self.html_engine)))
+            refusals.extend(f"{name}: {reason}" for reason in check_html(
+                forms.html, compiled_expression(self.html_engine), conditional_comments=handler.conditional_comments,
+            ))
         return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals))
 
     @staticmethod

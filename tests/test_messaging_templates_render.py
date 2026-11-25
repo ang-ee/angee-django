@@ -464,7 +464,9 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
         pytest.param("<p title={{ a }}>x</p>", True, id="unquoted"),
         pytest.param("<p title='{{ a }}'>x</p>", True, id="single-quoted"),
         pytest.param("<!-- note -->", True, id="comment"),
-        pytest.param("<!--[if mso]><v:rect></v:rect><![endif]-->", True, id="conditional-comment"),
+        pytest.param("<!--[if mso]><b>x</b><![endif]-->", True, id="conditional-comment-outside-a-layout"),
+        pytest.param("<xml><o:OfficeDocumentSettings></o:OfficeDocumentSettings></xml>", True, id="office-outside"),
+        pytest.param("<v:rect></v:rect>", True, id="vml"),
         pytest.param('<a href="{{ a|url }}{{ b|url }}">x</a>', True, id="href-two-outputs"),
         pytest.param('<a href="{{ a }}">x</a>', True, id="href-without-url"),
         pytest.param('<a href="https://x.test/{{ a|url }}">x</a>', True, id="href-text-and-output"),
@@ -544,6 +546,61 @@ def test_a_static_value_never_links_to_a_refused_scheme() -> None:
     for admitted in ('<html xmlns:v="urn:schemas-microsoft-com:vml">', '<img alt="Note: ready">',
                      '<p style="color:red;background:#fff">x</p>', '<meta content="width=device-width">'):
         assert check_html(admitted, expression) == [], admitted
+
+
+OUTLOOK_DPI = (
+    "<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings>"
+    "</xml><![endif]-->"
+)
+GHOST = (
+    '<!--[if mso]><table role="presentation" width="600" align="center"><tr><td><![endif]-->'
+    "<table><tr><td>{{ x }}</td></tr></table><!--[if mso]></td></tr></table><![endif]-->"
+)
+
+
+@pytest.mark.parametrize(
+    ("html", "refused"),
+    [
+        pytest.param(OUTLOOK_DPI, False, id="dpi"),
+        pytest.param("<!--[if mso]><style>td{font-family:Arial,sans-serif !important}</style><![endif]-->", False,
+                     id="font-override"),
+        pytest.param(GHOST, False, id="ghost-table"),
+        pytest.param("<!--[if !mso]><!--><p>{{ x }}</p><!--<![endif]-->", False, id="revealed-pair"),
+        pytest.param("<!--[if mso]><b>{{ x }}</b><![endif]-->", True, id="template-code-inside"),
+        pytest.param("<!--[if mso]><!-- {{ x }} --><![endif]-->", True, id="template-code-in-a-nested-comment"),
+        pytest.param("<!-- note -->", True, id="plain-comment"),
+        pytest.param("<!--[if gte mso 9]><b>x</b><![endif]-->", True, id="other-condition"),
+        pytest.param("<!--[if mso]><v:roundrect></v:roundrect><![endif]-->", True, id="vml-button"),
+        pytest.param("<!--[if mso]><script>x</script><![endif]-->", True, id="script-inside"),
+        pytest.param('<!--[if mso]><p onclick="x">x</p><![endif]-->', True, id="event-inside"),
+        pytest.param('<!--[if mso]><a href="javascript:x">x</a><![endif]-->', True, id="link-inside"),
+        pytest.param('<!--[if mso]><a href="x<![endif]-->', True, id="ends-inside-a-tag"),
+        pytest.param("<!--[if mso]><style>td{<![endif]-->", True, id="ends-inside-style"),
+        pytest.param("<!--[if mso]><b>--!><p>x</p><![endif]-->", True, id="bang-close"),
+        pytest.param("</<![endif]>", True, id="bogus-close"),
+        pytest.param("<!--[if !mso]><!--><p>x</p>", True, id="revealed-unclosed"),
+        pytest.param("<p>x</p><!--<![endif]-->", True, id="revealed-unopened"),
+        pytest.param("<!--[if !mso]><!--><!--[if !mso]><!--><!--<![endif]--><!--<![endif]-->", True,
+                     id="revealed-nested"),
+        pytest.param("<!--[if !mso]><!-->" + OUTLOOK_DPI + "<!--<![endif]-->", True, id="mso-inside-revealed"),
+    ],
+)
+def test_a_layout_holds_outlooks_conditional_comments_alone(html: str, refused: bool) -> None:
+    """D2: a layout may carry static, balanced MSO conditional comments whose markup is checked as any other."""
+
+    assert bool(check_html(html, compiled_expression(HTML_ENGINE), conditional_comments=True)) is refused, check_html(
+        html, compiled_expression(HTML_ENGINE), conditional_comments=True)
+    assert check_html(html, compiled_expression(HTML_ENGINE)) or "<!--" not in html
+
+
+def test_only_a_layout_carries_outlooks_comments(plain: Any) -> None:
+    """D2: the kind's fact decides; a template, block or part carrying one is refused."""
+
+    del plain
+    assert _refusals(_unsaved("layout", "outlook", source=OUTLOOK_DPI + PLAIN_LAYOUT, text_source=PLAIN_TEXT)) == []
+    for row in (_unsaved(format="html", source=OUTLOOK_DPI, text_source="x"),
+                _unsaved("block", "outlook", source=OUTLOOK_DPI, text_source="x")):
+        assert any("a layout alone holds Outlook's" in refusal for refusal in _refusals(row)), row.kind
 
 
 def test_static_url_as_decoded() -> None:

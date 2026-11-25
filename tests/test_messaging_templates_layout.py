@@ -46,11 +46,12 @@ def library(db: None) -> dict[str, Any]:
 
 
 class _Document(HTMLParser):
-    """Every element, its attributes and its depth below <body>, and the <style> text."""
+    """Every element, its attributes and its depth below <body>, the <style> text, and the end tags in order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.elements: list[tuple[str, dict[str, str | None], int]] = []
+        self.tags: list[str] = []
         self.styles: list[str] = []
         self.comments: list[str] = []
         self.decls: list[str] = []
@@ -62,11 +63,13 @@ class _Document(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         depth = len(self.stack) - self.stack.index("body") if "body" in self.stack else -1
         self.elements.append((tag, dict(attrs), depth))
+        self.tags.append(tag)
         if tag not in ("meta", "br", "img", "hr", "link"):
             self.stack.append(tag)
         self.in_style, self.in_title = tag == "style", tag == "title"
 
     def handle_endtag(self, tag: str) -> None:
+        self.tags.append("/" + tag)
         if tag in self.stack:
             del self.stack[len(self.stack) - 1 - self.stack[::-1].index(tag):]
         self.in_style = self.in_title = False
@@ -119,14 +122,28 @@ def test_the_base_layout_meets_the_mail_checklist(library: Any) -> None:
     elements = document.elements
     by_tag = lambda tag: [attrs for name, attrs, _ in elements if name == tag]  # noqa: E731
 
-    # 1. a doctype, one html, head and body, no conditional comment (a mail's HTML holds no comment).
+    # 1. a doctype, one html, head and body; Outlook's conditional comments, each [if mso], their markup balanced.
     assert [decl.lower() for decl in document.decls] == ["doctype html"]
     assert [len(by_tag(tag)) for tag in ("html", "head", "body")] == [1, 1, 1]
-    assert document.comments == []
-    # 2. the Office namespaces on <html>.
+    outlook = [re.fullmatch(r"\[if mso\]>(.*)<!\[endif\]", comment, re.DOTALL) for comment in document.comments]
+    assert outlook and all(outlook), document.comments
+    word = _document("".join(match.group(1) for match in outlook if match))
+    opened: list[str] = []
+    for tag in word.tags:
+        if tag.startswith("/"):
+            assert opened.pop() == tag[1:], word.tags
+        else:
+            opened.append(tag)
+    assert opened == []
+    # 2. the Office namespaces on <html>, and the DPI setting Word reads: PixelsPerInch 96.
     assert {"xmlns:o", "xmlns:v"} <= set(by_tag("html")[0])
-    # 3. one column, 600px wide at most, inside a table Word lays out.
-    assert any("max-width:600px" in (attrs.get("style") or "") for attrs in by_tag("table"))
+    assert word.tags[:3] == ["xml", "o:officedocumentsettings", "o:pixelsperinch"]
+    assert "<o:PixelsPerInch>96</o:PixelsPerInch>" in LAYOUT["source"]
+    # 3. one column: the layout table inside a ghost table Word lays out 600 wide, since Word ignores max-width.
+    assert [attrs for name, attrs, _ in word.elements if name == "table"] == [
+        {"role": "presentation", "width": "600", "align": "center", "cellpadding": "0", "cellspacing": "0"},
+    ]
+    assert len(by_tag("table")) == 1
     # 4. nothing a mail may not carry.
     assert not {"script", "iframe", "form", "object", "embed", "link"} & {name for name, _, _ in elements}
     assert not any((value or "").startswith("data:") for _, attrs, _ in elements for value in attrs.values())
@@ -148,8 +165,9 @@ def test_the_base_layout_meets_the_mail_checklist(library: Any) -> None:
         int(size) for _, attrs, _ in elements for size in re.findall(r"font:[^;]*?(\d+)px/", attrs.get("style") or "")
     ]
     assert sizes and min(sizes) >= 14 and "font:16px/24px" in html
-    # 18. the fonts are the kit's stacks, each ending in a generic family.
+    # 18. the fonts are the kit's stacks, each ending in a generic family; Word, which ignores fallbacks, gets Arial.
     assert library["kit"].font_body in html and library["kit"].font_body.rstrip().endswith("sans-serif")
+    assert "table,td,p,a,span{font-family:Arial,sans-serif !important}" in "".join(word.styles)
     # 20. the colour schemes the layout declares.
     metas = {attrs.get("name"): attrs.get("content") for attrs in by_tag("meta")}
     assert metas["color-scheme"] == metas["supported-color-schemes"] == "light dark"
