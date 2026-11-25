@@ -75,7 +75,13 @@ from angee.messaging_templates.engine import (
     filter_names,
     url,
 )
-from angee.messaging_templates.html_checks import SpellingRule, check_html, compiled_expression
+from angee.messaging_templates.html_checks import (
+    CONTROL_CHARACTERS,
+    SOURCE_CONTROLS,
+    SpellingRule,
+    check_html,
+    compiled_expression,
+)
 from angee.messaging_templates.rendering import (
     RESERVED_VARIABLE_ROOTS,
     MessageTemplateFormat,
@@ -110,9 +116,13 @@ VALUE_ITEMS_LIMIT = 500
 SUBJECT_LIMIT = 1_000
 """The longest rendered subject or preheader, after it is made one line."""
 
-_UNPRINTED = re.compile("[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
-"""NUL, the C0 and C1 control characters and the bidirectional embeddings, overrides and isolates, which a
-subject or preheader drops."""
+_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}]")
+"""What :meth:`TemplateWalk.prepare` drops from every string value: the C0 and C1 control characters but tab, line
+feed and carriage return, so none reaches a body, a subject or a preheader."""
+
+_UNPRINTED = re.compile(f"[{CONTROL_CHARACTERS}\u202a-\u202e\u2066-\u2069]")
+"""What a subject or preheader drops from each of its words: the same control characters, and the bidirectional
+embeddings, overrides and isolates; splitting the line on white space has dropped tab, line feed and return."""
 
 SUBJECT_WARNING_LENGTH = 60
 PREHEADER_WARNING_LENGTH = 100
@@ -401,8 +411,9 @@ class TemplateWalk:
            surrogate).
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
-           string, number, boolean or null; at a :attr:`float_paths` path, a
-           number one a float holds.
+           string, number, boolean or null, a string without its control
+           characters (:data:`_CONTROLS`), so one holding nothing else is empty;
+           at a :attr:`float_paths` path, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
         4. Every absent or null declared segment filled: an object with ``{}``, a
            list with ``[]``, a leaf with ``""``; so every lookup lands on a key.
@@ -613,7 +624,9 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
     if value is None:
         return None
     if not tree:
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            return _CONTROLS.sub("", value)
+        if isinstance(value, (int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
         return None
@@ -1041,9 +1054,10 @@ class TemplateWalker:
 
         texts = {"source": row.source, "text_source": row.text_source, "subject": row.subject,
                  "preheader": row.preheader}
-        if holding := [column for column, text in texts.items() if "\x00" in text]:
+        if holding := [column for column, text in texts.items() if SOURCE_CONTROLS.search(text)]:
             # Before anything reads the text: a NUL would forge the HTML checks' placeholders.
-            refuse(f"{', '.join(holding)}: {SpellingRule.NO_NUL.message} (rule {SpellingRule.NO_NUL.value})")
+            rule = SpellingRule.NO_CONTROL
+            refuse(f"{', '.join(holding)}: {rule.message} (rule {rule.value})")
             return _RowCheck(name, refusals=tuple(refusals))
         try:
             validate_variables(row.variables)

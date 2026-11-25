@@ -32,6 +32,18 @@ from django.template.base import DebugLexer, FilterExpression, Token, TokenType,
 
 from angee.messaging_templates.engine import LINK_SCHEMES, MAIL_COLOURS, MessageTemplateEngine, filter_names, url
 
+CONTROL_CHARACTERS = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f"
+"""The C0 and C1 control characters but tab, line feed and carriage return, as the body of a character class. A
+row's text holds none, nor a carriage return (rule 1, :data:`SOURCE_CONTROLS`); a value drops them
+(:meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`)."""
+
+SOURCE_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}\r]")
+"""What a row's text and its forms may not hold (rule 1): a NUL would forge the checks' placeholders, an escape could
+switch a reader's character set, and a carriage return gives one text two content hashes."""
+
+MAIL_CHARSET = "utf-8"
+"""The one character set a mail's HTML declares, and the one it is sent in."""
+
 STYLE_ELEMENT_OUTPUTS = frozenset(("brand", *path) for path in MAIL_COLOURS)
 """The outputs a ``<style>`` element may hold, without filters: the mail colours."""
 
@@ -42,7 +54,7 @@ STYLE_OUTPUTS = STYLE_ELEMENT_OUTPUTS | {("brand", "font", "heading"), ("brand",
 class SpellingRule(IntEnum):
     """The strict spelling of an HTML form, one rule each, with the refusal that says how to write the row."""
 
-    NO_NUL = 1
+    NO_CONTROL = 1
     LESS_THAN = 2
     START_TAG = 3
     SELF_CLOSING = 4
@@ -59,7 +71,9 @@ class SpellingRule(IntEnum):
 
 
 SPELLING: dict[SpellingRule, str] = {
-    SpellingRule.NO_NUL: "a row holds no NUL character",
+    SpellingRule.NO_CONTROL: (
+        "a row holds no control character but tab and newline, a carriage return written as a newline"
+    ),
     SpellingRule.LESS_THAN: (
         "a < opens a start tag, an end tag, and in a layout its opening <!doctype html> or Outlook's comments; "
         "anywhere else write &lt;"
@@ -256,6 +270,9 @@ class _HtmlChecker(HTMLParser):
             if name not in MAIL_ATTRIBUTES:
                 self.refuse(f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)")
                 continue
+            if name == "charset" and value.lower() != MAIL_CHARSET:
+                self.refuse(f"the charset of <{tag}> is {MAIL_CHARSET}, the one a mail is sent in")
+                continue
             ids = self.span_ids(value)
             self.check_conditions(name, ids)
             if name in LINK_ATTRIBUTES:
@@ -445,8 +462,8 @@ def check_html(
     ``FilterExpression``.
     """
 
-    if "\x00" in form:
-        return [f"the form: {SpellingRule.NO_NUL.message} (rule {SpellingRule.NO_NUL.value})"]
+    if SOURCE_CONTROLS.search(form):
+        return [f"the form: {SpellingRule.NO_CONTROL.message} (rule {SpellingRule.NO_CONTROL.value})"]
     spans: list[Token] = []
     parts: list[str] = []
     last = 0

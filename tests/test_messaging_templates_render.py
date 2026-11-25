@@ -55,6 +55,7 @@ from angee.messaging_templates.engine import (
     url,
 )
 from angee.messaging_templates.html_checks import (
+    CONTROL_CHARACTERS,
     LINK_ATTRIBUTES,
     MAIL_ATTRIBUTES,
     MAIL_ELEMENTS,
@@ -554,9 +555,9 @@ OFF_THE_LIST = [
 
 R = SpellingRule
 SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
-    (R.NO_NUL, "<p>a\x00b</p>", False),
-    (R.NO_NUL, '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>', False),
-    (R.NO_NUL, '<p title="\x009\x00">x</p>', False),
+    (R.NO_CONTROL, "<p>a\x00b</p>", False),
+    (R.NO_CONTROL, '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>', False),
+    (R.NO_CONTROL, '<p title="\x009\x00">x</p>', False),
     (R.LESS_THAN, "<p>5 < 6</p>", False),
     (R.LESS_THAN, "<p>x</p></><p>y</p>", False),
     (R.LESS_THAN, "<title>a<b</title>", False),
@@ -576,8 +577,8 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.START_TAG, '<p title="a" TITLE="b">y</p>', False),
     (R.START_TAG, '<p title = "x">y</p>', False),
     (R.START_TAG, '<p title="x" >y</p>', False),
-    (R.START_TAG, '<p\x0ctitle="x">y</p>', False),
-    (R.START_TAG, '<p\x0btitle="x">y</p>', False),
+    (R.NO_CONTROL, '<p\x0ctitle="x">y</p>', False),
+    (R.NO_CONTROL, '<p\x0btitle="x">y</p>', False),
     (R.START_TAG, '<p title="a&b">y</p>', False),
     (R.START_TAG, '<p title="x"title="y">z</p>', False),
     (R.START_TAG, '<p/title="x">y</p>', False),
@@ -634,6 +635,54 @@ def test_the_strict_spelling_admits_what_every_reader_reads_alike(html: str, doc
     assert check_html(html, compiled_expression(HTML_ENGINE), document=document) == []
 
 
+def test_a_mail_declares_one_character_set(kit: Any) -> None:
+    """A layout's meta charset is utf-8, any case: under iso-2022-jp an escape in a value switched the reader's
+    character set and a later value became an attribute."""
+
+    jp = PLAIN_LAYOUT.replace("<head>", '<head><meta charset="iso-2022-jp">')
+    template = _unsaved(format="html", source='<p><img alt="{{ a }}" src="https://example.test/x.png">{{ e }}'
+                        '<b title="{{ d }}">Hi</b></p>', text_source="x", variables={"a": "x", "e": "x", "d": "x"},
+                        layout="jp")
+    refusals = TemplateWalker(saving=True).judge(
+        template, _Rows(template, _unsaved("layout", "jp", source=jp, text_source=PLAIN_TEXT))).refusals
+    assert refusals == ["layouts/jp: the charset of <meta> is utf-8, the one a mail is sent in"]
+    utf8 = PLAIN_LAYOUT.replace("<head>", '<head><meta charset="UTF-8">')
+    walk = TemplateWalker(saving=True).walk(
+        template, _Rows(template, _unsaved("layout", "jp", source=utf8, text_source=PLAIN_TEXT)))
+    html = walk.render({"a": "\x1b$B", "e": "\x1b(B", "d": "x src=x onerror=alert(1) y"}, kit=kit).html
+    assert "\x1b" not in html and 'alt="$B"' in html
+
+
+def test_a_value_drops_its_control_characters(plain: Any, kit: Any) -> None:
+    """prepare() drops the C0 and C1 controls but tab, newline and return from every string, as a subject does; a
+    value of controls alone is empty."""
+
+    del plain
+    template = _mail("<p>{{ s }}|{% if t %}T{% else %}empty{% endif %}|{{ u }}</p>", {"s": "x", "t": "x", "u": "x"},
+                     format="html", text_source="{{ s }}|{{ t }}|{{ u }}", subject="{{ s }}")
+    rendered = _render(template, {"s": "a\x1b$B\x00b\x07\x85c\x9f", "t": "\x00\x1b\x0c", "u": "a\tb\nc\rd"}, kit)
+    assert "<p>a$Bbc|empty|a\tb\nc\rd</p>" in rendered.html
+    assert rendered.plain_text.startswith("a$Bbc||a\tb\nc\rd")
+    assert rendered.subject == "a$Bbc"
+
+
+def test_a_row_holds_no_control_character_and_a_return_is_a_newline(plain: Any) -> None:
+    """Rule 1 for every text column: no control character but tab and newline. clean() writes a carriage return as a
+    newline first, so pasted text has the content hash of the same text written with newlines."""
+
+    del plain
+    for character in ("\x00", "\x1b", "\x0c", "\x0b", "\x85", "\r", "\x7f"):
+        for column in ("source", "text_source", "subject", "preheader"):
+            row = _unsaved(format="html", **{"source": "<p>x</p>", "text_source": "x", column: f"a{character}b"})
+            assert any(R.NO_CONTROL.message in refusal for refusal in _refusals(row)), (character, column)
+    pasted = _unsaved(source="Line one\r\nLine two\rThree", subject="Hi\r\nthere", key="tests.pasted")
+    written = _unsaved(source="Line one\nLine two\nThree", subject="Hi\nthere", key="tests.pasted")
+    with system_context(reason="tests.messaging_templates.render.clean"):
+        pasted.full_clean()
+    assert (pasted.source, pasted.subject) == (written.source, written.subject)
+    assert pasted.compute_content_hash() == written.compute_content_hash()
+
+
 def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
     """Rule 7 and the attribute list: each listed element and attribute is admitted, and every other is refused by
     name with one message, an Office setting admitted inside a layout's Outlook comment alone."""
@@ -688,9 +737,9 @@ def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
     for source in ('<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>',
                    '<p title="\x009\x00">x</p>'):
         row = _unsaved(format="html", source=source, text_source="x", variables={"name": "x"})
-        assert any(R.NO_NUL.message in refusal for refusal in _refusals(row)), source
+        assert any(R.NO_CONTROL.message in refusal for refusal in _refusals(row)), source
         saved = _mail(source, {"name": "x"}, format="html", text_source="x", key="tests.nul")
-        with pytest.raises(ValidationError, match="NUL"):
+        with pytest.raises(ValidationError, match="no control character"):
             _render(saved, {"name": "x"}, kit)
         with system_context(reason="tests.messaging_templates.render.nul"):
             assert saved.preview(kit=kit).rendered is None
@@ -705,7 +754,7 @@ def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
         override.save()  # past clean: the deployment's row holds a NUL
         with caplog.at_level(logging.WARNING, logger="angee.messaging_templates.models"):
             MessageTemplate.after_resource_load([template], tier="install", source="tests")
-    assert any("NUL" in record.getMessage() for record in caplog.records)
+    assert any("no control character" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize(
@@ -988,13 +1037,15 @@ _HTML_SPACE = " \t\n\f\r"
 def _harmless(value: str) -> str:
     """The harmless value a hostile ``value`` is compared with: of its kind, empty, HTML white space, or visible text.
 
-    An author's ``{% if v %}`` chooses author markup by a value's truthiness, and a browser's tree builder implies
+    A value of control characters alone is empty once :meth:`TemplateWalk.prepare` drops them. An author's
+    ``{% if v %}`` chooses author markup by a value's truthiness, and a browser's tree builder implies
     or clones author elements by whether text is present and whether it is white space (a stray ``</p>`` before the
     body, text in a table, a formatting element reopened). Neither makes a value markup, so values are compared
     with one of their own kind: the same empty or white-space value, else :data:`MARKER`.
     """
 
-    return value if not value.strip(_HTML_SPACE) else MARKER
+    visible = re.sub(f"[{CONTROL_CHARACTERS}]", "", value)  # what prepare() leaves of it
+    return value if not visible.strip(_HTML_SPACE) else MARKER
 
 
 def _assert_value_stays_text(
@@ -1401,7 +1452,7 @@ def test_subject_preheader_and_plain_text(plain: Any, kit: Any) -> None:
 
     del plain
     template = _mail("Hi {{ name }}.", {"name": "x"}, subject="{{ name }}\nsecond line\tend",
-                     preheader="{{ name }}\r\nmore")
+                     preheader="{{ name }}\nmore")
     rendered = _render(template, {"name": "<b>Ana</b>"}, kit)
     assert rendered.subject == "<b>Ana</b> second line end" and rendered.preheader == "<b>Ana</b> more"
     assert "<title>&lt;b&gt;Ana&lt;/b&gt; second line end</title>" in rendered.html
@@ -1717,7 +1768,7 @@ def test_subject_and_preheader_drop_control_and_bidirectional_characters(plain: 
     del plain
     template = _mail("Hi.", {"name": "x"}, subject="Hi {{ name }}", preheader="{{ name }}")
     rendered = _render(template, {"name": "a\x00b\x1b[1m\u202eevil\u202c\u2066x\u2069\x85c\x9fd\r\nBcc: e"}, kit)
-    assert rendered.subject == "Hi ab[1mevilx cd Bcc: e" and rendered.preheader == "ab[1mevilx cd Bcc: e"
+    assert rendered.subject == "Hi ab[1mevilxcd Bcc: e" and rendered.preheader == "ab[1mevilxcd Bcc: e"
 
 
 def test_the_plain_text_body_never_reads_the_subject_or_the_preheader(plain: Any) -> None:
