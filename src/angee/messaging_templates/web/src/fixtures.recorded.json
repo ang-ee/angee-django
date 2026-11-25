@@ -395,20 +395,6 @@
   }
  ],
  "keep": {
-  "mtl_block_notice_en": {
-   "changes": {
-    "backlinks": {},
-    "previews": {},
-    "removed": [],
-    "rows": []
-   },
-   "result": {
-    "id": null,
-    "message": "This message template overrides no shipped default.",
-    "ok": false,
-    "validation_errors": null
-   }
-  },
   "mtl_block_record_card_en": {
    "changes": {
     "backlinks": {},
@@ -426,6 +412,18 @@
     "message": "Override kept.",
     "ok": true,
     "validation_errors": null
+   }
+  }
+ },
+ "keepRefused": {
+  "mtl_block_record_card_en": {
+   "id": null,
+   "message": "Keep message template override failed.",
+   "ok": false,
+   "validation_errors": {
+    "__all__": [
+     "MessageTemplate 'mtl_block_record_card_en' was not found."
+    ]
    }
   }
  },

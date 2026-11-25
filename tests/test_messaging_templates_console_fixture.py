@@ -7,8 +7,9 @@ host enabling the addon alone emits it, the library's rows as an administrator r
 them and what a member reads differently, the brand kits, and, for the rows the
 stories open, their backlinks, previews and delete previews and what Override, Keep
 override, the insert and a refused save answer, each with what it changed in the
-library. Public ids are stable aliases (:func:`_alias`) and timestamps fixed, so an
-unchanged server records the same file.
+library, and what Keep override answers on an override another session deleted.
+Public ids are stable aliases (:func:`_alias`), also inside the server's words, and
+timestamps fixed, so an unchanged server records the same file.
 
 The test records it afresh and fails when the committed file differs. Re-record it,
 never edit it, with ``ANGEE_RECORD_FIXTURES=1`` (the command is in ``docs/checks.md``),
@@ -181,6 +182,7 @@ _DELETE = (
     "refusals root { label object_label object_id children { label object_label object_id } } } }"
 )
 _ACTION = "{ ok message validation_errors id }"
+_KEEP = f"mutation($id: ID!) {{ keep_message_template_override(template: $id) {_ACTION} }}"
 _INSERT = (
     "mutation($object: message_templates_insert_input!, $idempotency_key: String) "
     f"{{ insert_message_templates_one(object: $object, idempotency_key: $idempotency_key) {{ {_ROW} }} }}"
@@ -293,13 +295,20 @@ def _library(model: Any, kit_model: Any) -> None:
 
 
 def _aliased(value: Any, ids: dict[str, str]) -> Any:
-    """``value`` with every public id it holds, as a key or a value, replaced by its alias."""
+    """``value`` with every public id it holds, as a key, a value or a part of a value, replaced by its alias."""
 
     if isinstance(value, dict):
         return {ids.get(key, key): _aliased(item, ids) for key, item in value.items()}
     if isinstance(value, list):
         return [_aliased(item, ids) for item in value]
-    return ids.get(value, value) if isinstance(value, str) else value
+    if not isinstance(value, str):
+        return value
+    if value in ids:
+        return ids[value]
+    # The server's words may name a row by its public id; the longest id first, so none is a prefix of another.
+    for public_id in sorted((id_ for id_ in ids if id_ in value), key=len, reverse=True):
+        value = value.replace(public_id, ids[public_id])
+    return value
 
 
 def _settled(row: dict[str, Any]) -> dict[str, Any]:
@@ -402,11 +411,18 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
         overrides[opened["welcome"]] = _aliased({"result": result, "changes": changed()}, new_ids())
 
     keeps = {}
-    for name in ("recordCard", "notice"):
-        with _rolled_back():
-            result = read(f"mutation($id: ID!) {{ keep_message_template_override(template: $id) {_ACTION} }}",
-                          {"id": opened[name]}, "keep_message_template_override")
-            keeps[opened[name]] = {"result": result, "changes": changed()}
+    with _rolled_back():
+        result = read(_KEEP, {"id": opened["recordCard"]}, "keep_message_template_override")
+        keeps[opened["recordCard"]] = {"result": result, "changes": changed()}
+
+    # Keep override on an override another session deleted since the page showed it: refused, in the server's words.
+    keep_refusals = {}
+    with _rolled_back():
+        with _system():
+            next(row for row in model.objects.all() if public_id_of(row) == opened["recordCard"]).delete()
+        keep_refusals[opened["recordCard"]] = read(
+            _KEEP, {"id": opened["recordCard"]}, "keep_message_template_override",
+        )
 
     inserts = []
     for object_ in _INSERTS:
@@ -440,6 +456,7 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
         "delete": deletes,
         "override": overrides,
         "keep": keeps,
+        "keepRefused": keep_refusals,
         "insert": inserts,
         "save": saves,
     }, ids)

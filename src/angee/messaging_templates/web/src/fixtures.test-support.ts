@@ -73,6 +73,8 @@ interface RecordedFixtures {
   delete: Readonly<Record<string, { preview: DeletePreview; changes?: RecordedChanges }>>;
   override: Readonly<Record<string, { result: ActionResult; changes: RecordedChanges }>>;
   keep: Readonly<Record<string, { result: ActionResult; changes: RecordedChanges }>>;
+  /** What Keep override answers on an override another session deleted since it was shown. */
+  keepRefused: Readonly<Record<string, ActionResult>>;
   insert: readonly RecordedInsert[];
   save: readonly { id: string; set: Readonly<Record<string, unknown>>; error: RecordedError }[];
 }
@@ -93,10 +95,10 @@ const BRAND_KIT_RESOURCE = recordedResource(BRAND_KIT_MODEL);
 /** The recorded rows the stories and tests open, by what each is (the recorder's `OPENED` says which). */
 export const ROW = RECORDED.opened;
 
-/** The answer to Keep override on a row that overrides no shipped default, as the console words it. */
+/** The answer to Keep override on the record card after another session deleted it, as the console words it. */
 export const KEEP_REFUSAL: ActionResult = (() => {
-  const refusal = Object.values(RECORDED.keep).find((entry) => !entry.result.ok)?.result;
-  if (!refusal) throw new Error("The recorded fixtures carry no refused Keep override.");
+  const refusal = RECORDED.keepRefused[RECORDED.opened.recordCard];
+  if (!refusal) throw new Error("The recorded fixtures carry no refused Keep override on the record card.");
   return refusal;
 })();
 
@@ -113,7 +115,7 @@ export interface MessageTemplateFixtureOptions {
   viewer?: MessageTemplateViewer;
   /** Every save is refused as the console refused the recorded one. */
   refuseSave?: boolean;
-  /** Keep override is refused as the console refuses it for a row that overrides no shipped default. */
+  /** Keep override is refused as the console refuses it on an override another session deleted meanwhile. */
   refuseKeep?: boolean;
   /**
    * The server says no row admits the reader to Override (`can_override` false), though the reader may still
@@ -195,7 +197,11 @@ export function messageTemplateSchemas({
       return entry.result;
     },
     keep_message_template_override: ({ template }) => {
-      if (refuseKeep) return KEEP_REFUSAL;
+      if (refuseKeep) {
+        const refusal = RECORDED.keepRefused[String(template)];
+        if (!refusal) throw unrecorded(`a refused Keep override on ${String(template)}`);
+        return refusal;
+      }
       const entry = RECORDED.keep[String(template)];
       if (!entry) throw unrecorded(`Keep override on ${String(template)}`);
       if (entry.result.ok) apply(entry.changes);
