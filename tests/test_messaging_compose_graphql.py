@@ -404,11 +404,13 @@ READS = {
 }
 SELECTIONS = {
     "row": ROW,
+    "attempts": f"{ROW} delivery_attempts",
+    "error": f"{ROW} delivery_error",
     "facts": f"{ROW} {FACTS}",
     "actions": f"{ROW} delivery_actions",
     "actions and facts": f"{ROW} delivery_actions {FACTS}",
 }
-"""What a list selects of each message: the delivery facts alone, beside ``delivery_actions``, or neither."""
+"""What a list selects of each message: each delivery fact alone, both, beside ``delivery_actions``, or neither."""
 READ_BUDGETS = {
     "thread_message_feed": {"statements": 33, "repeated": 25},
     "thread_message_feed_revalidate": {"statements": 21, "repeated": 16},
@@ -467,9 +469,9 @@ def test_the_delivery_facts_are_read_with_the_rows_of_every_list_the_composer_re
                         read.assert_ceiling(**READ_BUDGETS[name])
             for selection in SELECTIONS:
                 assert counts[selection, 1] == counts[selection, 25], (name, seat, selection, counts)
-            assert counts["facts", 25] == counts["actions", 25] == counts["actions and facts", 25], (
-                name, seat, counts,
-            )
+            assert counts["attempts", 25] == counts["row", 25], (name, seat, counts)
+            assert counts["error", 25] == counts["facts", 25] == counts["actions", 25] == counts[
+                "actions and facts", 25], (name, seat, counts)
 
 
 def test_whether_one_may_send_is_read_with_the_channels(console: Any, db: None) -> None:
@@ -512,7 +514,7 @@ def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) ->
     request = _receive(desk, "measured")
     Message.objects.compose(channel=desk, to=known, text="Hi.", actor=desk.owner, idempotency_key="warm")
     Message.objects.compose(parent=request, text="Hi.", actor=desk.owner, idempotency_key="warm-answer")
-    cases = {
+    cases: dict[int | str, tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = {
         **{size: ({"channel": desk}, {"channel": desk.public_id}, {"to": known[:size]}) for size in (1, 20)},
         "answer": ({"parent": request}, {"parent": request.public_id}, {}),
     }
