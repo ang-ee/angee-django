@@ -154,6 +154,16 @@ test("Discard restores saved values in every control and permits another draft",
   expect(f.patchPreferences).not.toHaveBeenCalled();
 });
 
+test("while the host's own options are still pending, a picked theme and its scheme re-theme the document at once", async () => {
+  const f = await fixture({ unrelated: true }, { themeId: paper.definition.id, colorScheme: "light", pending: true });
+  // Following the app default, the document waits for the host's options.
+  expect(document.documentElement.dataset.themeId).toBeUndefined();
+  fireEvent.click(radio(/ink.label/));
+  fireEvent.click(radio("Dark"));
+  await waitFor(() => expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" }));
+  expect(f.patchPreferences).not.toHaveBeenCalled();
+});
+
 test("customising while following the app default starts from the options the app wears and pins its theme", async () => {
   const worn = {
     version: paper.definition.options!.version,
