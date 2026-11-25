@@ -27,6 +27,8 @@
   "devDependencies": {
     "@angee/storybook": "workspace:*",
     "@angee/theme-angee": "workspace:*",
+    "@angee/theme-fyltr": "workspace:*",
+    "@angee/theme-ledger": "workspace:*",
     "@angee/theme-stock": "workspace:*",
     "@tanstack/react-query": "^5.102.0",
     "@tanstack/react-router": "^1.170.41",
