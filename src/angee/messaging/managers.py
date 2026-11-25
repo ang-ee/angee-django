@@ -3182,8 +3182,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         and the refusal rolls the claim back with everything else. ``admit()``
         checks domain eligibility once, on insertion, after replay. ``queued``
         hands the message to delivery when the outermost transaction commits,
-        ``scheduled_at`` holds a draft until then, neither holds it for approval,
-        and both are refused. ``local`` is the caller's provenance, never
+        ``scheduled_at`` holds a draft until then (a time without an offset is
+        refused, ``naive_datetime``), neither holds it for approval, and both are
+        refused. ``local`` is the caller's provenance, never
         messaging's delivery facts. ``idempotency_key`` replays the same intent
         (the hold aside) for the same actor, whatever the channel can do now.
         """
@@ -3296,6 +3297,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if queued and scheduled_at is not None:
             raise ValidationError({"scheduled_at": ValidationError(
                 "A queued message is sent now; schedule a held one instead.", code="queued",
+            )})
+        if scheduled_at is not None and timezone.is_naive(scheduled_at):
+            raise ValidationError({"scheduled_at": ValidationError(
+                "A schedule time needs its offset; it is never read in the server's zone.", code="naive_datetime",
             )})
         text, html, subject = (strip_null_bytes(value or "").strip() for value in (text, html, subject))
         if not text and not html:

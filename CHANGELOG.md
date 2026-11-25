@@ -29,8 +29,10 @@ live in code docstrings.
     address costs a call about 34 statements) and
     `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
     statements each); more is refused (`too_many`) under the argument that
-    crosses the bound, before anything is read. A new message also takes a
-    one-line `subject`,
+    crosses the bound, before anything is read. A `scheduled_at` without an
+    offset is refused (`naive_datetime`, as scheduling, calendar and workflows
+    refuse one) instead of being read in the server's zone. A new message also
+    takes a one-line `subject`,
     `text`, `html` and readable `attachments`, and starts a thread of its own
     through the new `ThreadManager.open_thread`, which `resolve` now shares.
     `Message.require_reply(actor)` decides who may answer a message and returns

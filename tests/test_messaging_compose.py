@@ -7,7 +7,7 @@ import string
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from email import message_from_bytes
 from email.message import EmailMessage
 from pathlib import Path
@@ -483,6 +483,22 @@ def test_an_entry_is_refused_or_lands_exactly_the_address_it_names(entry: str) -
     (addressee,) = outgoing.recipients
     typed = Handle.email_value(entry.strip())
     assert addressee.address == typed or typed.endswith(f"<{addressee.address}>")
+
+
+def test_a_schedule_time_without_an_offset_is_refused_before_the_claim(desk: Any) -> None:
+    """A naive time is never read in the server's zone; an aware one holds the draft until then."""
+
+    naive = datetime(2030, 1, 1, 10, 0)
+    with _refused(key="scheduled_at", code="naive_datetime"):
+        Message.objects.compose(
+            channel=desk, to=["later@example.test"], text="Hi.", scheduled_at=naive, idempotency_key="naive",
+            actor=desk.owner,
+        )
+    held = Message.objects.compose(
+        channel=desk, to=["later@example.test"], text="Hi.", scheduled_at=naive.replace(tzinfo=UTC),
+        actor=desk.owner,
+    )
+    assert held.scheduled_at == naive.replace(tzinfo=UTC)
 
 
 def _addresses(role: str, count: int) -> list[str]:
