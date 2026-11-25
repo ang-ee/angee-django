@@ -26,7 +26,11 @@ live in code docstrings.
     header would not carry as read (a NUL byte, which failed the write on
     PostgreSQL after it began, a control character, or an encoded-word opener,
     which a mail library decodes into another address or name), is refused,
-    never re-read; a caller
+    never re-read. **Known limit:** `compose` lands every address in lower
+    case, as inbound mail does, and finds its handle by that exact value, so a
+    contact another writer stored with a capital is a handle row of its own,
+    grouped with the lower-case one by the handle owner's comparison key
+    wherever a person is looked up; ending that split is the handle owner's. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
     (default 50, the strictest common provider's per-message limit; each new
