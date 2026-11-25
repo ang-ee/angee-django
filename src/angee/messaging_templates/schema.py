@@ -28,8 +28,8 @@ preview it (``MessageTemplate.preview``), in the kit it names or the default one
 it refuses as the verbs do: a signed-out caller gets the session's GraphQL error,
 and a reader who may not preview the row a ``PERMISSION_DENIED`` GraphQL error.
 Its rendered message carries the row's ``language`` and the ``direction`` of the
-mail's own text (``RenderedMessage.direction``), for a page that shows the
-subject, preheader or plain text outside the HTML.
+mail's own text (``RenderedMessage.direction``, a ``MessageTemplateTextDirection``),
+for a page that shows the subject, preheader or plain text outside the HTML.
 """
 
 from __future__ import annotations
@@ -53,12 +53,19 @@ from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.messaging_templates.models import MessageTemplate as MessageTemplateModel
 from angee.messaging_templates.models import MessageTemplateQuerySet
-from angee.messaging_templates.walker import RenderedMessage, TemplatePreview, TemplateWarning, TemplateWarningCode
+from angee.messaging_templates.walker import (
+    RenderedMessage,
+    TemplatePreview,
+    TemplateWarning,
+    TemplateWarningCode,
+    TextDirection,
+)
 
 MessageTemplate = apps.get_model("messaging_templates", "MessageTemplate")
 BrandKit = apps.get_model("brandkit", "BrandKit")
 
 MessageTemplateWarningCode = strawberry.enum(TemplateWarningCode, name="MessageTemplateWarningCode")
+MessageTemplateTextDirection = strawberry.enum(TextDirection, name="MessageTemplateTextDirection")
 MessageTemplateWarningType = strawberry.type(TemplateWarning, name="MessageTemplateWarningType")
 RenderedMessageType = strawberry.type(RenderedMessage, name="RenderedMessageType")
 MessageTemplatePreviewType = strawberry.type(TemplatePreview, name="MessageTemplatePreviewType")

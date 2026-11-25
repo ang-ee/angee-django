@@ -336,6 +336,7 @@ page.
 named kit or the default one, to a caller who may preview it. It refuses as the
 verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
 reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
-Its `rendered` message carries `direction` (`rtl` or `ltr`, what the HTML's `dir`
-says), which a page sets on the subject, preheader and plain text it shows
-outside the mail's frame, rather than guessing from their first letter.
+Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
+(`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
+says), which a page sets as `dir` on the subject, preheader and plain text it
+shows outside the mail's frame, rather than guessing from their first letter.

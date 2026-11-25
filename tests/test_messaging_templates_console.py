@@ -26,7 +26,7 @@ from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema,
 from angee.iam.roles import subject_permitted
 from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind, MessageTemplateQuerySet
 from angee.messaging_templates.testing.models import MessageTemplate
-from angee.messaging_templates.walker import TemplateWalker
+from angee.messaging_templates.walker import TemplateWalker, TextDirection
 from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
 from tests.test_messaging_templates import _row, _schema
@@ -425,8 +425,9 @@ _UNDIRECTED = "query($id: ID!) { message_template_preview(template: $id) { rende
 
 
 def test_a_preview_says_the_direction_of_the_mails_own_text(library: dict[str, Any]) -> None:
-    """An Arabic mail whose subject starts with a Latin brand name reads right to left, as its HTML's ``dir`` says,
-    and an English one left to right. Reading the direction costs no statement and adds no gate."""
+    """An Arabic mail whose subject starts with a Latin brand name reads right to left (``RTL`` on the wire), as its
+    HTML's ``dir`` says, and an English one left to right (``LTR``). Reading the direction costs no statement and
+    adds no gate."""
 
     del library
     admin = create_platform_admin("messaging-templates-console-director")
@@ -434,13 +435,13 @@ def test_a_preview_says_the_direction_of_the_mails_own_text(library: dict[str, A
     schema = _schema()
     arabic = _row("template", "tests.welcome", "ar", subject="Acme: مرحبا", source="مرحبا بك.")
     english = _row("template", "tests.welcome", subject="Acme: welcome", source="Welcome.")
-    for row, direction in ((arabic, "rtl"), (english, "ltr")):
+    for row, wire, direction in ((arabic, "RTL", TextDirection.RTL), (english, "LTR", TextDirection.LTR)):
         variables = {"id": public_id_of(row)}
         undirected = _measured(schema, _UNDIRECTED, variables, admin)
         directed = _measured(schema, _DIRECTED, variables, admin)
         rendered = directed.data["message_template_preview"]["rendered"]
-        assert (rendered["direction"], rendered["subject"]) == (direction, row.subject)
-        assert f'<html lang="{row.language}" dir="{direction}"' in rendered["html"]
+        assert (rendered["direction"], rendered["subject"]) == (wire, row.subject)
+        assert f'<html lang="{row.language}" dir="{direction.value}"' in rendered["html"]
         assert (directed.statements, directed.repeated) == (undirected.statements, undirected.repeated)
         for user in (member, AnonymousUser()):
             answers = [execute_schema(schema, document, variables, user=user) for document in (_DIRECTED, _UNDIRECTED)]
