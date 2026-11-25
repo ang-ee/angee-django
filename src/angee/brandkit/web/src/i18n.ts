@@ -23,6 +23,7 @@ export const enBrandkitMessages: Record<string, string> = {
   "field.fontBody": "Body text",
   "field.footerOrganization": "Organization",
   "field.footerAddress": "Postal address",
+  "field.voice": "Tone and style",
   "field.contrastWarnings": "Warnings",
   "contrast.none": "Light and dark mail show these colours as stated.",
   "contrast.moved": "{seed}: {role} in {scheme} mail moves far from this colour to stay readable.",

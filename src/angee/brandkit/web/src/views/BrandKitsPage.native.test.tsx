@@ -10,6 +10,36 @@ function listedKits(): string[] {
   return screen.queryAllByRole("link", { name: /^Open (Angee|Sandstone)$/ }).map((link) => link.getAttribute("aria-label") ?? "");
 }
 
+/** The kit form's section headings and field labels, in the order the sheet shows them. */
+async function sheetOutline(): Promise<string[]> {
+  const form = (await screen.findByRole("heading", { name: "Kit" })).closest("form");
+  if (!form) throw new Error("The kit form renders no form element.");
+  return [...form.querySelectorAll("h2, h3, label")].map((node) => node.textContent?.trim() ?? "").filter(Boolean);
+}
+
+/** The form below its title: every section in its declared place, both long texts in theirs. */
+const KIT_OUTLINE = [
+  "Kit", "Default kit",
+  "Identity palette", "Brand color", "Accent color", "Neutral tint",
+  "Surfaces and navigation", "Page background", "Cards and panels", "App rail",
+  "Status palette", "Success", "Warning", "Danger", "Information",
+  "Readability in mail", "Warnings",
+  "Fonts", "Headings", "Body text",
+  "Mail footer", "Organization", "Postal address",
+  "Voice", "Tone and style",
+];
+
+test.each([
+  ["a saved kit", "sandstone", KIT_OUTLINE],
+  ["the create form", "new", KIT_OUTLINE.filter((label) => label !== "Readability in mail" && label !== "Warnings")],
+] as const)("%s shows nothing but its title above the Kit section, the address in the mail footer and the voice last", async (_case, open, outline) => {
+  render(<BrandKitStory open={open} />);
+  await screen.findByLabelText("Tone and style");
+  expect(await sheetOutline()).toEqual(outline);
+  const footer = screen.getByRole("heading", { name: "Mail footer" }).closest("section");
+  expect(footer?.contains(screen.getByLabelText("Postal address"))).toBe(true);
+});
+
 test("the default kit lists first, and a kit saved as the default lists first once the list reads again", async () => {
   const requests: GraphQLWireRequest[] = [];
   render(<BrandKitStory onRequest={(request) => requests.push(request)} />);
