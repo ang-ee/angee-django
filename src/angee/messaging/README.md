@@ -210,26 +210,7 @@ its capability child. Takeout and export backends declare `SourceKind.IMPORT` an
 assert as the channel's `integration_ptr`, the same row that owns the takeout's
 `SyncStream` and observed `RecordLink`s.
 
-A channel held a public form in six columns of its own (`slug`, `is_published`,
-`form_schema`, `form_schema_version`, `max_body_bytes`, `max_field_bytes`) until
-web forms took forms over. Messaging no longer declares them, and each project
-removes them in its own migration history: with its copy of the web forms
-bridge's template where channels hold a form, which carries each form to a
-`webforms.Form` first, and with an ordinary autodetected removal where none
-does. [`webforms.py`](webforms.py) keeps what those retained migrations import:
-`default_webform_schema`, the column names, and the one judgment of "this
-channel holds a form" (`holds_form`, `channels_holding_forms`), which the
-template uses to move and messaging uses to refuse.
-
-Messaging refuses to let the columns go full
-([`webform_columns.py`](webform_columns.py)). Its `pre_migrate` receiver stops a
-`migrate` run, also under `provision`, whose plan removes one of them with a
-migration that neither declares itself the move (`moves_webform_channels = True`
-on its `Migration`) nor follows it, while a webform channel of that database
-holds a form; nothing is applied, and the refusal names the migration, counts
-the channels and gives the remedy. `check --database` says the same as
-`angee.E054`. It reads `RemoveField` on the channel, also inside
-`SeparateDatabaseAndState`; a column dropped by `RunSQL`, or renamed and then
-removed, is not seen. Interim: deleted once the framework pins django-compose
-0.1.0.dev14, whose drop guard judges pending removals at migrate time; the
-module's docstring says what the bridge's template changes with that pin.
+A channel held a public form in columns of its own until web forms took forms
+over. [`webforms.py`](webforms.py) keeps `default_webform_schema` alone, the
+default that `Channel.form_schema` named, because every initial messaging
+migration authored while those columns existed imports it.

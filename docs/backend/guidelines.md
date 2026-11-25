@@ -1637,15 +1637,10 @@ retains its native routing contract.
   [Migration procedures](../../.agents/skills/angee-runtime/references/migrations.md)
   own the operational cautions; routine startup never retires history.
 - **Removing a field, model or donor addon whose storage holds data needs a
-  declared cutover.** `makemigrations` refuses the autodetected drop through the
-  [composer's drop guard](../composer.md#project-migration-history). The guard
-  judges authoring, on the database `makemigrations` runs on. Until the
-  framework pins django-compose 0.1.0.dev14, whose guard also judges pending
-  removals at `migrate`, the addon that owns a column whose data a template
-  carries away refuses the wrong order itself, in a `pre_migrate` receiver and
-  a database check (messaging's
-  [`refuse_removal_ahead_of_the_move`](../../src/angee/messaging/webform_columns.py)
-  and `angee.E054`, for the form columns its channels held). An
+  declared cutover.** A host's `makemigrations` refuses an autodetected removal
+  of a table or column that holds data on any database the host routes it to
+  ([django-compose's authoring guard](../composer.md#project-migration-history));
+  a cutover is declared in a reviewed migration. A
   project authors a native migration that preserves or retires the data and
   removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
