@@ -12,6 +12,14 @@ import {
   ANGEE, HARBOUR, ORCHARD, PALE, brandKitResource, brandKitWire, defaultKitColors, type KitRow,
 } from "./views/brand-kits.test-support";
 
+/**
+ * The production `createApp`, frame and hold included, as a host composes it. Two things differ
+ * from a host page: the workshop has no head bootstrap script and no boot cache, so every story load
+ * is a device's first visit. The page renders under the workshop's own stock tokens while the kit is
+ * read, then the root takes the kit's, and controls cross-fade for `--dur-base` (their
+ * `transition-colors`). A host's first visit paints the build's appearance first in the same way; its
+ * next visits paint the cached kit before the app mounts and show no change.
+ */
 export default {
   title: "Brand kits/Host appearance",
   parameters: { angeeOwnRuntime: true, layout: "fullscreen" },
@@ -27,7 +35,7 @@ const HARBOUR_KITS: readonly KitRow[] = [{ ...HARBOUR, is_default: true }, { ...
 const PALE_KITS: readonly KitRow[] = [PALE];
 const NO_KITS: readonly KitRow[] = [];
 
-/** The console in Orchard, the default kit: rail, canvas, sheets, buttons, links, focus ring and status chips in its colours; stock's font, corners, density, elevation and mark. */
+/** The console in Orchard, the default kit: rail, canvas, sheets, buttons, links, status chips and the focus tokens in its colours; stock's font, corners, density, elevation and mark. */
 export const ConsoleOrchard = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} /> };
 /** The console in Harbour, the default kit. */
 export const ConsoleHarbour = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={HARBOUR_KITS} colorScheme={scheme(context)} /> };
@@ -37,11 +45,16 @@ export const ConsoleNoKit = { render: (_args: unknown, context: StoryContext) =>
 export const SaveTheDefault = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} initialEntry="/brand-kits/bkt_harbour" /> };
 /** A brand too pale for white ink: buttons fill pale with dark ink, links darken to read, and the console shows no warning. */
 export const PaleKit = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={PALE_KITS} colorScheme={scheme(context)} /> };
-/** The sign-in page, signed out, in Orchard: background, card and button in its colours; name and mark unchanged. */
+/**
+ * The sign-in page, signed out, in Orchard. The stories' host declares no brand, so the page shows the
+ * framework's own hero, whose backdrop is fixed artwork the kit does not reach. The button, the inputs,
+ * the text and the card's fill (the sheet at 94 %) take Orchard's colours; the name and mark are the
+ * framework's.
+ */
 export const SignInOrchard = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
-/** The sign-in page, signed out, in Harbour. */
+/** The sign-in page, signed out, in Harbour, as SignInOrchard. */
 export const SignInHarbour = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={HARBOUR_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
-/** The sign-in page, signed out, with no default kit: the stock theme. */
+/** The sign-in page, signed out, with no default kit: the stock theme over the framework's hero. */
 export const SignInNoKit = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={NO_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
 
 /** A platform admin: the identity the console's Brand kits entry asks for. */

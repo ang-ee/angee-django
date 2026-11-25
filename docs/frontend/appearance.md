@@ -44,8 +44,11 @@ options it answers replace the build's options for that theme; when it answers
 none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
 is that source. While the source's first read is on its way, the provider keeps
 the first paint and the boot cache; a failure or a pause releases them onto the
-build's options. Every page inside the app wears the answer, signed in or out; a
-standalone web form page (`/forms/*`) keeps the build's look.
+build's options. Pages render meanwhile under that paint: on a device's first
+visit it is the build's appearance, which changes once when the answer arrives;
+on later visits it is the cached answer, so nothing changes. Every page inside the app wears the answer where it draws from
+tokens, signed in or out; a standalone web form page (`/forms/*`) keeps the build's
+look.
 
 A signed-in user's `iam.User.preferences.appearance` fields override the host,
 run-time options included, independently. The stored document contains stable
