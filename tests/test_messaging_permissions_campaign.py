@@ -236,7 +236,7 @@ def test_the_policy_decides_every_messaging_permission(db):
         (notification, "read", "recipient thread-reader", "outsider author"),
         (notification, "write", "recipient", "thread-owner"),
         (notification, "delete", "recipient", "thread-owner"),
-        (part, "create", "outsider", "anonymous"),
+        (part, "create", "thread-editor message-editor admin", "outsider thread-reader anonymous"),
         (part, "read_inbox", "thread-reader", "outsider"),
         (part, "read", "thread-reader", "outsider author"),
         (part, "write", "thread-editor", "thread-reader"),
