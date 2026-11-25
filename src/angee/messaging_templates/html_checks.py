@@ -5,12 +5,24 @@ HTML form, the markup inside an Outlook comment) with its template spans read as
 placeholders, and returns what a mail may not carry. Property 1's static side, a
 value never becomes markup, an attribute, a link target or CSS, is this
 module's alone; the walker calls it on every row it checks.
+
+A form is admitted only when it is written in one strict spelling every HTML
+reader tokenises the same way (:class:`SpellingRule`): the text equals the
+canonical rebuild of what ``html.parser`` read, event by event, so nothing a
+browser could read differently from what was judged gets through. It is a
+refusal saying how to write the row, never a rewrite. Each event the parser
+reports is located by :meth:`~html.parser.HTMLParser.getpos` and must begin
+where the one before it ended, so nothing the parser consumes without reporting
+it (``</>``) passes either. Two spellings every reader takes alike stay free:
+the case of a tag or attribute name, and the run of spaces, tabs and newlines
+between attributes.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from enum import IntEnum
 from html import escape as escape_html
 from html.parser import HTMLParser
 from typing import cast
@@ -18,7 +30,7 @@ from typing import cast
 from django.template import TemplateSyntaxError
 from django.template.base import DebugLexer, FilterExpression, Token, TokenType, VariableNode
 
-from angee.messaging_templates.engine import MAIL_COLOURS, MessageTemplateEngine, filter_names, refused_link, url
+from angee.messaging_templates.engine import MAIL_COLOURS, MessageTemplateEngine, filter_names, url
 
 STYLE_ELEMENT_OUTPUTS = frozenset(("brand", *path) for path in MAIL_COLOURS)
 """The outputs a ``<style>`` element may hold, without filters: the mail colours."""
@@ -27,16 +39,75 @@ STYLE_OUTPUTS = STYLE_ELEMENT_OUTPUTS | {("brand", "font", "heading"), ("brand",
 """The outputs a ``style`` attribute may hold, without filters: a mail colour, a font stack, the direction."""
 
 
-REFUSED_ELEMENTS = frozenset({
-    "script", "iframe", "object", "embed", "form", "link", "base", "svg", "math",
-    # Raw text whose markup one reader parses and another does not; noscript turns on scripting.
-    "noscript", "xmp", "noembed", "noframes", "plaintext", "textarea",
+class SpellingRule(IntEnum):
+    """The strict spelling of an HTML form, one rule each, with the refusal that says how to write the row."""
+
+    NO_NUL = 1
+    LESS_THAN = 2
+    START_TAG = 3
+    SELF_CLOSING = 4
+    END_TAG = 5
+    TEMPLATE_CODE = 6
+    MODE_ELEMENTS = 7
+    ENDS_IN_TEXT = 8
+
+    @property
+    def message(self) -> str:
+        """How a row is written to meet this rule."""
+
+        return SPELLING[self]
+
+
+SPELLING: dict[SpellingRule, str] = {
+    SpellingRule.NO_NUL: "a row holds no NUL character",
+    SpellingRule.LESS_THAN: (
+        "a < opens a start tag, an end tag, and in a layout its opening <!doctype html> or Outlook's comments; "
+        "anywhere else write &lt;"
+    ),
+    SpellingRule.START_TAG: (
+        "a start tag is written plainly: a name of letters and digits, each attribute once with a name of letters, "
+        "digits, -, _, : or ., every value in double quotes with &amp;, &lt;, &gt; and &quot; for those "
+        "characters, spaces, tabs or newlines between attributes and nothing else"
+    ),
+    SpellingRule.SELF_CLOSING: "only a void element (br, hr, img, meta…) closes itself with />",
+    SpellingRule.END_TAG: "an end tag is </name> and nothing else",
+    SpellingRule.TEMPLATE_CODE: (
+        "template code sits in text or inside a double-quoted attribute value, never in a tag, an end tag, a "
+        "declaration or a comment"
+    ),
+    SpellingRule.MODE_ELEMENTS: (
+        "an element that changes how a reader reads what follows is not allowed in a mail; title and style are"
+    ),
+    SpellingRule.ENDS_IN_TEXT: "a form ends in text, outside any tag, comment or <style> or <title> element",
+}
+"""The refusal of each :class:`SpellingRule`, stated once."""
+
+MODE_ELEMENTS = frozenset({
+    "script", "iframe", "noscript", "xmp", "noembed", "noframes", "plaintext", "textarea", "svg", "math", "template",
+    "select",
 })
-REFUSED_ATTRIBUTES = frozenset(
-    {"http-equiv", "srcset", "background", "poster", "action", "formaction", "xlink:href", "cite"},
-)
-LINK_ATTRIBUTES = frozenset({"href", "src"})
+"""Elements that switch how a reader reads what follows them (rule 7); ``title`` and ``style`` alone are admitted."""
+
+REFUSED_ELEMENTS = frozenset({"object", "embed", "form", "link", "base"})
+"""Elements a mail may not carry for what they load or submit."""
+
+VOID_ELEMENTS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
+})
+"""The elements that have no content, and alone may close themselves with ``/>`` (rule 4)."""
+
+LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite", "poster", "action"})
+"""The attributes a mail uses for links: one ``url`` output, or a static link ``url`` leaves unchanged."""
+
+REFUSED_ATTRIBUTES = frozenset({
+    "http-equiv", "ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
+    "profile", "formaction", "srcset", "icon", "xlink:href",
+})
+"""The other attributes a reader follows as a link or acts on, refused by name with every ``on*``."""
+
 OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
+"""The text attributes an output may write."""
+
 CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
 
 OFFICE_ELEMENTS = re.compile(r"xml|o:[a-z]+")
@@ -48,40 +119,80 @@ REVEALED_OPENS = "[if !mso]><!"
 """The data of ``<!--[if !mso]><!-->``, which opens markup every client but classic Outlook renders."""
 REVEALED_CLOSES = "<![endif]"
 """The data of ``<!--<![endif]-->``, which closes it."""
+DOCTYPE = "doctype html"
+"""The one declaration, a layout's opening ``<!doctype html>``."""
 
+_ELEMENT_NAME = re.compile(r"[a-z][a-z0-9]*(?::[a-z][a-z0-9]*)?")
+_ATTRIBUTE_NAME = re.compile(r"[a-z_:][a-z0-9_:.-]*")
+_GAP = "[ \t\n]+"
+_CODE_IN_TAG = re.compile(r"<[/!?]?(?:[a-zA-Z][^\t\n\r\f />\x00]*)?\x00")
+"""Where a ``<`` the parser read as text names a tag that template code continues: rule 6, not rule 2."""
 _PLACEHOLDER = re.compile("\x00(\\d+)\x00")
-_SPAN_OPENS_TAG = re.compile("<[/!?]?\x00")
 
 
 def _written(value: str) -> str:
-    """An attribute value as a start tag holding template code writes it: ``&``, ``<``, ``>`` and ``"`` escaped."""
+    """An attribute value as the strict spelling writes it: ``&``, ``<``, ``>`` and ``"`` escaped."""
 
     return escape_html(value, quote=False).replace('"', "&quot;")
+
+
+def _start_tag(tag: str, attrs: list[tuple[str, str | None]], *, closing: bool) -> re.Pattern[str]:
+    """The canonical rebuild of a start tag as ``html.parser`` read it, the case of names and the gaps free."""
+
+    attributes = "".join(
+        _GAP + "(?i:" + re.escape(name) + ")" + ("" if value is None else '="' + re.escape(_written(value)) + '"')
+        for name, value in attrs
+    )
+    return re.compile("<(?i:" + re.escape(tag) + ")" + attributes + ("[ \t\n]*/>" if closing else ">"))
 
 
 class _HtmlChecker(HTMLParser):
     """Read an HTML form whose template spans are placeholders, and record what a mail may not carry.
 
-    ``text`` is what it is fed. ``conditional_comments`` admits Outlook's
-    conditional comments (a layout's); ``office`` reads the markup inside one.
+    ``text`` is what it is fed. ``document`` admits what a layout alone writes:
+    its opening doctype and Outlook's conditional comments; ``office`` reads the
+    markup inside one of those.
     """
 
     def __init__(
         self, spans: Sequence[Token], expression: Callable[[str], FilterExpression | None], text: str, *,
-        conditional_comments: bool = False, office: bool = False,
+        document: bool = False, office: bool = False,
     ) -> None:
         super().__init__(convert_charrefs=False)
         self.spans = spans
         self.expression = expression
         self.text = text
         self.line_starts = [0, *(index + 1 for index, character in enumerate(text) if character == "\n")]
-        self.conditional_comments = conditional_comments
+        self.document = document
         self.office = office
         self.revealed = False
+        self.following: int | None = 0
+        self.closing = False
         self.refusals: list[str] = []
 
     def refuse(self, reason: str) -> None:
         self.refusals.append(reason)
+
+    def broken(self, rule: SpellingRule, what: str) -> None:
+        """Refuse ``what`` for breaking ``rule`` of the strict spelling."""
+
+        self.refuse(f"{what}: {rule.message} (rule {rule.value})")
+
+    def event(self, length: int | None) -> int | None:
+        """Locate the event the parser reports; it must begin where the one before ended. ``None``: not checked.
+
+        ``length`` is the event's length in the text when its spelling is known, so
+        the next event's start can be held to it; ``None`` after a refused one.
+        """
+
+        if self.closing:
+            return None
+        line, column = self.getpos()
+        start = self.line_starts[line - 1] + column
+        if self.following is not None and start > self.following:
+            self.broken(SpellingRule.LESS_THAN, f"{self.text[self.following:start][:20]!r} reads as nothing")
+        self.following = None if length is None else start + length
+        return start
 
     def span_ids(self, text: str) -> list[int]:
         return [int(index) for index in _PLACEHOLDER.findall(text)]
@@ -98,26 +209,38 @@ class _HtmlChecker(HTMLParser):
         lookups = expression.var.lookups if expression.is_var else None
         return (tuple(lookups) if lookups else None), filter_names(expression)
 
+    # -- tags -------------------------------------------------------------------
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.check_tag(tag, attrs, endings=(">",))
+        self.check_tag(tag, attrs, closing=False)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.check_tag(tag, attrs, endings=("/>", " />"))
+        self.check_tag(tag, attrs, closing=True)
 
-    def check_tag(self, tag: str, attrs: list[tuple[str, str | None]], *, endings: tuple[str, ...]) -> None:
-        if "\x00" in tag:
-            return self.refuse("template code in a tag name")
+    def check_tag(self, tag: str, attrs: list[tuple[str, str | None]], *, closing: bool) -> None:
+        written = self.get_starttag_text() or ""
+        if self.event(len(written)) is None:
+            return
+        if "\x00" in tag or any("\x00" in name for name, _ in attrs):
+            return self.broken(SpellingRule.TEMPLATE_CODE, f"template code in the tag {written[:40]!r}")
+        names = [name for name, _ in attrs]
+        if "<" in written[1:]:
+            self.broken(SpellingRule.LESS_THAN, f"a < in the tag {written[:60]!r}")
+        elif (
+            not _ELEMENT_NAME.fullmatch(tag) or not all(_ATTRIBUTE_NAME.fullmatch(name) for name in names)
+            or len(set(names)) != len(names) or not _start_tag(tag, attrs, closing=closing).fullmatch(written)
+        ):
+            self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}")
+        if closing and tag not in VOID_ELEMENTS and not (self.office and OFFICE_ELEMENTS.fullmatch(tag)):
+            self.broken(SpellingRule.SELF_CLOSING, f"<{tag}/>")
+        if tag in MODE_ELEMENTS:
+            self.broken(SpellingRule.MODE_ELEMENTS, f"<{tag}>")
         if tag in REFUSED_ELEMENTS:
             self.refuse(f"<{tag}> is not allowed in a mail")
         if (":" in tag or tag == "xml") and not (self.office and OFFICE_ELEMENTS.fullmatch(tag)):
             self.refuse(f"<{tag}> is not allowed in a mail: xml and Office settings sit in Outlook's comments")
-        if any("\x00" in name or "\x00" in (value or "") for name, value in attrs):
-            self.check_spelling(tag, attrs, endings)
         for name, raw_value in attrs:
             value = raw_value or ""
-            if "\x00" in name:
-                self.refuse(f"template code in an attribute name of <{tag}>")
-                continue
             if name in REFUSED_ATTRIBUTES or name.startswith("on"):
                 self.refuse(f"the {name} attribute is not allowed in a mail")
                 continue
@@ -125,37 +248,27 @@ class _HtmlChecker(HTMLParser):
             self.check_conditions(name, ids)
             if name in LINK_ATTRIBUTES:
                 self.check_link(tag, name, value, ids)
-                continue
-            static = _PLACEHOLDER.split(value)[::2]
-            if any(refused_link(text) for text in (*static, "".join(static))):
-                self.refuse(f"the {name} of <{tag}> reaches a scheme a mail may not link to")
-            if name == "style":
+            elif name == "style":
                 self.check_spans(f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True)
             else:
                 self.check_spans(
                     f"the {name} attribute of <{tag}>", ids, None if name in OUTPUT_ATTRIBUTES else frozenset(),
                     conditions=True,
                 )
+        return None
 
-    def check_spelling(self, tag: str, attrs: list[tuple[str, str | None]], endings: tuple[str, ...]) -> None:
-        """Admit a start tag holding template code only as it is written plainly, so every reader reads it alike.
-
-        Its text equals the canonical rebuild of what ``html.parser`` read: the
-        lower-case name, then each attribute once, its value double-quoted with
-        ``&``, ``<``, ``>`` and ``"`` escaped, as web forms judge stored markup.
-        """
-
-        names = [name for name, _ in attrs]
-        rebuilt = "<" + tag + "".join(
-            f" {name}" if value is None else f' {name}="{_written(value)}"' for name, value in attrs
-        )
-        if len(set(names)) != len(names) or (self.get_starttag_text() or "") not in {
-            rebuilt + ending for ending in endings
-        }:
-            self.refuse(
-                f"<{tag}> holds template code, so it is written plainly: lower-case names, each attribute once, "
-                "each value double-quoted, with &amp;, &lt;, &gt; and &quot; for those characters",
-            )
+    def handle_endtag(self, tag: str) -> None:
+        start = self.event(len(tag) + 3)
+        if start is None:
+            return
+        if "\x00" in tag:
+            self.following = None
+            return self.broken(SpellingRule.TEMPLATE_CODE, f"template code in the end tag {self.text[start:][:30]!r}")
+        written = self.text[start:start + len(tag) + 3]
+        if not _ELEMENT_NAME.fullmatch(tag) or written.lower() != f"</{tag}>":
+            self.following = None
+            self.broken(SpellingRule.END_TAG, f"the end tag {self.text[start:][:30]!r}")
+        return None
 
     def check_conditions(self, name: str, ids: list[int]) -> None:
         """Refuse an ``if`` whose pair an attribute value does not hold whole."""
@@ -207,31 +320,62 @@ class _HtmlChecker(HTMLParser):
                 continue
             self.refuse(f"template code in {where}")
 
+    # -- text -------------------------------------------------------------------
+
     def handle_data(self, data: str) -> None:
+        start = self.event(len(data))
+        if start is None:
+            return
+        if "<" in data:
+            at = start + data.index("<")
+            opens_code = _CODE_IN_TAG.match(self.text, at) is not None
+            self.broken(
+                SpellingRule.TEMPLATE_CODE if opens_code else SpellingRule.LESS_THAN,
+                f"{self.text[at:at + 20]!r}" + (f" in <{self.cdata_elem}>" if self.cdata_elem else ""),
+            )
         if self.cdata_elem == "style":
             self.check_spans("a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False)
         elif self.cdata_elem == "title":
             self.check_spans("a <title> element", self.span_ids(data), None, conditions=True)
 
+    def handle_entityref(self, name: str) -> None:
+        self.character_reference(1 + len(name))
+
+    def handle_charref(self, name: str) -> None:
+        self.character_reference(2 + len(name))
+
+    def character_reference(self, length: int) -> None:
+        """Hold a character reference's spelling: ``&name`` or ``&#…``, its ``;`` optional; it is text."""
+
+        start = self.event(None)
+        if start is not None:
+            self.following = start + length + (self.text[start + length:start + length + 1] == ";")
+
+    # -- what a layout alone writes ------------------------------------------
+
     def handle_comment(self, data: str) -> None:
         """Admit, in a layout, Outlook's conditional comments alone: static, balanced, their markup checked."""
 
-        if not self.conditional_comments:
-            return self.refuse("an HTML comment is not allowed in a mail; a layout alone holds Outlook's")
-        line, column = self.getpos()
-        if not self.text.startswith(f"<!--{data}-->", self.line_starts[line - 1] + column):
-            return self.refuse("an HTML comment is written <!--…-->")
+        start = self.event(len(data) + 7)
+        if start is None:
+            return None
+        if not self.text.startswith(f"<!--{data}-->", start):
+            self.following = None
+            return self.broken(SpellingRule.LESS_THAN, f"the comment {self.text[start:][:30]!r}")
         if "\x00" in data:
-            return self.refuse("template code in an HTML comment: Outlook's comments are static")
+            return self.broken(SpellingRule.TEMPLATE_CODE, "template code in an HTML comment")
+        if not self.document:
+            return self.broken(SpellingRule.LESS_THAN, "an HTML comment, which a layout alone holds for Outlook")
         if data in (REVEALED_OPENS, REVEALED_CLOSES):
             if self.revealed is (data == REVEALED_OPENS):
                 return self.refuse("<!--[if !mso]><!--> and <!--<![endif]--> come in pairs, one pair at a time")
             self.revealed = data == REVEALED_OPENS
             return None
         if (comment := MSO_COMMENT.fullmatch(data)) is None:
-            return self.refuse(
-                "an HTML comment in a layout is <!--[if mso]>…<![endif]--> or the <!--[if !mso]><!-->…"
-                "<!--<![endif]--> pair",
+            return self.broken(
+                SpellingRule.LESS_THAN,
+                "an HTML comment other than <!--[if mso]>…<![endif]--> or the <!--[if !mso]><!-->…<!--<![endif]--> "
+                "pair",
             )
         if self.revealed:
             return self.refuse("an Outlook comment sits inside <!--[if !mso]><!-->…<!--<![endif]-->")
@@ -242,42 +386,50 @@ class _HtmlChecker(HTMLParser):
         return None
 
     def handle_decl(self, decl: str) -> None:
-        if "\x00" in decl or not decl.lower().startswith("doctype"):
-            self.refuse("a declaration other than the doctype is not allowed in a mail")
+        start = self.event(len(decl) + 3)
+        if start is None:
+            return
+        if "\x00" in decl:
+            self.following = None
+            self.broken(SpellingRule.TEMPLATE_CODE, "template code in a declaration")
+        elif not (self.document and start == 0 and decl.lower() == DOCTYPE):
+            self.following = None
+            self.broken(SpellingRule.LESS_THAN, f"the declaration <!{decl[:20]}>")
 
     def unknown_decl(self, data: str) -> None:
-        self.refuse("a marked section is not allowed in a mail")
+        if self.event(None) is not None:
+            self.broken(SpellingRule.LESS_THAN, "a marked section")
 
     def handle_pi(self, data: str) -> None:
-        self.refuse("a processing instruction is not allowed in a mail")
+        if self.event(None) is not None:
+            self.broken(SpellingRule.LESS_THAN, "a processing instruction")
 
 
 def check_html(
-    form: str, expression: Callable[[str], FilterExpression | None], *, conditional_comments: bool = False,
+    form: str, expression: Callable[[str], FilterExpression | None], *, document: bool = False,
 ) -> list[str]:
     """Return what an HTML form holds that a mail may not, its template spans read as placeholders.
 
-    Refused: the elements in :data:`REFUSED_ELEMENTS`; the attributes in
-    :data:`REFUSED_ATTRIBUTES` and every ``on*``; an ``if`` an attribute value does
-    not hold whole; template code in a tag name or an attribute name; any HTML
-    comment but, with ``conditional_comments`` (a layout), Outlook's
-    ``<!--[if mso]>…<![endif]-->`` and the ``<!--[if !mso]><!-->…<!--<![endif]-->``
-    pair, balanced, with no template code inside, the markup of the first checked
-    as any other and ``xml`` and Office (``o:``) settings admitted there alone;
-    ``xml`` and namespaced elements anywhere else; a start tag holding template
-    code that is not written plainly
-    (:meth:`_HtmlChecker.check_spelling`); in ``href`` or ``src`` anything but one
-    output whose last filter is ``url``, or a static link
-    :func:`~angee.messaging_templates.engine.url` leaves as ``html.parser`` decodes
-    it; in any other attribute a static value reaching a scheme ``url`` refuses;
-    in ``style`` an output but :data:`STYLE_OUTPUTS`; in a ``<style>`` element a
-    span but :data:`STYLE_ELEMENT_OUTPUTS`; in a ``<title>`` element or any other
-    attribute an output outside :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a
-    tag other than an ``if`` family one. A form ends where it started, in text
-    (:func:`_checked`). ``expression`` compiles one output span to its
+    Refused: what breaks a :class:`SpellingRule`; the elements in
+    :data:`REFUSED_ELEMENTS`; ``xml`` and namespaced elements but Office's inside
+    Outlook's comments; the attributes in :data:`REFUSED_ATTRIBUTES` and every
+    ``on*``; an ``if`` an attribute value does not hold whole; in an attribute of
+    :data:`LINK_ATTRIBUTES` anything but one output whose last filter is ``url``,
+    or a static link :func:`~angee.messaging_templates.engine.url` leaves as
+    ``html.parser`` decodes it; in ``style`` an output but :data:`STYLE_OUTPUTS`;
+    in a ``<style>`` element a span but :data:`STYLE_ELEMENT_OUTPUTS`; in a
+    ``<title>`` element or any other attribute an output outside
+    :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a tag other than an ``if``
+    family one. ``document`` (a layout) admits the opening ``<!doctype html>`` and
+    Outlook's ``<!--[if mso]>…<![endif]-->`` and
+    ``<!--[if !mso]><!-->…<!--<![endif]-->``, balanced, static, the markup of the
+    first held to this same contract with ``xml`` and Office (``o:``) settings
+    admitted there alone. ``expression`` compiles one output span to its
     ``FilterExpression``.
     """
 
+    if "\x00" in form:
+        return [f"the form: {SpellingRule.NO_NUL.message} (rule {SpellingRule.NO_NUL.value})"]
     spans: list[Token] = []
     parts: list[str] = []
     last = 0
@@ -289,10 +441,7 @@ def check_html(
         spans.append(token)
         last = end
     parts.append(form[last:])
-    text = "".join(parts)
-    checker = _HtmlChecker(spans, expression, text, conditional_comments=conditional_comments)
-    if _SPAN_OPENS_TAG.search(text):
-        checker.refuse("template code where a tag starts")
+    checker = _HtmlChecker(spans, expression, "".join(parts), document=document)
     refusals = _checked(checker)
     if checker.revealed:
         refusals.append("<!--[if !mso]><!--> is never closed with <!--<![endif]-->")
@@ -300,16 +449,21 @@ def check_html(
 
 
 def _checked(checker: _HtmlChecker) -> list[str]:
-    """Feed ``checker`` its text and return its refusals; the text ends where it started, in text.
+    """Feed ``checker`` its text and return its refusals; the text ends in text (rule 8).
 
-    ``html.parser`` drops an unfinished tag at the end of its input and never
-    closes a raw-text element, while the next row's text would continue it.
+    ``html.parser`` holds back an unfinished tag at the end of its input and never
+    closes a raw-text element, while the next row's text would continue it. What it
+    holds back may be a character reference (``AT&T``), which is text.
     """
 
     checker.feed(checker.text)
-    if checker.cdata_elem or checker.rawdata:
-        where = f"<{checker.cdata_elem}>" if checker.cdata_elem else repr(checker.rawdata[:20])
-        checker.refuse(f"it ends inside {where}: a form ends in text, outside any tag, comment or <style> or <title>")
+    if checker.cdata_elem:
+        checker.broken(SpellingRule.ENDS_IN_TEXT, f"it ends inside <{checker.cdata_elem}>")
+    elif checker.rawdata == "<":
+        checker.broken(SpellingRule.LESS_THAN, "it ends in <")
+    elif checker.rawdata and not checker.rawdata.startswith("&"):
+        checker.broken(SpellingRule.ENDS_IN_TEXT, f"it ends inside {checker.rawdata[:20]!r}")
+    checker.closing = True
     checker.close()
     return checker.refusals
 

@@ -45,7 +45,14 @@ from angee.messaging_templates.engine import (
     register,
     url,
 )
-from angee.messaging_templates.html_checks import LINK_ATTRIBUTES, OUTPUT_ATTRIBUTES, check_html, compiled_expression
+from angee.messaging_templates.html_checks import (
+    LINK_ATTRIBUTES,
+    MODE_ELEMENTS,
+    OUTPUT_ATTRIBUTES,
+    SpellingRule,
+    check_html,
+    compiled_expression,
+)
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     WALKED_NODES,
@@ -341,7 +348,7 @@ LONG = "a" * 1_001
         pytest.param({"source": "{% if a in items %}{% endif %}", "variables": {"a": "x", "items.*": "x"}},
                      "in takes a literal", id="11-in-value"),
         pytest.param({"source": "<script>x</script>", "format": "html", "text_source": "x"},
-                     "<script> is not allowed", id="12-html"),
+                     "changes how a reader reads what follows", id="12-html"),
         pytest.param({"source": "Use `{{ a }}` here.", "variables": {"a": "x"}}, "inside Markdown code inline",
                      id="12-markdown"),
         pytest.param({"source": "{{ secret }}"}, "secret is not in its variables", id="13-undeclared"),
@@ -448,7 +455,7 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
         pytest.param('<meta http-equiv="refresh" content="0">', True, id="http-equiv"),
         pytest.param('<p onclick="x">x</p>', True, id="on-attribute"),
         *(pytest.param(f'<img {name}="x">', True, id=f"attribute-{name}")
-          for name in ("srcset", "background", "poster", "action", "formaction", "xlink:href", "cite")),
+          for name in ("srcset", "formaction", "xlink:href", "ping", "longdesc", "usemap", "data", "icon")),
         *(pytest.param(f"<p>a</p><{tag}>b</{tag}>", True, id=f"s3-{tag}")
           for tag in ("noscript", "xmp", "noembed", "noframes", "plaintext", "textarea")),
         pytest.param('<noscript><p title="</noscript><b title={{ a }}>"></p></noscript>', True,
@@ -458,10 +465,10 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
         pytest.param('<span title="a" title="{{ a }}">x</span>', True, id="s1-repeated-name"),
         pytest.param('<span TITLE="a" title={{ a }}>x</span>', True, id="s1-repeated-name-in-capitals"),
         pytest.param('<a href="https://example.test/" href={{ a|url }}>x</a>', True, id="s1-repeated-href"),
-        pytest.param('<p TITLE="{{ a }}">x</p>', True, id="s1-capital-name"),
+        pytest.param('<p TITLE="{{ a }}">x</p>', False, id="s1-capital-name"),
         pytest.param('<p title = "{{ a }}">x</p>', True, id="s1-spaced-equals"),
         pytest.param('<p title="{{ a }}" >x</p>', True, id="s1-space-before-close"),
-        pytest.param('<a\nhref="https://example.test/"\ntitle="{{ a }}">x</a>', True, id="s1-newlines"),
+        pytest.param('<a\nhref="https://example.test/"\ntitle="{{ a }}">x</a>', False, id="s1-newlines"),
         pytest.param('<p title="a&b {{ a }}">x</p>', True, id="s1-bare-ampersand"),
         pytest.param('<p title="a &amp; b {{ a }}">x</p>', False, id="s1-admitted-escaped"),
         pytest.param('<img alt="{{ a }}" src="https://example.test/a.png" />', False, id="s1-admitted-self-closing"),
@@ -501,7 +508,7 @@ HTML_ENGINE = MessageTemplateEngine(autoescape=True)
                      id="admitted-condition"),
         pytest.param('<td style="text-align:{% if dir == \'rtl\' %}right{% else %}left{% endif %}">x</td>', False,
                      id="admitted-style-condition"),
-        pytest.param("<!doctype html><html><body>{{ a }}</body></html>", False, id="admitted-doctype"),
+        pytest.param("<!doctype html><html><body>{{ a }}</body></html>", True, id="doctype-outside-a-layout"),
     ],
 )
 def test_the_html_checks(html: str, refused: bool) -> None:
@@ -509,19 +516,153 @@ def test_the_html_checks(html: str, refused: bool) -> None:
         html, compiled_expression(HTML_ENGINE))
 
 
+R = SpellingRule
+SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
+    (R.NO_NUL, "<p>a\x00b</p>", False),
+    (R.NO_NUL, '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>', False),
+    (R.NO_NUL, '<p title="\x009\x00">x</p>', False),
+    (R.LESS_THAN, "<p>5 < 6</p>", False),
+    (R.LESS_THAN, "<p>x</p></><p>y</p>", False),
+    (R.LESS_THAN, "<title>a<b</title>", False),
+    (R.LESS_THAN, "<style>a<b{}</style>", False),
+    (R.LESS_THAN, '<p title="a<b">x</p>', False),
+    (R.LESS_THAN, "<p>x</p><!-- note -->", False),
+    (R.LESS_THAN, "<!doctype html><p>x</p>", False),
+    (R.LESS_THAN, "<p>x</p><!doctype html>", True),
+    (R.LESS_THAN, "<?php x ?>", False),
+    (R.LESS_THAN, "<![CDATA[x]]>", False),
+    (R.LESS_THAN, "<!x>", False),
+    (R.LESS_THAN, "</ x>", False),
+    (R.LESS_THAN, "<p>5 <", False),
+    (R.START_TAG, "<p title='x'>y</p>", False),
+    (R.START_TAG, "<p title=x>y</p>", False),
+    (R.START_TAG, '<p title="a" title="b">y</p>', False),
+    (R.START_TAG, '<p title="a" TITLE="b">y</p>', False),
+    (R.START_TAG, '<p title = "x">y</p>', False),
+    (R.START_TAG, '<p title="x" >y</p>', False),
+    (R.START_TAG, '<p\x0ctitle="x">y</p>', False),
+    (R.START_TAG, '<p\x0btitle="x">y</p>', False),
+    (R.START_TAG, '<p title="a&b">y</p>', False),
+    (R.START_TAG, '<p title="x"title="y">z</p>', False),
+    (R.START_TAG, '<p/title="x">y</p>', False),
+    *((R.SELF_CLOSING, opening, False)
+      for opening in ("<style/>", "<style />", "<STYLE/>", '<style media="all"/>', "<title/>", "<p/>",
+                      '<a href="https://example.test/" />')),
+    (R.END_TAG, "<p>x</p >", False),
+    (R.END_TAG, '<p>x</p x="y">', False),
+    (R.END_TAG, "<p>x</p/>", False),
+    (R.END_TAG, "<title>x</title\t>", False),
+    (R.TEMPLATE_CODE, "<{{ tag }}>x", False),
+    (R.TEMPLATE_CODE, "<a{{ x }}>x</a>", False),
+    (R.TEMPLATE_CODE, '<p {{ x }}="y">z</p>', False),
+    (R.TEMPLATE_CODE, "<p>x</p{{ x }}>", False),
+    (R.TEMPLATE_CODE, "<title>Hi</title{{ v }}><p>x</p></title>", False),
+    (R.TEMPLATE_CODE, "<!--{{ x }}-->", True),
+    *((R.MODE_ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in sorted(MODE_ELEMENTS)),
+    (R.ENDS_IN_TEXT, "<p>x</p><a", False),
+    (R.ENDS_IN_TEXT, '<p>x</p><a title="x', False),
+    (R.ENDS_IN_TEXT, '<p>x</p><a href="https://example.test/"', False),
+    (R.ENDS_IN_TEXT, "<p>x</p><style>", False),
+    (R.ENDS_IN_TEXT, "<p>x</p><title>", False),
+    (R.ENDS_IN_TEXT, "<p>x</p><!--", False),
+]
+SPELLING_ADMITTED: list[tuple[str, bool]] = [
+    ('<P TITLE="x">y</P>', False),
+    ('<a\nhref="https://example.test/"\n\ttitle="{{ a }}"  class="b">x</a>', False),
+    ("<td nowrap>x</td>", False),
+    ('<br/><br /><hr /><img src="https://example.test/a.png" alt="" />', False),
+    ("<p>AT&T, Q&A, R&D &amp; 5 &lt; 6</p>", False),
+    ("<p>AT&T", False),
+    ('<p title="a &amp; &lt;b&gt; &quot;c&quot;">x</p>', False),
+    ("<title>{{ subject }}{% if a %} {{ a }}{% endif %}</title><style>.a{color:{{ brand.dark.text }}}</style>", False),
+    ("<!doctype html><html><head><title>{{ subject }}</title></head><body>{{ x }}</body></html>", True),
+    ("<!DOCTYPE html><p>x</p>", True),
+]
+
+
+@pytest.mark.parametrize(("rule", "html", "document"), [
+    pytest.param(rule, html, document, id=f"{rule.value}-{rule.name.lower()}-{index}")
+    for index, (rule, html, document) in enumerate(SPELLING_REFUSED)
+])
+def test_each_spelling_rule_refuses_with_its_message(rule: SpellingRule, html: str, document: bool) -> None:
+    """Section 1: a form is admitted only in the strict spelling; each rule refuses with its own message."""
+
+    refusals = check_html(html, compiled_expression(HTML_ENGINE), document=document)
+    assert any(rule.message in refusal and f"(rule {rule.value})" in refusal for refusal in refusals), refusals
+
+
+@pytest.mark.parametrize(("html", "document"), SPELLING_ADMITTED)
+def test_the_strict_spelling_admits_what_every_reader_reads_alike(html: str, document: bool) -> None:
+    """The case of names, the gaps between attributes, void elements' slashes and character references are free."""
+
+    assert check_html(html, compiled_expression(HTML_ENGINE), document=document) == []
+
+
+def test_a_self_closing_style_is_refused_by_rule_4(plain: Any) -> None:
+    """A browser ignores the slash of <style/>, so what follows is CSS: in a template, a block, a layout."""
+
+    del plain
+    for row in (
+        _unsaved(format="html", source="<p>Hi</p><style/><p>Hello {{ name }}, welcome.</p></style>",
+                 text_source="{{ name }}", variables={"name": "x"}),
+        _unsaved("block", "styled", source="<p>Hi</p><style/>", text_source="Hi"),
+        _unsaved("layout", "styled", source=PLAIN_LAYOUT.replace("</head>", "<style/></head>"), text_source=PLAIN_TEXT),
+    ):
+        refusals = _refusals(row)
+        assert any(R.SELF_CLOSING.message in refusal for refusal in refusals), (row.kind, refusals)
+
+
+def test_template_code_glued_to_an_end_tag_is_refused_by_rule_6(plain: Any) -> None:
+    """</title{{ v }}> is title text to html.parser and an end tag to a browser once a value supplies its end."""
+
+    del plain
+    row = _unsaved(format="html", text_source="x", variables={"v": "x", "w": "x"},
+                   source='<title>Hi</title{{ v }}><img alt={{ w }} src="https://example.test/x.png"></title><p>B</p>')
+    assert any(R.TEMPLATE_CODE.message in refusal for refusal in _refusals(row)), _refusals(row)
+
+
+def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A NUL forged the checks' placeholders: it hid a value from the style check and raised IndexError."""
+
+    del plain
+    for source in ('<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>',
+                   '<p title="\x009\x00">x</p>'):
+        row = _unsaved(format="html", source=source, text_source="x", variables={"name": "x"})
+        assert any(R.NO_NUL.message in refusal for refusal in _refusals(row)), source
+        saved = _mail(source, {"name": "x"}, format="html", text_source="x", key="tests.nul")
+        with pytest.raises(ValidationError, match="NUL"):
+            _render(saved, {"name": "x"}, kit)
+        with system_context(reason="tests.messaging_templates.render.nul"):
+            assert saved.preview(kit=kit).rendered is None
+            saved.delete()
+    _row("layout", "shipped", is_baseline=True)
+    shipped = _row("part", "said", format="html", source="<b>Said.</b>", text_source="Said.", is_baseline=True)
+    template = _row("template", "tests.said", source='{% include "parts/said" only %}', layout="shipped",
+                    is_baseline=True)
+    with system_context(reason="tests.messaging_templates.render.nul"):
+        override = MessageTemplate.objects.override(shipped)
+        override.source = '<p title="\x009\x00">x</p>'
+        override.save()  # past clean: the deployment's row holds a NUL
+        with caplog.at_level(logging.WARNING, logger="angee.messaging_templates.models"):
+            MessageTemplate.after_resource_load([template], tier="install", source="tests")
+    assert any("NUL" in record.getMessage() for record in caplog.records)
+
+
 @pytest.mark.parametrize(
     ("ending", "refused"),
     [
         ("<a", True), ('<a href="https://example.test/"', True), ('<a title="x', True), ("<a href=", True),
         ("<style>", True), ("<style>.a{", True), ("<title>", True), ("<!--", True), ("<!", True), ("</", True),
-        ("&am", True), ("<b><i>", False), ("", False),
+        ("&am", False), ("AT&T", False), ("Q&A", False), ("5 <", True), ("<b><i>", False), ("", False),
     ],
 )
 def test_a_form_ends_where_it_started(ending: str, refused: bool) -> None:
     """S2 (i3): html.parser drops an unfinished tag at the end and never closes <style>; a form ends in text."""
 
     refusals = check_html("<p>x</p>" + ending, compiled_expression(HTML_ENGINE))
-    assert any("it ends inside" in refusal for refusal in refusals) is refused, refusals
+    assert bool(refusals) is refused, refusals
 
 
 def test_a_row_cannot_leave_the_next_row_inside_a_tag_or_a_style(plain: Any, kit: Any) -> None:
@@ -544,18 +685,25 @@ def test_a_row_cannot_leave_the_next_row_inside_a_tag_or_a_style(plain: Any, kit
             _render(template, {"link": "javascript:alert(document.domain)"}, kit)
 
 
-def test_a_static_value_never_links_to_a_refused_scheme() -> None:
-    """Fix 4 (q12): a static value reaching a scheme url refuses is refused in every attribute, as decoded."""
+def test_link_attributes_follow_url_and_text_attributes_are_text() -> None:
+    """URL-valued attributes: the ones mail links with follow url; the others are refused by name; text is text."""
 
     expression = compiled_expression(HTML_ENGINE)
-    for name in ("ping", "longdesc", "usemap", "lowsrc", "dynsrc", "data", "codebase", "manifest", "profile",
-                 "archive", "itemtype", "xmlns", "title", "class"):
-        for value in ("javascript:alert(1)", "JaVaScRiPt:x", " vbscript:x", "java&#9;script:x", "&#1;file:///x",
-                      "data:text/html,x"):
-            assert check_html(f'<img {name}="{value}">', expression), (name, value)
-    assert check_html('<p title="{% if a %}javascript{% endif %}:x">x</p>', expression)
-    for admitted in ('<html xmlns:v="urn:schemas-microsoft-com:vml">', '<img alt="Note: ready">',
-                     '<p style="color:red;background:#fff">x</p>', '<meta content="width=device-width">'):
+    for name in ("href", "src", "background", "cite", "poster", "action"):
+        for value in ("javascript:alert(1)", "JaVaScRiPt:x", "java&#9;script:x", "data:text/html,x"):
+            assert check_html(f'<td {name}="{value}">x</td>', expression), (name, value)
+        assert check_html(f'<td {name}="https://example.test/a.png">x</td>', expression) == [], name
+    for name in ("ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
+                 "profile", "formaction", "srcset", "icon", "xlink:href"):
+        assert any(f"the {name} attribute is not allowed" in refusal for refusal in check_html(
+            f'<img {name}="https://example.test/">', expression)), name
+    # A scheme an author splices from branches has nowhere left to go: each URL attribute is listed.
+    assert check_html('<img longdesc="{% if a %}java{% else %}x{% endif %}script:alert(1)" alt="a">', expression)
+    for admitted in ('<img alt="Data: 2026 results">', '<p title="File: Q3 report.pdf">x</p>',
+                     '<img alt="JavaScript: The Good Parts">', '<p title="Note: hello">x</p>',
+                     '<html xmlns:v="urn:schemas-microsoft-com:vml">', '<p class="sm:hidden">x</p>',
+                     '<p style="color:red;background:#fff">x</p>',
+                     '<meta content="width=device-width, initial-scale=1">'):
         assert check_html(admitted, expression) == [], admitted
 
 
@@ -599,8 +747,8 @@ GHOST = (
 def test_a_layout_holds_outlooks_conditional_comments_alone(html: str, refused: bool) -> None:
     """D2: a layout may carry static, balanced MSO conditional comments whose markup is checked as any other."""
 
-    assert bool(check_html(html, compiled_expression(HTML_ENGINE), conditional_comments=True)) is refused, check_html(
-        html, compiled_expression(HTML_ENGINE), conditional_comments=True)
+    assert bool(check_html(html, compiled_expression(HTML_ENGINE), document=True)) is refused, check_html(
+        html, compiled_expression(HTML_ENGINE), document=True)
     assert check_html(html, compiled_expression(HTML_ENGINE)) or "<!--" not in html
 
 
@@ -611,7 +759,7 @@ def test_only_a_layout_carries_outlooks_comments(plain: Any) -> None:
     assert _refusals(_unsaved("layout", "outlook", source=OUTLOOK_DPI + PLAIN_LAYOUT, text_source=PLAIN_TEXT)) == []
     for row in (_unsaved(format="html", source=OUTLOOK_DPI, text_source="x"),
                 _unsaved("block", "outlook", source=OUTLOOK_DPI, text_source="x")):
-        assert any("a layout alone holds Outlook's" in refusal for refusal in _refusals(row)), row.kind
+        assert any("which a layout alone holds for Outlook" in refusal for refusal in _refusals(row)), row.kind
 
 
 def test_static_url_as_decoded() -> None:

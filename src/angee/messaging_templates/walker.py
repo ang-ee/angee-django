@@ -72,7 +72,7 @@ from angee.messaging_templates.engine import (
     filter_names,
     url,
 )
-from angee.messaging_templates.html_checks import check_html, compiled_expression
+from angee.messaging_templates.html_checks import SpellingRule, check_html, compiled_expression
 from angee.messaging_templates.rendering import (
     RESERVED_VARIABLE_ROOTS,
     MessageTemplateFormat,
@@ -153,7 +153,7 @@ class WalkedKind(Protocol):
     def holds_content(self) -> bool: ...
 
     @property
-    def conditional_comments(self) -> bool: ...
+    def writes_document(self) -> bool: ...
 
     def template_name(self, key: str) -> str: ...
 
@@ -942,6 +942,12 @@ class TemplateWalker:
         def refuse(reason: str) -> None:
             refusals.append(f"{name}: {reason}")
 
+        texts = {"source": row.source, "text_source": row.text_source, "subject": row.subject,
+                 "preheader": row.preheader}
+        if holding := [column for column, text in texts.items() if "\x00" in text]:
+            # Before anything reads the text: a NUL would forge the HTML checks' placeholders.
+            refuse(f"{', '.join(holding)}: {SpellingRule.NO_NUL.message} (rule {SpellingRule.NO_NUL.value})")
+            return _RowCheck(name, refusals=tuple(refusals))
         try:
             validate_variables(row.variables)
         except ValidationError as error:
@@ -951,8 +957,6 @@ class TemplateWalker:
         except ValueError:
             refuse(f"{row.format!r} is not a markup")
             return _RowCheck(name, refusals=tuple(refusals))
-        texts = {"source": row.source, "text_source": row.text_source, "subject": row.subject,
-                 "preheader": row.preheader}
         for column, text in texts.items():
             if len(text) > SOURCE_LIMIT:
                 refuse(f"{column} is over {SOURCE_LIMIT} characters")
@@ -1003,7 +1007,7 @@ class TemplateWalker:
             pieces[piece] = template
         if RowPiece.HTML in pieces:
             refusals.extend(f"{name}: {reason}" for reason in check_html(
-                forms.html, compiled_expression(self.html_engine), conditional_comments=handler.conditional_comments,
+                forms.html, compiled_expression(self.html_engine), document=handler.writes_document,
             ))
         return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals))
 

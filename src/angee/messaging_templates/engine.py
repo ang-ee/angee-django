@@ -270,8 +270,6 @@ def _charged(function: Callable[..., Any]) -> Callable[..., Any]:
 _LINKS = MarkdownIt("commonmark")
 """The parser whose public ``normalizeLink`` and ``validateLink`` judge a link, as Markdown links are judged."""
 
-_URL_TRIMMED = "".join(map(chr, range(0x21)))
-_TAB_OR_NEWLINE = str.maketrans("", "", "\t\n\r")
 
 
 def _link(text: str) -> str:
@@ -291,18 +289,6 @@ def url(value: Any) -> str:
 
     text = str(value)
     return "" if len(text) > URL_INPUT_LIMIT else _link(text)
-
-
-def refused_link(text: str) -> bool:
-    """Whether a browser reading ``text`` as a link reaches a scheme :func:`url` refuses.
-
-    A browser's URL parser removes every tab and newline and trims C0 controls
-    and spaces before it reads a scheme, so ``java&#9;script:`` (as ``html.parser``
-    decodes it) is ``javascript:``; the scheme is then judged as :func:`url` judges it.
-    """
-
-    link = text.translate(_TAB_OR_NEWLINE).strip(_URL_TRIMMED)
-    return bool(link) and not _link(link)
 
 
 for _name in ALLOWED_FILTERS[:-1]:

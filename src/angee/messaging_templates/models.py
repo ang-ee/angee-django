@@ -152,8 +152,8 @@ class MessageTemplateKindHandler:
     """Whether a row of this kind reads ``subject`` and ``preheader``, which the mail around it supplies."""
     holds_content: ClassVar[bool] = False
     """Whether each form of a row of this kind holds the one empty ``{% block content %}`` a template fills."""
-    conditional_comments: ClassVar[bool] = False
-    """Whether a row of this kind may carry Outlook's conditional comments, static and checked as markup."""
+    writes_document: ClassVar[bool] = False
+    """Whether a row of this kind writes the mail's document: its opening doctype and Outlook's conditional comments."""
     preview_frame: ClassVar[PreviewFrame | None] = None
     """The fixed body, subject and preheader a row of this kind is previewed around; ``None`` previews it alone."""
 
@@ -187,7 +187,7 @@ class LayoutHandler(MessageTemplateKindHandler):
     template_prefix = "layouts/"
     reads_message_fields = True
     holds_content = True
-    conditional_comments = True
+    writes_document = True
     preview_frame = LAYOUT_PREVIEW
 
     def naming_rows(self, rows: models.QuerySet[Any], key: str) -> models.QuerySet[Any]:
