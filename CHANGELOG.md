@@ -116,11 +116,18 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` before any work, refuses a shipped default's identity
+    (`shipped_default`), and seeds the row with what that language reads for the
+    key today, or with the kind's `defaults` when nothing resolves the key. Each
+    row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, read once per listed kind. The mutations
+    refuse as the framework's actions do: a signed-out caller gets the session's
+    GraphQL error, a caller who may not create or write the override a
+    `PERMISSION_DENIED` GraphQL error, and a row that is not a shipped default
+    (`not_a_baseline`) or overrides none (`no_baseline`) an in-band `ok: false`.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution

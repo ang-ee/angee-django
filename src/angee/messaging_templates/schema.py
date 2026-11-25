@@ -2,7 +2,12 @@
 
 Exposed on the console. A message template is an ordinary resource (list,
 detail, insert, update, delete); deleting an override is resetting it to its
-shipped default. ``override_message_template`` starts the deployment's override
+shipped default. The insert takes a kind, key, language and name, and the server
+seeds the rest (``MessageTemplateManager.create_own``), deciding ``create``
+before any work. A row reports what its reader may do with it (``permissions``),
+whether its kind carries a subject, preheader and layout, and, to a reader who
+may preview it, the rows naming its kind and key (``backlinks``), read once per
+list. ``override_message_template`` starts the deployment's override
 of a shipped default and ``keep_message_template_override`` keeps an override
 over a default that changed; both return an ``ActionResult`` naming the override.
 Both refuse as the framework's actions do: a signed-out caller gets the session's

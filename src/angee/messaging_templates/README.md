@@ -234,7 +234,25 @@ every row. Nobody but a resource load writes a baseline
 
 ## Console
 
-The `message_templates` resource lists, reads, inserts, edits and deletes rows;
+The `message_templates` resource lists, reads, inserts, edits and deletes rows.
+Its insert takes `kind`, `key`, `language` and `name`, and
+`MessageTemplate.objects.create_own` does the rest: it decides `create` on the
+candidate row before anything is cleaned, read or written, refuses an identity a
+shipped default holds in that language (`shipped_default`: override it instead),
+and seeds the row with what a recipient in that language reads for the key
+today, so a new row changes nobody's mail. Only a key nothing resolves starts
+from its kind's starting row (`MessageTemplateKindHandler.defaults`; a template
+starts in the `base` layout, with an empty preheader its preview warns about).
+
+Each row reports `permissions` (of `delete`, `preview` and `write`, those its
+reader holds), `carries_message_fields` (whether its kind fills the subject,
+preheader and layout) and `backlinks`: the rows, in any language, naming its
+kind and key (a template its layout, any row a block or part it includes), or
+null for a reader who may not preview it. A list reads them once per kind it
+lists, for the listed rows its reader may preview, through the reader's own
+scope, and checks each naming row once; a member's list reads and checks nothing
+for them.
+
 `override_message_template` and `keep_message_template_override` take a row's id
 and return an `ActionResult` naming the override. They refuse as the framework's
 actions do: a signed-out caller gets the session's GraphQL error, and a caller
