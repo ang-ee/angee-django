@@ -156,9 +156,11 @@ live in code docstrings.
 - **Message templates render, on Django's template engine.**
   - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
     `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
-    `language`): the subject and preheader on one line each, the HTML body with
-    every value escaped, and the plain-text body rendered from the rows' text
-    forms, never scraped from the HTML. Rows render on a standalone, restricted
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
     Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
     whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
     `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
@@ -186,11 +188,24 @@ live in code docstrings.
     the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
     written with, Office's settings inside a layout's Outlook comment alone; the
     places a value sits; a link `url` gives (an absolute `https`, `http`,
-    `mailto` or `tel` link) and one an author writes (that, a `#fragment` or a
-    `cid:` image); the one character set, `utf-8`; no control character in a
-    row's text, a carriage return written as a newline by `clean()`, and none in
-    a value, which drops them; at most ten operators in a condition, each a node;
-    and every form capped straight after the Markdown pass. A layout alone
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    `clean()`, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, and a saving
+    walk resolves a level's include targets in one query. A layout alone
     writes the doctype and Outlook's conditional comments, static and balanced,
     their markup checked. A Markdown link takes its label and its target from
     values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
@@ -278,8 +293,11 @@ live in code docstrings.
     the rows naming its kind and key, a read for one record's page. Each verb
     asks one predicate first (`MessageTemplate.override_refusal()`,
     `keep_override_refusal()`), and a row projects its answers for the reader as
-    `can_override` and `can_keep_override`. The mutations refuse as the
-    framework's actions do: a signed-out caller gets the session's GraphQL error,
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
     a caller who may not create or write the override a `PERMISSION_DENIED`
     GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
     overrides none (`no_baseline`) an in-band `ok: false`.

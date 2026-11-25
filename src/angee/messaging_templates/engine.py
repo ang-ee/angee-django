@@ -24,6 +24,7 @@ reached, by template name. This module imports nothing else of the addon.
 from __future__ import annotations
 
 import functools
+import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -70,7 +71,11 @@ URL_INPUT_LIMIT = 2_048
 
 LINK_SCHEMES = ("https", "http", "mailto", "tel")
 """The schemes of a link :func:`url` gives. A mail has no base, so the link is absolute: ``https`` and ``http``
-with a host, or a ``mailto:`` or ``tel:`` link."""
+with a host (:data:`LINK_HOST`), or a ``mailto:`` or ``tel:`` link."""
+
+LINK_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?", re.I)
+"""The authority of an ``https`` or ``http`` link: a domain name of two labels or more, the last a name, and a port.
+No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty."""
 
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
@@ -319,7 +324,9 @@ def url(value: Any) -> str:
     scheme = scheme.lower()
     if not colon or scheme not in LINK_SCHEMES:
         return ""
-    if scheme in ("https", "http") and not (rest.startswith("//") and rest[2:3] not in ("", "/", "?", "#")):
+    if scheme in ("https", "http") and not (
+        rest.startswith("//") and LINK_HOST.fullmatch(re.split(r"[/?#]", rest[2:], maxsplit=1)[0])
+    ):
         return ""
     return link
 

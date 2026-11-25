@@ -96,6 +96,11 @@ LINE_LIMIT = 1_000
 OPENERS_PER_LINE = 30
 FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
+WALK_READ_LIMIT = 600_000
+WALK_SPAN_READ_LIMIT = 4_000
+"""What the checks of the rows a walk reaches read at most, summed as it gathers them: characters of their forms and
+template spans, a comment's content included. A comment renders nothing, but the Markdown pass and the HTML checks
+read all of it, and a Markdown pass multiplies its source; so the walk stops once its rows' forms pass either."""
 NESTING_LIMIT = 16
 CONDITION_OPERATOR_LIMIT = 10
 """The most operators (``and``, ``or``, ``not``, ``in``, comparisons) one ``if`` or ``elif`` condition holds. Django
@@ -124,13 +129,12 @@ VALUE_ITEMS_LIMIT = 500
 SUBJECT_LIMIT = 1_000
 """The longest rendered subject or preheader, after it is made one line."""
 
-_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}]")
-"""What :meth:`TemplateWalk.prepare` drops from every string value: the C0 and C1 control characters but tab, line
-feed and carriage return, so none reaches a body, a subject or a preheader."""
-
-_UNPRINTED = re.compile(f"[{CONTROL_CHARACTERS}\u202a-\u202e\u2066-\u2069]")
-"""What a subject or preheader drops from each of its words: the same control characters, and the bidirectional
-embeddings, overrides and isolates; splitting the line on white space has dropped tab, line feed and return."""
+UNPRINTED = re.compile(f"[{CONTROL_CHARACTERS}\u202a-\u202e\u2066-\u2069]")
+"""The one rule for what a value and a line drop: the C0 and C1 control characters but tab, line feed and carriage
+return, and the bidirectional embeddings, overrides and isolates, so a value neither switches a reader's character
+set nor reorders the author's text after it. The directional marks a language needs (LRM, RLM, ALM) stay.
+:meth:`TemplateWalk.prepare` drops them from every string value; a subject or preheader from each of its words,
+splitting the line on white space having dropped tab, line feed and return."""
 
 SUBJECT_WARNING_LENGTH = 60
 PREHEADER_WARNING_LENGTH = 100
@@ -242,7 +246,7 @@ class RowReader(Protocol):
 
     def named_rows(self, names: Iterable[str], *, language: str) -> Mapping[str, Any]: ...
 
-    def resolves_name(self, name: str) -> bool: ...
+    def resolving_names(self, names: Iterable[str]) -> frozenset[str]: ...
 
 
 def _dotted(path: Sequence[str]) -> str:
@@ -271,6 +275,13 @@ class PreviewFrame:
     text: str
 
 
+class TextDirection(StrEnum):
+    """The direction a mail's text reads in, as an HTML ``dir`` takes it."""
+
+    RTL = "rtl"
+    LTR = "ltr"
+
+
 @dataclass
 class RenderedMessage:
     """One rendered message: subject and preheader on one line each, the HTML and plain-text bodies."""
@@ -280,6 +291,10 @@ class RenderedMessage:
     html: str
     plain_text: str
     language: str
+    direction: TextDirection
+    """The direction of the mail's own text, the one the HTML's ``dir`` says, for whoever shows the subject, the
+    preheader or the plain text outside the HTML. Django's bidi answer for the row's language, left to right for a
+    language Django does not know."""
 
 
 class TemplateWarningCode(StrEnum):
@@ -370,6 +385,41 @@ class _RowCheck:
     pieces: Mapping[RowPiece, Template] = field(default_factory=dict)
     includes: frozenset[str] = frozenset()
     refusals: tuple[str, ...] = ()
+    sizes: Mapping[RowPiece, tuple[int, int, int]] = field(default_factory=dict)
+    """What each body form's own nodes add to any tree reaching the row, at least: nodes, outputs, text
+    (:func:`_own_size`)."""
+    read: tuple[int, int] = (0, 0)
+    """What the row's checks read: its forms' characters and template spans, comments included; nothing for a row
+    its own form caps refuse, whose refusal ends the walk."""
+
+
+def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
+    """The nodes (loop bodies aside), outputs and text a compiled piece adds to every tree that reaches it.
+
+    A tree walks every node of every row it reaches at least once, both branches of an ``if`` and a loop body once,
+    and counts conditions, ``with`` values and include arguments besides; so this is a floor of the tree's count,
+    and the rows it includes add theirs.
+    """
+
+    nodes = nodelist.get_nodes_by_type(Node)
+    return (
+        sum(type(node) is not BudgetedLoopBody for node in nodes),
+        sum(type(node) is VariableNode for node in nodes),
+        sum(len(cast(TextNode, node).s) for node in nodes if type(node) is TextNode),
+    )
+
+
+def _over_caps(root_name: str, form: RowPiece, nodes: int, outputs: int, text: int) -> list[str]:
+    """The tree caps a form's count passes: :data:`NODE_LIMIT`, :data:`OUTPUT_LIMIT`, :data:`TEXT_LIMIT`."""
+
+    refusals = []
+    if nodes > NODE_LIMIT:
+        refusals.append(f"{root_name}: its {form} reaches over {NODE_LIMIT} nodes")
+    if outputs > OUTPUT_LIMIT:
+        refusals.append(f"{root_name}: its {form} reaches over {OUTPUT_LIMIT} outputs")
+    if text > TEXT_LIMIT:
+        refusals.append(f"{root_name}: its {form} writes over {TEXT_LIMIT} characters of text")
+    return refusals
 
 
 @dataclass
@@ -420,7 +470,8 @@ class TemplateWalk:
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
            string, number, boolean or null, a string without its control
-           characters (:data:`_CONTROLS`), so one holding nothing else is empty;
+           characters and bidirectional overrides and isolates
+           (:data:`UNPRINTED`), so one holding nothing else is empty;
            at a :attr:`float_paths` path, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
         4. Every absent or null declared segment filled: an object with ``{}``, a
@@ -496,10 +547,8 @@ class TemplateWalk:
         language = self.language
         with translation.override(language):
             prepared = self.prepare(values)
-            mail_globals = {
-                "brand": brand_values(kit), "lang": language,
-                "dir": "rtl" if translation.get_language_bidi() else "ltr",
-            }
+            direction = TextDirection.RTL if translation.get_language_bidi() else TextDirection.LTR
+            mail_globals = {"brand": brand_values(kit), "lang": language, "dir": direction.value}
             text_engine = self._engine(RowPiece.TEXT, mail_globals)
             html_engine = self._engine(RowPiece.HTML, mail_globals)
             with RenderBudget.for_lines().spend():
@@ -527,6 +576,7 @@ class TemplateWalk:
                 text = text_root.render(text_engine.context(prepared))
         return RenderedMessage(
             subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
+            direction=direction,
         )
 
     def _engine(self, form: RowPiece, mail_globals: Mapping[str, Any]) -> MessageTemplateEngine:
@@ -555,7 +605,12 @@ class TemplateWalk:
             warnings.append(TemplateWarning(
                 TemplateWarningCode.SUBJECT_LENGTH, f"The subject is {len(rendered.subject)} characters long.",
             ))
-        if carries_message_fields and not 0 < len(rendered.preheader) <= PREHEADER_WARNING_LENGTH:
+        if carries_message_fields and not rendered.preheader:
+            warnings.append(TemplateWarning(
+                TemplateWarningCode.PREHEADER,
+                "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+            ))
+        elif carries_message_fields and len(rendered.preheader) > PREHEADER_WARNING_LENGTH:
             warnings.append(TemplateWarning(
                 TemplateWarningCode.PREHEADER, f"The preheader is {len(rendered.preheader)} characters long.",
             ))
@@ -580,8 +635,20 @@ class TemplateWalk:
         return warnings
 
 
+ENCODED_WORD_OPENER = re.compile(r"=\?(?=[^?]*\?[bq]\?)", re.IGNORECASE)
+"""Where a mail library reads an RFC 2047 encoded word as starting: ``=?``, a charset (empty, unknown or with its
+``*lang`` too), ``?``, ``b`` or ``q`` in either case, and ``?``, terminated or not, at a word's start or inside one.
+CPython's header machinery decodes one there when it takes a subject, so an ASCII spelling would bring back a line
+break, a control character or an override the line rule drops."""
+
+
 def _one_line(text: str, name: str) -> str:
-    line = " ".join(word for word in (_UNPRINTED.sub("", word) for word in text.split()) if word)
+    """``text`` as one line of a subject or a preheader: its words joined by one space, each without
+    :data:`UNPRINTED`, and every :data:`ENCODED_WORD_OPENER` broken to ``= ?``, so a mail library stores exactly the
+    string it is given; ``2+2=?`` stays as it is."""
+
+    line = " ".join(word for word in (UNPRINTED.sub("", word) for word in text.split()) if word)
+    line = ENCODED_WORD_OPENER.sub("= ?", line)
     if len(line) > SUBJECT_LIMIT:
         raise ValidationError(
             "The rendered %(name)s is over %(limit)s characters.",
@@ -633,7 +700,7 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
         return None
     if not tree:
         if isinstance(value, str):
-            return _CONTROLS.sub("", value)
+            return UNPRINTED.sub("", value)
         if isinstance(value, (int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
@@ -1053,6 +1120,7 @@ class TemplateWalker:
         self.html_engine = MessageTemplateEngine(autoescape=True)
         self.text_engine = MessageTemplateEngine(autoescape=False)
         self.checked: dict[tuple[str, str], _RowCheck] = {}
+        self.expression = compiled_expression(self.html_engine)
 
     # -- one row's own checks --------------------------------------------------
 
@@ -1107,9 +1175,12 @@ class TemplateWalker:
         except RowRefusal as refusal:
             refuse(str(refusal))
             return _RowCheck(name, refusals=tuple(refusals))
+        read = [0, 0]
         for form_name, form in forms._asdict().items():
             # Before anything else reads the form: a Markdown pass multiplies its source many times over.
             spans = tag_re.findall(form)
+            read[0] += len(form)
+            read[1] += len(spans)
             if len(spans) > FORM_SPAN_LIMIT:
                 refuse(f"its {form_name} form holds over {FORM_SPAN_LIMIT} template spans")
             elif len(form) - sum(map(len, spans)) > TEXT_LIMIT:
@@ -1149,9 +1220,12 @@ class TemplateWalker:
             pieces[piece] = template
         if RowPiece.HTML in pieces:
             refusals.extend(f"{name}: {reason}" for reason in check_html(
-                forms.html, compiled_expression(self.html_engine), document=handler.writes_document,
+                forms.html, self.expression, document=handler.writes_document,
             ))
-        return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals))
+        sizes = {piece: _own_size(pieces[piece].nodelist) for piece in (RowPiece.HTML, RowPiece.TEXT)
+                 if piece in pieces}
+        return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals),
+                         sizes=sizes, read=(read[0], read[1]))
 
     @staticmethod
     def _structure(nodelist: NodeList, piece: RowPiece, row: WalkedRow, refuse: Callable[[str], None]) -> None:
@@ -1210,10 +1284,16 @@ class TemplateWalker:
         return walk
 
     def _gather(self, walk: TemplateWalk, reader: RowReader) -> dict[str, _RowCheck]:
-        """Rows reached, level by level, each counted before it is parsed and checked alone."""
+        """Rows reached, level by level, each counted before it is parsed and checked alone.
+
+        Each checked row's own size (:attr:`_RowCheck.sizes`) adds to the walk's totals, and the walk stops as soon as
+        a total passes a tree cap: every row reached is in the tree at least once, so no admitted walk reaches it.
+        What each row's checks read (:attr:`_RowCheck.read`) adds up too, against :data:`WALK_READ_LIMIT`.
+        """
 
         checks: dict[str, _RowCheck] = {}
-        characters = 0
+        totals: dict[RowPiece, tuple[int, int, int]] = {}
+        characters = read = spans = 0
         level = [walk.root_name]
         while level:
             wanted: list[str] = []
@@ -1227,6 +1307,19 @@ class TemplateWalker:
                     return checks
                 check = checks[name] = self.check(row)
                 walk.refusals.extend(check.refusals)
+                read, spans = read + check.read[0], spans + check.read[1]
+                if read > WALK_READ_LIMIT or spans > WALK_SPAN_READ_LIMIT:
+                    walk.refusals.append(
+                        f"{walk.root_name}: the forms of the rows it reaches hold over {WALK_READ_LIMIT} characters "
+                        f"or {WALK_SPAN_READ_LIMIT} template spans for its checks to read, comments included",
+                    )
+                    return checks
+                for piece, size in check.sizes.items():
+                    total = totals[piece] = cast(tuple[int, int, int], tuple(
+                        map(sum, zip(totals.get(piece, (0, 0, 0)), size, strict=True))))
+                    if over := _over_caps(walk.root_name, piece, *total):
+                        walk.refusals.extend(over)
+                        return checks
                 if check.forms is not None:
                     walk.forms[name] = check.forms
                 walk.includes |= check.includes
@@ -1237,13 +1330,16 @@ class TemplateWalker:
             if walk.refusals or not wanted:
                 return checks
             found = reader.named_rows(wanted, language=walk.language)
+            # One query a level for what a save asks of every included key, never one a target.
+            resolving = reader.resolving_names(
+                [target for target in wanted if target in walk.includes]) if self.saving else frozenset()
             for target in wanted:
                 reached = found.get(target)
                 if reached is None:
                     walk.refusals.append(f"{walk.root_name}: no message template {target} in {walk.language}")
                 elif target in walk.includes and not reached.handler.includable:
                     walk.refusals.append(f"{walk.root_name}: only blocks and parts are included, not {target}")
-                elif self.saving and target in walk.includes and not reader.resolves_name(target):
+                elif self.saving and target in walk.includes and target not in resolving:
                     walk.refusals.append(
                         f"{walk.root_name}: {target} has no shipped default or row in the default language",
                     )
@@ -1322,14 +1418,7 @@ class _TreeWalker:
         self.walk.refusals.append(f"{frame.name}: {reason}")
 
     def close(self, tree: _Tree) -> None:
-        if tree.nodes > NODE_LIMIT:
-            self.walk.refusals.append(f"{self.walk.root_name}: its {tree.form} reaches over {NODE_LIMIT} nodes")
-        if tree.outputs > OUTPUT_LIMIT:
-            self.walk.refusals.append(f"{self.walk.root_name}: its {tree.form} reaches over {OUTPUT_LIMIT} outputs")
-        if tree.text > TEXT_LIMIT:
-            self.walk.refusals.append(
-                f"{self.walk.root_name}: its {tree.form} writes over {TEXT_LIMIT} characters of text",
-            )
+        self.walk.refusals.extend(_over_caps(self.walk.root_name, tree.form, tree.nodes, tree.outputs, tree.text))
 
     def nodes(self, frame: _Frame, nodelist: Iterable[Node], tree: _Tree) -> None:
         for node in nodelist:

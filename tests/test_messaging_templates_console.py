@@ -1,5 +1,6 @@
 """What the message templates console reads and creates: a row's permissions, its kind's message fields, the rows
-naming it, and the deployment's own row, decided before any work and seeded by the server."""
+naming it, the direction its preview says, and the deployment's own row, decided before any work and seeded by the
+server."""
 
 from __future__ import annotations
 
@@ -23,12 +24,17 @@ from rebac.testing import install_schema
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
-from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind, MessageTemplateQuerySet
+from angee.messaging_templates.models import (
+    BASE_LAYOUT,
+    SHIPPED_DEFAULT_MESSAGE,
+    MessageTemplateKind,
+    MessageTemplateQuerySet,
+)
 from angee.messaging_templates.testing.models import MessageTemplate
-from angee.messaging_templates.walker import TemplateWalker
+from angee.messaging_templates.walker import TemplateWalker, TextDirection
 from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
-from tests.test_messaging_templates import _row, _schema
+from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
 from tests.test_messaging_templates_render import TIMED, _recording
 
@@ -416,6 +422,38 @@ def test_backlinks_time(blocks: None) -> None:
     assert spent < 1.0
 
 
+# ---------- what a preview says ----------
+
+
+_DIRECTED = "query($id: ID!) { message_template_preview(template: $id) { rendered { subject html direction } } }"
+_UNDIRECTED = "query($id: ID!) { message_template_preview(template: $id) { rendered { subject html } } }"
+
+
+def test_a_preview_says_the_direction_of_the_mails_own_text(library: dict[str, Any]) -> None:
+    """An Arabic mail whose subject starts with a Latin brand name reads right to left (``RTL`` on the wire), as its
+    HTML's ``dir`` says, and an English one left to right (``LTR``). Reading the direction costs no statement and
+    adds no gate."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-director")
+    member = create_user("messaging-templates-console-undirected")
+    schema = _schema()
+    arabic = _row("template", "tests.welcome", "ar", subject="Acme: مرحبا", source="مرحبا بك.")
+    english = _row("template", "tests.welcome", subject="Acme: welcome", source="Welcome.")
+    for row, wire, direction in ((arabic, "RTL", TextDirection.RTL), (english, "LTR", TextDirection.LTR)):
+        variables = {"id": public_id_of(row)}
+        undirected = _measured(schema, _UNDIRECTED, variables, admin)
+        directed = _measured(schema, _DIRECTED, variables, admin)
+        rendered = directed.data["message_template_preview"]["rendered"]
+        assert (rendered["direction"], rendered["subject"]) == (wire, row.subject)
+        assert f'<html lang="{row.language}" dir="{direction.value}"' in rendered["html"]
+        assert (directed.statements, directed.repeated) == (undirected.statements, undirected.repeated)
+        for user in (member, AnonymousUser()):
+            answers = [execute_schema(schema, document, variables, user=user) for document in (_DIRECTED, _UNDIRECTED)]
+            refusals = [[(error.extensions["code"], error.message) for error in answer.errors] for answer in answers]
+            assert refusals[0] == refusals[1] and [code for code, _ in refusals[0]] == ["PERMISSION_DENIED"], refusals
+
+
 # ---------- creating the deployment's own row ----------
 
 
@@ -503,6 +541,25 @@ def test_starter_text_lands_only_on_a_key_with_no_row(db: None) -> None:
         with actor_context(admin):
             dutch = MessageTemplate.objects.create_own(kind="part", key="away", language="nl", name="Hoi")
     assert dutch.override_values() == {**english.override_values(), "name": "Hoi"}
+
+
+def test_a_new_template_sits_in_a_layout_whichever_row_seeds_it(library: dict[str, Any]) -> None:
+    """A new template starts in a layout and passes ``full_clean()``, seeded from what its language reads today, from
+    the key's row in another language, or from the kind's starting row; the console refuses emptying its layout."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-placer")
+    _template("tests.read", "Read today.")  # the default language's row: what a German recipient reads today
+    _template("tests.abroad", "Bonjour.", "fr")  # nothing resolves for German, so the French row seeds it
+    starter = MessageTemplateKind("template").handler.defaults["source"]
+    for key, seeded in (("tests.read", "Read today."), ("tests.abroad", "Bonjour."), ("tests.fresh", starter)):
+        created = result_data(_insert(admin, "template", key, "de", name="Neu"))["insert_message_templates_one"]
+        (row,) = [row for row in _rows("template", key) if row.language == "de"]
+        assert (row.source, row.layout) == (seeded, BASE_LAYOUT), key
+        with actor_context(admin):
+            row.full_clean()
+    (error,) = execute_schema(_schema(), _UPDATE, {"id": created["id"], "set": {"layout": ""}}, user=admin).errors
+    assert (error.extensions["code"], list(error.extensions["validationErrors"])) == ("VALIDATION", ["layout"])
 
 
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
@@ -623,6 +680,36 @@ def test_a_member_or_a_signed_out_caller_is_refused_before_anything_is_judged(
     assert checked == []
     assert _rows("part", "fresh") == [] and _rows("template", "tests.fresh") == []
     assert not any(_claimed(key) for key in keys if key is not None)
+
+
+def test_an_insert_of_what_no_column_can_store_is_refused_before_any_row_is_read(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lone surrogate in any column the insert takes: an administrator is refused under that column, never with an
+    internal error, and a member and a signed-out caller are refused create first. No seat's insert reads a message
+    template row, lexes anything or writes a row. A null or a value JSON cannot write never reaches the insert: its
+    four inputs are strings the schema requires."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-unstorable")
+    member = create_user("messaging-templates-console-unstorable-member")
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    table = MessageTemplate._meta.db_table
+    for column in ("kind", "key", "language", "name"):
+        identity = {"kind": "part", "key": "fresh", "language": "en", "name": "Fresh", column: "a\ud800"}
+        for user, refusal in (
+            (admin, ("VALIDATION", [column])), (member, ("PERMISSION_DENIED", [])),
+            (AnonymousUser(), ("PERMISSION_DENIED", [])),
+        ):
+            with CaptureQueriesContext(connection) as captured:
+                (error,) = _insert(user, **identity).errors
+            assert (error.extensions["code"], sorted(error.extensions.get("validationErrors", {}))) == refusal, (
+                column, user)
+            assert not any(table in query["sql"] for query in captured.captured_queries), (column, user)
+    assert checked == []
+    with system_context(reason="tests.messaging_templates.console.read"):
+        assert not MessageTemplate.objects.exists()
 
 
 def test_an_identity_its_validators_refuse_is_refused_under_its_fields(db: None) -> None:
