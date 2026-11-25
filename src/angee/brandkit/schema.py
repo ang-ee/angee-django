@@ -36,15 +36,29 @@ strawberry.enum(MailSeed)
 ContrastWarningType = strawberry.type(ContrastWarning, name="ContrastWarningType")
 
 
-@strawberry_django.type(BrandKit, fields=list(BrandKitModel.THEME_COLORS))
+@strawberry_django.type(BrandKit)
 class BrandKitType(AngeeNode):
-    """Console projection of one brand kit; its colours are ``BrandKit.THEME_COLORS``."""
+    """Console projection of one brand kit.
+
+    Its colours are ``BrandKit.THEME_COLORS``, annotated here in that order after
+    ``is_default``: tools that summarise a resource take its first fields in this order.
+    """
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
     name: auto
     is_default: auto
+    brand: auto
+    accent: auto
+    neutral: auto
+    canvas: auto
+    surface: auto
+    rail: auto
+    success: auto
+    warning: auto
+    danger: auto
+    info: auto
     font_heading: auto
     font_body: auto
     logo: FileType | None = actor_scoped_to_one("logo")

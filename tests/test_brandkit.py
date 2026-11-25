@@ -35,6 +35,7 @@ from rebac import (
 )
 from rebac.models import PermissionAuditEvent, active_relationship_model
 from rebac.testing import assert_decisions
+from strawberry.types import get_object_definition
 
 from angee.base.build import extension_source_map
 from angee.base.fields.text import ColorField
@@ -686,6 +687,20 @@ def test_the_console_reads_the_logos_and_cannot_write_them() -> None:
     assert {"logo", "logo_dark"} <= _sdl_fields(schema, "type", "BrandKitType")
 
 
+def test_the_console_type_lists_the_theme_colours_right_after_is_default() -> None:
+    """``BrandKitType``'s colours are ``THEME_COLORS``, in order, after ``is_default``.
+
+    The resource metadata keeps the type's field order, and tools that summarise a resource
+    take its first fields, so the order is part of what an agent reads of a kit.
+    """
+
+    names = [field.name for field in get_object_definition(brandkit_schema.BrandKitType, strict=True).fields]
+    colours = tuple(name for name in names if name in SourceBrandKit.THEME_COLORS)
+    start = names.index("is_default") + 1
+    assert colours == SourceBrandKit.THEME_COLORS
+    assert tuple(names[start : start + len(colours)]) == colours
+
+
 @pytest.mark.usefixtures("image_drive")
 def test_listing_kits_with_logos_costs_the_same_at_one_and_at_twenty_five_rows(db: None) -> None:
     """Every row carries both logos, so the logos' batched reads are part of the count."""
@@ -765,8 +780,10 @@ def test_the_public_projection_is_the_theme_inputs_and_nothing_more(db: None) ->
 
     del db
     schema = _public_schema()
-    assert _sdl_fields(schema, "type", "BrandKitColors") == set(THEME_COLORS)
-    assert {name for name in _sdl_fields(schema, "type", "Query") if "brand" in name} == {"default_brand_kit_colors"}
+    # The built schema, extensions included: a type extension prints apart from the type in SDL.
+    built = schema._schema
+    assert set(built.type_map["BrandKitColors"].fields) == set(THEME_COLORS)
+    assert {name for name in built.query_type.fields if "brand" in name} == {"default_brand_kit_colors"}
 
     _kit("Angee")
     for field in ("id", "name", "font_body", "logo", "voice", "is_default"):
