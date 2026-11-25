@@ -3,16 +3,18 @@
 Exposed on the console. A message template is an ordinary resource (list,
 detail, insert, update, delete); deleting an override is resetting it to its
 shipped default. The insert takes a kind, key, language and name, and the server
-seeds the rest (``MessageTemplateManager.create_own``), deciding ``create``
-before any work. A row reports what its reader may do with it (``permissions``),
-whether its kind carries a subject, preheader and layout, and, to a reader who
-may preview it, the rows naming its kind and key (``backlinks``), a read for one
-record's page. ``can_override`` and ``can_keep_override`` answer, for the reader,
-what the two verbs below ask first (``MessageTemplate.override_refusal`` and
-``keep_override_refusal``); ``can_override`` is a read for one record's page.
-``override_message_template`` starts the deployment's override
-of a shipped default and ``keep_message_template_override`` keeps an override
-over a default that changed; both return an ``ActionResult`` naming the override.
+seeds the rest (``MessageTemplateManager.create_own``), deciding ``create`` on
+the candidate before any work of its own; a keyed insert is claimed first, as
+every factory insert is, and a refusal rolls the claim back. A row reports what
+its reader may do with it (``permissions``), whether its kind carries a subject,
+preheader and layout, and, to a reader who may preview it, the rows naming its
+kind and key (``backlinks``), a read for one record's page. ``can_override`` and
+``can_keep_override`` answer, for the reader, what the two verbs below ask first
+(``MessageTemplate.override_refusal`` and ``keep_override_refusal``);
+``can_override`` is a read for one record's page. ``override_message_template``
+starts the deployment's override of a shipped default and
+``keep_message_template_override`` keeps an override over a default that
+changed; both return an ``ActionResult`` naming the override.
 Both refuse as the framework's actions do: a signed-out caller gets the session's
 GraphQL error, and a caller who may not create or write the override gets a
 ``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
@@ -43,7 +45,7 @@ from strawberry_django.optimizer import optimize
 from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
 from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, CreationClaim, hasura_model_resource
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.messaging_templates.models import MessageTemplate as MessageTemplateModel
@@ -171,11 +173,20 @@ class MessageTemplateType(AngeeNode):
 class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for message templates: create belongs to the manager factory."""
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create the deployment's own row; the manager decides create before any work."""
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Create the deployment's own row; a keyed insert is claimed first, then the manager decides create.
+
+        As every factory backend: the factory decides as it writes, so the claim
+        is asked before it. ``create_own`` then decides ``create`` on the
+        candidate before it cleans, reads or writes anything, and a refusal rolls
+        the claim back with the insert.
+        """
 
         del info
-        return MessageTemplate.objects.create_own(**self._decode_public_id_fields(data))
+        values = self._decode_public_id_fields(data)
+        if claim is not None and (replay := claim()) is not None:
+            return replay
+        return MessageTemplate.objects.create_own(**values)
 
 
 _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(

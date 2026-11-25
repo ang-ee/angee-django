@@ -265,9 +265,12 @@ every row. Nobody but a resource load writes a baseline
 The `message_templates` resource lists, reads, inserts, edits and deletes rows.
 Its insert takes `kind`, `key`, `language` and `name`, and
 `MessageTemplate.objects.create_own` does the rest. It decides `create` on the
-candidate row before it cleans, reads or writes anything; with an
-`idempotency_key`, the provenance claim reads and records first, in the same
-transaction, which a refusal rolls back, and the refusal is the same. It then
+candidate row before it cleans, reads or writes anything, as the framework's
+generic insert now decides before it validates. With an `idempotency_key`, the
+insert is claimed first, as every factory insert is: provenance looks the key
+up and records its claim in the same transaction, which a refusal rolls back,
+leaving no claim, and a member's refusal is the same; a signed-out caller's key
+is refused by provenance before anything else (`idempotency_key`). It then
 refuses, before it seeds or walks anything, an identity a shipped default holds
 in that language (`shipped_default`: override it instead) and one the deployment
 already has. The row is seeded from its key's content: what a recipient in that
