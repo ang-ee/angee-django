@@ -1042,7 +1042,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         renders is new or changed (its content hash differs from the stored
         row's), :meth:`validate_source`, through the
         same scope: an edit of only the name, the description or the sample walks
-        nothing.
+        nothing. The stored layout and hash are a structural read of the row's own
+        columns (``_base_manager``).
         """
 
         if not self._readable():
@@ -1054,7 +1055,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
                 setattr(self, column, text.replace("\r\n", "\n").replace("\r", "\n"))
         errors: dict[str, str] = {}
         stored_layout, stored_hash = (None, None) if self._state.adding else (
-            type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
+            type(self)._base_manager.filter(pk=self.pk).values_list("layout", "content_hash").first()
             or (None, None)
         )
         if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields:
