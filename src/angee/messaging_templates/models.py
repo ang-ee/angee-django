@@ -746,7 +746,10 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         value is present and not null, dates are ``date``, aware ``datetime`` or
         ISO 8601, and money is a ``Decimal`` printed through ``floatformat``. Reads
         rows and the kit through the acting reader's scope: a sender renders as the
-        system actor. Raises ``ValidationError``.
+        system actor. Raises ``ValidationError`` alone, each item with its code
+        (``invalid_values``, ``message_template_refused``, ``render_budget``,
+        ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
+        (:func:`~angee.messaging_templates.walker.refusals_only`).
         """
 
         walk = TemplateWalker().walk(self, type(self).objects)
@@ -759,18 +762,21 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         always may); ``PermissionDenied`` otherwise. A template renders whole, a
         layout around its handler's fixed body, subject and preheader, and a block
         or part alone, its sample as its arguments. ``rendered`` is ``None`` when
-        the walk or the render raised, and the one warning is then ``render_error``.
+        the walk, the render or its warnings refused, and the one warning is then
+        ``render_error``; only a ``ValidationError`` leaves any of them
+        (:func:`~angee.messaging_templates.walker.refusals_only`).
         """
 
         self.require_access("preview")
         try:
             walk = TemplateWalker().walk(self, type(self).objects)
             rendered = walk.render(self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
+            warnings = walk.preview_warnings(rendered, self.sample)
         except ValidationError as error:
             return TemplatePreview(
                 rendered=None, warnings=[TemplateWarning(TemplateWarningCode.RENDER_ERROR, " ".join(error.messages))],
             )
-        return TemplatePreview(rendered=rendered, warnings=walk.preview_warnings(rendered, self.sample))
+        return TemplatePreview(rendered=rendered, warnings=warnings)
 
     @staticmethod
     def _brand_kit(kit: BrandKit | None) -> BrandKit:
@@ -800,15 +806,20 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         rows = cls.objects
         for instance in loaded:
             walker.walk(instance, rows.filter(is_baseline=True))
-            walk = walker.judge(instance, rows)
-            if walk.refusals:
+            try:
+                walk = walker.judge(instance, rows)
+            except ValidationError as error:  # a failure nobody foresaw, logged where it happened
+                deployment, refusals = "rows", error.messages
+            else:
+                deployment = ", ".join(f"{name} ({row.language})" for name, row in walk.rows.items()
+                                       if not cast(MessageTemplate, row).is_baseline)
+                refusals = walk.refusals
+            if refusals:
                 logger.warning(
                     "The shipped message template %s (%s) refuses through the deployment's %s, and refuses at "
                     "render until that row is fixed: %s",
-                    walk.root_name, instance.language,
-                    ", ".join(f"{name} ({row.language})" for name, row in walk.rows.items()
-                              if not cast(MessageTemplate, row).is_baseline),
-                    "; ".join(dict.fromkeys(walk.refusals)),
+                    instance.handler.template_name(instance.key), instance.language, deployment,
+                    "; ".join(dict.fromkeys(refusals)),
                 )
         super().after_resource_load(loaded, tier=tier, source=source)
 

@@ -144,7 +144,7 @@ def _mail(source: str, variables: dict[str, str] | None = None, **values: Any) -
     return _row("template", values.pop("key", "tests.mail"), variables=variables or {}, source=source, **values)
 
 
-def _recording(monkeypatch: pytest.MonkeyPatch, owner: type, name: str, record: Callable[..., None]) -> None:
+def _recording(monkeypatch: pytest.MonkeyPatch, owner: object, name: str, record: Callable[..., None]) -> None:
     """Wrap ``owner.name`` so ``record`` sees each call's arguments before it runs."""
 
     original = getattr(owner, name)
@@ -1315,25 +1315,130 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
     assert "d is printed with a time" in preview.warnings[0].detail
 
 
-def test_any_other_failure_in_a_pass_is_a_render_error(plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Whatever nobody thought of leaves render() as ValidationError(code="render_failed"), and preview reports it."""
+def _failing(raised: type[BaseException]) -> Any:
+    def upper(value: Any) -> str:
+        raise raised("a filter nobody thought of")
+
+    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
+    return upper
+
+
+@pytest.mark.parametrize("raised", [RuntimeError, ZeroDivisionError, ValueError])
+def test_any_other_failure_is_logged_then_refused_as_render_failed(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: type[Exception],
+) -> None:
+    """Section 4: what nobody thought of is logged with its traceback, then leaves as render_failed; preview says so."""
+
+    del plain
+    monkeypatch.setitem(register.filters, "upper", _failing(raised))
+    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
+    with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
+        with pytest.raises(ValidationError) as caught:
+            _render(template, {"name": "Ana"}, kit)
+        with system_context(reason="tests.messaging_templates.render.preview"):
+            preview = template.preview(kit=kit)
+    assert [item.code for item in caught.value.error_list] == ["render_failed"]
+    assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+    assert preview.rendered is None
+    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
+    assert len(caplog.records) == 2 and all(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.parametrize("raised", [MemoryError, RecursionError])
+def test_running_out_of_room_is_not_a_refusal(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, raised: type[Exception],
+) -> None:
+    """MemoryError and RecursionError say the process ran out of room, not that the row cannot render."""
+
+    del plain
+    monkeypatch.setitem(register.filters, "upper", _failing(raised))
+    with pytest.raises(raised):
+        _render(_mail("{{ name|upper }}", {"name": "x"}), {"name": "Ana"}, kit)
+
+
+def test_the_walk_and_the_warnings_are_inside_the_contract(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 4: a failure in the walk or in the preview's warnings leaves as a refusal, never as itself."""
+
+    del plain
+    template = _mail("{{ name }}", {"name": "x"}, sample={"name": "Ana"})
+    with monkeypatch.context() as patched:
+        patched.setattr(_TreeWalker, "close", lambda walker, tree: 1 / 0)
+        with pytest.raises(ValidationError) as caught:
+            _render(template, {"name": "Ana"}, kit)
+        assert [item.code for item in caught.value.error_list] == ["render_failed"]
+        with system_context(reason="tests.messaging_templates.render.preview"):
+            assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
+    monkeypatch.setattr(TemplateWalk, "unused", property(lambda walk: 1 / 0))
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = template.preview(kit=kit)
+    assert preview.rendered is None and preview.warnings[0].code == TemplateWarningCode.RENDER_ERROR
+
+
+def test_a_caller_tells_each_refusal_apart_by_its_code(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 4: every item of a refusal carries its code in error_list, as the sending lane reads it."""
 
     del plain
 
-    def upper(value: Any) -> str:
-        raise RuntimeError("a filter nobody thought of")
+    def codes(row: Any, values: dict[str, Any], kit: Any = kit) -> set[str | None]:
+        with pytest.raises(ValidationError) as caught:
+            _render(row, values, kit)
+        return {item.code for item in caught.value.error_list}
 
-    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
-    monkeypatch.setitem(register.filters, "upper", upper)
-    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
-    with pytest.raises(ValidationError) as raised:
-        _render(template, {"name": "Ana"}, kit)
-    assert raised.value.code == "render_failed"
-    assert "RuntimeError: a filter nobody thought of" in raised.value.messages[0]
+    template = _mail("{{ order.total }} {{ name }}", {"order.total": "x", "name": "x"}, key="tests.codes")
+    assert codes(template, {"order": "x"}) == {"invalid_values"}
+    assert codes(template, {"order": {"total": None}, "name": None}) == {"invalid_values"}
+    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {"message_template_refused"}
+    looping = _mail("{% for i in items %}" + "{{ i|upper }}{{ i|lower }}{{ i|title }}" * 2 + "{% endfor %}",
+                    {"items.*": "x"}, key="tests.looping")
+    assert codes(looping, {"items": ["a"] * 501}) == {"invalid_values"}
+    assert codes(looping, {"items": ["a" * 90] * 500}) == {"render_budget"}
+    long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
+    assert codes(long_subject, {"name": "n" * 600}) == {"subject_too_long"}
+    monkeypatch.setitem(register.filters, "upper", _failing(RuntimeError))
+    assert codes(looping, {"items": ["a"]}) == {"render_failed"}
+    with system_context(reason="tests.messaging_templates.render.kit"):
+        BrandKit.objects.filter(pk=kit.pk).update(is_default=False)
+    with pytest.raises(ValidationError) as caught, system_context(reason="tests.messaging_templates.render"):
+        template.render({"order": {"total": 1}, "name": "Ana"})
+    assert {item.code for item in caught.value.error_list} == {"no_brand_kit"}
+
+
+def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> None:
+    """A value no mail can encode is refused in prepare(), never returned in a subject or raised from preview."""
+
+    del plain
+    template = _mail("Hello {{ name }}.", {"name": "x"}, subject="Hi {{ name }}", sample={"name": "a\ud800b"})
+    with pytest.raises(ValidationError, match="lone surrogate") as caught:
+        _render(template, {"name": "a\ud800b"}, kit)
+    assert {item.code for item in caught.value.error_list} == {"invalid_values"}
     with system_context(reason="tests.messaging_templates.render.preview"):
-        preview = template.preview(kit=kit)
-    assert preview.rendered is None
-    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, raised.value.messages[0])]
+        assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
+
+
+def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> None:
+    """Section 4: tags nested 16 deep, three includes, two loops and eight-segment paths reach no RecursionError."""
+
+    del plain
+    nested = "\n".join(["{% if x %}"] * 16) + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
+    _row("part", "depth3", source=nested, variables={"x": "x"})
+    _row("part", "depth2", source='{% include "parts/depth3" with x=x only %}', variables={"x": "x"})
+    _row("part", "depth1", source='{% include "parts/depth2" with x=x only %}', variables={"x": "x"})
+    deep = "a.b.c.d.e.f.g.h"
+    template = _mail(
+        "{% for o in outer %}\n\n{% for i in o.inner %}\n\n"
+        '{% include "parts/depth1" with x=i.v only %}\n\n{% endfor %}\n\n{% endfor %}\n\n{{ ' + deep + " }}",
+        {"outer.*.inner.*.v": "x", deep: "x"}, key="tests.deepest",
+    )
+    assert _refusals(template) == []
+    values: dict[str, Any] = {"outer": [{"inner": [{"v": "Deep"}] * 10}] * 10}
+    node = values
+    for segment in deep.split("."):
+        node = node.setdefault(segment, {}) if segment != "h" else node.setdefault(segment, "Eight")
+    assert _render(template, values, kit).plain_text.count("Deep") == 100
 
 
 def test_an_over_long_subject_is_refused_by_its_column_and_never_lexed(

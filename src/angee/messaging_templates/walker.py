@@ -30,10 +30,12 @@ other class, so a Django upgrade that changes the nodes fails loudly.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import quopri
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -59,10 +61,7 @@ from django.utils import translation
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.functional import Promise
 from django.utils.html import escape
-from django.utils.timezone import (
-    get_current_timezone,
-    template_localtime,  # type: ignore[attr-defined]  # django-stubs lacks it
-)
+from django.utils.timezone import get_current_timezone, template_localtime  # type: ignore[attr-defined]  # unstubbed
 
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
@@ -129,6 +128,39 @@ NESTED_ENDS = frozenset({"endif", "endfor", "endwith", "endblock"})
 CONTENT_BLOCK = "content"
 
 type Path = tuple[str, ...]
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def refusals_only() -> Iterator[None]:
+    """The one owner of "only ``ValidationError`` leaves" a walk, ``prepare()``, a render's passes or its warnings.
+
+    Every public entry of a walk runs inside it, so ``MessageTemplate.render``,
+    ``MessageTemplate.preview`` and a sender rendering a walk itself are covered
+    whole. A ``ValidationError`` passes as it is. ``MemoryError`` and
+    ``RecursionError`` pass unconverted: they say the process ran out of room, not
+    that the row cannot render, and no admitted row and values reach either. Any
+    other exception is logged with its traceback, then becomes
+    ``ValidationError(code="render_failed")``.
+    """
+
+    try:
+        yield
+    except (ValidationError, MemoryError, RecursionError):
+        raise
+    except Exception as error:
+        logger.exception("A message template failed to render.")
+        raise ValidationError(
+            "The message template did not render: %(error)s", code="render_failed",
+            params={"error": f"{type(error).__name__}: {error}"},
+        ) from error
+
+
+def _refused(messages: Iterable[str], code: str) -> ValidationError:
+    """One ``ValidationError`` whose every item carries ``code``: Django keeps no code on an error built from a list."""
+
+    return ValidationError([ValidationError(message, code=code) for message in dict.fromkeys(messages)])
 
 
 class RowPiece(StrEnum):
@@ -351,14 +383,16 @@ class TemplateWalk:
                 unused.append(path)
         return unused
 
+    @refusals_only()
     def prepare(self, values: Any) -> dict[str, Any]:
         """Return ``values`` as the render reads them, or raise ``ValidationError`` naming each path.
 
         1. ``values`` as JSON (``DjangoJSONEncoder``: dates and decimals become
            strings, a ``SafeString`` a plain string, any other object is refused),
            refused over 50,000 characters of JSON (characters, not escapes), with
-           a string over 10,000, with over 500 list items in all, or with a
-           reserved root.
+           a string over 10,000, with over 500 list items in all, with a
+           reserved root, or holding a character no mail can encode (a lone
+           surrogate).
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
            string, number, boolean or null, a number one a float holds.
@@ -387,9 +421,15 @@ class TemplateWalk:
             raise ValidationError(
                 f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code="values_too_large",
             )
+        try:
+            text.encode()
+        except UnicodeEncodeError as error:
+            raise ValidationError(
+                "The values hold a character no mail can encode, a lone surrogate.", code="invalid_values",
+            ) from error
         errors = _value_errors(data)
         if errors:
-            raise ValidationError(errors, code="invalid_values")
+            raise _refused(errors, "invalid_values")
         tree = _tree(self.declared)
         shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
         errors.extend(
@@ -397,15 +437,16 @@ class TemplateWalk:
             if _lacks(shaped, path)
         )
         if errors:
-            raise ValidationError(errors, code="invalid_values")
+            raise _refused(errors, "invalid_values")
         filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
         printer = _DatePrinter(self.date_paths)
         for path in sorted(self.date_paths):
             _parse_dates(filled, path, path, printer, errors)
         if errors:
-            raise ValidationError(errors, code="invalid_values")
+            raise _refused(errors, "invalid_values")
         return filled
 
+    @refusals_only()
     def render(self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None = None) -> RenderedMessage:
         """Render the walked row with ``values``, the mail colours from ``kit``.
 
@@ -418,20 +459,9 @@ class TemplateWalk:
         HTML engine, the subject and preheader at its top level; (4) the plain-text
         body on the text engine, from the rows' text forms. ``frame`` renders a
         layout around a fixed body, subject and preheader. Raises ``ValidationError``
-        alone: any other exception out of a pass becomes one, ``render_failed``.
+        alone (:func:`refusals_only`).
         """
 
-        try:
-            return self._render(values, kit=kit, frame=frame)
-        except ValidationError:
-            raise
-        except Exception as error:
-            raise ValidationError(
-                "The message template did not render: %(error)s", code="render_failed",
-                params={"error": f"{type(error).__name__}: {error}"},
-            ) from error
-
-    def _render(self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None) -> RenderedMessage:
         language = self.language
         with translation.override(language):
             prepared = self.prepare(values)
@@ -479,6 +509,7 @@ class TemplateWalk:
             mail_globals=mail_globals,
         )
 
+    @refusals_only()
     def preview_warnings(self, rendered: RenderedMessage, sample: Mapping[str, Any]) -> list[TemplateWarning]:
         """Return what a preview of ``rendered``, the row's ``sample`` rendered, warns about.
 
@@ -1080,17 +1111,20 @@ class TemplateWalker:
 
     # -- the walk --------------------------------------------------------------
 
+    @refusals_only()
     def walk(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
         """Walk ``root`` and every row it reaches in its language, read through ``rows``.
 
-        Raise ``ValidationError`` listing every refusal.
+        Raise ``ValidationError`` listing every refusal, each item coded
+        ``message_template_refused``.
         """
 
         walk = self.judge(root, rows)
         if walk.refusals:
-            raise ValidationError(list(dict.fromkeys(walk.refusals)), code="message_template_refused")
+            raise _refused(walk.refusals, "message_template_refused")
         return walk
 
+    @refusals_only()
     def judge(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
         """Walk ``root`` as :meth:`walk` does, and return the walk with its refusals and the rows it reached."""
 
