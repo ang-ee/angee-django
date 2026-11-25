@@ -217,7 +217,8 @@ describe("the default kit dresses the app", () => {
     expect(root().style.getPropertyValue("--brand")).toBe("#010203");
     expect(cacheWrites()).toEqual([]);
 
-    // The save reports once the reads it refetches have answered.
+    // The save confirms on its write, whether or not this read has answered. The saved kit lands
+    // when the read answers, and the app wore nothing else on the way.
     kitRead.open();
     await screen.findByText("Changes saved");
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(HARBOUR)));
