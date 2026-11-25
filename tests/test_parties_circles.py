@@ -640,7 +640,7 @@ def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_
             sender=alias,
             created_by=owner,
         )
-        recipient = Recipient._base_manager.create(message=message, thread=thread, handle=alias, role="to")
+        recipient = Recipient._base_manager.create(message=message, handle=alias, role="to")
         for handle in (alias, phone):
             Reaction._base_manager.create(message=message, handle=handle, reaction="👍")
         moved_reaction = Reaction._base_manager.create(message=message, handle=alias, reaction="❤️")
