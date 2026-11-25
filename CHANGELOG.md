@@ -10,6 +10,20 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A record form's save no longer writes into the values it
+  reads: `mutationData` (`form-view-model.ts`) copies what it takes from them,
+  as its hidden-reset branch already did. Before, a structured field saved
+  together with a dotted member it sends as another value (a cleared number as
+  `null`, a picked record as its id) had that wire value written into the
+  values the save had read, so the form stayed marked as changed after a
+  successful save, with Save and Discard still showing, and a form's own
+  submit owner received the wire value in `context.values`. Now the form is
+  clean after such a save and the owner receives what the form held. What a
+  form sends is unchanged for a record form's values, which are plain data:
+  the copy is `structuredClone`'s, as the form's undo history already makes on
+  every change. A class instance would now be sent as a plain copy without its
+  methods, and a value holding a function would throw. No widget or form holds
+  such a value, and no declared form saves such a pair today.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
