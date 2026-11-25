@@ -143,8 +143,9 @@ jobs:
   # (scripts/changed_path_selection.py), and do not start when those reach no
   # Python test; its PostgreSQL groups run the planner gate and the PostgreSQL
   # selection's entries those paths reach (scripts/postgres_selection.py), in as
-  # many groups as their stored time needs. Every other event runs the whole suite
-  # and the whole PostgreSQL selection in six groups.
+  # many groups as their stored time needs. Every other event runs the whole
+  # PostgreSQL selection in six groups, and the whole suite unless the caller turned
+  # the pull-request lanes off (pr-checks-enabled, false on a push to main).
   select:
     if: ${{ inputs.uv-enabled }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
@@ -167,19 +168,27 @@ jobs:
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
+          PR_CHECKS: ${{ inputs.pr-checks-enabled }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             reached=$(git diff --name-only HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
             postgres=(scripts/postgres_selection.py)
-            sqlite=$([ -n "$reached" ] && echo true || echo false)
           else
             reached=
             postgres=(scripts/postgres_selection.py --all)
+          fi
+          if [ "$PR_CHECKS" != true ]; then
+            sqlite=false
+            echo "SQLite: not run, as pr-checks-enabled is false"
+          elif [ "$EVENT" = pull_request ] && [ -z "$reached" ]; then
+            sqlite=false
+            echo "SQLite: not run, as the changed paths reach no Python test"
+          else
             sqlite=true
+            echo "SQLite: ${reached:-the whole suite}"
           fi
           postgres_tests=$(printf '%s\n' "$reached" | uv run --locked python "${postgres[@]}")
           postgres_groups=$(printf '%s\n' "$reached" | uv run --locked python "${postgres[@]}" --groups)
-          echo "SQLite: ${reached:-the whole suite}"
           echo "PostgreSQL groups $postgres_groups: $postgres_tests"
           {
             echo "sqlite=$sqlite"
@@ -195,7 +204,7 @@ jobs:
   uv-shard:
     name: uv ${{ matrix.group }}/6
     needs: select
-    if: ${{ inputs.uv-enabled && inputs.pr-checks-enabled && needs.select.outputs.sqlite == 'true' }}
+    if: ${{ inputs.uv-enabled && needs.select.outputs.sqlite == 'true' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
@@ -321,11 +330,10 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.select.result }}" = success
-          # The shards are skipped where a caller turned the pull-request lanes off,
-          # or where the changed paths reach no Python test.
+          # The shards are skipped where select turned them off: the caller turned the
+          # pull-request lanes off, or the changed paths reach no Python test.
           test "${{ needs.uv-shard.result }}" = success || {
-            { test "${{ inputs.pr-checks-enabled }}" = false || test "${{ needs.select.outputs.sqlite }}" = false; } &&
-            test "${{ needs.uv-shard.result }}" = skipped; }
+            test "${{ needs.select.outputs.sqlite }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
 
   pnpm:
