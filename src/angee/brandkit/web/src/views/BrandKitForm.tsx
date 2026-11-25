@@ -10,8 +10,11 @@ export const BRAND_KIT_MODEL = "brandkit.BrandKit";
  * The brand kit form: the name as its title; the default flag; the colours in the
  * theme customisation editor's sections and words, since each is that editor's
  * input of the same name; a saved kit's mail contrast warnings; the fonts, the
- * mail footer and the voice. The logos are not edited here: only storage's image
- * ingest may put a logo on the image drive.
+ * mail footer and the voice, each in its own section in that order. A kit has no
+ * record body, so neither long text is one (`body={false}`); the voice has a section
+ * of its own because the form view shows ungrouped fields before every section. The
+ * logos are not edited here: only storage's image ingest may put a logo on the image
+ * drive.
  */
 function BrandKitForm({ resource: _resource, ...props }: RegisteredFormProps): React.ReactElement {
   const t = useBrandkitT();
@@ -22,17 +25,17 @@ function BrandKitForm({ resource: _resource, ...props }: RegisteredFormProps): R
       <Group label={t("form.kit")}>
         <Field name="is_default" label={t("field.isDefault")} description={t("field.isDefaultHint")} />
       </Group>
-      <Group label={ui("theme.customization.section.identity")} hint={t("form.colorsHint")} columns={3}>
+      <Group label={ui("theme.customization.section.identity")} hint={t("form.colorsHint")} columns={2}>
         <Field name="brand" label={ui("theme.customization.brand")} />
         <Field name="accent" label={ui("theme.customization.accent")} />
         <Field name="neutral" label={ui("theme.customization.neutral")} />
       </Group>
-      <Group label={ui("theme.customization.section.surfaces")} columns={3}>
+      <Group label={ui("theme.customization.section.surfaces")} columns={2}>
         <Field name="canvas" label={ui("theme.customization.canvas")} />
         <Field name="surface" label={ui("theme.customization.surface")} />
         <Field name="rail" label={ui("theme.customization.rail")} />
       </Group>
-      <Group label={ui("theme.customization.section.feedback")} columns={4}>
+      <Group label={ui("theme.customization.section.feedback")} columns={2}>
         <Field name="success" label={ui("theme.customization.success")} />
         <Field name="warning" label={ui("theme.customization.warning")} />
         <Field name="danger" label={ui("theme.customization.danger")} />
@@ -51,9 +54,11 @@ function BrandKitForm({ resource: _resource, ...props }: RegisteredFormProps): R
       </Group>
       <Group label={t("form.footer")} columns={2}>
         <Field name="footer_organization" label={t("field.footerOrganization")} />
-        <Field name="footer_address" label={t("field.footerAddress")} widget="textarea" />
+        <Field name="footer_address" label={t("field.footerAddress")} widget="textarea" body={false} />
       </Group>
-      <Field name="voice" label={t("form.voice")} widget="textarea" description={t("form.voiceHint")} />
+      <Group label={t("form.voice")} hint={t("form.voiceHint")} columns={1}>
+        <Field name="voice" label={t("field.voice")} widget="textarea" body={false} />
+      </Group>
     </Form>
   );
 }
