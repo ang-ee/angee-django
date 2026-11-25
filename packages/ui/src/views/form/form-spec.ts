@@ -29,7 +29,11 @@ export type FormSpecRelationCreate = Pick<
 /**
  * Descriptor produced from a backend-emitted JSON form schema.
  * `type`/`properties`/`required`/`items`/`enum`/`const` are the recursive schema
- * vocabulary. Presentation extensions live on each property: string-only
+ * vocabulary. A `string` whose JSON Schema `format` is `date`, `date-time` or
+ * `time` carries it as the descriptor's `format`, the value's declared type; any
+ * other format, and one on another type, is not carried: where a schema validator
+ * runs (a schema dialog, the server) it reads it from the schema. Presentation
+ * extensions live on each property: string-only
  * `widget`/`label`/`description`/`placeholder` (`label` overrides JSON Schema
  * `title`; an undeclared label is humanized from the field name), list
  * `addLabel`/`removeLabel`,
@@ -338,6 +342,7 @@ function deserializeField(
     name,
     kind: type,
     widget,
+    ...(type === "string" && isDeclaredFormat(field.format) ? { format: field.format } : {}),
     ...(label ? { label } : {}),
     ...(addLabel ? { addLabel } : {}),
     ...(removeLabel ? { removeLabel } : {}),
@@ -366,6 +371,11 @@ function deserializeField(
     ...(objectTemplate ? { objectTemplate } : {}),
     ...(itemTemplate ? { itemTemplate } : {}),
   };
+}
+
+/** Whether a wire `format` is one a descriptor carries: a date, a date and time, or a time as text. */
+function isDeclaredFormat(format: string | undefined): format is NonNullable<FormSpecFieldDescriptor["format"]> {
+  return format === "date" || format === "date-time" || format === "time";
 }
 
 /** Project validated wire filters into Refine's required value slot. */

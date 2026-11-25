@@ -17,7 +17,11 @@ import { emptyDraft } from "./form-view-model";
 import { MutationDialog } from "./MutationDialog";
 
 describe("a field's empty value (emptyValueForField), one row of its table per line", () => {
-  test.each<[string, Pick<FieldDescriptor, "widget" | "kind">, unknown]>([
+  test.each<[string, Pick<FieldDescriptor, "widget" | "kind" | "format">, unknown]>([
+    ["1. a declared format: a date carried as text", { kind: "string", format: "date" }, null],
+    ["1. a declared format: a date and time carried as text", { kind: "string", format: "date-time", widget: "datetime" }, null],
+    ["1. a declared format: a time carried as text", { kind: "string", format: "time", widget: "text" }, null],
+    ["1. a declared format with no kind", { format: "date" }, null],
     ["1. an explicit string kind", { kind: "string" }, ""],
     ["1. a widget does not override an explicit string kind: date", { kind: "string", widget: "date" }, ""],
     ["1. a widget does not override an explicit string kind: date and time", { kind: "string", widget: "datetime" }, ""],
@@ -216,7 +220,8 @@ async function mutationDialogSeed(field: FormSpecFieldDescriptor): Promise<unkno
 /** What an action dialog's submit receives for `field` as an optional argument left untouched. */
 async function actionArgumentSeed(field: FormSpecFieldDescriptor): Promise<unknown> {
   const submit = vi.fn(async (_values: Record<string, unknown>) => ({ ok: true, message: "" }));
-  const argument = { name: field.name, label: "Argument", widget: field.widget, kind: field.kind, options: field.options, optional: true } as ActionArg;
+  // Typed, not cast: an argument that could not carry the field's format would not compile.
+  const argument: ActionArg = { name: field.name, label: "Argument", widget: field.widget, kind: field.kind, format: field.format, options: field.options, optional: true };
   render(<Shell><ActionFormDialog action={{ id: "seed", label: "Run", args: [argument], submit }}
     context={{ record: null, selectedIds: [] }} open onOpenChange={() => undefined} /></Shell>);
   const button = await screen.findByRole<HTMLButtonElement>("button", { name: "Run" });

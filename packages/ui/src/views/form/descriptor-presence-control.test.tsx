@@ -37,6 +37,13 @@ describe("a field whose empty value is null has no present-but-empty state", () 
     expect(screen.queryByText("Left empty")).toBeNull();
   });
 
+  test("a nullable string with a declared format holding null shows its own control with the Left empty hint and no Set value", () => {
+    renderField({ name: "due", label: "Due", kind: "string", format: "date", widget: "date", nullable: true }, null);
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+    expect(screen.getByText("Left empty")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Due/ })).toBeTruthy();
+  });
+
   test("a nullable number holding nothing, with no default, shows its own control and never writes a 0", () => {
     const changes = renderField({ name: "limit", label: "Limit", kind: "integer", widget: "integer", nullable: true }, undefined);
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();

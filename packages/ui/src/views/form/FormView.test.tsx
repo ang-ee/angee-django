@@ -2838,18 +2838,22 @@ describe("FormView", () => {
     expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
   });
 
-  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, holding null offers Set value, which writes an empty text", async () => {
+  // A date carried as text declares its format beside its date widget, as the backend's form spec emits
+  // it: the format, not the widget, makes its empty value null. The backend also marks every member
+  // omittable or presence-required; the edit and draft tests below use members without those marks, as
+  // a hand-written or raw schema declares them, which is where those seeds changed.
+  test("a date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
     sdkMocks.record = { id: "note-1", title: "First", due: null };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={deserializeFormSpec({ type: "object", properties: {
-      due: { anyOf: [{ type: "string", widget: "date" }, { type: "null" }], label: "Due" },
+      due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" },
     } }, defaultWidgets)} />);
     await screen.findByText("Left empty");
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
   });
 
-  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, seeds an empty text, so an edit that writes its object sends it as one where it sent null, and a create draft holds one", async () => {
+  test("a date carried as text that the record lacks is sent as null when an edit writes its object", async () => {
     const members = deserializeFormSpec({ type: "object", properties: {
-      name: { type: "string", label: "Name" }, day: { type: "string", widget: "date", label: "Day" },
+      name: { type: "string", label: "Name" }, day: { type: "string", format: "date", widget: "date", label: "Day" },
     } }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
     sdkMocks.record = { id: "note-1", title: "First", config: { name: "a" } };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={members} />);
@@ -2859,7 +2863,15 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate.mock.calls[0]![0].data.config.day).toBeNull();
-    expect(emptyDraft(members)).toStrictEqual({ config: { name: "", day: null } });
+  });
+
+  test.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+    ["nullable, holds null", { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }] }, { name: "", day: null }],
+    ["neither required nor nullable, is left out, as its type refuses null", { type: "string", format: "date", widget: "date" }, { name: "" }],
+  ])("a create draft's date carried as text that is %s", (_case, day, draft) => {
+    const members = deserializeFormSpec({ type: "object", properties: { name: { type: "string", label: "Name" }, day } }, defaultWidgets)
+      .map((field) => ({ ...field, name: `config.${field.name}` }));
+    expect(emptyDraft(members)).toStrictEqual({ config: draft });
   });
 
   const labelField = { name: "label", label: "Label", required: true } satisfies FormField;
