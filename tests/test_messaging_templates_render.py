@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import functools
 import inspect
+import itertools
 import logging
 import os
 import re
@@ -235,18 +237,19 @@ GUARD_NODES = {
     "BlockNode": (("nodelist",), ["name", "nodelist", "parent"]),
     "TemplateTagNode": (("nodelist",), ["tagtype"]),
 }
+# is_safe is the engine's own (True for its markup filter alone); needs_autoescape and expects_localtime are Django's.
 GUARD_FILTERS = {
-    "capfirst": ((True, None, None), "(value)"),
+    "capfirst": ((False, None, None), "(value)"),
     "date": ((False, None, True), "(value, arg=None)"),
     "default": ((False, None, None), "(value, arg)"),
-    "floatformat": ((True, None, None), "(text, arg=-1)"),
+    "floatformat": ((False, None, None), "(text, arg=-1)"),
     "length": ((False, None, None), "(value)"),
     "linebreaksbr": ((True, True, None), "(value, autoescape=True)"),
-    "lower": ((True, None, None), "(value)"),
+    "lower": ((False, None, None), "(value)"),
     "pluralize": ((False, None, None), "(value, arg='s')"),
-    "title": ((True, None, None), "(value)"),
-    "truncatechars": ((True, None, None), "(value, arg)"),
-    "truncatewords": ((True, None, None), "(value, arg)"),
+    "title": ((False, None, None), "(value)"),
+    "truncatechars": ((False, None, None), "(value, arg)"),
+    "truncatewords": ((False, None, None), "(value, arg)"),
     "upper": ((False, None, None), "(value)"),
     "url": ((False, None, None), "(value: 'Any') -> 'str'"),
     "yesno": ((False, None, None), "(value, arg=None)"),
@@ -903,6 +906,7 @@ def test_values_never_become_markdown(plain: Any, kit: Any) -> None:
 # ---------- values ----------
 
 
+@functools.lru_cache(maxsize=4_096)
 def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list[str]]:
     """What a browser reads of a rendered body, by html5lib's WHATWG tokeniser and tree construction.
 
@@ -940,7 +944,9 @@ def _harmless(value: str) -> str:
     return value if not value.strip(_HTML_SPACE) else MARKER
 
 
-def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) -> None:
+def _assert_value_stays_text(
+    marker_html: str, hostile_html: str, value: str, *, scriptings: tuple[bool, ...] = (False, True),
+) -> None:
     """Property 1: ``value`` adds no element, attribute or comment, no text in style or script, a link only by ``url``.
 
     ``marker_html`` is the same rows rendered with ``_harmless(value)``. A browser's reading of both has
@@ -949,7 +955,7 @@ def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) ->
     makes a link of the value.
     """
 
-    for scripting in (False, True):
+    for scripting in scriptings:
         (marker, marker_raw), (hostile, hostile_raw) = (
             _reading(marker_html, scripting=scripting), _reading(hostile_html, scripting=scripting))
         assert hostile_raw == marker_raw, (hostile_raw, marker_raw)
@@ -1138,6 +1144,91 @@ def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, v
         marker = _render(template, {"v": harmless, "items": [harmless], "when": "2026-11-24"}, kit).html
         rendered = _render(template, {"v": candidate, "items": [candidate], "when": "2026-11-24"}, kit)
         _assert_value_stays_text(marker, rendered.html, str(candidate))
+
+
+TRUNCATING_SENDER = "x onmouseover=alert(document.domain) style=background:url(https://tracker.example/leak);x:"
+
+
+def test_a_cut_line_break_is_refused_since_markup_is_the_last_filter(plain: Any, kit: Any) -> None:
+    """linebreaksbr then truncatechars cut a <br> open and the next output became an attribute: refused, as is a
+    markup filter's output handed to a filter through with, an include argument or a test."""
+
+    del plain
+    source = "<p>{{ message|linebreaksbr|truncatechars:200 }} — {{ sender }}</p>"
+    row = _unsaved(format="html", source=source, text_source="{{ message }} {{ sender }}",
+                   variables={"message": "x", "sender": "x"})
+    rule = "linebreaksbr writes markup, so it is the last filter of a printed value"
+    assert any(rule in refusal for refusal in _refusals(row)), _refusals(row)
+    for bound in (
+        "{% with b=message|linebreaksbr %}<p>{{ b|truncatechars:9 }}{{ sender }}</p>{% endwith %}",
+        '{% include "blocks/cut" with body=message|linebreaksbr only %}{{ sender }}',
+        "{% if message|linebreaksbr %}<p>{{ sender }}</p>{% endif %}",
+    ):
+        row = _unsaved(format="html", source=bound, text_source="x", variables={"message": "x", "sender": "x"})
+        rows = _Rows(row, _unsaved("block", "cut", source="<p>{{ body|truncatechars:9 }}</p>", text_source="x",
+                                   variables={"body": "x"}))
+        refusals = TemplateWalker(saving=True).judge(row, rows).refusals
+        assert any(rule in refusal for refusal in refusals), (bound, refusals)
+    admitted = _mail("<p>{{ message|linebreaksbr }} — {{ sender }}</p>", {"message": "x", "sender": "x"},
+                     format="html", text_source="{{ message }} {{ sender }}")
+    html = _render(admitted, {"message": "a" * 196 + "\nx", "sender": TRUNCATING_SENDER}, kit).html
+    assert "<br>x — x onmouseover=alert(document.domain)" in html
+
+
+def test_only_a_markup_filter_returns_markup(plain: Any, kit: Any) -> None:
+    """A filter's result is escaped though Django's filter hands on a safe input, marks its own result safe or returns
+    its literal argument; a literal printed alone holds no <, > or "."""
+
+    del plain
+    template = _mail(
+        "<p>{{ v|default:'Q&A'|lower }}|{{ n|floatformat }}|{{ v|default:'a&amp;b' }}|{{ 'Q&A' }}</p>",
+        {"v": "x", "n": "x"}, format="html", text_source="x",
+    )
+    html = _render(template, {"v": "", "n": 1.5}, kit).html
+    assert "<p>q&amp;a|1.5|a&amp;amp;b|Q&A</p>" in html
+    assert any("holds <, > or" in refusal for refusal in _refusals(_unsaved(
+        format="html", source="<p>{{ '<b>' }}</p>", text_source="x")))
+
+
+CHAIN_FILTERS = [
+    "default:'d'", "upper", "lower", "capfirst", "title", "truncatechars:9", "truncatechars:10", "truncatechars:11",
+    "truncatewords:2", "linebreaksbr", "length", "floatformat", "pluralize", "yesno:'a,b'",
+]
+"""Every filter that reads a string, with arguments that cut where linebreaksbr writes <br>."""
+CHAIN_MESSAGES = ["aaaaaa\nbb cc", "aaaaaaa\nbb", "aaaaaaaa\nb", "&<>\"'\n\n", "a\n\n\nb", "1.5\n2"]
+CHAIN_PLACES = [
+    "<p>{chain} {{{{ s }}}}</p>", '<p title="{chain}">{{{{ s }}}}</p>', "<title>{chain} {{{{ s }}}}</title><p>x</p>",
+]
+
+
+@pytest.mark.parametrize("longest", [2, pytest.param(3, marks=pytest.mark.skipif(
+    not TIMED_RUN, reason="chains of three take a minute; ANGEE_TIMED_TESTS=1 runs them"))])
+def test_no_chain_of_filters_lets_a_value_become_markup(kit: Any, longest: int) -> None:
+    """Every chain of up to ``longest`` filters, in text, a double-quoted attribute and a title, before a hostile
+    value, read as a browser reads it: the value stays text whatever the chain did to the message before it."""
+
+    admitted = compared = 0
+    for size in range(1, longest + 1):
+        for chain in itertools.product(CHAIN_FILTERS, repeat=size):
+            output = "{{ m|" + "|".join(chain) + " }}"
+            for place in CHAIN_PLACES:
+                template = _unsaved(format="html", source=place.format(chain=output), text_source="x",
+                                    variables={"m": "x", "s": "x"}, layout="plain")
+                rows = _Rows(template, _unsaved("layout", "plain", source=PLAIN_LAYOUT, text_source=PLAIN_TEXT))
+                try:
+                    walk = TemplateWalker(saving=True).walk(template, rows)
+                except ValidationError:
+                    continue
+                admitted += 1
+                for message in CHAIN_MESSAGES:
+                    try:
+                        marker = walk.render({"m": message, "s": _harmless(TRUNCATING_SENDER)}, kit=kit).html
+                    except ValidationError:
+                        continue  # floatformat or pluralize refuses a message no float holds
+                    hostile = walk.render({"m": message, "s": TRUNCATING_SENDER}, kit=kit).html
+                    _assert_value_stays_text(marker, hostile, TRUNCATING_SENDER, scriptings=(False,))
+                    compared += 1
+    assert admitted and compared
 
 
 def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:

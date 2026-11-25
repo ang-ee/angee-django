@@ -45,7 +45,7 @@ from django.template import (
 from django.template.base import FilterExpression, Node, NodeList, Parser, Token
 from django.template.loader_tags import IncludeNode
 from django.template.loaders.base import Loader
-from django.utils.safestring import SafeString
+from django.utils.safestring import SafeData, SafeString
 from markdown_it import MarkdownIt
 
 from angee.brandkit.models import BrandKit, MailRole, MailScheme
@@ -58,6 +58,12 @@ ALLOWED_FILTERS = (
     "date", "floatformat", "pluralize", "yesno", "url",
 )
 """The filters a message template may use: Django's own thirteen and :func:`url`."""
+
+MARKUP_FILTERS = frozenset({"linebreaksbr"})
+"""The filters whose output is markup: ``linebreaksbr`` escapes what it reads and writes ``<br>``. A markup filter is
+the last filter of a printed value (the walker's row rules), and no other filter's result is ever marked safe
+(:func:`_charged`). An output is escaped text, a literal (which holds no ``<``, ``>`` or ``"``), or one markup
+filter's whole output."""
 
 URL_INPUT_LIMIT = 2_048
 """The longest value :func:`url` reads; a longer one gives no link."""
@@ -265,22 +271,30 @@ register.tag("templatetag", defaulttags.templatetag)
 
 
 def _charged(name: str, function: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap the filter ``name`` so each call charges the pass's budget; its flags and signature stay Django's."""
+    """Wrap the filter ``name`` so each call charges the pass's budget, and only a markup filter returns markup.
+
+    Django's ``needs_autoescape`` and ``expects_localtime`` and its signature stay its own. ``is_safe`` is kept for
+    :data:`MARKUP_FILTERS` alone, and any other filter's result is a plain string, so the HTML engine escapes it
+    even where Django's filter hands on a safe input, marks its own result safe (``floatformat``) or returns its
+    literal argument (``default``).
+    """
 
     reads_input = name in INPUT_READING_FILTERS
+    writes_markup = name in MARKUP_FILTERS
 
     @functools.wraps(function)
     def charged(value: Any, *args: Any, **kwargs: Any) -> Any:
         length = len(value) if reads_input and isinstance(value, str) else 0
         RenderBudget.current().charge(filter_input=FILTER_CHARGE + length)
-        return function(value, *args, **kwargs)
+        result = function(value, *args, **kwargs)
+        return result if writes_markup or not isinstance(result, SafeData) else str.__str__(result)
 
+    charged.__dict__["is_safe"] = writes_markup
     return charged
 
 
 _LINKS = MarkdownIt("commonmark")
 """The parser whose public ``normalizeLink`` and ``validateLink`` judge a link, as Markdown links are judged."""
-
 
 
 def _link(text: str) -> str:

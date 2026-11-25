@@ -66,6 +66,7 @@ from django.utils.timezone import get_current_timezone, template_localtime  # ty
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
     BRAND_PATHS,
+    MARKUP_FILTERS,
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
@@ -860,7 +861,7 @@ class _RowRules:
         elif type(node) is BudgetedIncludeNode:
             self.includes.add(str(node.template.var))
         for expression in reads.expressions(node):
-            self.expression(expression)
+            self.expression(expression, printed=type(node) is VariableNode)
         for nodelist in reads.nodelists(node):
             self.nodes(nodelist)
 
@@ -868,7 +869,9 @@ class _RowRules:
         if (reason := _literal_refusal(value)) is not None:
             self.refuse(reason)
 
-    def expression(self, expression: FilterExpression) -> None:
+    def expression(self, expression: FilterExpression, *, printed: bool) -> None:
+        """Judge one expression's literals and filters; ``printed``: an output's, not a test's or an argument's."""
+
         variable = expression.var
         if expression.is_var:
             if variable.translate:
@@ -903,12 +906,14 @@ class _RowRules:
                 self.refuse(f"date is the first filter in {expression.token}")
             if name == "url" and (position != len(names) - 1 or set(names[:position]) - {"default"}):
                 self.refuse(f"url is the last filter, after default alone, in {expression.token}")
-            if name == "linebreaksbr" and self.text_form:
-                self.refuse("linebreaksbr writes <br> into plain text")
+            if name in MARKUP_FILTERS and self.text_form:
+                self.refuse(f"{name} writes <br> into plain text")
+            elif name in MARKUP_FILTERS and (not printed or position != len(names) - 1):
+                self.refuse(f"{name} writes markup, so it is the last filter of a printed value, in {expression.token}")
 
     def condition(self, condition: Any) -> None:
         if type(condition) is TemplateLiteral:
-            self.expression(cast(FilterExpression, condition.value))
+            self.expression(cast(FilterExpression, condition.value), printed=False)
             return
         if condition.id in ("in", "not in"):
             right = condition.second
