@@ -28,6 +28,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -73,6 +74,13 @@ class MessageTemplateType(AngeeNode):
     is_baseline: auto
     created_at: auto
     updated_at: auto
+    permissions = permissions_field(("delete", "preview", "write"))
+
+    @strawberry_django.field(only=["kind"])
+    def carries_message_fields(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether rows of this kind fill ``subject``, ``preheader`` and ``layout``; the others leave them empty."""
+
+        return parent.handler.carries_message_fields
 
     @strawberry_django.field(annotate={"_is_effective": lambda info: _row_fact("is_effective")})
     def is_effective(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
