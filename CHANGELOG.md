@@ -27,6 +27,61 @@ live in code docstrings.
   that loses the selection and is not kept mounted is unmounted, as any
   inactive pane is. A create that is saved still mounts its form again, as
   before.
+- `angee.messaging`, `angee.webforms_messaging`: the move of forms out of
+  messaging channels is removed: the bridge's migration template
+  (`compose_migrations/messaging/webform_channels_to_forms.py`), its
+  `check_webform_channels` command, and messaging's guard that refused a
+  removal of the channel's form columns ahead of the move
+  (`angee.messaging.webform_columns`, its `pre_migrate` receiver and its database
+  check). This changes the earlier statement in this file that "the template
+  ships through the 3.x releases and is removed in 4.0": it is removed now. The
+  move landed on main after `v0.2.0` and was in no release. The guard's planned
+  replacement by django-compose's `IntendedRemoveField` is retired with it; a
+  host's `makemigrations` still refuses an autodetected removal of a table or
+  column that holds data. `angee.messaging.webforms` keeps `default_webform_schema` alone,
+  because every initial messaging migration authored while the channel's form
+  columns existed imports it at each `migrate`; `FORM_COLUMNS`, `holds_form`,
+  `channels_holding_forms`, `channel_public_id` and `is_move` are gone.
+  Check ids: `angee.E054` is retired and is never reused.
+  Upgrade:
+  - A host on `v0.2.0` or earlier, or on a commit from before the move, whose
+    messaging channels still hold forms upgrades first through the marker tag
+    `forms-on-channels-move-last`, commit
+    `fc5a0fce49a54d545f5a621ef7244bed61514b9c` (a marker, not a release; it
+    publishes nothing), and moves its forms there as that commit's notes say.
+  - A host that applied its own copy of the template edits that copy once: its
+    imports of `FORM_COLUMNS`, `channel_public_id`, `channels_holding_forms` and
+    `holds_form` no longer resolve (`default_webform_schema` and the
+    `validate_publishable` and `validate_version` it imports from
+    `angee.webforms.validators` still do). Keep the file's name and its
+    `dependencies` exactly as they are, and make the rest:
+
+    ```python
+    from django.db import migrations
+
+
+    class Migration(migrations.Migration):
+        # The move of webform channels to forms, applied: its data step is retired, its schema steps stay.
+        dependencies = [...]  # unchanged
+        operations = [
+            migrations.RemoveConstraint("channel", "uq_messaging_channel_webform_slug"),
+            migrations.RemoveField("channel", "slug"),
+            migrations.RemoveField("channel", "is_published"),
+            migrations.RemoveField("channel", "form_schema_version"),
+            migrations.RemoveField("channel", "form_schema"),
+            migrations.RemoveField("channel", "max_body_bytes"),
+            migrations.RemoveField("channel", "max_field_bytes"),
+        ]
+    ```
+
+    This is the one case where an applied migration is edited, and it is safe:
+    the file keeps the same schema operations, so the migration state is the
+    same and no database operation changes. A database that applied it runs
+    nothing again, `makemigrations messaging` reports no changes, and a fresh
+    database replays it as the removal of the columns its initial migration
+    created. Emptying the file instead would leave those columns in the state,
+    and `makemigrations` would author their removal again.
+  - Every other host needs nothing.
 - `angee.messaging`, `angee.nexus`: **Changed behaviour.** A message's sender is
   read from `Message.sender` alone. Ingest no longer writes a `from` participant
   row beside it, so a message's participant rows are its recipients (`to`, `cc`,
