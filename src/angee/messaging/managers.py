@@ -611,7 +611,10 @@ class _MessageChronology(TypedDict):
 
 def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
     """Return a short text preview of a parsed body tree: the first plain body text, else the
-    first HTML body stripped of its markup. A preview is user text and never carries tags."""
+    first HTML body stripped of its markup. A preview is user text and never carries tags.
+
+    The one preview rule of every message writer: ingest, ``MessageManager.compose`` and a
+    chatter post or edit. A plain body previews as its first ``limit`` characters."""
 
     plain = _first_body_text(body, html=False)
     if plain:
@@ -3908,7 +3911,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 message_type=kind,
                 subtype_id=subtype.pk if subtype is not None else None,
                 parent_id=parent.pk if parent is not None else None,
-                preview=body[:280],
+                preview=_preview(ParsedPart(text=body)),
                 sent_at=sent_at,
                 created_by_id=created_by_id,
             )
@@ -4057,7 +4060,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     _edit_history_entry(edited_by_id=edited_by_id, prev_fragment_hashes=prior_hashes),
                     *(message.edit_history or []),
                 ]
-                message.preview = body[:280]
+                message.preview = _preview(ParsedPart(text=body))
                 message.status = self.model.MessageStatus.EDITED
                 message.save(update_fields=("preview", "status", "edit_history", "updated_at"))
                 return message

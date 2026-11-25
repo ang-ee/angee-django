@@ -12,6 +12,8 @@ from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
+from hypothesis import given
+from hypothesis import strategies as st
 from rebac import PermissionDenied, system_context
 
 from angee.intake.models import TaskIntake
@@ -26,6 +28,7 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
+from angee.messaging.managers import _preview
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
@@ -133,6 +136,22 @@ def test_a_new_email_on_a_channel_starts_its_own_thread_titled_by_its_subject(de
     # The title part carries the subject as written; the thread is titled by its normalised form.
     assert (first.title(), second.title()) == ("Re: Quarterly report", "Quarterly report")
     assert desk.sent == []
+
+
+def test_the_text_part_comes_from_the_text_and_never_from_the_html(desk: Any) -> None:
+    owner = desk.owner
+    bodies = {
+        "text": {"text": "Plain words."},
+        "both": {"text": "Plain words.", "html": "<p>Rich <b>words</b>.</p>"},
+        "html": {"html": "<style>p { color: red }</style><p>Rich words.</p>"},
+    }
+    types = {}
+    for name, body in bodies.items():
+        message = Message.objects.compose(channel=desk, to=["reader@example.test"], actor=owner, **body)
+        types[name] = [part.get_content_type() for part in _wire(desk, message).walk()]
+    assert types["text"] == ["text/plain"]
+    assert types["both"] == ["multipart/alternative", "text/plain", "text/html"]
+    assert "text/plain" not in types["html"] and "text/html" in types["html"]
 
 
 @pytest.mark.parametrize(
@@ -388,6 +407,13 @@ def test_compose_and_intakes_route_agree_on_which_message_can_be_answered(desk: 
                 with pytest.raises(refusal):
                     Message.objects.compose(parent=message, text="Answer.", actor=actor, **values)
         assert (route is message) == (error is None and message.message_type == "email"), name
+
+
+@given(st.text())
+def test_a_plain_body_previews_as_its_first_280_characters(text: str) -> None:
+    """The chatter writers' previews did not change when they moved to the one preview rule."""
+
+    assert _preview(ParsedPart(text=text)) == text[:280]
 
 
 def test_a_recipient_row_is_inserted_on_its_messages_thread(db: None) -> None:
