@@ -1952,22 +1952,26 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
 
 
 def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> None:
-    """Tags nested 16 deep, three includes, two loops, eight-segment paths and a condition of ten operators: the walk
-    and the render stay far under Python's default recursion limit, so no RecursionError, which stays unconverted,
-    can arise from a row."""
+    """Tags nested 16 deep in each of four rows, three includes, two loops, eight-segment paths and a condition of
+    ten operators: the walk and the render stay far under Python's default recursion limit, so no RecursionError,
+    which stays unconverted, can arise from a row."""
 
     del plain
+
+    def nested(inner: str, depth: int = 16) -> str:
+        return "\n".join(["{% if x %}"] * depth) + inner + "\n".join(["{% endif %}"] * depth)
+
     condition = "{% if " + "not " * CONDITION_OPERATOR_LIMIT + "x %}"
-    nested = "\n".join(["{% if x %}"] * 15) + condition + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
-    _row("part", "depth3", source=nested, variables={"x": "x"})
-    _row("part", "depth2", source='{% include "parts/depth3" with x=x only %}', variables={"x": "x"})
-    _row("part", "depth1", source='{% include "parts/depth2" with x=x only %}', variables={"x": "x"})
+    for name, source in (("depth3", nested(condition + "{{ x }}{% endif %}", 15)),
+                         ("depth2", nested('{% include "parts/depth3" with x=x only %}')),
+                         ("depth1", nested('{% include "parts/depth2" with x=x only %}'))):
+        _row("part", name, format="html", source=source, text_source=source, variables={"x": "x"})
     deep = "a.b.c.d.e.f.g.h"
-    template = _mail(
-        "{% for o in outer %}\n\n{% for i in o.inner %}\n\n"
-        '{% include "parts/depth1" with x=i.v only %}\n\n{% endfor %}\n\n{% endfor %}\n\n{{ ' + deep + " }}",
-        {"outer.*.inner.*.v": "x", deep: "x"}, key="tests.deepest",
-    )
+    body = ("{% for o in outer %}{% for i in o.inner %}{% with x=i.v %}"
+            + nested('{% include "parts/depth1" with x=x only %}', 13)
+            + "{% endwith %}{% endfor %}{% endfor %}{{ " + deep + " }}")
+    template = _mail(body, {"outer.*.inner.*.v": "x", deep: "x"}, format="html", text_source=body,
+                     key="tests.deepest")
     assert _refusals(template) == []
     values: dict[str, Any] = {"outer": [{"inner": [{"v": "Deep"}] * 10}] * 10}
     node = values
