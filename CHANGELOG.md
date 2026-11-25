@@ -15,17 +15,14 @@ live in code docstrings.
   it, signed in or not.
   - `@angee/app` gains the install-one manifest key `hostAppearance`, a
     `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
-    per render of its session frame for the theme a person who chose none wears (the
-    selected app's, else the build's, locked apps included); the `{ options, pending }`
-    it answers replaces the build's options for that theme. Two providers fail
-    composition, as two dashboard stores do. `@angee/ui`'s `HostAppearanceDefaults`
-    gains `pending`, which keeps the first paint and the boot cache until the source's
-    first read answers, fails or pauses.
-  - `angee.brandkit` is that source. When the theme accepts the shared palette
-    customisation, the kit's ten colours go over the build's options for it, else over
-    the theme's defaults; the build's font, radius, density, elevation and logo
-    treatment stay, and a person's own theme or options still win. A fixed theme, or
-    none, sends no read; no default kit or a failed read leaves the build's options.
+    per render of its session frame; two providers fail composition, as two dashboard
+    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps the
+    first paint and the boot cache until the source's first read answers, fails or
+    pauses; only the session frame sets it, and `CreateAppInput.appearance` takes none.
+    Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
+    precedence".
+  - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
+    colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
   - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
     of any kit, through the new public root `default_brand_kit_colors`
     (`BrandKitColors`), under `read_colors`, a deliberate disclosure on the kit's own
@@ -35,8 +32,9 @@ live in code docstrings.
     wears, so customising while following the app default keeps its other choices.
   - **Upgrade:** the console root `default_brand_kit` is removed; read
     `default_brand_kit_colors` on the public schema, or `BrandKit.objects.default()` in
-    Python. Provision applies the permission revision through `rebac sync`. Once the
-    addon is provisioned a default kit always exists, so on a host with
+    Python. Provision applies the permission revision through `rebac sync`; until it
+    has, the public root answers `null` with no error and the app wears the build's
+    colours. Once the addon is provisioned a default kit always exists, so on a host with
     `angee.brandkit`: a project on the stock theme (the full profile's default) wears
     the shipped Angee kit's colours; a project on another customisable theme, such as
     Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
@@ -380,9 +378,8 @@ live in code docstrings.
     kit as the default takes the flag from the previous one, and the default can
     be neither unticked nor deleted, on any delete path. A conditional unique
     constraint refuses a second default written past the save.
-    `BrandKit.objects.default()` and the console's `default_brand_kit` query
-    return it, or `None` before any kit exists, after a write past `save()` and
-    `clean()`, and for an actor who reads no kit.
+    `BrandKit.objects.default()` returns it, or `None` before any kit exists,
+    after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
     layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
     `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's

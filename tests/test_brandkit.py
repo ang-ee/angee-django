@@ -33,7 +33,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
-from rebac.models import active_relationship_model
+from rebac.models import PermissionAuditEvent, active_relationship_model
 from rebac.testing import assert_decisions
 
 from angee.base.build import extension_source_map
@@ -55,6 +55,7 @@ from angee.brandkit.models import (
     contrast_ratio,
     mix_colors,
 )
+from angee.brandkit.models import BrandKit as SourceBrandKit
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.resources.testing.models import Resource
@@ -106,14 +107,20 @@ def _public_schema() -> Any:
 
 
 def test_kit_colours_are_the_theme_customisation_hex_inputs() -> None:
-    """The kit's colour columns and the theme runtime's hex inputs are one vocabulary, and its inks are the theme's."""
+    """``THEME_COLORS`` is the addon's own colour columns and the theme runtime's hex inputs, in its order.
+
+    A colour column the addon adds fails here until someone decides whether it is a theme
+    input; a column a consumer adds by extending the kit is not the addon's own, so it never
+    joins ``THEME_COLORS`` or the public type built from it.
+    """
 
     runtime = THEME_RUNTIME.read_text()
-    hex_inputs = set(re.findall(r'normalizedHex\(value\.(\w+), "\1"\)', runtime))
-    colours = {field.name for field in BrandKit._meta.concrete_fields if isinstance(field, ColorField)}
-    assert hex_inputs
-    assert colours == hex_inputs
-    assert {str(seed) for seed in MailSeed} <= colours
+    hex_inputs = tuple(re.findall(r'normalizedHex\(value\.(\w+), "\1"\)', runtime))
+    own_colours = {field.name for field in SourceBrandKit._meta.fields if isinstance(field, ColorField)}
+    assert len(hex_inputs) == 10
+    assert SourceBrandKit.THEME_COLORS == hex_inputs
+    assert own_colours == set(hex_inputs)
+    assert {str(seed) for seed in MailSeed} <= own_colours
 
     readable_text = re.search(
         r'function readableText\(background\) \{\s*return contrastRatio\("(#[0-9a-f]{6})", background\) >= '
@@ -710,14 +717,14 @@ def test_listing_kits_with_logos_costs_the_same_at_one_and_at_twenty_five_rows(d
 # ---------- the public schema ----------
 
 
-THEME_COLORS = ("brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info")
+THEME_COLORS = SourceBrandKit.THEME_COLORS
 _DEFAULT_COLORS = f"{{ default_brand_kit_colors {{ {' '.join(THEME_COLORS)} }} }}"
 
-SANDSTONE: dict[str, Any] = {
-    "brand": "#c2410c", "accent": "#0f766e", "neutral": "#78716c", "canvas": "#fafaf9", "surface": "#fffbeb",
+CLAY: dict[str, Any] = {
+    "brand": "#c2410c", "accent": "#0f766e", "neutral": "#78716c", "canvas": "#fafaf8", "surface": "#fffbeb",
     "rail": "#292524", "success": "#15803d", "warning": "#b45309", "danger": "#b91c1c", "info": "#1d4ed8",
 }
-"""A kit whose ten colours all differ from the Angee kit's."""
+"""A kit whose ten colours all differ from the Angee kit's; the web fragment's mapping tests use the same."""
 
 
 def test_everyone_reads_the_default_kits_colours_and_no_kit_reads_as_none(db: None) -> None:
@@ -728,11 +735,29 @@ def test_everyone_reads_the_default_kits_colours_and_no_kit_reads_as_none(db: No
         assert empty.errors is None
         assert empty.data == {"default_brand_kit_colors": None}
 
-    _kit("Sandstone", **SANDSTONE)
+    _kit("Clay", **CLAY)
     _kit("Angee")
     for user in (member, AnonymousUser()):
         read = result_data(execute_schema(_public_schema(), _DEFAULT_COLORS, user=user))
-        assert read["default_brand_kit_colors"] == SANDSTONE
+        assert read["default_brand_kit_colors"] == CLAY
+
+
+def test_the_colour_read_is_the_disclosure_and_never_a_bypass(db: None) -> None:
+    """No bypass, no audit row: the public read decides under ``read_colors``, where a ``sudo()`` read is audited."""
+
+    del db
+    _kit("Clay", **CLAY)
+    _kit("Angee")
+    for user in (create_user("brandkit-colour-audit"), AnonymousUser()):
+        audited = PermissionAuditEvent.objects.count()
+        read = result_data(execute_schema(_public_schema(), _DEFAULT_COLORS, user=user))
+        assert read["default_brand_kit_colors"] == CLAY
+        assert PermissionAuditEvent.objects.count() == audited
+
+    audited = PermissionAuditEvent.objects.count()
+    with actor_context(AnonymousUser()):
+        assert BrandKit.objects.sudo(reason="tests.brandkit.bypass").default() is not None
+    assert PermissionAuditEvent.objects.count() == audited + 1
 
 
 def test_the_public_projection_is_the_theme_inputs_and_nothing_more(db: None) -> None:
@@ -740,8 +765,7 @@ def test_the_public_projection_is_the_theme_inputs_and_nothing_more(db: None) ->
 
     del db
     schema = _public_schema()
-    colours = {field.name for field in BrandKit._meta.concrete_fields if isinstance(field, ColorField)}
-    assert _sdl_fields(schema, "type", "BrandKitColors") == colours == set(THEME_COLORS)
+    assert _sdl_fields(schema, "type", "BrandKitColors") == set(THEME_COLORS)
     assert {name for name in _sdl_fields(schema, "type", "Query") if "brand" in name} == {"default_brand_kit_colors"}
 
     _kit("Angee")
@@ -752,9 +776,12 @@ def test_the_public_projection_is_the_theme_inputs_and_nothing_more(db: None) ->
 
 
 def test_reading_the_default_kits_colours_costs_the_same_at_one_and_at_twenty_five_kits(db: None) -> None:
+    """The same statements at 1 and 25 kits, and the kit's row read selects its id and the ten colours alone."""
+
     del db
     schema = _public_schema()
     seats = {"member": create_user("brandkit-colour-counter"), "anonymous": AnonymousUser()}
+    table = BrandKit._meta.db_table
 
     def statements() -> dict[str, int]:
         counts = {}
@@ -763,13 +790,16 @@ def test_reading_the_default_kits_colours_costs_the_same_at_one_and_at_twenty_fi
             with CaptureQueriesContext(connection) as captured:
                 read = result_data(execute_schema(schema, _DEFAULT_COLORS, user=user))
             assert read["default_brand_kit_colors"] == {name: ANGEE[name] for name in THEME_COLORS}
+            [kit_read] = [query["sql"] for query in captured.captured_queries if f'FROM "{table}"' in query["sql"]]
+            selected = set(re.findall(rf'"{table}"\."(\w+)"', kit_read.split(f' FROM "{table}"', 1)[0]))
+            assert selected == {"id", *THEME_COLORS}
             counts[seat] = len(captured)
         return counts
 
     _kit("Kit 0")
     one = statements()
     for index in range(1, 25):
-        _kit(f"Kit {index}", **SANDSTONE)
+        _kit(f"Kit {index}", **CLAY)
     assert statements() == one
 
 

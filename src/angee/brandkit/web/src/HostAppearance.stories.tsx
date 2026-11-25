@@ -13,9 +13,9 @@ import {
 } from "./views/brand-kits.test-support";
 
 export default {
-  title: "Brand kits/App appearance",
+  title: "Brand kits/Host appearance",
   parameters: { angeeOwnRuntime: true, layout: "fullscreen" },
-  excludeStories: ["AppAppearanceStory"],
+  excludeStories: ["HostAppearanceStory"],
 };
 
 type StoryContext = { globals: Record<string, unknown> };
@@ -28,21 +28,21 @@ const PALE_KITS: readonly KitRow[] = [PALE];
 const NO_KITS: readonly KitRow[] = [];
 
 /** The console in Orchard, the default kit: rail, canvas, sheets, buttons, links, focus ring and status chips in its colours; stock's font, corners, density, elevation and mark. */
-export const ConsoleOrchard = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} /> };
+export const ConsoleOrchard = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} /> };
 /** The console in Harbour, the default kit. */
-export const ConsoleHarbour = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={HARBOUR_KITS} colorScheme={scheme(context)} /> };
+export const ConsoleHarbour = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={HARBOUR_KITS} colorScheme={scheme(context)} /> };
 /** No default kit: the console wears the stock theme exactly. */
-export const ConsoleNoKit = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={NO_KITS} colorScheme={scheme(context)} /> };
+export const ConsoleNoKit = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={NO_KITS} colorScheme={scheme(context)} /> };
 /** Orchard is the default. Harbour's form is open: tick Default kit and save, and the console turns Harbour without a reload; the list shows Harbour first. */
-export const SaveTheDefault = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} initialEntry="/brand-kits/bkt_harbour" /> };
+export const SaveTheDefault = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} initialEntry="/brand-kits/bkt_harbour" /> };
 /** A brand too pale for white ink: buttons fill pale with dark ink, links darken to read, and the console shows no warning. */
-export const PaleKit = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={PALE_KITS} colorScheme={scheme(context)} /> };
+export const PaleKit = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={PALE_KITS} colorScheme={scheme(context)} /> };
 /** The sign-in page, signed out, in Orchard: background, card and button in its colours; name and mark unchanged. */
-export const SignInOrchard = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={ORCHARD_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
+export const SignInOrchard = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
 /** The sign-in page, signed out, in Harbour. */
-export const SignInHarbour = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={HARBOUR_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
+export const SignInHarbour = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={HARBOUR_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
 /** The sign-in page, signed out, with no default kit: the stock theme. */
-export const SignInNoKit = { render: (_args: unknown, context: StoryContext) => <AppAppearanceStory kits={NO_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
+export const SignInNoKit = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={NO_KITS} signedIn={false} initialEntry="/login" colorScheme={scheme(context)} /> };
 
 /** A platform admin: the identity the console's Brand kits entry asks for. */
 const ADMIN = {
@@ -63,7 +63,7 @@ const signIn = defineBaseAddon({
  * real brand kit manifest: the default kit's colours come only from the public schema's
  * `default_brand_kit_colors`, which answers the kit the console's saves leave the default.
  */
-export function AppAppearanceStory({
+export function HostAppearanceStory({
   kits,
   signedIn = true,
   initialEntry = "/brand-kits",
@@ -81,7 +81,7 @@ export function AppAppearanceStory({
   themeId?: string;
   /** The theme addons installed, stock by default. */
   themes?: readonly BaseAddon[];
-  /** The public default-kit read answers an HTTP 500 every time, as a server failing it would. */
+  /** The public default-kit read's first attempt answers an HTTP 500, as a failing server would; every retry stays unanswered. */
   failKitRead?: boolean;
   /** The public default-kit read answers only once this settles, as a slow server would. */
   kitReadGate?: Promise<void>;
@@ -101,18 +101,19 @@ export function AppAppearanceStory({
     const consoleFetch = storySchema({
       current_user: () => user, real_user: () => user, viewable_people: () => [], ...wire.operations,
     }, (request) => onRequest?.("console", request)).public!.fetch!;
+    // The wire fake answers only data or GraphQL errors, so an HTTP failure wraps its fetch.
+    let kitReads = 0;
+    const failingKitRead: typeof publicFetch = (resource, init) => {
+      const { operationName } = JSON.parse(String(init?.body ?? "{}")) as { operationName?: string };
+      if (operationName !== "DefaultBrandKitColors") return publicFetch(resource, init);
+      kitReads += 1;
+      return kitReads === 1 ? Promise.resolve(new Response("The server failed.", { status: 500 })) : new Promise<Response>(() => undefined);
+    };
     return {
       addons: [...themes, signIn, brandkit],
       layouts: { console: { chrome: ConsoleLayout }, public: { schema: "public" } },
       schemas: {
-        public: {
-          url: "/graphql/public/", live: false,
-          fetch: failKitRead
-            ? (resource, init) => String(init?.body ?? "").includes("default_brand_kit_colors")
-              ? Promise.resolve(new Response("The server failed.", { status: 500 }))
-              : publicFetch(resource, init)
-            : publicFetch,
-        },
+        public: { url: "/graphql/public/", live: false, fetch: failKitRead ? failingKitRead : publicFetch },
         console: {
           url: "/graphql/console/", live: false, fetch: consoleFetch,
           metadata: { angee: { resources: [brandKitResource] } }, operationDocuments,

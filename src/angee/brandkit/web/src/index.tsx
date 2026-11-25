@@ -32,8 +32,8 @@ const brandkitMenu: MenuDeclarations = {
  * The `@angee/brandkit` rendered addon: the Brand kits page in Settings for
  * whoever may create kits, the registered kit form, the
  * `angee.brandkit.contrastWarnings` read widget the backend's computed
- * `contrast_warnings` field declares, and the app's `hostAppearance`: the default
- * kit's colours on the theme a person who chose none wears, signed in or not.
+ * `contrast_warnings` field declares, and the app's `hostAppearance` source
+ * (`brandKitHostAppearance`).
  */
 const brandkit = defineBaseAddon({
   id: BRANDKIT_ID,

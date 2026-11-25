@@ -41,8 +41,8 @@ function paletteOf(theme: ThemeDefinition<unknown>): Record<string, string> {
 /** The shipped Angee kit states the Angee theme's colours (`test_the_shipped_kit_states_the_angee_theme_and_no_default`). */
 const SHIPPED_KIT = paletteOf(angee);
 
-/** A kit whose ten colours differ from every theme here. */
-const SANDSTONE = {
+/** A kit whose ten colours differ from every theme here; `tests/test_brandkit.py` reads the same kit. */
+const CLAY = {
   brand: "#c2410c", accent: "#0f766e", neutral: "#78716c", canvas: "#fafaf8", surface: "#fffbeb",
   rail: "#292524", success: "#15803d", warning: "#b45309", danger: "#b91c1c", info: "#1d4ed8",
 };
@@ -77,9 +77,9 @@ describe("brandKitOptions: what each kind of host wears", () => {
     { host: "the stock theme", theme: stock },
     { host: "another customisable theme, whose authored palette the kit replaces", theme: house },
   ])("puts all ten of a kit's colours on $host and keeps its structure", ({ theme }) => {
-    const options = brandKitOptions(theme, SANDSTONE, undefined);
+    const options = brandKitOptions(theme, CLAY, undefined);
     const defaults = parseThemeCustomization(theme.options!.defaults);
-    expect(valueOf(options)).toEqual({ ...defaults, ...SANDSTONE });
+    expect(valueOf(options)).toEqual({ ...defaults, ...CLAY });
     const tokens = resolveThemeOptions(theme, options).tokens;
     expect(tokens).not.toEqual(theme.tokens);
     expect(tokens.shared).toMatchObject(theme.tokens.shared);
@@ -87,32 +87,32 @@ describe("brandKitOptions: what each kind of host wears", () => {
 
   // The architect's ruling on build options changes this row and the one branch in `brandKitOptions`.
   test("a build that states options keeps its font, radius, density, elevation and logo, and wears the kit's colours", () => {
-    const options = brandKitOptions(stock, SANDSTONE, BUILD);
-    expect(valueOf(options)).toEqual({ ...SANDSTONE, font: "inter", radius: "soft", density: "compact", elevation: "flat", logo: "brand" });
+    const options = brandKitOptions(stock, CLAY, BUILD);
+    expect(valueOf(options)).toEqual({ ...CLAY, font: "inter", radius: "soft", density: "compact", elevation: "flat", logo: "brand" });
   });
 
   test.each([
-    { host: "a fixed theme", theme: fixed, kit: SANDSTONE },
-    { host: "no theme", theme: null, kit: SANDSTONE },
+    { host: "a fixed theme", theme: fixed, kit: CLAY },
+    { host: "no theme", theme: null, kit: CLAY },
     { host: "no default kit", theme: stock, kit: null },
   ])("leaves the build's options to $host", ({ theme, kit }) => {
     expect(brandKitOptions(theme, kit, BUILD)).toBeUndefined();
   });
 
   test.each([
-    { case: "a colour the parser refuses", kit: { ...SANDSTONE, brand: "red" }, build: undefined },
-    { case: "a field the theme takes no input for", kit: { ...SANDSTONE, logo_url: "/logo.png" }, build: undefined },
-    { case: "build options of another version", kit: SANDSTONE, build: { version: 99, value: BUILD.value } },
-    { case: "build options the parser refuses", kit: SANDSTONE, build: { ...BUILD, value: { ...BUILD.value, radius: "huge" } } },
+    { case: "a colour the parser refuses", kit: { ...CLAY, brand: "red" }, build: undefined },
+    { case: "a field the theme takes no input for", kit: { ...CLAY, logo_url: "/logo.png" }, build: undefined },
+    { case: "build options of another version", kit: CLAY, build: { version: 99, value: BUILD.value } },
+    { case: "build options the parser refuses", kit: CLAY, build: { ...BUILD, value: { ...BUILD.value, radius: "huge" } } },
   ])("answers undefined without throwing for $case", ({ kit, build }) => {
     expect(brandKitOptions(stock, kit, build)).toBeUndefined();
   });
 
   test("ignores the GraphQL type name a read may carry", () => {
-    expect(valueOf(brandKitOptions(stock, { __typename: "BrandKitColors", ...SANDSTONE }, undefined))).toMatchObject(SANDSTONE);
+    expect(valueOf(brandKitOptions(stock, { __typename: "BrandKitColors", ...CLAY }, undefined))).toMatchObject(CLAY);
   });
 
   test("normalizes a kit's colours as the theme does", () => {
-    expect(valueOf(brandKitOptions(stock, { ...SANDSTONE, brand: "#C2410C" }, undefined)).brand).toBe("#c2410c");
+    expect(valueOf(brandKitOptions(stock, { ...CLAY, brand: "#C2410C" }, undefined)).brand).toBe("#c2410c");
   });
 });

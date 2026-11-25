@@ -21,7 +21,6 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.base.fields.text import ColorField
 from angee.brandkit.models import BrandKit as BrandKitModel
 from angee.brandkit.models import ContrastWarning, MailRole, MailScheme, MailSeed
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
@@ -37,25 +36,15 @@ strawberry.enum(MailSeed)
 ContrastWarningType = strawberry.type(ContrastWarning, name="ContrastWarningType")
 
 
-@strawberry_django.type(BrandKit)
+@strawberry_django.type(BrandKit, fields=list(BrandKitModel.THEME_COLORS))
 class BrandKitType(AngeeNode):
-    """Console projection of one brand kit."""
+    """Console projection of one brand kit; its colours are ``BrandKit.THEME_COLORS``."""
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
     name: auto
     is_default: auto
-    brand: auto
-    accent: auto
-    neutral: auto
-    canvas: auto
-    surface: auto
-    rail: auto
-    success: auto
-    warning: auto
-    danger: auto
-    info: auto
     font_heading: auto
     font_body: auto
     logo: FileType | None = actor_scoped_to_one("logo")
@@ -77,8 +66,7 @@ class BrandKitType(AngeeNode):
 
 
 _BRAND_KIT_WRITABLE_FIELDS = (
-    "name", "is_default",
-    "brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info",
+    "name", "is_default", *BrandKitModel.THEME_COLORS,
     "font_heading", "font_body", "footer_organization", "footer_address", "voice",
 )
 
@@ -96,12 +84,9 @@ _BRAND_KIT_RESOURCE = hasura_model_resource(
 )
 
 
-_THEME_COLORS = [field.name for field in BrandKit._meta.concrete_fields if isinstance(field, ColorField)]
-
-
-@strawberry_django.type(BrandKit, name="BrandKitColors", fields=_THEME_COLORS)
+@strawberry_django.type(BrandKit, name="BrandKitColors", fields=list(BrandKitModel.THEME_COLORS))
 class BrandKitColorsType:
-    """A kit's colours, the hex inputs a customisable theme takes, as everyone reads the default kit's."""
+    """A kit's colours, ``BrandKit.THEME_COLORS`` and no other column, as everyone reads the default kit's."""
 
 
 @strawberry.type
@@ -112,7 +97,8 @@ class BrandKitPublicQuery:
     def default_brand_kit_colors(self) -> BrandKitColorsType | None:
         """Return the default kit's colours under the ``read_colors`` disclosure, or ``None`` with no default kit."""
 
-        return cast("BrandKitColorsType | None", BrandKit.objects.with_action("read_colors").default())
+        kits = BrandKit.objects.with_action("read_colors").only(*BrandKitModel.THEME_COLORS)
+        return cast("BrandKitColorsType | None", kits.default())
 
 
 schemas = {

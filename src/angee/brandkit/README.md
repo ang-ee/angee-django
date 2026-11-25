@@ -97,30 +97,23 @@ advice: the kit form shows each as a warning, and a save never refuses one.
 
 ## The app's colours
 
-The default kit's colours dress the app, on every page, signed in or not. The web
-fragment is the app's `hostAppearance` source: `createApp` asks it about the theme
-a person who chose none wears (the selected app's, else the build's), locked or
-not. When that theme accepts the shared palette customisation
-(`createThemeCustomizationOptions`), the fragment reads the public
-`default_brand_kit_colors` root and puts the kit's ten colours over the build's
-options for that theme, else over the theme's defaults (`brandKitOptions` in
-`web/src/appearance.ts`). The build's font, radius, density, elevation and logo
-treatment stay. The theme still derives every token from those inputs, dark
+The web fragment is the app's `hostAppearance` source; where its answer ranks
+against the build's and a person's own appearance is
+[host and user precedence](../../../docs/frontend/appearance.md#host-and-user-precedence).
+For a host theme that accepts the shared palette customisation
+(`createThemeCustomizationOptions`), it reads the public `default_brand_kit_colors`
+root and answers the theme's options with the default kit's ten colours over the
+build's options for that theme, else over the theme's defaults: the build's
+font, radius, density, elevation and logo treatment stay (`brandKitOptions` in
+`web/src/appearance.ts`). It sends no read for a fixed theme or no theme, and
+answers nothing with no default kit, after a failed read, or for a kit the
+theme's parser refuses. The theme derives every token from those inputs, dark
 values included, and emits a token only where an input differs from its own
-default, so a kit equal to the theme's defaults changes nothing.
+default, so a kit equal to the theme's defaults changes nothing. A kit's contrast
+warnings are about mail; the app shows none. The kit's name, logos and fonts do
+not reach the app.
 
-Nothing changes, and no read is made, for a fixed theme or no theme. With no
-default kit, a failed read, or a kit the theme's parser refuses, the app wears the
-build's options. A person's own theme or options still win, and **Reset
-appearance** returns them to the kit. The first paint holds while the read is on
-its way (`HostAppearanceDefaults.pending`), so the build's colours do not flash
-before the kit's. An administrator's save re-themes their own app at once; other
-open sessions pick the change up on reload, a device first repainting from its
-boot cache. A kit's contrast warnings are about mail: the app wears the theme's
-derivation of the kit's colours, which keeps on-brand text and links readable,
-and shows no warning.
-
-The kit's name, logos and fonts do not reach the app.
+An administrator's save refetches the read, so their own app re-themes at once.
 
 ## Access
 

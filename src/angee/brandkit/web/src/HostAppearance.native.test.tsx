@@ -1,25 +1,26 @@
 // @vitest-environment happy-dom
+import { onlineManager } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { defineBaseAddon } from "@angee/app";
 import { installTestLocalStorage } from "@angee/app/testing";
 import type { GraphQLWireRequest } from "@angee/storybook/testing";
 import { themes as stockThemes } from "@angee/theme-stock/themes";
-import { APPEARANCE_CACHE_KEY, defineTheme, defineThemeContribution, resolveThemeOptions, type ThemeDefinition } from "@angee/ui/theme";
+import { APPEARANCE_CACHE_KEY, defineTheme, defineThemeContribution, resolveThemeOptions } from "@angee/ui/theme";
 
-import { brandKitOptions } from "./appearance";
-import { AppAppearanceStory } from "./HostAppearance.stories";
+import { HostAppearanceStory } from "./HostAppearance.stories";
 import { ANGEE, HARBOUR, ORCHARD, colorsOf, type KitRow } from "./views/brand-kits.test-support";
 
-const stock = stockThemes[0]! as ThemeDefinition<unknown>;
+const stock = stockThemes[0];
 const TOKENS = ["--brand", "--surface-rail", "--surface-canvas"] as const;
+const NO_TOKENS = { "--brand": "", "--surface-rail": "", "--surface-canvas": "" };
 const root = () => document.documentElement;
 
-/** What the stock theme wears in light with a kit's colours, as the theme itself works them out. */
-function wornTokens(kit: KitRow) {
-  const light = resolveThemeOptions(stock, brandKitOptions(stock, colorsOf(kit), undefined)).tokens.light;
-  return Object.fromEntries(TOKENS.map((name) => [name, light[name]]));
+/** The stock theme's light tokens with a kit's ten colours over its defaults, as the theme itself works them out. */
+function lightTokens(kit: KitRow) {
+  return resolveThemeOptions(stock, { version: stock.options!.version, value: { ...stock.options!.defaults, ...colorsOf(kit) } }).tokens.light;
 }
+const wornTokens = (kit: KitRow) => Object.fromEntries(TOKENS.map((name) => [name, lightTokens(kit)[name]]));
 const inlineTokens = () => Object.fromEntries(TOKENS.map((name) => [name, root().style.getPropertyValue(name)]));
 
 /** Every request the app sends, with its schema, in order. */
@@ -33,6 +34,13 @@ function recorder() {
   };
 }
 
+/** A promise the test settles: a kit read gated on it answers only then. */
+function gate() {
+  let open!: () => void;
+  const closed = new Promise<void>((resolve) => { open = resolve; });
+  return { closed, open };
+}
+
 const ORCHARD_DEFAULT = [ORCHARD, HARBOUR, { ...ANGEE, is_default: false }];
 const HARBOUR_DEFAULT = [{ ...HARBOUR, is_default: true }, { ...ORCHARD, is_default: false }];
 
@@ -42,7 +50,11 @@ beforeEach(() => {
   delete root().dataset.themeId;
   delete root().dataset.colorScheme;
 });
-afterEach(() => { cleanup(); });
+afterEach(() => {
+  onlineManager.setOnline(true);
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("the default kit dresses the app", () => {
   // Each kit differs from stock in all ten colours, so each of the three tokens is the kit's.
@@ -53,7 +65,7 @@ describe("the default kit dresses the app", () => {
     { where: "the sign-in page, signed out", kits: HARBOUR_DEFAULT, kit: HARBOUR, signedIn: false, entry: "/login" },
   ])("$where wears $kit.name's colours, read from the public schema only", async ({ kits, kit, signedIn, entry }) => {
     const requests = recorder();
-    render(<AppAppearanceStory kits={kits} signedIn={signedIn} initialEntry={entry} onRequest={requests.onRequest} />);
+    render(<HostAppearanceStory kits={kits} signedIn={signedIn} initialEntry={entry} onRequest={requests.onRequest} />);
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(kit)));
     expect(root().dataset.themeId).toBe("angee.stock");
     expect(requests.to("default_brand_kit_colors")).toEqual(["public"]);
@@ -63,18 +75,17 @@ describe("the default kit dresses the app", () => {
     { where: "the console, signed in", signedIn: true, entry: "/brand-kits" },
     { where: "the sign-in page, signed out", signedIn: false, entry: "/login" },
   ])("with no default kit, $where wears stock exactly", async ({ signedIn, entry }) => {
-    render(<AppAppearanceStory kits={[]} signedIn={signedIn} initialEntry={entry} />);
+    render(<HostAppearanceStory kits={[]} signedIn={signedIn} initialEntry={entry} />);
     await waitFor(() => expect(root().dataset.themeId).toBe("angee.stock"));
-    expect(inlineTokens()).toEqual({ "--brand": "", "--surface-rail": "", "--surface-canvas": "" });
+    expect(inlineTokens()).toEqual(NO_TOKENS);
   });
 
   test("the kit is read once identity resolves, and the first paint and boot cache hold until it answers", async () => {
     const requests = recorder();
-    let answer!: () => void;
-    const gate = new Promise<void>((resolve) => { answer = resolve; });
+    const kitRead = gate();
     // The first paint, as the head bootstrap left it.
     root().style.setProperty("--brand", "#010203");
-    render(<AppAppearanceStory kits={ORCHARD_DEFAULT} kitReadGate={gate} onRequest={requests.onRequest} />);
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} kitReadGate={kitRead.closed} onRequest={requests.onRequest} />);
     await waitFor(() => expect(requests.first("default_brand_kit_colors")).toBeGreaterThan(-1));
     expect(requests.first("current_user")).toBeLessThan(requests.first("default_brand_kit_colors"));
     // Identity has resolved: the console page renders, and the app still wears its first paint.
@@ -83,17 +94,33 @@ describe("the default kit dresses the app", () => {
     expect(root().dataset.themeId).toBeUndefined();
     expect(window.localStorage.getItem(APPEARANCE_CACHE_KEY)).toBeNull();
 
-    answer();
+    kitRead.open();
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(ORCHARD)));
-    expect(window.localStorage.getItem(APPEARANCE_CACHE_KEY)).not.toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!).tokenLayers.light).toEqual(lightTokens(ORCHARD));
   });
 
   test("a failing kit read releases the first paint onto the build's appearance at its first failure", async () => {
     root().style.setProperty("--brand", "#010203");
-    render(<AppAppearanceStory kits={ORCHARD_DEFAULT} failKitRead />);
-    // The read retries for seconds; the hold ends at the first failure, well within this wait.
-    await waitFor(() => expect(root().dataset.themeId).toBe("angee.stock"), { timeout: 900 });
-    expect(inlineTokens()).toEqual({ "--brand": "", "--surface-rail": "", "--surface-canvas": "" });
+    // The first attempt fails and every retry stays unanswered: only a release at the first failure lets go.
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} failKitRead />);
+    await waitFor(() => expect(root().dataset.themeId).toBe("angee.stock"));
+    expect(inlineTokens()).toEqual(NO_TOKENS);
+  });
+
+  test("a kit read paused offline releases the first paint onto the build's appearance, and the kit applies once online", async () => {
+    const requests = recorder();
+    root().style.setProperty("--brand", "#010203");
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} onRequest={(schema, request) => {
+      requests.onRequest(schema, request);
+      // Identity is on its way; every read that starts after it starts offline, so the kit read pauses.
+      if (schema === "public" && request.fields.includes("current_user")) onlineManager.setOnline(false);
+    }} />);
+    await waitFor(() => expect(root().dataset.themeId).toBe("angee.stock"));
+    expect(inlineTokens()).toEqual(NO_TOKENS);
+    expect(requests.first("default_brand_kit_colors")).toBe(-1);
+
+    onlineManager.setOnline(true);
+    await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(ORCHARD)));
   });
 
   test("a fixed theme takes no kit and sends no read", async () => {
@@ -103,7 +130,7 @@ describe("the default kit dresses the app", () => {
     });
     const requests = recorder();
     const themes = [defineBaseAddon({ id: "theme.fixed", themes: [defineThemeContribution({ definition: fixed })] })];
-    render(<AppAppearanceStory kits={ORCHARD_DEFAULT} themeId="example.fixed" themes={themes} onRequest={requests.onRequest} />);
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} themeId="example.fixed" themes={themes} onRequest={requests.onRequest} />);
     await waitFor(() => expect(root().dataset.themeId).toBe("example.fixed"));
     expect(root().style.getPropertyValue("--brand")).toBe("#0a0a0a");
     expect(requests.first("default_brand_kit_colors")).toBe(-1);
@@ -111,7 +138,7 @@ describe("the default kit dresses the app", () => {
 
   test("an administrator who makes another kit the default re-themes their app at once", async () => {
     const requests = recorder();
-    render(<AppAppearanceStory kits={ORCHARD_DEFAULT} initialEntry="/brand-kits/bkt_harbour" onRequest={requests.onRequest} />);
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} initialEntry="/brand-kits/bkt_harbour" onRequest={requests.onRequest} />);
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(ORCHARD)));
     const isDefault = await screen.findByRole("switch", { name: "Default kit" });
     fireEvent.click(isDefault);
@@ -123,5 +150,41 @@ describe("the default kit dresses the app", () => {
     expect(saved).toBeGreaterThan(-1);
     expect(requests.sent.slice(saved + 1).some(({ schema, request }) =>
       schema === "public" && request.fields.includes("default_brand_kit_colors"))).toBe(true);
+  });
+
+  test("a kit saved before the first kit read answers never shows the build's appearance in between", async () => {
+    const requests = recorder();
+    const kitRead = gate();
+    // Every appearance the root takes, as each change lands: the theme and the brand token.
+    const worn: string[] = [];
+    const observer = new MutationObserver(() => {
+      worn.push(`${root().dataset.themeId ?? "none"} ${root().style.getPropertyValue("--brand") || "none"}`);
+    });
+    observer.observe(root(), { attributes: true, attributeFilter: ["data-theme-id", "style"] });
+    const storageWrites = vi.spyOn(window.localStorage, "setItem");
+    const cacheWrites = () => storageWrites.mock.calls.filter(([key]) => key === APPEARANCE_CACHE_KEY);
+    root().style.setProperty("--brand", "#010203");
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} initialEntry="/brand-kits/bkt_harbour" kitReadGate={kitRead.closed}
+      onRequest={requests.onRequest} />);
+    const isDefault = await screen.findByRole("switch", { name: "Default kit" });
+    expect(requests.first("default_brand_kit_colors")).toBeGreaterThan(-1);
+    fireEvent.click(isDefault);
+    await waitFor(() => expect(isDefault.getAttribute("aria-checked")).toBe("true"));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // The save cancels the unanswered kit read and sends it again; the first paint still holds.
+    await waitFor(() => expect(requests.to("default_brand_kit_colors")).toEqual(["public", "public"]));
+    expect(requests.sent.findLastIndex(({ request }) => request.fields.includes("default_brand_kit_colors")))
+      .toBeGreaterThan(requests.first("update_brand_kits_by_pk"));
+    expect(root().dataset.themeId).toBeUndefined();
+    expect(root().style.getPropertyValue("--brand")).toBe("#010203");
+    expect(cacheWrites()).toEqual([]);
+
+    // The save reports once the reads it refetches have answered.
+    kitRead.open();
+    await screen.findByText("Changes saved");
+    await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(HARBOUR)));
+    observer.disconnect();
+    expect(worn.filter((entry) => !entry.startsWith("none"))).toEqual([`angee.stock ${lightTokens(HARBOUR)["--brand"]}`]);
+    expect(cacheWrites()).toHaveLength(1);
   });
 });

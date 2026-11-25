@@ -38,7 +38,7 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -284,6 +284,15 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
     """The organization's brand name: the wordmark where no logo shows."""
     is_default = models.BooleanField(default=False)
     """The deployment's kit: exactly one once any kit exists (:meth:`save`, :meth:`clean`, :meth:`delete_blocker`)."""
+
+    THEME_COLORS: ClassVar[tuple[str, ...]] = (
+        "brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info",
+    )
+    """The colour columns below, in the theme runtime's order: a customisable theme's hex inputs.
+
+    The one list of them: the public ``BrandKitColors`` type reads these and no other
+    column, so a colour column added by extending the kit is never disclosed with them.
+    """
 
     # The theme customisation's hex inputs, named as the theme runtime names them.
     brand = ColorField()
