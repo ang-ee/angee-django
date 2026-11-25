@@ -13,7 +13,6 @@ import {
   type FormProps,
   type ListProps,
   type RecordTabDescriptor,
-  type RecordToolbarContext,
   type ResourceListProps,
 } from "@angee/ui";
 
@@ -31,7 +30,10 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useRecordActionMutation: () => [async () => undefined],
 }));
 
+import { enMessagingTemplatesMessages as M } from "../i18n";
+import { MESSAGE_TEMPLATE_PRESET_IDS } from "../resources";
 import { messageTemplateForm } from "./MessageTemplateForm";
+import { MessageTemplateNotice } from "./MessageTemplateNotice";
 import { MessageTemplatesPage } from "./MessageTemplatesPage";
 
 afterEach(cleanup);
@@ -68,10 +70,10 @@ describe("MessageTemplatesPage", () => {
     expect(page.form).toBe(messageTemplateForm);
     expect(page.routed).toBe(true);
     expect(list.defaultGroups).toEqual({ list: { field: "kind" } });
-    expect(list.presetIds).toEqual(["messaging_templates.default-updated", "messaging_templates.rendering"]);
+    expect(list.presetIds).toBe(MESSAGE_TEMPLATE_PRESET_IDS);
     expect(parsePageColumns(list.children).map((column) => [column.field, column.header])).toEqual([
-      ["name", "Name"], ["language", "Language"], ["is_baseline", "Shipped"], ["is_effective", "Renders"],
-      ["has_updated_default", "Default updated"],
+      ["name", M["col.name"]], ["language", M["col.language"]], ["is_baseline", M["col.shipped"]],
+      ["is_effective", M["col.effective"]], ["has_updated_default", M["col.defaultUpdated"]],
     ]);
   });
 });
@@ -90,8 +92,8 @@ describe("MessageTemplateForm", () => {
       "sample",
     ]);
     expect(parsePageGroups(children(form)).map((group) => [group.label, group.pane ?? null])).toEqual([
-      ["Message template", null], ["Message", null], ["Content", null], ["Template variables", null],
-      ["Details", null], ["Sample values", "sample"],
+      [M["form.identity"], null], [M["form.message"], null], [M["form.content"], null], [M["form.variables"], null],
+      [M["form.details"], null], [M["form.sample"], "sample"],
     ]);
     expect(parsePageFields(children(form)).find((field) => field.name === "name")?.title).toBe(true);
   });
@@ -130,7 +132,7 @@ describe("MessageTemplateForm", () => {
     const groups = parsePageGroups(children(formDeclaration()));
 
     expect(groups.filter((group) => group.savedOnly).map((group) => group.label)).toEqual([
-      "Template variables", "Sample values",
+      M["form.variables"], M["form.sample"],
     ]);
   });
 
@@ -140,7 +142,7 @@ describe("MessageTemplateForm", () => {
     const keep = actions.find((action) => action.id === "keep-override");
 
     expect(actions.map((action) => [action.id, action.label, action.permission])).toEqual([
-      ["override", "Override", "preview"], ["keep-override", "Keep override", "write"],
+      ["override", M["action.override"], "preview"], ["keep-override", M["action.keepOverride"], "write"],
     ]);
     expect(override?.visibleWhen?.({ is_baseline: true, is_overridden: false })).toBe(true);
     expect(override?.visibleWhen?.({ is_baseline: true, is_overridden: true })).toBe(false);
@@ -156,11 +158,11 @@ describe("MessageTemplateForm", () => {
     expect(form.deleteVisibleWhen?.({ permissions: ["preview"] })).toBe(false);
   });
 
-  test("reads the row facts beside its caller's selection, and puts its Preview pane before its caller's panes", () => {
+  test("reads the row facts it shows beside its caller's selection, and puts its Preview pane before its caller's panes", () => {
     const extra: RecordTabDescriptor = { id: "extra", label: "Extra", render: () => null };
     const form = formDeclaration({ returning: ["display_name"], recordTabs: [extra] });
 
-    expect(form.returning).toEqual(["display_name", "is_baseline", "is_overridden", "has_updated_default", "is_effective"]);
+    expect(form.returning).toEqual(["display_name", "is_baseline", "is_overridden", "has_updated_default"]);
     expect(form.recordTabs?.map((tab) => tab.id)).toEqual(["preview", "extra"]);
     const preview = form.recordTabs?.[0];
     expect(preview?.presentation).toBe("full-bleed");
@@ -170,48 +172,44 @@ describe("MessageTemplateForm", () => {
 });
 
 describe("MessageTemplateNotice", () => {
-  const SENTENCES = {
-    shipped: "This is a shipped default.",
-    overrideHint: "Override it to change it for this deployment.",
-    overridden: "This deployment's override renders instead.",
-    changed: "The shipped default changed since this override started or was last kept.",
-    keepHint: "Keep override keeps this text.",
-    deleteNew: "Delete returns this deployment to the new shipped default.",
-    live: "Saved changes go live for every message at once.",
-    deleteDefault: "Delete returns this deployment to the shipped default, where there is one.",
-  } as const;
-  type Sentence = keyof typeof SENTENCES;
+  type Sentence = "notice.shipped" | "notice.shippedOverride" | "notice.overridden" | "notice.defaultUpdated"
+    | "notice.keepHint" | "notice.deleteNew" | "notice.live" | "notice.deleteDefault";
+  const SENTENCES: readonly Sentence[] = [
+    "notice.shipped", "notice.shippedOverride", "notice.overridden", "notice.defaultUpdated", "notice.keepHint",
+    "notice.deleteNew", "notice.live", "notice.deleteDefault",
+  ];
   const shipped = ["preview"];
   const writable = ["delete", "preview", "write"];
 
-  /** The notice the form's heading shows for one row: its tone, or null when there is none, and its text. */
+  /** The notice for one row: its alert role, or null when there is none, and its text. */
   function notice(record: Record<string, unknown>): { role: string | null; text: string } {
-    const context = { recordId: "mtl_row", record: { id: "mtl_row", ...record } } as RecordToolbarContext;
-    const { container } = render(<>{formDeclaration().headerExtras?.(context)}</>);
+    const { container } = render(<MessageTemplateNotice record={{ id: "mtl_row", ...record }} />);
     const alert = container.querySelector("[role=status], [role=alert]");
     return { role: alert?.getAttribute("role") ?? null, text: container.textContent ?? "" };
   }
 
-  test.each<[string, Record<string, unknown>, string, readonly Sentence[]]>([
+  test.each<[string, Record<string, unknown>, readonly Sentence[]]>([
     ["a shipped default nobody overrides, to an administrator",
-      { is_baseline: true, is_overridden: false, permissions: shipped }, "status", ["shipped", "overrideHint"]],
+      { is_baseline: true, is_overridden: false, permissions: shipped }, ["notice.shipped", "notice.shippedOverride"]],
     ["an overridden shipped default, to an administrator",
-      { is_baseline: true, is_overridden: true, permissions: shipped }, "status", ["shipped", "overridden"]],
+      { is_baseline: true, is_overridden: true, permissions: shipped }, ["notice.overridden"]],
     ["an override whose default changed, to an administrator",
-      { is_baseline: false, has_updated_default: true, permissions: writable }, "status", ["changed", "keepHint", "deleteNew"]],
+      { is_baseline: false, has_updated_default: true, permissions: writable },
+      ["notice.defaultUpdated", "notice.keepHint", "notice.deleteNew"]],
     ["the deployment's own row or a current override, to an administrator",
-      { is_baseline: false, has_updated_default: false, permissions: writable }, "status", ["live", "deleteDefault"]],
+      { is_baseline: false, has_updated_default: false, permissions: writable }, ["notice.live", "notice.deleteDefault"]],
     ["a shipped default nobody overrides, to a member",
-      { is_baseline: true, is_overridden: false, permissions: [] }, "status", ["shipped"]],
+      { is_baseline: true, is_overridden: false, permissions: [] }, ["notice.shipped"]],
     ["an override whose default changed, to a member",
-      { is_baseline: false, has_updated_default: true, permissions: [] }, "status", ["changed"]],
-  ])("says what %s is, and each hint only where its verb is the reader's", (_case, record, role, shown) => {
-    const { role: shownRole, text } = notice(record);
+      { is_baseline: false, has_updated_default: true, permissions: [] }, ["notice.defaultUpdated"]],
+  ])("says what %s is, and each hint only where its verb is the reader's", (_case, record, shown) => {
+    const { role, text } = notice(record);
 
-    expect(shownRole).toBe(role);
-    for (const key of Object.keys(SENTENCES) as Sentence[]) {
-      expect([key, text.includes(SENTENCES[key])]).toEqual([key, shown.includes(key)]);
-    }
+    expect(role).toBe("status");
+    // "notice.overridden" restates "notice.shipped" before its own sentence; the other sentences are each their own.
+    const contained = SENTENCES.filter((key) => text.includes(M[key]!));
+    expect(contained.filter((key) => key !== "notice.shipped" || !shown.includes("notice.overridden")))
+      .toEqual(SENTENCES.filter((key) => shown.includes(key)));
   });
 
   test("says nothing to a member about a row whose only sentences are a writer's", () => {
