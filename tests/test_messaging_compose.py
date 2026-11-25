@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import email.policy
+import string
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,7 +18,8 @@ from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
-from hypothesis import given
+from hypothesis import example, given
+from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
 from rebac import PermissionDenied, system_context
 from rebac.models import PermissionAuditEvent
@@ -410,6 +412,61 @@ def test_a_chat_reply_is_plain_text_from_an_explicit_sender_on_its_platform(desk
     reply = Message.objects.compose(parent=question, text="Yes.", sender=slack, actor=chat.owner)
     assert (reply.message_type, reply.sender_id, reply.title()) == ("chat", slack.pk, "")
     assert not Recipient._base_manager.filter(message=reply).exists()
+
+
+REREAD = {
+    "a<b@example.test": ("b@example.test",),
+    "a:b@example.test": ("b@example.test",),
+    "a(comment)@example.test": ("a@example.test",),
+    "team:a@example.test;": ("a@example.test",),
+    "a@x.test,b@example.test": ("a@x.test", "b@example.test"),
+    "a@example.test junk": ("a@example.testjunk",),
+    "a@example.test(c)": ("a@example.test",),
+    "eve@example.test (Eve)": ("eve@example.test",),
+}
+"""Entries a mail library reads as another address, or as several: each would land the addresses beside it."""
+
+
+@pytest.mark.parametrize("entry", REREAD)
+def test_an_entry_compose_would_read_as_another_address_is_refused(desk: Any, entry: str) -> None:
+    with _refused(key="to", code="invalid"):
+        Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner)
+    assert not Handle._base_manager.filter(value__in=REREAD[entry]).exists()
+
+
+@pytest.mark.parametrize(("entry", "expected"), [
+    ("Customer@Example.COM", ("", "customer@example.com")),
+    ("Name <a@example.test>", ("Name", "a@example.test")),
+    ('"Doe, Jane" <jane@example.test>', ("Doe, Jane", "jane@example.test")),
+    ("jörg@example.test", ("", "jörg@example.test")),
+])
+def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: str, expected: tuple[str, str]) -> None:
+    assert Message.objects.clean_recipient(entry) == expected
+    message = Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.clean_recipient"):
+        assert Recipient._base_manager.get(message=message).handle.value == expected[1]
+
+
+@given(st.text(alphabet=string.ascii_letters + '@.<>:;,()" ', max_size=40))
+@example("a<b@example.test")
+@example("a(b)@example.test")
+@example("a@example.test c")
+@example("a:b@example.test")
+@hypothesis_settings(max_examples=300, deadline=None)
+def test_an_entry_is_refused_or_lands_exactly_the_address_it_names(entry: str) -> None:
+    """Whatever is typed, compose refuses it or lands one address that the entry itself names."""
+
+    try:
+        outgoing = Message.objects._validate_outgoing(
+            channel=None, parent=None, record=None, sender=None, to=(entry,), cc=(), bcc=(), subject="",
+            text="x", html="", attachments=(), local={}, queued=False, scheduled_at=None,
+        )
+    except ValidationError as error:
+        assert "to" in error.error_dict
+        return
+    (addressee,) = outgoing.recipients
+    typed = Handle.email_value(entry.strip())
+    assert addressee.address == typed or typed.endswith(f"<{addressee.address}>")
 
 
 def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: Any) -> None:

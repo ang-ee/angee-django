@@ -17,7 +17,13 @@ live in code docstrings.
     (`channel=` with `record=`): its row, parts, recipients, sender, thread,
     idempotency and delivery hand-off, decided under the actor by `reply` on the
     channel (and posting on the record) before anything is claimed or written.
-    A new message takes `to`, `cc` and `bcc` addresses, a one-line `subject`,
+    A new message takes `to`, `cc` and `bcc` entries, each one recipient as
+    `Message.objects.clean_recipient(entry, *, key="to")` reads it: a bare
+    address read as itself or one explicit `Name <address>`, returned as
+    `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
+    entry a mail library would read as another address or as several (a
+    comment, a group, a list, trailing text) is refused, never re-read; a caller
+    asks `clean_recipient` before expensive work. A new message also takes a one-line `subject`,
     `text`, `html` and readable `attachments`, and starts a thread of its own
     through the new `ThreadManager.open_thread`, which `resolve` now shares.
     `Message.require_reply(actor)` decides who may answer a message and returns

@@ -3205,6 +3205,33 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
 
+    def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
+        """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
+
+        An entry is one recipient: a bare address, read as itself, or one explicit
+        ``Name <address>``. An entry a mail library would read as another address,
+        or as several (a comment, a group, a list, trailing text, ``address
+        (Name)``), is refused rather than re-read. The handle owner then decides
+        whether the address can be one and can be stored on a handle
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
+        nothing, so a caller can ask it before expensive work, and ``compose``
+        lands exactly what it returns. The refusal is ``invalid``, naming the
+        entry as typed.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        text = str(entry or "").strip()
+        parsed = getaddresses([text])
+        name, address = parsed[0] if len(parsed) == 1 else ("", "")
+        explicit = text.endswith(f"<{address}>") and text.count("<") == text.count(">") == 1
+        if not address or not (text == address or explicit) or not handle_model.is_email_address(address):
+            raise ValidationError({key: ValidationError(
+                "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
+            )})
+        address = handle_model.email_value(address)
+        _require_landable(handle_model, ((key, address),))
+        return name.strip(), address
+
     def _validate_outgoing(
         self,
         *,
@@ -3228,8 +3255,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         An answer takes its parent's kind and platform and names no subject or
         address; one of a non-email kind is plain text from an explicit, saved
         ``sender`` on the parent's platform. A new message is an email to at least
-        one address the handle owner takes (``Handle.is_email_address``,
-        ``HandleManager.clean_identity``), with an optional one-line subject. An
+        one recipient, each entry as :meth:`clean_recipient` reads it, with an
+        optional one-line subject. An
         email has ``text``, ``html`` or both and names no sender: its channel's
         default sends it.
         """
@@ -3263,21 +3290,14 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         else:
             kind, platform = email_kind, handle_model.Platform.EMAIL
             recipients = tuple(
-                _Addressee(role, handle_model.email_value(address), name.strip())
+                _Addressee(role, address, name)
                 for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
-                for name, address in getaddresses([str(entry) for entry in entries])
+                for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
             if not recipients:
                 raise ValidationError({"to": ValidationError(
                     "Address the message to at least one recipient.", code="required",
                 )})
-            for addressee in recipients:
-                if not handle_model.is_email_address(addressee.address):
-                    raise ValidationError({addressee.role: ValidationError(
-                        "%(entry)s is not an email address.", code="invalid",
-                        params={"entry": addressee.address or "An entry"},
-                    )})
-            _require_landable(handle_model, ((addressee.role, addressee.address) for addressee in recipients))
         if kind == email_kind:
             if sender is not None:
                 raise ValidationError({"sender": ValidationError(
