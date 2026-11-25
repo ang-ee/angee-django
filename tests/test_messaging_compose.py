@@ -779,6 +779,16 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
 
 
+def test_an_answer_to_a_message_with_a_channel_and_no_thread_is_refused_unwritten(desk: Any) -> None:
+    """``Message.thread`` is nullable and nothing ties it to the channel, so the envelope refuses such a parent."""
+
+    with system_context(reason="tests.messaging.compose.threadless"):
+        parent = Message._base_manager.create(channel=desk, platform="email", message_type="email")
+    assert parent.reply_error(actor=desk.owner).error_dict["parent"][0].code == "reply_incomplete"
+    with _refused(key="parent", code="reply_incomplete"):
+        Message.objects.compose(parent=parent, text="Thanks.", actor=desk.owner)
+
+
 @given(st.text())
 def test_a_plain_body_previews_as_its_first_280_characters(text: str) -> None:
     """The chatter writers' previews did not change when they moved to the one preview rule."""
