@@ -267,10 +267,12 @@ live in code docstrings.
     `message_templates` resource and the `override_message_template` and
     `keep_message_template_override` mutations. The resource's insert takes
     `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
-    decides `create` before any work, refuses a shipped default's identity
-    (`shipped_default`) and an existing one, and seeds the row from its key's
-    content: what that language reads for the key today, else the key's row in
-    another language; only a key with no row starts from the kind's `defaults`.
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
     Each row projects `permissions` (`delete`, `preview`, `write`),
     `carries_message_fields` and, to a reader who may preview it, `backlinks`:
     the rows naming its kind and key, a read for one record's page. Each verb
