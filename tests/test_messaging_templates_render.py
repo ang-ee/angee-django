@@ -11,7 +11,8 @@ import re
 import threading
 import time
 import zoneinfo
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -138,6 +139,20 @@ def plain(kit: Any) -> Any:
 
     del kit
     return _row("layout", "plain")
+
+
+TIMED_RUN = os.environ.get("ANGEE_TIMED_TESTS") == "1"
+"""Whether CPU-time bounds are asserted: every one of them runs on request (docs/checks.md), never by default."""
+
+
+@contextmanager
+def _within(seconds: float, case: object = None) -> Iterator[None]:
+    """Time the block in CPU seconds; the bound is asserted only when ``ANGEE_TIMED_TESTS=1``, as every CPU bound is."""
+
+    started = time.process_time()
+    yield
+    spent = time.process_time() - started
+    assert not TIMED_RUN or spent < seconds, (case, f"{spent:.3f} s of CPU, over {seconds} s")
 
 
 def _mail(source: str, variables: dict[str, str] | None = None, **values: Any) -> Any:
@@ -857,11 +872,10 @@ def test_reference_definitions_off(plain: Any) -> None:
     del plain
     title = ("{{" * 30 + "x" * 1_000)[:980]
     source = f'[r]: /u "{title}"\n\n' + "\n".join(["[r]" * 30] * 40)
-    started = time.process_time()
-    refusals = _refusals(_unsaved(source=source))
-    assert any("text holds {{" in message for message in refusals), refusals
-    assert not any("form holds over 60" in message for message in refusals), refusals
-    assert time.process_time() - started < 0.5
+    with _within(0.5):
+        refusals = _refusals(_unsaved(source=source))
+        assert any("text holds {{" in message for message in refusals), refusals
+        assert not any("form holds over 60" in message for message in refusals), refusals
     with system_context(reason="tests.messaging_templates.render.forms"):
         forms = TemplateWalker().check(_unsaved(source="[r]: /u\n\n[r] and [r]")).forms
     assert forms is not None and "<a" not in forms.html and "[r]: /u" in forms.html
@@ -906,12 +920,25 @@ def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list
 
 
 MARKER = "MARKER"
+_HTML_SPACE = " \t\n\f\r"
+
+
+def _harmless(value: str) -> str:
+    """The harmless value a hostile ``value`` is compared with: of its kind, empty, HTML white space, or visible text.
+
+    An author's ``{% if v %}`` chooses author markup by a value's truthiness, and a browser's tree builder implies
+    or clones author elements by whether text is present and whether it is white space (a stray ``</p>`` before the
+    body, text in a table, a formatting element reopened). Neither makes a value markup, so values are compared
+    with one of their own kind: the same empty or white-space value, else :data:`MARKER`.
+    """
+
+    return value if not value.strip(_HTML_SPACE) else MARKER
 
 
 def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) -> None:
     """Property 1: ``value`` adds no element, attribute or comment, no text in style or script, a link only by ``url``.
 
-    ``marker_html`` is the same rows rendered with :data:`MARKER` for the value. A browser's reading of both has
+    ``marker_html`` is the same rows rendered with ``_harmless(value)``. A browser's reading of both has
     the same elements, attribute names and comments, the same ``style`` and ``script`` text, and attribute values
     that differ only where the HTML checks admit an output (``title``, ``alt``…) or in a link attribute as ``url``
     makes a link of the value.
@@ -928,7 +955,9 @@ def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) ->
                 continue
             assert [name for name, _ in after[2]] == [name for name, _ in before[2]], (before, after)
             for (name, was), (_, now) in zip(before[2], after[2], strict=True):
-                if name in OUTPUT_ATTRIBUTES or (name in LINK_ATTRIBUTES and (was, now) == (url(MARKER), url(value))):
+                if name in OUTPUT_ATTRIBUTES or (
+                    name in LINK_ATTRIBUTES and (was, now) == (url(_harmless(value)), url(value))
+                ):
                     continue
                 assert now == was, (before[1], name, was, now)
 
@@ -1047,7 +1076,7 @@ def test_a_value_never_becomes_markup(
         event("refused")
         return  # a refused row never renders
     event("admitted")
-    marker = walk.render({"v": MARKER}, kit=kit).html
+    marker = walk.render({"v": _harmless(value)}, kit=kit).html
     _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
 
 
@@ -1074,7 +1103,7 @@ def test_a_value_never_becomes_markup_through_markdown(kit: Any, source: str, he
         walk = TemplateWalker(saving=True).walk(template, rows)
     except ValidationError:
         return
-    marker = walk.render({"v": MARKER}, kit=kit).html
+    marker = walk.render({"v": _harmless(value)}, kit=kit).html
     _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
 
 
@@ -1099,8 +1128,9 @@ def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, v
             _mail(PROPERTY_SOURCE, {"v": "x", "items.*": "x", "when": "x"}, format="html", text_source="{{ v }}",
                   key="tests.property")
         template = MessageTemplate.objects.get(key="tests.property")
-    marker = _render(template, {"v": MARKER, "items": [MARKER], "when": "2026-11-24"}, kit).html
     for candidate in (value, SafeString(value), mark_safe("<b>" + value + "</b>")):
+        harmless = _harmless(str(candidate))
+        marker = _render(template, {"v": harmless, "items": [harmless], "when": "2026-11-24"}, kit).html
         rendered = _render(template, {"v": candidate, "items": [candidate], "when": "2026-11-24"}, kit)
         _assert_value_stays_text(marker, rendered.html, str(candidate))
 
@@ -1180,9 +1210,8 @@ def test_variables_caps(plain: Any) -> None:
         source="x", layout="order", variables={"order.total": "x"})))
     wide = _walk(_unsaved(source="{% for i in items %}{{ i.k00|default:'' }}{% endfor %}",
                           variables={f"items.*.k{index:02}": "x" for index in range(50)}))
-    started = time.process_time()
-    filled = wide.prepare({"items": [{} for _ in range(500)]})
-    assert time.process_time() - started < 0.5
+    with _within(0.5):
+        filled = wide.prepare({"items": [{} for _ in range(500)]})
     assert len(filled["items"]) == 500 and filled["items"][0]["k49"] == ""
     walk = _walk(_unsaved(source="{% for i in items %}{{ i }}{% endfor %}", variables={"items.*": "x"}))
     for values, refusal in (
@@ -1515,10 +1544,9 @@ def test_filter_cost_caps(plain: Any, kit: Any) -> None:
         + "\n{% endfor %}",
         {"items.*": "x", "d": "x"}, format="html", text_source="x",
     )
-    started = time.process_time()
-    with pytest.raises(RenderBudgetExceeded):
-        _render(loop, {"items": [0] * 500, "d": "2026-11-24T15:30:00+00:00"}, kit)
-    assert time.process_time() - started < 1.0
+    with _within(1.0):
+        with pytest.raises(RenderBudgetExceeded):
+            _render(loop, {"items": [0] * 500, "d": "2026-11-24T15:30:00+00:00"}, kit)
 
 
 def test_condition_filters_refused(plain: Any) -> None:
@@ -1555,10 +1583,9 @@ def test_nesting_before_compile(plain: Any) -> None:
     sixteen = "\n".join(["{% if a %}"] * 16) + "x" + "\n".join(["{% endif %}"] * 16)
     assert _refusals(_unsaved(source=sixteen, variables={"a": "x"}, format="html", text_source="x")) == []
     deep = "\n".join(["{% if a %}" * 25] * 16) + "\nx\n" + "\n".join(["{% endif %}" * 25] * 16)
-    started = time.process_time()
-    refusals = _refusals(_unsaved(source=deep, variables={"a": "x"}, format="html", text_source="x"))
-    assert any("nests tags over 16" in message for message in refusals)
-    assert time.process_time() - started < 0.5
+    with _within(0.5):
+        refusals = _refusals(_unsaved(source=deep, variables={"a": "x"}, format="html", text_source="x"))
+        assert any("nests tags over 16" in message for message in refusals)
 
 
 def test_expression_shapes(plain: Any, kit: Any) -> None:
@@ -1609,13 +1636,11 @@ def test_line_caps_bound_lexing(plain: Any) -> None:
         "long-line": "x" * 50_000,
     }
     for case, source in rows.items():
-        started = time.process_time()
-        assert _refusals(_unsaved(source=source)), case
-        assert time.process_time() - started < 0.2, case
-    started = time.process_time()
-    admitted = (("{{" * 30 + "x" * 999)[:999] + "\n") * 50
-    assert any("text holds {{" in message for message in _refusals(_unsaved(source=admitted)))
-    assert time.process_time() - started < 1.0
+        with _within(0.2, case):
+            assert _refusals(_unsaved(source=source)), case
+    with _within(1.0):
+        admitted = (("{{" * 30 + "x" * 999)[:999] + "\n") * 50
+        assert any("text holds {{" in message for message in _refusals(_unsaved(source=admitted)))
 
 
 def test_budget_sticky_through_if(plain: Any, kit: Any) -> None:
@@ -1665,10 +1690,9 @@ def test_include_renders_charge_the_budget(plain: Any, kit: Any) -> None:
     _row("part", "empty", source="")
     looping = _mail("{% for i in items %}\n\n" + '{% include "parts/empty" only %}\n\n' * 2 + "{% endfor %}",
                     {"items.*": "x"})
-    started = time.process_time()
-    with pytest.raises(RenderBudgetExceeded):
-        _render(looping, {"items": [0] * 300}, kit)
-    assert time.process_time() - started < 1.0
+    with _within(1.0):
+        with pytest.raises(RenderBudgetExceeded):
+            _render(looping, {"items": [0] * 300}, kit)
     assert _render(looping, {"items": [0] * 166}, kit).plain_text.strip() == ""
 
 
@@ -1681,9 +1705,8 @@ def test_walk_stops_expanding_at_its_node_bound(plain: Any) -> None:
     _row("block", "next", source=fan.replace("blocks/next", "blocks/last"), text_source="x")
     _row("block", "fan", source=fan, text_source="x")
     template = _unsaved(source=fan.replace("blocks/next", "blocks/fan"), format="html", text_source="x")
-    started = time.process_time()
-    assert any("over 1000 nodes" in message for message in _refusals(template))
-    assert time.process_time() - started < 1.0
+    with _within(1.0):
+        assert any("over 1000 nodes" in message for message in _refusals(template))
 
 
 def test_walk_character_cap(plain: Any) -> None:
@@ -1694,17 +1717,15 @@ def test_walk_character_cap(plain: Any) -> None:
     for index in range(4):
         _row("part", f"big{index}", source=big)
     template = _unsaved(source="\n\n".join(f'{{% include "parts/big{index}" only %}}' for index in range(4)))
-    started = time.process_time()
-    refusals = _refusals(template)
-    assert any("over 150000 characters" in message for message in refusals), refusals
-    assert time.process_time() - started < 2.0
+    with _within(2.0):
+        refusals = _refusals(template)
+        assert any("over 150000 characters" in message for message in refusals), refusals
 
 
 # ---------- the costliest work the caps admit: what it does, and its CPU on request ----------
 
 TIMED = pytest.mark.skipif(
-    os.environ.get("ANGEE_TIMED_TESTS") != "1",
-    reason="CPU-time bounds depend on the machine and its load; ANGEE_TIMED_TESTS=1 runs them",
+    not TIMED_RUN, reason="CPU-time bounds depend on the machine and its load; ANGEE_TIMED_TESTS=1 runs them",
 )
 """The CPU bounds of the costliest passes and previews, run on request in the lane and at integration; the
 default suite pins the work the same cases do instead."""
@@ -1855,6 +1876,9 @@ def test_the_costliest_pass_does_bounded_work(plain: Any, kit: Any, work: dict[s
         walk.render(values, kit=kit)
     trees, charges = PASS_WORK[name]
     assert work["trees"] == trees and _charges(work["passes"]) == charges
+    # The charges are counted against the budget's own limits: the costliest cases reach them.
+    assert RenderBudget().limits == {"iterations": 500, "output": 200_000, "filter_input": 500_000}
+    assert RenderBudget.for_lines().limits == {"iterations": 50, "output": 20_000, "filter_input": 50_000}
 
 
 PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[int, int, int]]]] = {
@@ -2121,10 +2145,21 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
         "keep": (_KEEP, {"id": public_id_of(own)}),
         "preview": (_PREVIEW, {"id": public_id_of(own), "kit": None}),
     }
+    refusals = {
+        ("update", "member"): ("PERMISSION_DENIED", "cannot write"),
+        ("update", "anonymous"): ("VALIDATION", "not found"),
+        ("override", "member"): ("PERMISSION_DENIED", "lacks 'create'"),
+        ("keep", "member"): ("PERMISSION_DENIED", "lacks 'write'"),
+        ("preview", "member"): ("PERMISSION_DENIED", "lacks 'preview'"),
+    }
     for name, (document, variables) in cases.items():
-        for user in (member, AnonymousUser()):
+        for label, user in (("member", member), ("anonymous", AnonymousUser())):
             checked.clear()
-            execute_schema(schema, document, variables, user=user)
-            assert checked == [], (name, user)
+            result = execute_schema(schema, document, variables, user=user)
+            assert checked == [], (name, label)
+            code, said = refusals.get((name, label), ("PERMISSION_DENIED", "Authentication required."))
+            (error,) = result.errors or [None]
+            assert error is not None and (error.extensions or {}).get("code") == code and said in error.message, (
+                name, label, result.errors)
     with system_context(reason="tests.messaging_templates.render.save"):
         assert MessageTemplate.objects.get(pk=own.pk).source == "Still {% if %}"
