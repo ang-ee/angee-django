@@ -219,7 +219,9 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         Values probe the primary key and redirect indexes, as :meth:`redirect_group`
         does. A subquery selects ``pk IN`` the id union of the two indexed arms
         instead: PostgreSQL cannot estimate ``IN (subquery) OR IN (subquery)`` and
-        plans it as a scan of most of the table.
+        plans it as a scan of most of the table. A correlated input (an ``OuterRef``)
+        is not supported: it sits one query deeper there, so its reference would
+        name another query.
         """
 
         if not hasattr(survivors, "resolve_expression"):
