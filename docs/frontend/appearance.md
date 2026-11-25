@@ -39,7 +39,12 @@ and React share its token validation, cache protocol and root application.
 One installed addon may supply the host theme's options at run time, through the
 install-one `hostAppearance` manifest key
 ([`HostAppearanceSource`](../../packages/app/src/define-addon.ts)). `createApp` asks
-it about the host theme: the selected app's, else the build's, locked or not. The
+it about the host theme: the selected app's, else the build's, locked or not. A
+theme whose options decline the source (`acceptsHostAppearanceSource: false`, as
+Fyltr and Ledger state) is not put to it: the source is asked about no theme and no
+build options, so it sends no read and never holds the first paint or the boot
+cache, and the theme wears the build's options when it is the build's own theme,
+else its own defaults. The
 options it answers replace the build's options for that theme; when it answers
 none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
 is that source. While the source's first read is on its way, the provider keeps
@@ -200,6 +205,14 @@ defineThemeContribution({
   optionsEditor: ThemeCustomizationEditor,
 });
 ```
+
+A customizable theme takes the answer of the run-time host appearance source
+([host and user precedence](#host-and-user-precedence)) unless it declines it, as a
+theme whose palette is its identity does:
+`createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`.
+The flag belongs to the options definition, not to the options envelope, so it
+changes no options version and no saved customization; the build's stated
+options and a person's own still apply.
 
 ## Authoring a theme addon
 

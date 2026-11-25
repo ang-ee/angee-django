@@ -10,9 +10,10 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`, `angee.theme_fyltr`,
+  `angee.theme_ledger`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
-  it, signed in or not.
+  it, signed in or not, unless its theme declines them.
   - `@angee/app` gains the install-one manifest key `hostAppearance`, a
     `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
     per render of its session frame; two providers fail composition, as two dashboard
@@ -21,6 +22,13 @@ live in code docstrings.
     pauses; only the session frame sets it, and `CreateAppInput.appearance` takes none.
     Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
     precedence".
+  - A customisable theme declines the source with
+    `createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`,
+    `@angee/ui`'s new optional `ThemeOptionsDefinition.acceptsHostAppearanceSource`
+    (default true; `defineTheme` refuses a non-boolean). `createApp` then asks the source
+    about no theme and no build options, so the build's options for its own theme apply
+    whole. The flag is not in the options envelope: no options version changes. Fyltr and
+    Ledger decline; Default and Angee accept.
   - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
     colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
   - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
@@ -36,13 +44,17 @@ live in code docstrings.
     has, the public root answers `null` with no error and the app wears the build's
     colours. Once the addon is provisioned a default kit always exists, so on a host with
     `angee.brandkit`: a project on the stock theme (the full profile's default) wears
-    the shipped Angee kit's colours; a project on another customisable theme, such as
-    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
-    states in `appearance_options` show only on a device's first visit, before the read
-    answers; and every app of a deployment with per-app themes wears the kit's palette,
-    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
-    hosts without the addon, and a theme that ships its own default kit stating its own
-    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+    the shipped Angee kit's colours; a project on another customisable theme that
+    accepts the source, as one that says nothing does, wears the kit's palette in place
+    of its own; on such a theme, colours a build states in `appearance_options` show
+    only on a device's first visit, before the read answers; and every app of a
+    deployment with per-app themes wears the kit's palette on its own theme when that
+    theme accepts the source, locked apps too. Unchanged: the Angee theme under the
+    shipped kit, fixed themes, hosts without the addon, a theme that ships its own
+    default kit stating its own colours, and the Fyltr and Ledger themes, which decline
+    the source: a project or app on either sends no read and wears its own palette, or,
+    on the build's own theme, the build's `appearance_options` whole. To keep other
+    colours, edit the default kit in Settings > Brand kits.
 
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
