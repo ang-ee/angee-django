@@ -38,8 +38,11 @@ from angee.resources.testing.models import Resource
 from tests.conftest import addon_schema, create_platform_admin, create_user
 from tests.decision_table import seat_cells
 
+_CONTENT = "{% block content %}{% endblock %}"
+"""The one empty block a layout's forms hold, which a template fills."""
+
 _KIND_VALUES: dict[str, dict[str, Any]] = {
-    "layout": {"format": "html", "source": "<main>Body</main>", "text_source": "Body"},
+    "layout": {"format": "html", "source": f"<main>{_CONTENT}</main>", "text_source": _CONTENT},
     "template": {"format": "markdown", "source": "Hello.", "subject": "Hello", "layout": "base"},
     "block": {"format": "html", "source": "<p>Block</p>", "text_source": "Block"},
     "part": {"format": "markdown", "source": "Part."},
@@ -232,7 +235,7 @@ def test_a_caller_may_declare_more_paths_than_a_row() -> None:
 
 
 def test_declared_variables_are_judged_in_linear_time() -> None:
-    """A console insert runs the grammar before it checks who may insert, so a hostile declaration stays cheap."""
+    """Every clean runs the grammar on what an administrator wrote, so a hostile declaration stays cheap."""
 
     parent = ".".join(["a" * 100_000] * 7)
     hostile = [
@@ -296,7 +299,8 @@ def test_each_kind_has_its_handler() -> None:
 
 
 def test_the_policy_decides_every_message_template_permission(db: None) -> None:
-    """Every signed-in principal reads; admins alone read samples and write rows but baselines, which nobody writes."""
+    """Every signed-in principal reads; admins alone read samples, preview every row and write rows but baselines,
+    which nobody writes."""
 
     del db
     seats = {
@@ -315,6 +319,7 @@ def test_the_policy_decides_every_message_template_permission(db: None) -> None:
         rows += [
             (row, "read", "admin member service", "anonymous"),
             (row, "read__sample", "admin", "member service anonymous"),
+            (row, "preview", "admin", "member service anonymous"),
             *((row, action, editors, others) for action in ("create", "write", "delete")),
         ]
     assert_decisions(checks=seat_cells(seats.__getitem__, *rows))
@@ -359,8 +364,7 @@ def test_an_admin_writes_the_deployments_rows_and_nobody_writes_a_baseline(db: N
     del db
     admin = create_platform_admin("messaging-templates-writer")
     member = create_user("messaging-templates-onlooker")
-    part = {"kind": "part", "key": "signature", "language": "en", "name": "Signature", "format": "markdown",
-            "source": "The team", "variables": {"team.name": "The team's name"}}
+    part = {"kind": "part", "key": "signature", "language": "en", "name": "Signature"}
     for refused in (member, AnonymousUser()):
         result = execute_schema(_schema(), _INSERT, {"object": part}, user=refused)
         assert result.errors
@@ -372,12 +376,12 @@ def test_an_admin_writes_the_deployments_rows_and_nobody_writes_a_baseline(db: N
     }
 
     baseline = _row(baseline=True)
-    edit = {"id": public_id_of(baseline), "set": {"source": "<main>Edited</main>"}}
+    edit = {"id": public_id_of(baseline), "set": {"source": f"<main>{_CONTENT}Edited</main>"}}
     for document, variables in ((_UPDATE, edit), (_DELETE, {"id": public_id_of(baseline)})):
         refused = execute_schema(_schema(), document, variables, user=admin)
         assert refused.errors
         assert refused.errors[0].extensions["code"] == "PERMISSION_DENIED"
-    assert _read(baseline).source == "<main>Body</main>"
+    assert _read(baseline).source == f"<main>{_CONTENT}</main>"
 
 
 # ---------- shipped defaults: the resource adapter and reload ----------
@@ -420,7 +424,10 @@ def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_has_upda
     """The reload saves only the row's columns, the hash with them, and the override sees the default moved."""
 
     del db
-    first = _load(("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One"), headers=_LAYOUT_HEADERS)
+    first = _load(
+        ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One"),
+        headers=_LAYOUT_HEADERS,
+    )
     assert (first.created, first.updated) == (1, 0)
     with system_context(reason="tests.messaging_templates.read"):
         baseline = MessageTemplate.objects.get(key="base")
@@ -430,10 +437,13 @@ def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_has_upda
     assert override.baseline_hash == shipped_before
     assert not _read(override).has_updated_default
 
-    second = _load(("base", "layout", "base", "en", "Base", "html", "<main>Two</main>", "Two"), headers=_LAYOUT_HEADERS)
+    second = _load(
+        ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}Two</main>", f"{_CONTENT}Two"),
+        headers=_LAYOUT_HEADERS,
+    )
     assert (second.created, second.updated) == (0, 1)
     reloaded = _read(baseline)
-    assert reloaded.source == "<main>Two</main>"
+    assert reloaded.source == f"<main>{_CONTENT}Two</main>"
     assert reloaded.content_hash != shipped_before
     with system_context(reason="tests.messaging_templates.resave"):
         reloaded.save()
@@ -855,26 +865,12 @@ def test_a_deployment_whose_default_language_moves_can_still_edit_its_template(d
         assert set(_system_clean(template)) == {"layout"}
 
 
-def test_a_caller_who_reads_no_layout_gets_one_answer_for_any_layout_key(db: None) -> None:
-    """An anonymous insert naming an existing and a missing layout is refused the same way: nothing to learn."""
-
-    del db
-    _row(baseline=True)
-    answers = []
-    for layout in ("base", "nope"):
-        template = {"kind": "template", "key": "tests.welcome", "language": "en", "name": "Welcome",
-                    "format": "markdown", "source": "Hello.", "layout": layout}
-        result = execute_schema(_schema(), _INSERT, {"object": template}, user=AnonymousUser())
-        assert result.errors
-        answers.append([(error.message, error.extensions) for error in result.errors])
-    assert answers[0] == answers[1]
-
-
 def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
     """The loader restores a stated ``created_at`` through the owner's write, past the closed ``update()``."""
 
     del db
-    row = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One", "2020-01-02 03:04:05")
+    row = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One",
+           "2020-01-02 03:04:05")
     assert _load(row, headers=[*_LAYOUT_HEADERS, "created_at"]).created == 1
     with system_context(reason="tests.messaging_templates.read"):
         loaded = MessageTemplate.objects.get(key="base")
@@ -887,7 +883,7 @@ def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
 
 def test_an_unchanged_reload_writes_no_message_template_row(db: None) -> None:
     del db
-    row = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One")
+    row = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One")
     _load(row, headers=_LAYOUT_HEADERS)
     table = MessageTemplate._meta.db_table
     with CaptureQueriesContext(connection) as captured:
