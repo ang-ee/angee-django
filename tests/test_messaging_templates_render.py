@@ -1483,7 +1483,9 @@ REFUSED_LINKS = (
     "blob:https://x.test/1", "filesystem:https://x.test/temporary/a", "mhtml:file://x", "res://x", "about:blank",
     "jar:https://x.test!/", "feed:https://x.test", "cid:logo", "#top", "//evil.example/x", "/settings/forward",
     "settings", "https:example.test", "https:///x", "https://", "http://?x", " javascript:x", "java\tscript:x",
-    "\x01javascript:x",
+    "\x01javascript:x", "https://:80/x", "https://:@/", "http://.", "https://user:pw@good.example@evil.example/",
+    "https://user@example.test/", "http://localhost/", "http://192.168.0.1/", "https://example.test./",
+    "https://-example.test/", "https://example.t/", "https://exa_mple.test/",
 )
 """Links a value may not give: every scheme but the four, and every link a mail with no base cannot resolve."""
 ADMITTED_LINKS = {
@@ -1494,6 +1496,7 @@ ADMITTED_LINKS = {
     "https://bücher.example/a b": "https://xn--bcher-kva.example/a%20b",
     "mailto:hello@example.test?subject=Hi there": "mailto:hello@example.test?subject=Hi%20there",
     "tel:+1-555-0100": "tel:+1-555-0100",
+    "https://mail.example.co.uk:8443/a#b": "https://mail.example.co.uk:8443/a#b",
 }
 """Values url makes links of, percent-encoded and in punycode as markdown-it writes them, then escaped."""
 
