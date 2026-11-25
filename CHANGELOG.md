@@ -129,6 +129,18 @@ live in code docstrings.
     GraphQL error, a caller who may not create or write the override a
     `PERMISSION_DENIED` GraphQL error, and a row that is not a shipped default
     (`not_a_baseline`) or overrides none (`no_baseline`) an in-band `ok: false`.
+  - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
+    adds **Message templates** to Settings for whoever holds
+    `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
+    library grouped by kind with the open row's registered form beside it, the
+    presets `messaging_templates.default-updated` and
+    `messaging_templates.rendering`, New over the four insertable fields,
+    Override, Keep override and Delete, a notice saying what the row is, a
+    Preview pane of the saved row in the framework's sandboxed message frame with
+    a brand kit select, and a Backlinks group in the record's Links tab.
+    `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
+    stack's JS dependencies, which links the new fragment, then regenerate the
+    web codegen.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution

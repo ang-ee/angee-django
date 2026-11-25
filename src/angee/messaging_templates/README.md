@@ -270,3 +270,25 @@ and an override of none (`no_baseline`) come back in band as `ok: false`.
 named kit or the default one, to a caller who may preview it. It refuses as the
 verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
 reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
+
+### The Message templates page
+
+The addon's web fragment, `@angee/messaging-templates`, puts **Message templates**
+in Settings for whoever holds `messaging_templates.MessageTemplate#preview`
+(`MessageTemplatesPage`). The library is one list, grouped by kind, with the open
+row's form beside it; its presets list the overrides whose shipped default
+changed and the rows that render. **New** opens the form with the name, kind, key
+and language alone, the four fields the insert takes; the server seeds the rest
+and the new row opens. A shipped default is read-only: **Override** starts the
+deployment's override and opens it. An override whose shipped default changed
+offers **Keep override**, and **Delete** shows where the row projects `delete`. A
+notice above the form says which of these the row is, each hint only to a reader
+who may use its verb.
+
+The **Preview** pane renders the saved row with its sample, in a brand kit chosen
+there or the default one, and lists what the preview warns about, or why the row
+does not render, in the server's words. The HTML shows only in the framework's
+sandboxed message frame, which runs no script, has no same origin and loads
+remote images only when asked; the frame's own body styles sit under the mail,
+so a mail client may space and size it slightly differently. A message
+template's Links tab lists its **Backlinks**, the rows naming its kind and key.
