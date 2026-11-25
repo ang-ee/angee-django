@@ -551,11 +551,11 @@ test("changed server lines refuse a destructive full-list save and discard loads
   await f.refresh(remote);
   await act(async () => f.surface().submitForm());
   expect(f.submit).not.toHaveBeenCalled();
-  expect(f.surface().saveError).toBe("form.linesChanged");
+  expect(f.surface().saveErrors).toEqual(["form.linesChanged"]);
   expect(f.surface().form.getValues("lines")).toEqual([{ ...initialLines[0], label: "Local alpha" }, ...initialLines.slice(1)]);
   act(() => f.surface().discardChanges());
   expect(f.surface().form.getValues("lines")).toEqual(remote);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().formIsDirty).toBe(false);
   edit("x.label", "Reconciled xray");
   await act(async () => f.surface().submitForm());
@@ -636,7 +636,7 @@ test.each([true, false])("concurrent edits to a newly saved line remain intact a
   expect(f.surface().form.getValues("lines")).toEqual([...initialLines, { ...newLine, label: "Later delta" }]);
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(1);
-  expect(f.surface().saveError).toBe("form.linesChanged");
+  expect(f.surface().saveErrors).toEqual(["form.linesChanged"]);
   if (!includesLines) {
     await act(async () => resolveRead({ data: accepted }));
     await waitFor(() => expect(f.surface().displayRecord?.lines).toEqual(accepted.lines));
@@ -1276,13 +1276,13 @@ test.each([
   await f.refresh(lines);
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(1);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.submit.mock.calls[0]?.[1].lines?.payload.map((row) => row.position)).toEqual([0, 1, 2]);
   act(() => f.surface().discardChanges());
   edit("b.label", "Edit after discard");
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(2);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
 });
 
 test.each(["position change", "reorder", "field change"])("an actual observed server %s still conflicts when stored positions are duplicate defaults", async (change) => {

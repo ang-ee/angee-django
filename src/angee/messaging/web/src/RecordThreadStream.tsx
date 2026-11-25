@@ -173,5 +173,5 @@ function InlineCreateComposer({ action, composer, submitKey = "enter", onCreated
     submitKey={submitKey} prompt={composer.prompt} submitLabel={action.label}
     readerLine={composer.readerLine ?? (composer.audience ? undefined : t("composer.audience"))}
     audience={composer.audience}
-    after={<ErrorBanner description={[...(form.fieldErrors[composer.bodyArg] ?? []), form.formError].filter(Boolean).join(" ") || null} />} />;
+    after={<ErrorBanner messages={[...(form.fieldErrors[composer.bodyArg] ?? []), ...form.formErrors]} />} />;
 }

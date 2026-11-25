@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 
@@ -317,9 +317,11 @@ describe("MutationDialog", () => {
     const message = await screen.findByText("Choose a title Use a unique value");
     const input = screen.getByRole("textbox", { name: "Title" });
     expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(message.id);
-    expect(screen.getByText(/The entry changed/)).toBeTruthy();
-    expect(screen.getByText(/Review the values/)).toBeTruthy();
-    expect(screen.getByText(/Refresh the entry/)).toBeTruthy();
+    // The form-level message and each message no rendered field claims are separate items of the banner.
+    const banner = screen.getByText("Review the values").closest<HTMLElement>('[role="alert"]')!;
+    expect(within(banner).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Review the values", "missing: The entry changed", "token: Refresh the entry",
+    ]);
     expect(submit).not.toHaveBeenCalled();
   });
 

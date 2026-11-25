@@ -871,7 +871,7 @@ test("a failed save keeps the preset's value for the retry, which writes it once
   stored.update.mockRejectedValueOnce(new Error("Unavailable"));
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(stored.update).toHaveBeenCalledOnce());
-  await waitFor(() => expect(stored.surface().saveError).not.toBeNull());
+  await waitFor(() => expect(stored.surface().saveErrors).not.toEqual([]));
   expect(stored.isDirty()).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(stored.update).toHaveBeenCalledTimes(2));
@@ -1711,7 +1711,7 @@ test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and
   expect(f.update).not.toHaveBeenCalled();
   expect(f.onSaved).toHaveBeenCalledOnce();
   expect(f.surface().formIsDirty).toBe(false);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
 });
 
 test("native create submissions retain their resource-owned writable field restriction", async () => {
@@ -1837,7 +1837,7 @@ test("a missing custom response reports failure and retains the draft", async ()
   const f = await fixture({ submit: async () => savedFormSubmitResult<Row>(undefined, "No record returned.") });
   edit("title", "Unsaved");
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBe("No record returned.");
+  expect(f.surface().saveErrors).toEqual(["No record returned."]);
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
@@ -1858,7 +1858,7 @@ test("nested server errors and root failures share the native form store", async
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
-  expect(f.surface().saveError).toBe("Cannot save lines.0.title: Invalid line");
+  expect(f.surface().saveErrors).toEqual(["Cannot save", "lines.0.title: Invalid line"]);
   expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
@@ -2206,7 +2206,7 @@ test.each(["invalid", "conflict"] as const)("a typed %s result keeps the edit ba
   expect(f.onSaved).not.toHaveBeenCalled();
   expect(f.surface().form.formState.errors.root?.server?.type).toBe(status === "conflict" ? "conflict" : "server");
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
   expect(f.surface().formIsDirty).toBe(false);
   expect(f.onSaved).toHaveBeenCalledTimes(1);
@@ -2218,7 +2218,7 @@ test("a post-save callback failure does not convert an acknowledged save into a 
   edit("title", "Accepted");
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow("Continuation failed"); });
   expect(f.surface().formIsDirty).toBe(false);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().form.getValues("title")).toBe("Accepted");
 });
 
@@ -2317,7 +2317,7 @@ test("an outdated custom save result fails loudly without presenting a retry ban
   const f = await fixture({ submit });
   edit("title", "Already saved");
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow(/FormSubmitResult contract/); });
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
 
@@ -2395,7 +2395,7 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
     }
   });
   if (mode === "rejected") {
-    expect(surface.saveError).toBe("Refused");
+    expect(surface.saveErrors).toEqual(["Refused"]);
     expect(write).not.toHaveBeenCalled();
     expect(getList).toHaveBeenCalledTimes(3);
     expect(custom).toHaveBeenCalledTimes(2);

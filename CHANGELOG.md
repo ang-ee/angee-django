@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed API.** A refusal's form-level messages stay several.
+  `applyFormErrors` (`validation-errors.ts`) joined the form-level messages
+  and each message no rendered field claims with a space into the one
+  `root.server` text, so a save refused for three reasons read as one run-on
+  sentence on the record form's banner and in both dialogs, to the eye and to
+  a screen reader. The form-level error now holds a list (`formErrorsFromForm`
+  reads it), and `ErrorBanner` takes `messages`: one is the banner's body,
+  several are a list, one item each. `FormViewSaveSurface.saveErrors` replaces
+  `saveError`, and an action form's `formErrors` replaces `formError`; the
+  three addons that read it follow (the tasks pane, the thread composer, the
+  workflow studio's action banner). Known, not changed: the workflow studio's
+  own issue summary still sets its lines in one text, and
+  `useDottedPathFieldErrors.formSummary`, which nothing reads, still joins.
+  **Upgrade:** read `saveErrors` or `formErrors` and pass them to
+  `<ErrorBanner messages={…} />`; a test that matched a refusal's reasons as
+  one sentence finds one list item per reason.
 - `@angee/ui`: A record form confirms a save as soon as the write answers.
   The save awaited the refresh of every dependent resource and of every
   authored read registered on the saved model, among them the reads a record's

@@ -192,7 +192,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     formIsDirty,
     displayRecord,
     loadError,
-    saveError,
+    saveErrors,
     saveConflict,
     declaredActions,
     genericActions,
@@ -409,7 +409,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
     <ErrorBanner
-      description={saveError}
+      messages={saveErrors}
       title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
       actions={saveConflict ? (
         <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>

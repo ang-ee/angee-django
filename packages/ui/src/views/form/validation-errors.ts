@@ -239,6 +239,8 @@ function assertNeverResult(_result: never): never {
 /** Narrow one submit result and bind its issues to RHF; malformed results fail loudly.
  * A failure is shown once: a message bound to a rendered field stays under that field,
  * and `fallback` stands in only for a failure no field and no form-level message names.
+ * The form-level messages stay several: `root.server` holds them as a list (its `types`),
+ * read with `formErrorsFromForm`; its `message` is their text, one per line.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -285,15 +287,29 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
     target[name] = messages;
   }
-  const summary = [...issues.formErrors];
-  if (summary.length === 0 && Object.keys(bound).length && options.fieldSummary) {
-    summary.push(options.fieldSummary(bound));
+  const messages = [...issues.formErrors];
+  if (messages.length === 0 && Object.keys(bound).length && options.fieldSummary) {
+    messages.push(options.fieldSummary(bound));
   }
-  const unclaimedSummary = dottedPathErrorSummary(unclaimed);
-  if (unclaimedSummary) summary.push(unclaimedSummary);
-  const message = summary.join(" ") || (Object.keys(bound).length > 0 ? "" : options.fallback);
-  if (message) form.setError("root.server", { type, message });
+  messages.push(...dottedPathErrorMessages(unclaimed));
+  if (messages.length === 0 && Object.keys(bound).length === 0 && options.fallback) messages.push(options.fallback);
+  if (messages.length > 0) {
+    form.setError("root.server" as Path<TValues>, { type, message: messages.join("\n"), types: { [type]: messages } });
+  }
   return true;
+}
+
+/**
+ * The form-level messages a submit left on the form (`root.server`), each its own entry: the list
+ * `applyFormErrors` stored, or the one message another owner set there. Empty when there is none.
+ */
+export function formErrorsFromForm(errors: object): readonly string[] {
+  const server = "root" in errors && errors.root && typeof errors.root === "object" && "server" in errors.root ? errors.root.server : undefined;
+  if (!server || typeof server !== "object") return EMPTY_FIELD_NAMES;
+  const type = "type" in server && typeof server.type === "string" ? server.type : undefined;
+  const listed = type && "types" in server && server.types && typeof server.types === "object" ? (server.types as Record<string, unknown>)[type] : undefined;
+  if (Array.isArray(listed)) return listed.filter((message): message is string => typeof message === "string");
+  return "message" in server && typeof server.message === "string" && server.message ? [server.message] : EMPTY_FIELD_NAMES;
 }
 
 /**
@@ -487,12 +503,15 @@ function dottedPathBelongsToField(path: string, field: string): boolean {
   return path === field || path.startsWith(`${field}.`);
 }
 
+/** One `field: message` entry per message of a path no rendered field claims. */
+function dottedPathErrorMessages(errors: DottedPathFieldErrorMap): string[] {
+  return Object.entries(errors).flatMap(([field, entries]) => entries.map((message) => `${field}: ${message}`));
+}
+
 function dottedPathErrorSummary(
   errors: DottedPathFieldErrorMap,
 ): string | null {
-  const messages = Object.entries(errors).flatMap(([field, entries]) =>
-    entries.map((message) => `${field}: ${message}`),
-  );
+  const messages = dottedPathErrorMessages(errors);
   return messages.length > 0 ? messages.join(" ") : null;
 }
 
