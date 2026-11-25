@@ -4,7 +4,9 @@ The previous release's recipient rows are ``messaging.Participant`` rows: the te
 that model, with its fields and constraints, in place of ``Recipient`` in a migration
 state derived from the installed models and creates its table, so the template's
 callables run on historical models. Messages, threads and handles are the installed
-models' rows. Every name and address is invented.
+models' rows. Every name and address is invented. The drop guard judges a copy of the
+template in a project's own history (``tests.project_history``), as ``migrate`` and
+``provision`` judge it.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,16 +26,19 @@ from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.graph import MigrationGraph
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ModelState, ProjectState
+from django.utils import timezone
 from django_compose.migrations import DropGuardAutodetector
 from rebac import system_context
 
 from angee.base.fields.state import StateField
 from angee.messaging.compose_migrations.messaging import participants_to_recipients as template
 from angee.messaging.testing.models import Handle, Message, Recipient, Thread
+from tests.project_history import INITIAL, project_history
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 _NAME = "0099_participants_to_recipients"
+_COPY = "0002_participants_to_recipients"
 _PARTICIPANTS, _RECIPIENTS = "messaging_participant", "messaging_recipient"
 
 
@@ -302,3 +308,63 @@ def test_the_drop_guard_refuses_an_autodetected_delete_and_create_of_participant
         assert {(type(operation).__name__, getattr(operation, "name", "")) for operation in written.operations} >= {
             ("DeleteModel", "Participant"), ("CreateModel", "Recipient"),
         }
+
+
+def _dated_rows(state: ProjectState) -> set[int]:
+    """A message's recipients, one of them holding the date it joined, and its sender's row; return the recipients."""
+
+    people = _people("ada", "bob", "cat")
+    thread = Thread._base_manager.create(platform="email")
+    sent = _message(thread, "sent", people["ada"])
+    joined = _participant(state, sent, thread, people["bob"])
+    copied = _participant(state, sent, thread, people["cat"], "cc")
+    _participant(state, sent, thread, people["ada"], "from")
+    participants = state.apps.get_model("messaging", "Participant")._base_manager
+    participants.filter(pk=joined.pk).update(joined_at=timezone.now())
+    return {joined.pk, copied.pk}
+
+
+def test_migrate_applies_a_copy_of_the_template_whose_rows_hold_a_joined_date(tmp_path: Path) -> None:
+    """The template declares the drop of ``joined_at`` and ``left_at``: the drop guard lets the values go."""
+
+    with (
+        system_context(reason="test recipients upgrade under the drop guard"),
+        _previous_release() as before,
+        project_history(tmp_path) as history,
+    ):
+        recipients = _dated_rows(before)
+        history.start(before, "messaging", "parties")
+        history.copy("messaging", template, _COPY, {"0000_messaging_leaf": INITIAL})
+
+        history.migrate("messaging", _COPY)
+
+        assert history.applied("messaging", _COPY)
+        assert _PARTICIPANTS not in _tables()
+        assert not {"joined_at", "left_at"} & set(_columns(_RECIPIENTS))
+        assert {pk for pk, *_ in _rows(_after(before), "Recipient")} == recipients
+
+
+def test_the_drop_guard_refuses_a_copy_that_drops_a_joined_date_undeclared(tmp_path: Path) -> None:
+    """A copy taken before the template declared its drop is refused while a row holds a date; nothing changes."""
+
+    with (
+        system_context(reason="test recipients upgrade under the drop guard"),
+        _previous_release() as before,
+        project_history(tmp_path) as history,
+    ):
+        _dated_rows(before)
+        kept = _rows(before, "Participant")
+        history.start(before, "messaging", "parties")
+        history.copy("messaging", template, _COPY, {"0000_messaging_leaf": INITIAL}, declarations=False)
+
+        with pytest.raises(CommandError) as refused:
+            history.migrate("messaging", _COPY)
+
+        assert not history.applied("messaging", _COPY)
+        assert _rows(before, "Participant") == kept
+        assert {"joined_at", "left_at"} <= set(_columns(_PARTICIPANTS))
+    said = str(refused.value)
+    assert said.startswith(f"unsafe migration drop: messaging.{_COPY} (Remove field joined_at from recipient): ")
+    assert f"{_PARTICIPANTS}.joined_at holds data in 1 rows on 'default'" in said
+    assert "left_at" not in said  # It holds nothing.
+    assert "Nothing was migrated" in said and "IntendedRemoveField" in said
