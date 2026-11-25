@@ -273,6 +273,7 @@ export {
   type SectionHeadingProps,
   type RecordRailField,
   type RecordRailGroupProps,
+  type FormNextSave,
   type FormSubmit,
   type FormSubmitAcknowledgement,
   type FormSubmitContext,

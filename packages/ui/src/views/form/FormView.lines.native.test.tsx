@@ -18,6 +18,7 @@ import { CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig } from 
 import { EditableLines } from "./EditableLines";
 import type { RecordTabDescriptor } from "./form-view-surface";
 import { FORM_CONTAINERS, FormView } from "./FormView";
+import { readNextSave } from "./next-save.test-support";
 import { acknowledgeFormSubmit, useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
 import { Group, type FieldDescriptor } from "../page";
 
@@ -1294,4 +1295,57 @@ test.each(["position change", "reorder", "field change"])("an actual observed se
   await act(async () => f.surface().submitForm());
   expect(f.submit).not.toHaveBeenCalled();
   expect(f.surface().form.getFieldState("lines").error?.type).toBe("conflict");
+});
+
+/** Every request the fixture's provider and submit owner received. */
+function requests(f: Awaited<ReturnType<typeof fixture>>): number {
+  return f.provider.create.mock.calls.length + f.update.mock.calls.length + f.custom.mock.calls.length + f.submit.mock.calls.length;
+}
+
+test("nextSave reads a lines create as Save sends it, in one nested insert", async () => {
+  const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
+  const f = await fixture({ isCreate: true, publicView: true, create: async () => ({ data: saved }) });
+  edit("Title", "Draft document");
+  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+  edit("Label", "Lamp");
+  const next = readNextSave(f.surface, () => requests(f));
+  expect(next.data).toEqual({ title: "Draft document" });
+  expect(next.lines?.created).toEqual([{ label: "Lamp", position: 0 }]);
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.provider.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    variables: { ...next.data, lines: { data: next.lines!.payload } },
+  })));
+});
+
+test("nextSave reads a lines edit as the resource save receives it, a list cell's own list included", async () => {
+  const taggedResource = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: {
+      ...renderedResource.linesResource!,
+      fields: [...(renderedResource.linesResource!.fields ?? []), { ...lineField("tags", "String"), kind: "list" }],
+    },
+  });
+  const lines = initialLines.map((row) => ({ ...row, tags: [`tag-${String(row.id)}`] }));
+  const f = await fixture({ publicView: true, resourceMetadata: taggedResource, lines });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  const next = readNextSave(f.surface, () => requests(f));
+  expect(next.data).toEqual({});
+  expect(next.lines?.payload).toEqual([{ ...lines[0], label: "Edited alpha" }, ...lines.slice(1)]);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom.mock.calls[0]![0].payload).toEqual({ pk: "doc-1", patch: next.data, lines: next.lines!.payload });
+});
+
+test("an own submit owner receives what nextSave reads of an edited, removed and reordered line list", async () => {
+  const f = await fixture({ submit: async () => ({ status: "ok" as const, data: { id: "doc-1", title: "Original", lines: [] } }) });
+  edit("a.label", "Edited alpha");
+  f.remove(1);
+  f.move(0, 1);
+  const next = readNextSave(f.surface, () => requests(f));
+  expect(next.lines?.payload.map((row) => row.id)).toEqual(["c", "a"]);
+  expect(next.lines?.deleted).toEqual(["b"]);
+  await act(async () => f.surface().submitForm());
+  expect(f.submit).toHaveBeenCalledOnce();
+  expect(f.submit.mock.calls[0]![0]).toEqual(next.data);
+  expect(f.submit.mock.calls[0]![1].lines).toEqual(next.lines);
 });

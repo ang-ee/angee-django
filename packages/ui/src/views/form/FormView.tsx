@@ -67,6 +67,7 @@ export type FieldKind = PageFieldKind;
 export type FormField = FieldDescriptor;
 
 export type {
+  FormNextSave,
   FormSubmit,
   FormSubmitAcknowledgement,
   FormSubmitContext,

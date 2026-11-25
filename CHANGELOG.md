@@ -10,6 +10,42 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A record form tells what its Save would write before a save.
+  The save surface a pane (`RecordPanelContext.form`) and a toolbar
+  (`RecordToolbarContext.form`) receive has `nextSave(): FormNextSave`,
+  `{ data, lines }`: the record's input and the lines diff that Save hands the
+  native create or update, the resource save or the form's own submit owner.
+  Save and `nextSave` build it with one function (`use-form-view-save.ts`),
+  from the values, the baseline and the changed fields the form holds when it
+  is called, so a reader that keeps `nextSave` across edits, saves and
+  discards reads what Save then sends, and a pane that previews unsaved edits
+  does not rebuild the save's mapping. Each reads its own copy of the values
+  (Save the form library's submit copy, `nextSave` a `structuredClone`), which
+  hold the same for a record form's plain values, and each call returns a new
+  object, to compare by value. Reading it validates, writes and requests
+  nothing, and promises no more than what the save would build: a form that
+  takes no edit, a save in flight, the rule check, a registered validation,
+  lines another save changed, a running "view as" preview, a revision that is
+  not available or the server may still stop that save. Save itself now reads
+  the changed fields when it runs, where it read those of the render that made
+  its handler, so within one record a `submitForm` kept across edits, saves
+  and discards builds from the current ones. Everything else it reads (the
+  mode, the fields it saves, whether the form takes an edit, the record) is
+  still that render's. The form's own Save, Enter and submit never kept one.
+- `@angee/ui`: A record form's save no longer writes into the values it
+  reads: `mutationData` (`form-view-model.ts`) copies what it takes from them,
+  as its hidden-reset branch already did. Before, a structured field saved
+  together with a dotted member it sends as another value (a cleared number as
+  `null`, a picked record as its id) had that wire value written into the
+  values the save had read, so the form stayed marked as changed after a
+  successful save, with Save and Discard still showing, and a form's own
+  submit owner received the wire value in `context.values`. Now the form is
+  clean after such a save and the owner receives what the form held. What a
+  form sends is unchanged for a record form's values, which are plain data:
+  the copy is `structuredClone`'s, as the form's undo history already makes on
+  every change. A class instance would now be sent as a plain copy without its
+  methods, and a value holding a function would throw. No widget or form holds
+  such a value, and no declared form saves such a pair today.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
