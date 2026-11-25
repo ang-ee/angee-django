@@ -61,8 +61,12 @@ sender, and its text part is only its own text, never made from its HTML.
 Each typed recipient is one entry, as
 [`MessageManager.clean_recipient`](managers.py) reads it and as `compose` lands
 it: a bare address or one explicit `Name <address>`. An entry a mail library
-would read as another address or as several, or one carrying a NUL byte, is
-refused (`invalid`) under its role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc`
+would read as another address or as several, or whose name or address a mail
+header would not carry as read (a NUL byte, a control character, an
+encoded-word opener: [`header_text`](email.py), the rule every subject and
+display name the email backend writes takes), is refused (`invalid`) under its
+role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
+addresses across `to`, `cc`
 and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
 under the argument that crosses the bound, before anything is read. A

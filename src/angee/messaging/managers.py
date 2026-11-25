@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -102,6 +101,7 @@ from angee.messaging.constants import (
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
 )
+from angee.messaging.email import header_text
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -178,30 +178,6 @@ def normalize_subject(subject: str) -> str:
     # normalized subject still reads naturally and two subjects differing only in
     # case stay distinct conversations.
     return text.strip()
-
-
-_ENCODED_WORD_OPENER = re.compile(r"=(?=\?[^?]*\?[bq]\?)", re.IGNORECASE)
-"""The ``=`` that opens an RFC 2047 encoded word: a mail library decodes one with any or no charset, either
-encoding letter in either case, terminated or not, and inside a word too."""
-
-
-def outgoing_subject(subject: str) -> str:
-    """Return ``subject`` as an outgoing message carries it: one line, with no control character and no encoded word.
-
-    Each control character and line break becomes a space, and every encoded-word
-    opener (``=?charset?q?`` or ``?b?``) is broken with a space after its ``=``, so
-    neither a mail library nor a reader's client decodes anything out of it, and no
-    provider that receives the subject as a string can either: the subject written,
-    the one on the wire and the one a reader sees are the same string. Text that
-    opens no word (``2+2=?``) is kept. Every outgoing subject takes it, a typed one
-    and one derived from a conversation's title.
-    """
-
-    text = "".join(
-        " " if unicodedata.category(character) in ("Cc", "Zl", "Zp") else character
-        for character in strip_null_bytes(subject or "")
-    )
-    return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
 # One rule for naming a message part that arrived without its own filename. It lives
@@ -3239,8 +3215,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         An entry is one recipient: a bare address, read as itself, or one explicit
         ``Name <address>``. An entry a mail library would read as another address,
         or as several (a comment, a group, a list, trailing text, ``address
-        (Name)``), is refused rather than re-read, and so is one carrying a NUL
-        byte, which no messaging write stores. The handle owner then decides
+        (Name)``), is refused rather than re-read, and so is one whose name or
+        address a mail header would not carry as read
+        (:func:`~angee.messaging.email.header_text`): a NUL byte, which no messaging
+        write stores, a control character, or an encoded-word opener, which a mail
+        library decodes into another address or name. The handle owner then decides
         whether the address can be one and can be stored on a handle
         (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
         nothing, so a caller can ask it before expensive work, and ``compose``
@@ -3252,15 +3231,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         text = str(entry or "").strip()
         parsed = getaddresses([text])
         name, address = parsed[0] if len(parsed) == 1 else ("", "")
+        name = name.strip()
         explicit = text.endswith(f"<{address}>") and text.count("<") == text.count(">") == 1
-        landable = "\x00" not in text and handle_model.is_email_address(address)
+        as_written = header_text(name) == name and header_text(address) == address
+        landable = as_written and handle_model.is_email_address(address)
         if not address or not (text == address or explicit) or not landable:
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})
         address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
-        return name.strip(), address
+        return name, address
 
     def _validate_outgoing(
         self,
@@ -3309,7 +3290,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({"text": ValidationError("Write the message.", code="required")})
         if "\r" in subject or "\n" in subject:
             raise ValidationError({"subject": ValidationError("A subject is one line.", code="invalid")})
-        subject = outgoing_subject(subject)
+        subject = header_text(subject)
         recipients: tuple[_Addressee, ...] = ()
         if parent is not None:
             kind, platform = parent.message_type, parent.platform

@@ -82,6 +82,7 @@ from angee.messaging.backends import (
 )
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
+from angee.messaging.email import header_text
 from angee.messaging.managers import (
     ChannelManager,
     DeliveryReconciliationBusy,
@@ -98,7 +99,6 @@ from angee.messaging.managers import (
     ThreadManager,
     ThreadNotificationManager,
     normalize_subject,
-    outgoing_subject,
 )
 from angee.messaging.mixins import (
     AudienceMember as AudienceMember,
@@ -1414,7 +1414,7 @@ class Message(
         return ReplyEnvelope(
             addresses=tuple(addresses.items()),
             handle_id=None if addresses else self.sender_id,
-            subject=outgoing_subject(f"Re: {title}") if title else "",
+            subject=header_text(f"Re: {title}") if title else "",
             sender=sender,
         )
 

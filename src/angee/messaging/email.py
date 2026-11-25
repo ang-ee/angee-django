@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import unicodedata
 from email.utils import formataddr, getaddresses, parseaddr
 from smtplib import SMTPRecipientsRefused, SMTPResponseException, SMTPServerDisconnected
 from typing import Any
@@ -27,6 +28,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
+from angee.base.serialization import strip_null_bytes
 from angee.integrate.errors import IntegrationError, is_transient_status
 from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
 
@@ -36,6 +38,30 @@ logger = logging.getLogger(__name__)
 # so a retained header part never adds a second copy of one.
 _ENVELOPE_HEADERS = frozenset({"bcc", "cc", "from", "in-reply-to", "message-id", "references", "subject", "to"})
 _HEADER_NAME_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
+_ENCODED_WORD_OPENER = re.compile(r"=(?=\?[^?]*\?[bq]\?)", re.IGNORECASE)
+"""The ``=`` that opens an RFC 2047 encoded word: a mail library decodes one with any or no charset, either
+encoding letter in either case, terminated or not, and inside a word too."""
+
+
+def header_text(text: str) -> str:
+    """Return ``text`` as an outgoing mail header carries it: one line, with no control character and no encoded word.
+
+    Each control character and line break becomes a space, and every encoded-word
+    opener (``=?charset?q?`` or ``?b?``) is broken with a space after its ``=``, so
+    neither a mail library nor a reader's client decodes anything out of it, and no
+    provider that receives the text as a string can either: the text written, the
+    text on the wire and the text a reader sees are the same string. Text that
+    opens no word (``2+2=?``) is kept. Every outgoing subject takes it (a typed one
+    and one derived from a conversation's title), and so does every display name
+    this backend writes; a typed recipient it would change is refused
+    (``MessageManager.clean_recipient``).
+    """
+
+    text = "".join(
+        " " if unicodedata.category(character) in ("Cc", "Zl", "Zp") else character
+        for character in strip_null_bytes(text or "")
+    )
+    return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
 class AnymailEmailChannelBackend(ChannelBackend):

@@ -451,6 +451,25 @@ def test_an_entry_compose_would_read_as_another_address_is_refused(desk: Any, en
 
 
 @pytest.mark.parametrize("role", ["to", "cc", "bcc"])
+@pytest.mark.parametrize("entry", [
+    "=?us-ascii?q?boss?=@example.test",
+    "=?utf-8?q?b=40evil.test?=@example.test",
+    "=?utf-8?q?ceo=40bank.test?= <eve@example.test>",
+    '"Eve\tX" <eve@example.test>',
+    '"Eve\x1bX" <eve@example.test>',
+    "Eve\u2028X <eve@example.test>",
+])
+def test_an_entry_a_mail_header_would_not_carry_as_typed_is_refused_under_its_role(
+    desk: Any, role: str, entry: str,
+) -> None:
+    """A mail library decodes an encoded word into another address or name, and rewrites a control character."""
+
+    with _refused(key=role, code="invalid"):
+        Message.objects.compose(channel=desk, **{role: [entry]}, text="Hi.", actor=desk.owner)
+    assert not Handle._base_manager.filter(value__in=("boss@example.test", "b@evil.test", "eve@example.test")).exists()
+
+
+@pytest.mark.parametrize("role", ["to", "cc", "bcc"])
 @pytest.mark.parametrize("entry", ["Na\x00me <nul@example.test>", "nul@example.test\x00", "nu\x00l@example.test"])
 def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str, entry: str) -> None:
     """PostgreSQL stores no NUL, so a name holding one would fail the write after it began; it is refused first."""
@@ -464,6 +483,7 @@ def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str,
     ("Name <a@example.test>", ("Name", "a@example.test")),
     ('"Doe, Jane" <jane@example.test>', ("Doe, Jane", "jane@example.test")),
     ("jörg@example.test", ("", "jörg@example.test")),
+    ("Eve\tX <eve@example.test>", ("Eve X", "eve@example.test")),
 ])
 def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: str, expected: tuple[str, str]) -> None:
     assert Message.objects.clean_recipient(entry) == expected

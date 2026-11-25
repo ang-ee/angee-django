@@ -22,8 +22,11 @@ live in code docstrings.
     address read as itself or one explicit `Name <address>`, returned as
     `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
     entry a mail library would read as another address or as several (a
-    comment, a group, a list, trailing text), or carrying a NUL byte (which
-    failed the write on PostgreSQL after it began), is refused, never re-read; a caller
+    comment, a group, a list, trailing text), or whose name or address a mail
+    header would not carry as read (a NUL byte, which failed the write on
+    PostgreSQL after it began, a control character, or an encoded-word opener,
+    which a mail library decodes into another address or name), is refused,
+    never re-read; a caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
     (default 50, the strictest common provider's per-message limit; each new
@@ -75,7 +78,8 @@ live in code docstrings.
     or derived from a conversation's title, has each control character and line
     break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
     so no mail library, client or provider decodes anything out of it: the subject
-    stored, sent and read back are one string (`outgoing_subject`); a typed line
+    stored, sent and read back are one string (`angee.messaging.email.header_text`,
+    the one rule for text a mail header carries); a typed line
     break is still refused. A channel's own sender handle is landed with no
     creator, under a non-user attribution (`messaging/system:outgoing`): the
     first person to compose on a channel no longer holds read, write and delete
