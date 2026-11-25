@@ -3,13 +3,18 @@ import { onlineManager } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { defineBaseAddon } from "@angee/app";
+import type { CreateAppInput } from "@angee/app/create-app";
 import { installTestLocalStorage } from "@angee/app/testing";
-import type { GraphQLWireRequest } from "@angee/storybook/testing";
+import { operationDocuments } from "@angee/gql/console/actions";
+import { ComposedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
+import stockAddon from "@angee/theme-stock";
 import { themes as stockThemes } from "@angee/theme-stock/themes";
-import { APPEARANCE_CACHE_KEY, defineTheme, defineThemeContribution, resolveThemeOptions } from "@angee/ui/theme";
+import { ConsoleLayout } from "@angee/ui";
+import { APPEARANCE_CACHE_KEY, bootstrapAppearance, defineTheme, defineThemeContribution, resolveThemeOptions } from "@angee/ui/theme";
 
 import { HostAppearanceStory } from "./HostAppearance.stories";
-import { ANGEE, HARBOUR, ORCHARD, colorsOf, type KitRow } from "./views/brand-kits.test-support";
+import brandkit from "./index";
+import { ANGEE, HARBOUR, ORCHARD, brandKitResource, colorsOf, type KitRow } from "./views/brand-kits.test-support";
 
 const stock = stockThemes[0];
 const TOKENS = ["--brand", "--surface-rail", "--surface-canvas"] as const;
@@ -83,12 +88,12 @@ describe("the default kit dresses the app", () => {
   test("the kit is read once identity resolves, and the first paint and boot cache hold until it answers", async () => {
     const requests = recorder();
     const kitRead = gate();
-    // The first paint, as the head bootstrap left it.
+    // The first paint, as the head bootstrap left it (on a device's first visit, the build's appearance).
     root().style.setProperty("--brand", "#010203");
     render(<HostAppearanceStory kits={ORCHARD_DEFAULT} kitReadGate={kitRead.closed} onRequest={requests.onRequest} />);
     await waitFor(() => expect(requests.first("default_brand_kit_colors")).toBeGreaterThan(-1));
     expect(requests.first("current_user")).toBeLessThan(requests.first("default_brand_kit_colors"));
-    // Identity has resolved: the console page renders, and the app still wears its first paint.
+    // Identity has resolved: the console page renders under the first paint, which the hold keeps.
     await screen.findByRole("link", { name: "Open Orchard" });
     expect(root().style.getPropertyValue("--brand")).toBe("#010203");
     expect(root().dataset.themeId).toBeUndefined();
@@ -97,6 +102,39 @@ describe("the default kit dresses the app", () => {
     kitRead.open();
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(ORCHARD)));
     expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!).tokenLayers.light).toEqual(lightTokens(ORCHARD));
+  });
+
+  test("on a device's next visit the head bootstrap paints the cached kit, and the app wears nothing else while the kit is read", async () => {
+    // The first visit writes the boot cache once the kit answers.
+    const first = render(<HostAppearanceStory kits={ORCHARD_DEFAULT} />);
+    await waitFor(() => expect(window.localStorage.getItem(APPEARANCE_CACHE_KEY)).not.toBeNull());
+    first.unmount();
+    root().removeAttribute("style");
+    delete root().dataset.themeId;
+
+    // The next visit: the host page's head script paints from the cache before the app mounts.
+    bootstrapAppearance({
+      fingerprint: "",
+      host: { themeId: "angee.stock", colorScheme: "light", fingerprint: "", tokenLayers: stock.tokens },
+      catalogue: { schema: 1, fingerprint: "catalogue", themes: [{ id: "angee.stock", defaultTokens: stock.tokens }] },
+    }, window);
+    expect(inlineTokens()).toEqual(wornTokens(ORCHARD));
+    const worn: string[] = [];
+    const observer = new MutationObserver(() => {
+      worn.push(`${root().dataset.themeId ?? "none"} ${root().style.getPropertyValue("--brand") || "none"}`);
+    });
+    observer.observe(root(), { attributes: true, attributeFilter: ["data-theme-id", "style"] });
+    const kitRead = gate();
+    render(<HostAppearanceStory kits={ORCHARD_DEFAULT} kitReadGate={kitRead.closed} />);
+    // The console renders while the read is out; the root keeps the cached kit.
+    await screen.findByRole("link", { name: "Open Orchard" });
+    expect(inlineTokens()).toEqual(wornTokens(ORCHARD));
+    kitRead.open();
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!).actorId).toBe("user-1"));
+    await waitFor(() => expect(worn.length).toBeGreaterThan(0));
+    observer.disconnect();
+    // Every state the root took is the kit's: no build frame between the head script and the answer.
+    expect(new Set(worn)).toEqual(new Set([`angee.stock ${lightTokens(ORCHARD)["--brand"]}`]));
   });
 
   test("a failing kit read releases the first paint onto the build's appearance at its first failure", async () => {
@@ -179,12 +217,43 @@ describe("the default kit dresses the app", () => {
     expect(root().style.getPropertyValue("--brand")).toBe("#010203");
     expect(cacheWrites()).toEqual([]);
 
-    // The save reports once the reads it refetches have answered.
+    // The save confirms on its write, whether or not this read has answered. The saved kit lands
+    // when the read answers, and the app wore nothing else on the way.
     kitRead.open();
     await screen.findByText("Changes saved");
     await waitFor(() => expect(inlineTokens()).toEqual(wornTokens(HARBOUR)));
     observer.disconnect();
     expect(worn.filter((entry) => !entry.startsWith("none"))).toEqual([`angee.stock ${lightTokens(HARBOUR)["--brand"]}`]);
     expect(cacheWrites()).toHaveLength(1);
+  });
+});
+
+describe("a full-product workshop", () => {
+  test("the composed fixture leaves the host appearance source out, so a workshop that answers no kit read renders", async () => {
+    const sent: string[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // A workshop as a product writes one: each schema's fake answers the session's reads and nothing of the kit's.
+    const fetch = () => storySchema({ current_user: () => null }, (request) => { sent.push(...request.fields); }).public!.fetch!;
+    const input: CreateAppInput = {
+      addons: [stockAddon, brandkit, defineBaseAddon({
+        id: "workshop-page",
+        routes: [{ name: "workshop.page", path: "/page", layout: "public", component: () => <p>A product page</p> }],
+      })],
+      layouts: { console: { chrome: ConsoleLayout }, public: { schema: "public" } },
+      schemas: {
+        public: { url: "/graphql/public/", live: false, fetch: fetch() },
+        console: {
+          url: "/graphql/console/", live: false, fetch: fetch(),
+          metadata: { angee: { resources: [brandKitResource] } }, operationDocuments,
+        },
+      },
+      defaultSchema: "console",
+      appearance: { themeId: "angee.stock", colorScheme: "light" },
+    };
+    render(<ComposedRuntimeFixture input={input} initialEntry="/page" />);
+    await screen.findByText("A product page");
+    await waitFor(() => expect(sent).toContain("current_user"));
+    expect(sent).not.toContain("default_brand_kit_colors");
+    expect(errors).not.toHaveBeenCalled();
   });
 });

@@ -112,9 +112,11 @@ answers nothing with no default kit, after a failed read, for a kit the theme's
 parser refuses, or for build options of another version or that the parser
 refuses. The theme derives every token from those inputs, dark
 values included, and emits a token only where an input differs from its own
-default, so a kit equal to the theme's defaults changes nothing. A kit's contrast
-warnings are about mail; the app shows none. The kit's name, logos and fonts do
-not reach the app.
+default, so a kit equal to the theme's defaults changes nothing. The kit reaches
+what is drawn from those tokens and nothing drawn in fixed colours, such as the
+backdrop of the framework's own sign-in hero, which a host with no brand shows. A
+kit's contrast warnings are about mail; the app shows none. The kit's name, logos
+and fonts do not reach the app.
 
 Mail takes the default kit whatever theme the app wears; the app takes it only on a
 theme that accepts the host appearance source. An administrator's save refetches the

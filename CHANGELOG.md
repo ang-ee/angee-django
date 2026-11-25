@@ -55,6 +55,10 @@ live in code docstrings.
     the source: a project or app on either sends no read and wears its own palette, or,
     on the build's own theme, the build's `appearance_options` whole. To keep other
     colours, edit the default kit in Settings > Brand kits.
+  - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
+    (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
+    because the workshop's toolbar is the host's appearance there; a story about the
+    source passes `hostAppearanceSource`.
 
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
