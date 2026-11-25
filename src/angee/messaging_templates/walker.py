@@ -612,8 +612,20 @@ class TemplateWalk:
         return warnings
 
 
+ENCODED_WORD_OPENER = re.compile(r"=\?(?=[^?]*\?[bq]\?)", re.IGNORECASE)
+"""Where a mail library reads an RFC 2047 encoded word as starting: ``=?``, a charset (empty, unknown or with its
+``*lang`` too), ``?``, ``b`` or ``q`` in either case, and ``?``, terminated or not, at a word's start or inside one.
+CPython's header machinery decodes one there when it takes a subject, so an ASCII spelling would bring back a line
+break, a control character or an override the line rule drops."""
+
+
 def _one_line(text: str, name: str) -> str:
+    """``text`` as one line of a subject or a preheader: its words joined by one space, each without
+    :data:`UNPRINTED`, and every :data:`ENCODED_WORD_OPENER` broken to ``= ?``, so a mail library stores exactly the
+    string it is given; ``2+2=?`` stays as it is."""
+
     line = " ".join(word for word in (UNPRINTED.sub("", word) for word in text.split()) if word)
+    line = ENCODED_WORD_OPENER.sub("= ?", line)
     if len(line) > SUBJECT_LIMIT:
         raise ValidationError(
             "The rendered %(name)s is over %(limit)s characters.",

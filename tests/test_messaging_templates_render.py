@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import email
+import email.policy
 import functools
 import inspect
 import itertools
@@ -18,6 +20,7 @@ import zoneinfo
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from decimal import Decimal
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +72,7 @@ from angee.messaging_templates.html_checks import (
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
+    ENCODED_WORD_OPENER,
     UNPRINTED,
     WALKED_NODES,
     RowPiece,
@@ -2015,6 +2019,75 @@ def test_subject_and_preheader_drop_control_and_bidirectional_characters(plain: 
     template = _mail("Hi.", {"name": "x"}, subject="Hi {{ name }}", preheader="{{ name }}")
     rendered = _render(template, {"name": "a\x00b\x1b[1m\u202eevil\u202c\u2066x\u2069\x85c\x9fd\r\nBcc: e"}, kit)
     assert rendered.subject == "Hi ab[1mevilxcd Bcc: e" and rendered.preheader == "ab[1mevilxcd Bcc: e"
+
+
+ENCODED_WORDS = [
+    "Invoice =?utf-8?q?=E2=80=AEtxt.exe?= ready", "Hi =?utf-8?b?4oCudHh0LmV4ZQ==?=", "=?utf-8?b?4oCuZXZpbA==?= invoice",
+    "plain =?utf-8?q?a=E2=80=AEb?= tail", "abc=?utf-8?q?=E2=80=AE?=def", "Héllo =?utf-8?q?=E2=80=AE?=x",
+    "a =?UTF-8?Q?=E2=80=AE?= b", "a =?UTF-8?B?4oCu?= b", "a =?x-nope?q?=E2=80=AE?= b", "a =?utf-8*en?q?=E2=80=AE?= b",
+    "a =?utf-8?q?=E2=80=AE b", "a=?utf-8?q?=E2=80=AE?=", "a =??q?=E2=80=AE?= b",
+    "a =?utf-8?q?=E2=80?= =?utf-8?q?=AE?= b", "Hi =?utf-8?q?a=0D=0ABcc:_evil@example.com?= there",
+    "=?us-ascii?q?plain?=", "x =?utf-8?q?=00?= y", "x =?utf-8?q?=1B[31m?= y", "=?=?utf-8?b?4oCu?=",
+]
+"""Spellings CPython's header machinery decodes when it takes a subject: a word terminated or not, at the start, in
+the text or inside a word, base64 or Q in either case, an empty, unknown or language-tagged charset, two adjacent
+words, an encoded CR LF before a Bcc:, a NUL, an escape sequence, an override."""
+UNTOUCHED_SUBJECTS = ["2+2=? and more", "a = ?utf-8?q?=E2=80=AE?= b", "a =?utf-8?x?=E2=80=AE?= b", "Why =? Because"]
+"""Subjects no mail library decodes, which the line rule leaves as they are."""
+
+
+def _survives_the_mail_library(subject: str) -> None:
+    """The standard library stores exactly ``subject`` when it takes it, and reads exactly it back from the wire."""
+
+    message = EmailMessage(policy=email.policy.default)
+    message["Subject"] = subject
+    assert str(message["Subject"]) == subject, (subject, str(message["Subject"]))
+    parsed = email.message_from_bytes(message.as_bytes(), policy=email.policy.default)
+    assert str(parsed["Subject"]) == subject, (subject, str(parsed["Subject"]))
+
+
+def test_a_subject_never_holds_an_encoded_word(plain: Any, kit: Any) -> None:
+    """Every spelling a mail library decodes, in a value and in the row's own text, reaches the subject and the
+    preheader with its opener broken, so the library stores the string as it is; what it does not decode stays."""
+
+    del plain
+    template = _mail("Hi.", {"v": "x"}, subject="{{ v }} =?utf-8?q?=E2=80=AE?=", preheader="{{ v }}")
+    for value in ENCODED_WORDS:
+        rendered = _render(template, {"v": value}, kit)
+        for line in (rendered.subject, rendered.preheader):
+            assert not ENCODED_WORD_OPENER.search(line), line
+            assert "\u202e" not in line and "\r" not in line and "\x00" not in line
+            _survives_the_mail_library(line)
+    for value in UNTOUCHED_SUBJECTS:
+        assert _render(template, {"v": value}, kit).preheader == value
+
+
+_OPENED = st.builds(
+    lambda before, charset, marker, body, after: f"{before}=?{charset}?{marker}?{body}{after}",
+    st.sampled_from(["", "a ", "a", "Hi =?", "2+2=? "]),
+    st.sampled_from(["utf-8", "UTF-8", "", "x-nope", "utf-8*en", "us-ascii", "iso-8859-1"]),
+    st.sampled_from(["q", "Q", "b", "B"]),
+    st.sampled_from(["=E2=80=AE", "4oCu", "a=0D=0ABcc:_x", "=00", "=1B[31m", "plain", "=E2=80=AE b"]),
+    st.sampled_from(["?=", "?= tail", "?=x", "", " =?utf-8?q?=AE?="]),
+)
+
+
+@settings(deadline=None, max_examples=300, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(value=st.one_of(_OPENED, st.sampled_from(ENCODED_WORDS + UNTOUCHED_SUBJECTS), st.text(max_size=40)))
+def test_a_subject_never_becomes_an_encoded_word(plain: Any, kit: Any, value: str) -> None:
+    """Any value in a subject and a preheader survives the standard library's header machinery as it was rendered:
+    stored exactly, and read back exactly from the wire."""
+
+    del plain
+    with system_context(reason="tests.messaging_templates.render.encoded"):
+        template = MessageTemplate.objects.filter(key="tests.encoded").first() or _mail(
+            "Hi.", {"v": "x"}, subject="Re {{ v }}", preheader="{{ v }}", key="tests.encoded")
+    try:
+        rendered = _render(template, {"v": value}, kit)
+    except ValidationError:
+        return  # a lone surrogate is refused
+    _survives_the_mail_library(rendered.subject)
+    _survives_the_mail_library(rendered.preheader)
 
 
 def test_the_plain_text_body_never_reads_the_subject_or_the_preheader(plain: Any) -> None:
