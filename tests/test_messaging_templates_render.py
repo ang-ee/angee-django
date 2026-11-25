@@ -1728,3 +1728,52 @@ def test_preview_is_an_administrators_read(plain: Any, kit: Any) -> None:
     assert result["message_template_preview"]["rendered"] is None
     assert result["message_template_preview"]["warnings"][0]["code"] == "RENDER_ERROR"
     assert re.search(r"does not compile", result["message_template_preview"]["warnings"][0]["detail"])
+
+
+_UPDATE = """
+mutation($id: String!, $set: message_templates_set_input!) {
+  update_message_templates_by_pk(pk_columns: {id: $id}, _set: $set) { id }
+}
+"""
+_OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok message id } }"
+_KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok message id } }"
+
+
+def test_the_walk_runs_in_clean_after_the_permission_is_decided(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three confirmations (probes j, b, b2): save() never walks; the console update, override, keep and
+    preview decide the caller's permission before anything is lexed or compiled. The console insert, which
+    validates before it decides create, is the framework's to fix."""
+
+    del plain, kit
+    checked: list[str] = []
+    check = TemplateWalker._check
+    monkeypatch.setattr(TemplateWalker, "_check", lambda walker, row, name: checked.append(name) or check(
+        walker, row, name))
+    own = _row("part", "own", source="{% if %}")  # save() of a row the walk refuses
+    with system_context(reason="tests.messaging_templates.render.save"):
+        own.source = "Still {% if %}"
+        own.save(update_fields=["source"])
+        assert checked == []
+        own.source = "Changed {% if %}"  # clean() walks what changed
+        with pytest.raises(ValidationError, match="does not compile"):
+            own.full_clean()
+        own.refresh_from_db()
+    assert checked
+    shipped = _row("part", "shipped", source="{% if %}", is_baseline=True)
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    member = create_user("messaging-templates-writer")
+    cases = {
+        "update": (_UPDATE, {"id": public_id_of(own), "set": {"source": "{% if %} again"}}),
+        "override": (_OVERRIDE, {"id": public_id_of(shipped)}),
+        "keep": (_KEEP, {"id": public_id_of(own)}),
+        "preview": (_PREVIEW, {"id": public_id_of(own), "kit": None}),
+    }
+    for name, (document, variables) in cases.items():
+        for user in (member, AnonymousUser()):
+            checked.clear()
+            execute_schema(schema, document, variables, user=user)
+            assert checked == [], (name, user)
+    with system_context(reason="tests.messaging_templates.render.save"):
+        assert MessageTemplate.objects.get(pk=own.pk).source == "Still {% if %}"
