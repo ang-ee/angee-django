@@ -43,6 +43,10 @@ live in code docstrings.
     locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
     hosts without the addon, and a theme that ships its own default kit stating its own
     colours. To keep other colours, edit the default kit in Settings > Brand kits.
+  - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
+    (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
+    because the workshop's toolbar is the host's appearance there; a story about the
+    source passes `hostAppearanceSource`.
 
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,

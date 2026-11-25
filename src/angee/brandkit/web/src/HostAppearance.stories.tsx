@@ -74,7 +74,8 @@ const signIn = defineBaseAddon({
 /**
  * The production `createApp` over two wire fakes, with the stock theme, the sign-in route and the
  * real brand kit manifest: the default kit's colours come only from the public schema's
- * `default_brand_kit_colors`, which answers the kit the console's saves leave the default.
+ * `default_brand_kit_colors`, which answers the kit the console's saves leave the default. It asks
+ * the composed fixture for the host appearance source, which a workshop otherwise leaves out.
  */
 export function HostAppearanceStory({
   kits,
@@ -136,5 +137,5 @@ export function HostAppearanceStory({
       appearance: { themeId, colorScheme },
     };
   }, [kits, signedIn, colorScheme, themeId, themes, failKitRead, kitReadGate, onRequest]);
-  return <ComposedRuntimeFixture input={input} initialEntry={initialEntry} />;
+  return <ComposedRuntimeFixture input={input} initialEntry={initialEntry} hostAppearanceSource />;
 }

@@ -3,13 +3,18 @@ import { onlineManager } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { defineBaseAddon } from "@angee/app";
+import type { CreateAppInput } from "@angee/app/create-app";
 import { installTestLocalStorage } from "@angee/app/testing";
-import type { GraphQLWireRequest } from "@angee/storybook/testing";
+import { operationDocuments } from "@angee/gql/console/actions";
+import { ComposedRuntimeFixture, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
+import stockAddon from "@angee/theme-stock";
 import { themes as stockThemes } from "@angee/theme-stock/themes";
+import { ConsoleLayout } from "@angee/ui";
 import { APPEARANCE_CACHE_KEY, bootstrapAppearance, defineTheme, defineThemeContribution, resolveThemeOptions } from "@angee/ui/theme";
 
 import { HostAppearanceStory } from "./HostAppearance.stories";
-import { ANGEE, HARBOUR, ORCHARD, colorsOf, type KitRow } from "./views/brand-kits.test-support";
+import brandkit from "./index";
+import { ANGEE, HARBOUR, ORCHARD, brandKitResource, colorsOf, type KitRow } from "./views/brand-kits.test-support";
 
 const stock = stockThemes[0];
 const TOKENS = ["--brand", "--surface-rail", "--surface-canvas"] as const;
@@ -219,5 +224,35 @@ describe("the default kit dresses the app", () => {
     observer.disconnect();
     expect(worn.filter((entry) => !entry.startsWith("none"))).toEqual([`angee.stock ${lightTokens(HARBOUR)["--brand"]}`]);
     expect(cacheWrites()).toHaveLength(1);
+  });
+});
+
+describe("a full-product workshop", () => {
+  test("the composed fixture leaves the host appearance source out, so a workshop that answers no kit read renders", async () => {
+    const sent: string[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // A workshop as a product writes one: each schema's fake answers the session's reads and nothing of the kit's.
+    const fetch = () => storySchema({ current_user: () => null }, (request) => { sent.push(...request.fields); }).public!.fetch!;
+    const input: CreateAppInput = {
+      addons: [stockAddon, brandkit, defineBaseAddon({
+        id: "workshop-page",
+        routes: [{ name: "workshop.page", path: "/page", layout: "public", component: () => <p>A product page</p> }],
+      })],
+      layouts: { console: { chrome: ConsoleLayout }, public: { schema: "public" } },
+      schemas: {
+        public: { url: "/graphql/public/", live: false, fetch: fetch() },
+        console: {
+          url: "/graphql/console/", live: false, fetch: fetch(),
+          metadata: { angee: { resources: [brandKitResource] } }, operationDocuments,
+        },
+      },
+      defaultSchema: "console",
+      appearance: { themeId: "angee.stock", colorScheme: "light" },
+    };
+    render(<ComposedRuntimeFixture input={input} initialEntry="/page" />);
+    await screen.findByText("A product page");
+    await waitFor(() => expect(sent).toContain("current_user"));
+    expect(sent).not.toContain("default_brand_kit_colors");
+    expect(errors).not.toHaveBeenCalled();
   });
 });
