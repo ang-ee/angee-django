@@ -155,10 +155,14 @@ live in code docstrings.
   carried over. On a stack whose `operator-schema` job does not wait for
   `provision`, the first chained restart after this upgrade can fail `rebac.E009`
   on the retired `messaging/participant` type until provision's sync has run; run
-  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
-  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
-  stays while retained migrations import it; a host upgrading from an earlier
-  release applies the template through a 3.x release first.
+  the chain once more. If a provision run stops before its sync (for example at
+  its migration check, when a newly enabled addon has no migrations yet), the same
+  check stops every management command, `makemigrations` included; author the
+  pending migrations with `--skip-checks` until provision has synced. Upgrade
+  cutoff: the template ships through the 3.x releases and is removed in 4.0, and
+  `angee.base.querysets.MergeableQuerySet.survivor_id` stays while retained
+  migrations import it; a host upgrading from an earlier release applies the
+  template through a 3.x release first.
 - `@angee/ui`: A record form's create no longer displays a field its save
   cannot write that holds an empty object. What a record form displays reads
   its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a
