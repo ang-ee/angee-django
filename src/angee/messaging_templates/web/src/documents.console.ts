@@ -14,23 +14,16 @@ export const MessageTemplatePreview = graphql(`
   }
 `);
 
-/** The brand kits a preview may render in, the default first: the brand kit resource's own order. */
-export const MessageTemplatePreviewKits = graphql(`
-  query MessageTemplatePreviewKits {
-    brand_kits(order_by: [{ is_default: desc }, { name: asc }]) { id name is_default }
-  }
-`);
-
 /**
- * The rows, in any language, naming one row's kind and key, and whether each
- * renders; null for a reader who may not preview the row. A read for one
- * record's page, never a list's.
+ * The rows, in any language, naming one row's kind and key, and whether each is
+ * a shipped default the deployment overrides; null for a reader who may not
+ * preview the row. A read for one record's page, never a list's.
  */
 export const MessageTemplateBacklinks = graphql(`
   query MessageTemplateBacklinks($id: String!) {
     message_templates_by_pk(id: $id) {
       id
-      backlinks { id display_name kind key language is_effective }
+      backlinks { id display_name kind key language is_overridden }
     }
   }
 `);

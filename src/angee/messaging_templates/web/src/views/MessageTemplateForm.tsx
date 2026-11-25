@@ -18,8 +18,8 @@ import { MESSAGE_TEMPLATE_MODEL } from "../resources";
 import { MessageTemplateNotice } from "./MessageTemplateNotice";
 import { MessageTemplatePreviewPane } from "./MessageTemplatePreviewPane";
 
-/** The row facts the notice, the verbs and the panes read beside the form's fields. */
-const ROW_FACTS = ["is_baseline", "is_overridden", "has_updated_default", "is_effective"];
+/** The row facts the notice and the verbs read beside the form's fields. */
+const ROW_FACTS = ["is_baseline", "is_overridden", "has_updated_default"];
 
 /** Only a template fills a subject, a preheader and a layout; the server says which kinds do. */
 function carriesMessageFields(values: Row): boolean {

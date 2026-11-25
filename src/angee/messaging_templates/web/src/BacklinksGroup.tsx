@@ -17,7 +17,7 @@ import {
 
 import { MessageTemplateBacklinks } from "./documents.console";
 import { useMessagingTemplatesT } from "./i18n";
-import { MESSAGE_TEMPLATE_MODEL } from "./resources";
+import { MESSAGE_TEMPLATE_MODEL, MESSAGE_TEMPLATES_PRESENCE } from "./resources";
 
 /** A change to any message template may change which rows name this one. */
 const BACKLINK_MODELS = [MESSAGE_TEMPLATE_MODEL];
@@ -29,7 +29,10 @@ function recordId(context: ChatterViewContext): string {
 /** The one read the group's count and its rows share. */
 function useBacklinks(context: ChatterViewContext) {
   const id = recordId(context);
-  return useAuthoredQuery(MessageTemplateBacklinks, { id }, { enabled: Boolean(id), models: BACKLINK_MODELS });
+  // The group shows its own banner on a failed read; the app's notifier would report it a second time.
+  return useAuthoredQuery(MessageTemplateBacklinks, { id }, {
+    enabled: Boolean(id), models: BACKLINK_MODELS, errorNotification: false,
+  });
 }
 
 function BacklinksLabel(): React.ReactElement {
@@ -39,8 +42,8 @@ function BacklinksLabel(): React.ReactElement {
 
 /**
  * The rows, in any language, that name the open row's kind and key: a layout's
- * templates, and every row that includes a block or part. Each opens its record;
- * a row that does not render, an overridden shipped default, says so.
+ * templates, and every row that includes a block or part. Each opens its record,
+ * and a shipped default the deployment overrides says so.
  */
 function MessageTemplateBacklinkRows({ context }: { context: ChatterViewContext }): React.ReactElement {
   const t = useMessagingTemplatesT();
@@ -58,7 +61,7 @@ function MessageTemplateBacklinkRows({ context }: { context: ChatterViewContext 
         <li key={row.id}>
           <PaneRow icon="message-templates" title={row.display_name} detail={row.language}
             sub={<>{optionLabel(kinds, row.kind)} · {row.key}</>}
-            meta={row.is_effective ? undefined : t("backlinks.overridden")} href={href?.(row.id)} />
+            meta={row.is_overridden ? t("backlinks.overridden") : undefined} href={href?.(row.id)} />
         </li>
       ))}
     </PaneRows>
@@ -66,12 +69,13 @@ function MessageTemplateBacklinkRows({ context }: { context: ChatterViewContext 
 }
 
 /**
- * The Backlinks group of a message template's Links tab. It counts the rows it
- * lists, so it is absent where nothing names the row, and for a reader who may
- * not preview the row, whose read answers no rows at all.
+ * The Backlinks group of a message template's Links tab, present for whoever may
+ * preview message templates, as the Settings entry is: no other reader runs its
+ * read. It counts the rows it lists, so it is absent where nothing names the row.
  */
 export const messageTemplateBacklinksGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
+  requires: MESSAGE_TEMPLATES_PRESENCE,
   content: {
     label: <BacklinksLabel />,
     usePaneCount: (context) => {

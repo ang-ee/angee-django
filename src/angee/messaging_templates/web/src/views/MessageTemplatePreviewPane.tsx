@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Alert,
+  EmptyState,
   ErrorBanner,
   LoadingPanel,
   MessageHtmlFrame,
@@ -11,16 +11,18 @@ import {
   Select,
   errorMessage,
   textRoleVariants,
+  useRelationOptions,
   type RecordIssue,
 } from "@angee/ui";
 
-import { MessageTemplatePreview, MessageTemplatePreviewKits } from "../documents.console";
+import { MessageTemplatePreview } from "../documents.console";
 import { useMessagingTemplatesT } from "../i18n";
-import { BRAND_KIT_MODEL, MESSAGE_TEMPLATE_MODEL } from "../resources";
+import { BRAND_KIT_MODEL, BRAND_KIT_RELATION, MESSAGE_TEMPLATE_MODEL } from "../resources";
 
 /** A saved row's preview reads again when a row or a kit changes. */
 const PREVIEW_MODELS = [MESSAGE_TEMPLATE_MODEL, BRAND_KIT_MODEL];
-const KIT_MODELS = [BRAND_KIT_MODEL];
+/** What the kit select reads beside each kit's id and label. */
+const KIT_FIELDS = ["is_default"];
 
 type PreviewFormat = "html" | "text";
 
@@ -39,58 +41,53 @@ export interface MessageTemplatePreviewPaneProps {
  * words it. The HTML is only ever in the framework's sandboxed message frame,
  * which runs no script, has no same origin and loads remote images only when
  * asked; the frame's own body styles sit under the mail, so a mail client may
- * space and size it slightly differently.
+ * space and size it slightly differently. While another kit's preview loads, the
+ * previous one stays on screen and the pane says it is busy.
  */
 export function MessageTemplatePreviewPane({ template, active }: MessageTemplatePreviewPaneProps): React.ReactElement {
   const t = useMessagingTemplatesT();
   const [kit, setKit] = React.useState("");
   const [format, setFormat] = React.useState<PreviewFormat>("html");
-  const kits = useAuthoredQuery(MessageTemplatePreviewKits, undefined, { models: KIT_MODELS, enabled: active });
+  // The kit resource's own rows in its own order; choosing the default kit by name reads what unset reads.
+  const kits = useRelationOptions(BRAND_KIT_RELATION, { enabled: active, fields: KIT_FIELDS });
   // Unset sends no kit, and the server renders in the default one.
   const variables = React.useMemo(() => (kit ? { template, brand_kit: kit } : { template }), [kit, template]);
   const preview = useAuthoredQuery(MessageTemplatePreview, variables, {
     models: PREVIEW_MODELS,
     keepPreviousData: true,
     enabled: active,
+    errorNotification: false,
   });
-  const kitOptions = React.useMemo(() => [
-    { value: "", label: t("preview.kitDefault") },
-    ...(kits.data?.brand_kits ?? [])
-      .filter((option) => !option.is_default)
-      .map((option) => ({ value: option.id, label: option.name })),
-  ], [kits.data, t]);
+  const kitOptions = React.useMemo(() => {
+    const defaults = new Set(kits.rows.filter((row) => row.is_default === true).map((row) => String(row.id)));
+    return [
+      { value: "", label: t("preview.kitDefault") },
+      ...kits.options
+        .filter((option) => !defaults.has(option.value))
+        .map((option) => ({ value: option.value, label: option.label })),
+    ];
+  }, [kits.options, kits.rows, t]);
   const formatOptions = React.useMemo(() => [
     { value: "html" as const, label: t("preview.html") },
     { value: "text" as const, label: t("preview.text") },
   ], [t]);
   const result = preview.data?.message_template_preview;
   const rendered = result?.rendered ?? null;
-  const issues: RecordIssue[] = rendered
-    ? (result?.warnings ?? []).map((warning, index) => ({
-        id: `${warning.code}-${index}`,
-        tone: "warning" as const,
-        message: warning.detail,
-      }))
-    : [];
+  // A rendered row's warnings, or the reasons a row does not render, each as the server words it.
+  const issues: RecordIssue[] = (result?.warnings ?? []).map((warning) => ({
+    id: `${warning.code}:${warning.detail}`,
+    tone: rendered ? "warning" as const : "danger" as const,
+    message: warning.detail,
+  }));
 
   let body: React.ReactNode;
-  if (!result && preview.error) {
-    body = <div className="p-4"><ErrorBanner description={errorMessage(preview.error, t("preview.loadError"))} /></div>;
-  } else if (!result) {
-    body = <LoadingPanel density="inline" />;
+  if (!result) {
+    body = preview.error ? null : <LoadingPanel density="inline" />;
   } else if (!rendered) {
-    body = (
-      <div className="p-4">
-        <Alert tone="danger" title={t("preview.refused")}>
-          <ul className="grid gap-1">
-            {result.warnings.map((warning, index) => <li key={index}>{warning.detail}</li>)}
-          </ul>
-        </Alert>
-      </div>
-    );
+    body = <EmptyState icon="triangle-alert" title={t("preview.refused")} fill />;
   } else if (format === "text") {
     body = (
-      <div lang={rendered.language} dir="auto"
+      <div lang={rendered.language} dir="auto" tabIndex={0} role="region" aria-label={t("preview.text")}
         className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 text-sm text-fg">
         {rendered.plain_text}
       </div>
@@ -103,17 +100,18 @@ export function MessageTemplatePreviewPane({ template, active }: MessageTemplate
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-sheet">
+    <div className="flex min-h-0 flex-1 flex-col bg-sheet" aria-busy={preview.isPlaceholderData || undefined}>
       <div className="grid gap-3 border-b border-border-subtle px-4 py-3">
         <div className="flex flex-wrap items-center gap-3">
           <p className={textRoleVariants({ role: "meta", className: "min-w-0 flex-1" })}>{t("preview.saved")}</p>
           <Select aria-label={t("preview.kit")} size="sm" value={kit} onValueChange={setKit} options={kitOptions}
-            loading={kits.isPending} />
+            loading={kits.list.fetching && kits.rows.length === 0} />
           {rendered ? (
             <SegmentedControl aria-label={t("preview.format")} options={formatOptions} value={format}
               onValueChange={setFormat} />
           ) : null}
         </div>
+        {preview.error ? <ErrorBanner description={errorMessage(preview.error, t("preview.loadError"))} /> : null}
         {rendered ? (
           <MetaGrid rows={[
             {

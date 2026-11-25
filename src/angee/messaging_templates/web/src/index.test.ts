@@ -25,15 +25,17 @@ describe("angee.messaging_templates addon manifest", () => {
     expect(Object.keys(messagingTemplates.icons ?? {})).toEqual(["message-templates"]);
   });
 
-  test("adds Backlinks to a message template's Links tab", () => {
-    expect(containerChildren(messagingTemplates, "messaging_templates.MessageTemplate#groups").map(([id]) => id))
-      .toEqual(["messaging_templates.backlinks"]);
+  test("adds Backlinks to a message template's Links tab, present for whoever may preview message templates", () => {
+    expect(containerChildren(messagingTemplates, "messaging_templates.MessageTemplate#groups")
+      .map(([id, child]) => [id, child.requires])).toEqual([
+      ["messaging_templates.backlinks", "messaging_templates.MessageTemplate#preview"],
+    ]);
   });
 
   test("ships the library's presets for the message template resource", () => {
     expect(messagingTemplates.resourceViews?.map((preset) => [preset.id, preset.resource, preset.filter])).toEqual([
       ["messaging_templates.default-updated", "messaging_templates.MessageTemplate", { has_updated_default: { exact: true } }],
-      ["messaging_templates.rendering", "messaging_templates.MessageTemplate", { is_effective: { exact: true } }],
+      ["messaging_templates.effective", "messaging_templates.MessageTemplate", { is_effective: { exact: true } }],
     ]);
   });
 });
