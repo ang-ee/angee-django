@@ -2367,7 +2367,10 @@ has one provider stack — appearance, data, toasts and modals.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
-fixture transports with live queries disabled. The `@angee/storybook/host` entry
+fixture transports with live queries disabled. The workshop's toolbar is the host's
+appearance, so the fixture leaves the composed addons' run-time `hostAppearance`
+source out and a workshop answers none of its reads; a story about that source
+passes `hostAppearanceSource`. The `@angee/storybook/host` entry
 exposes the stack's emitted addons and schema loader; it adds no product registry.
 `resourceSnapshotOperations` supplies small read-only sample collections through
 metadata-owned filters, relations and grouping. Product packages own their sample
