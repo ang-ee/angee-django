@@ -58,7 +58,6 @@ from angee.messaging_templates.engine import (
     url,
 )
 from angee.messaging_templates.html_checks import (
-    CONTROL_CHARACTERS,
     LINK_ATTRIBUTES,
     MAIL_ATTRIBUTES,
     MAIL_ELEMENTS,
@@ -71,6 +70,7 @@ from angee.messaging_templates.html_checks import (
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
+    UNPRINTED,
     WALKED_NODES,
     RowPiece,
     TemplateWalk,
@@ -718,6 +718,17 @@ def test_a_value_drops_its_control_characters(plain: Any, kit: Any) -> None:
     assert rendered.subject == "a$Bbc"
 
 
+def test_a_value_drops_bidirectional_overrides_and_keeps_its_marks(plain: Any, kit: Any) -> None:
+    """An override or an isolate in a value would reorder the author's text after it: dropped by the one rule a
+    subject uses; the right-to-left and left-to-right marks a language needs stay."""
+
+    del plain
+    template = _mail("<p>{{ name }} wrote this.</p>", {"name": "x"}, format="html", text_source="{{ name }} wrote")
+    rendered = _render(template, {"name": "a\u202eevil\u202c\u2066x\u2069\u200fb\u200e\u061c"}, kit)
+    assert "<p>aevilx\u200fb\u200e\u061c wrote this.</p>" in rendered.html
+    assert rendered.plain_text.startswith("aevilx\u200fb\u200e\u061c wrote")
+
+
 def test_a_row_holds_no_control_character_and_a_return_is_a_newline(plain: Any) -> None:
     """Rule 1 for every text column: no control character but tab and newline. clean() writes a carriage return as a
     newline first, so pasted text has the content hash of the same text written with newlines."""
@@ -1124,7 +1135,7 @@ def _harmless(value: str) -> str:
     with one of their own kind: the same empty or white-space value, else :data:`MARKER`.
     """
 
-    visible = re.sub(f"[{CONTROL_CHARACTERS}]", "", value)  # what prepare() leaves of it
+    visible = UNPRINTED.sub("", value)  # what prepare() leaves of it
     return value if not visible.strip(_HTML_SPACE) else MARKER
 
 

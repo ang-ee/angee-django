@@ -124,13 +124,12 @@ VALUE_ITEMS_LIMIT = 500
 SUBJECT_LIMIT = 1_000
 """The longest rendered subject or preheader, after it is made one line."""
 
-_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}]")
-"""What :meth:`TemplateWalk.prepare` drops from every string value: the C0 and C1 control characters but tab, line
-feed and carriage return, so none reaches a body, a subject or a preheader."""
-
-_UNPRINTED = re.compile(f"[{CONTROL_CHARACTERS}\u202a-\u202e\u2066-\u2069]")
-"""What a subject or preheader drops from each of its words: the same control characters, and the bidirectional
-embeddings, overrides and isolates; splitting the line on white space has dropped tab, line feed and return."""
+UNPRINTED = re.compile(f"[{CONTROL_CHARACTERS}\u202a-\u202e\u2066-\u2069]")
+"""The one rule for what a value and a line drop: the C0 and C1 control characters but tab, line feed and carriage
+return, and the bidirectional embeddings, overrides and isolates, so a value neither switches a reader's character
+set nor reorders the author's text after it. The directional marks a language needs (LRM, RLM, ALM) stay.
+:meth:`TemplateWalk.prepare` drops them from every string value; a subject or preheader from each of its words,
+splitting the line on white space having dropped tab, line feed and return."""
 
 SUBJECT_WARNING_LENGTH = 60
 PREHEADER_WARNING_LENGTH = 100
@@ -452,7 +451,8 @@ class TemplateWalk:
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
            string, number, boolean or null, a string without its control
-           characters (:data:`_CONTROLS`), so one holding nothing else is empty;
+           characters and bidirectional overrides and isolates
+           (:data:`UNPRINTED`), so one holding nothing else is empty;
            at a :attr:`float_paths` path, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
         4. Every absent or null declared segment filled: an object with ``{}``, a
@@ -613,7 +613,7 @@ class TemplateWalk:
 
 
 def _one_line(text: str, name: str) -> str:
-    line = " ".join(word for word in (_UNPRINTED.sub("", word) for word in text.split()) if word)
+    line = " ".join(word for word in (UNPRINTED.sub("", word) for word in text.split()) if word)
     if len(line) > SUBJECT_LIMIT:
         raise ValidationError(
             "The rendered %(name)s is over %(limit)s characters.",
@@ -665,7 +665,7 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
         return None
     if not tree:
         if isinstance(value, str):
-            return _CONTROLS.sub("", value)
+            return UNPRINTED.sub("", value)
         if isinstance(value, (int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")

@@ -41,8 +41,8 @@ from angee.messaging_templates.engine import LINK_SCHEMES, MAIL_COLOURS, Message
 
 CONTROL_CHARACTERS = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f"
 """The C0 and C1 control characters but tab, line feed and carriage return, as the body of a character class. A
-row's text holds none, nor a carriage return (rule 1, :data:`SOURCE_CONTROLS`); a value drops them
-(:meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`)."""
+row's text holds none, nor a carriage return (rule 1, :data:`SOURCE_CONTROLS`); a value drops them with the
+bidirectional overrides (:data:`~angee.messaging_templates.walker.UNPRINTED`)."""
 
 SOURCE_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}\r]")
 """What a row's text and its forms may not hold (rule 1): a NUL would forge the checks' placeholders, an escape could
