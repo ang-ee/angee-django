@@ -25,9 +25,10 @@ live in code docstrings.
   `recipients`; the `participants=` keyword of `MessageQuerySet.ids_involving_handles`
   and `ids_involving_parties` to `recipients=`; the model label in resource
   metadata and live invalidation to `messaging.Recipient`; the REBAC type
-  `messaging/participant` to `messaging/recipient` (schema revision 26), without
+  `messaging/participant` to `messaging/recipient` (schema revision 27), without
   the `membership_thread`, `editor` and `reader` relations, so a recipient row is
-  read through its message or thread and changed through its message. In the
+  read through its message or thread and created and changed through its message:
+  creating one is no longer open to every signed-in user. In the
   console GraphQL schema, `ParticipantType` is `RecipientType`, without
   `joined_at` and `left_at`; the `participants`, `participants_by_pk` and
   `participants_aggregate` roots and their inputs are `recipients…`;

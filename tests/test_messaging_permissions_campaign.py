@@ -245,7 +245,7 @@ def test_the_policy_decides_every_messaging_permission(db):
         (edge, "read", "both-reader", "channel-owner thread-owner author"),
         (edge, "write", "admin", "channel-owner thread-owner"),
         (edge, "delete", "channel-owner thread-owner", "both-reader"),
-        (recipient_row, "create", "outsider", "anonymous"),
+        (recipient_row, "create", "channel-owner admin", "outsider thread-editor anonymous"),
         (recipient_row, "read", "channel-reader thread-reader", "outsider"),
         (recipient_row, "write", "channel-owner", "thread-editor"),
         (recipient_row, "delete", "channel-owner", "thread-owner"),
