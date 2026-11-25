@@ -33,7 +33,9 @@ live in code docstrings.
     address costs a call about 34 statements) and
     `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
     statements each); more is refused (`too_many`) under the argument that
-    crosses the bound, before anything is read. A `scheduled_at` without an
+    crosses the bound, before anything is read. An answer is bound the same way
+    by the addresses its parent's `Reply-To` names: over the bound it is refused
+    under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
     offset is refused (`naive_datetime`, as scheduling, calendar and workflows
     refuse one) instead of being read in the server's zone. A new message also
     takes a one-line `subject`,

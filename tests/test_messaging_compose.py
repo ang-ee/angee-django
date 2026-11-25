@@ -799,6 +799,21 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
 
 
+def test_an_answer_to_a_reply_to_over_the_recipient_bound_is_refused_and_one_at_it_is_written(desk: Any) -> None:
+    """The bound on to, cc and bcc holds for the addresses an answer takes from its parent's Reply-To."""
+
+    owner = desk.owner
+    over = _receive(desk, "reply-to-over", reply_to=", ".join(_addresses("reply", 51)))
+    assert over.reply_error(actor=owner).error_dict["reply_to"][0].code == "too_many"
+    with _refused(key="reply_to", code="too_many"):
+        Message.objects.compose(parent=over, text="Thanks.", actor=owner)
+    at = _receive(desk, "reply-to-at", reply_to=", ".join(_addresses("reply", 50)))
+    assert at.reply_error(actor=owner) is None
+    answer = Message.objects.compose(parent=at, text="Thanks.", actor=owner)
+    with system_context(reason="tests.messaging.compose.reply_to_bound"):
+        assert Recipient._base_manager.filter(message=answer).count() == 50
+
+
 def test_an_answer_to_a_message_with_a_channel_and_no_thread_is_refused_unwritten(desk: Any) -> None:
     """``Message.thread`` is nullable and nothing ties it to the channel, so the envelope refuses such a parent."""
 

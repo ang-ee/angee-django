@@ -98,6 +98,7 @@ from angee.messaging.managers import (
     ThreadFollowerManager,
     ThreadManager,
     ThreadNotificationManager,
+    _require_at_most,
     normalize_subject,
 )
 from angee.messaging.mixins import (
@@ -1385,7 +1386,9 @@ class Message(
         with ``actor``'s access). A ``Reply-To`` that names no address is refused
         (``reply_to``, ``reply_to_invalid``) rather than answered at its sender,
         which may be a relay; only a message with no ``Reply-To`` is answered at
-        its sender (``parent``, ``reply_unaddressed`` when it has none). Any other
+        its sender (``parent``, ``reply_unaddressed`` when it has none). A
+        ``Reply-To`` naming more than ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses
+        is refused (``reply_to``, ``too_many``), as a typed list of as many is. Any other
         kind is answered by its transport's own sender: the envelope is empty.
         ``channel`` is the transport channel when the caller has read it
         (:meth:`require_reply`); otherwise it is read here. Who may answer is
@@ -1402,6 +1405,7 @@ class Message(
             channel = cast(Channel, self.transport_channel(reason="messaging.reply_envelope"))
         sender = channel.outbound_sender()
         addresses = self.reply_addresses(actor=actor)
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("reply_to", tuple(addresses)),))
         if not addresses and any(value.strip() for value in self.source_header_values("reply-to", actor=actor)):
             raise ValidationError({"reply_to": ValidationError(
                 "The message's Reply-To names no address to answer.", code="reply_to_invalid",

@@ -69,7 +69,9 @@ role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
 addresses across `to`, `cc`
 and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
-under the argument that crosses the bound, before anything is read. A
+under the argument that crosses the bound, before anything is read; an answer
+taking more addresses than that from its parent's `Reply-To` is refused under
+`reply_to`, and `Message.reply_error` says so. A
 `scheduled_at` without an offset is refused (`naive_datetime`), never read in
 the server's zone. The docstrings own the exact refusals and hold rules.
 
