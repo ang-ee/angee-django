@@ -33,7 +33,7 @@ vi.mock("@angee/ui", async (original) => ({
 }));
 beforeEach(() => vi.clearAllMocks());
 
-const record = { id: "user-1", revision: 4, is_active: true, account_actions: ["SET_ACTIVE", "RENAME", "RESET_PASSWORD"] };
+const record = { id: "user-1", revision: 4, is_active: true, account_actions: ["set_active", "rename", "reset_password"] };
 const context = (row: Record<string, unknown> = record) => ({
   record: row, values: {}, refresh: vi.fn(), update: vi.fn(), prompt: mocks.prompt,
 });
@@ -77,7 +77,7 @@ describe("chosen passwords are write-only action inputs", () => {
     mocks.setPassword.mockResolvedValue({ ok: true, message: "Password set." });
     const { result } = renderHook(useSetPasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
-    expect(result.current.visibleWhen?.({ ...record, account_actions: ["SET_PASSWORD"] })).toBe(true);
+    expect(result.current.visibleWhen?.({ ...record, account_actions: ["set_password"] })).toBe(true);
     expect(result.current.visibleWhen?.({ id: "protected", account_actions: [] })).toBe(false);
     expect(result.current.danger).toBe(true);
     const args = result.current.args;
@@ -167,7 +167,7 @@ describe("one-time sign-in reveal", () => {
     mocks.reveal.mockResolvedValue(undefined);
     const { result } = renderHook(useIssuePasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
-    expect(result.current.visibleWhen?.({ ...record, account_actions: ["ISSUE_PASSWORD"] })).toBe(true);
+    expect(result.current.visibleWhen?.({ ...record, account_actions: ["issue_password"] })).toBe(true);
     await act(async () => { await result.current.run?.(context()); });
     expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1" });
     expect(mocks.reveal).toHaveBeenCalledWith(expect.objectContaining({ secrets: [

@@ -20,16 +20,16 @@ import { useIamT } from "./i18n";
 
 const USER_MODEL = "iam.User";
 
-/** Account verbs the server projects per user row through their own admission rules. */
-export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link" | "set_password";
-
 /** Fields every account verb reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
 
-/** Whether the row's server projection offers `action`; the client never derives eligibility itself. */
-export function offersAccountAction(record: Row, action: UserAccountAction): boolean {
+/**
+ * Whether the row's server projection offers verb `action`, named by its Zed permission
+ * (`issue_password`, or a verb another addon contributes); the client never derives eligibility itself.
+ */
+export function offersAccountAction(record: Row, action: string): boolean {
   const offered = record.account_actions;
-  return Array.isArray(offered) && offered.some((value) => String(value).toLowerCase() === action);
+  return Array.isArray(offered) && offered.includes(action);
 }
 
 /** The revision the open record was read at, sent so a stale account write is refused. */
@@ -212,7 +212,8 @@ export function useRenameAction(): ActionDescriptor {
   };
 }
 
-function AccountActionBar({ actions }: { actions: readonly ActionDescriptor[] }): React.ReactElement | null {
+/** An `iam.User#actions-menu` child's bar: `actions` on the open account record, for IAM's and contributed verbs. */
+export function AccountActionBar({ actions }: { actions: readonly ActionDescriptor[] }): React.ReactElement | null {
   const { record } = useRecordChromeContext();
   return record ? <RecordActionBar record={record} actions={actions} /> : null;
 }

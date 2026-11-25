@@ -41,10 +41,10 @@ SETTINGS = {
     # hour. A success clears nothing, so a client cannot interleave its own
     # sign-ins with guesses; each request makes one attempt (`authenticate_once`).
     "AXES_COOLOFF_TIME": 1,
-    # A sign-in link attempt is recorded under the account public id it names,
-    # never an empty username; a genuine but spent link is not a guess.
+    # A credential attempt is recorded under the account it names, never an
+    # empty username; a genuine but spent credential is not a guess.
     "AXES_USERNAME_CALLABLE": "angee.iam.auth.axes_username",
-    "AXES_WHITELIST_CALLABLE": "angee.iam.auth.spent_sign_in_link",
+    "AXES_WHITELIST_CALLABLE": "angee.iam.auth.spent_credential",
 }
 """Django settings contributed when IAM is installed."""
 

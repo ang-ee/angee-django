@@ -207,7 +207,7 @@ class UserKind(models.TextChoices):
 
 
 class UserAccountAction(models.TextChoices):
-    """Account verbs, each named by its Zed permission and sharing protected-account blockers."""
+    """IAM's own account verbs, each named by its Zed permission; ``User.account_verbs`` offers them."""
 
     SET_ACTIVE = "set_active", "Set active"
     RENAME = "rename", "Rename"
@@ -873,9 +873,19 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
 
-    @staticmethod
+    @classmethod
+    def account_verbs(cls) -> tuple[str, ...]:
+        """Verbs ``account_actions`` offers, in offer order, each named by its Zed permission on ``auth/user``.
+
+        A donor that adds a verb extends this and :meth:`account_action_blockers`
+        through ``super()``, and runs its verb under :meth:`lock_for_account_verb`.
+        """
+
+        return tuple(UserAccountAction.values)
+
+    @classmethod
     def account_action_blockers(
-        action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
+        cls, action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
     ) -> tuple[tuple[Q, str], ...]:
         """Return the target conditions refusing ``action``, each with its refusal.
 
@@ -884,7 +894,9 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         the batched ``account_actions`` projection share these conditions, so a
         control is offered exactly when its verb admits it. Only ``actor is None``
         denotes system work, which retains the full protected-account refusal.
-        Other subjects without a concrete user cannot set passwords.
+        Other subjects without a concrete user cannot set passwords. A verb IAM
+        does not declare meets the person-kind and protected-account blockers;
+        its donor adds its own after them.
         """
 
         usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
@@ -916,16 +928,16 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     def account_action_annotations(cls, actor: Any) -> dict[str, models.expressions.BaseExpression]:
         """Batch every account verb's permission and eligibility for one actor's rows.
 
-        Keys are ``UserAccountAction`` values. Without an actor nothing is allowed.
+        Keys are the verbs :meth:`account_verbs` names. Without an actor nothing is allowed.
         """
 
         if actor is None:
-            return {action: models.Value(False) for action in UserAccountAction.values}
+            return {action: models.Value(False) for action in cls.account_verbs()}
         protection = cls.objects.protection_condition(actor)
         inactive = cls.objects.inactive_condition(actor)
         own = cls.objects.own_account_condition(actor)
         annotations: dict[str, models.expressions.BaseExpression] = {}
-        for action in UserAccountAction.values:
+        for action in cls.account_verbs():
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
             for condition, _error in cls.account_action_blockers(action, protection, inactive, own, system=False):
                 rows = rows.exclude(condition)
@@ -933,7 +945,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         return annotations
 
     def account_actions_for(self, actor: Any) -> list[str]:
-        """Return the account verbs ``actor`` may run on this row, in declaration order."""
+        """Return the account verbs ``actor`` may run on this row, in :meth:`account_verbs` order."""
 
         if actor is None:
             return []
@@ -946,7 +958,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             .values(*(f"_iam_{name}" for name in annotations))
             .first()
         ) or {}
-        return [action for action in UserAccountAction.values if allowed.get(f"_iam_{action}")]
+        return [action for action in type(self).account_verbs() if allowed.get(f"_iam_{action}")]
 
     def protected_against(self, actor: Any) -> bool:
         """Whether this account needs protected-account admission; see ``protection_condition``."""
@@ -976,12 +988,15 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
                 return error
         return None
 
-    def _lock_for_account_action(self, action: str, *, expected_revision: int | None) -> Self:
-        """Lock this account and admit ``action`` for the instance's actor under the lock.
+    def lock_for_account_verb(self, action: str, *, expected_revision: int | None) -> Self:
+        """Lock this account and admit verb ``action`` for the instance's actor under the lock.
 
-        Actor presence is required before locking. System callers bypass the
-        permission by the REBAC library's contract but still meet eligibility;
-        protection then excludes staff, superusers and elevated accounts only.
+        Every account verb, a donor's included, runs under this: the locked row
+        must pass ``action``'s Zed permission, the expected revision and
+        :meth:`account_action_blockers`. Actor presence is required before
+        locking. System callers bypass the permission by the REBAC library's
+        contract but still meet eligibility; protection then excludes staff,
+        superusers and elevated accounts only.
         """
 
         actor, bypass = self.effective_actor(strict=True)
@@ -1016,7 +1031,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """
 
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.ISSUE_PASSWORD), expected_revision=None)
+            user = self.lock_for_account_verb(str(UserAccountAction.ISSUE_PASSWORD), expected_revision=None)
             return self._store_new_password(user, reason="iam.password.issue", expected_revision=None)
 
     @sensitive_variables("token")
@@ -1035,7 +1050,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """
 
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.ISSUE_SIGN_IN_LINK), expected_revision=None)
+            user = self.lock_for_account_verb(str(UserAccountAction.ISSUE_SIGN_IN_LINK), expected_revision=None)
             try:
                 validate_email(user.email)
             except ValidationError:
@@ -1054,7 +1069,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         _require_confirmed(confirmed, "Confirm resetting this account's password.")
         with transaction.atomic():
             action = str(UserAccountAction.RESET_PASSWORD)
-            user = self._lock_for_account_action(action, expected_revision=expected_revision)
+            user = self.lock_for_account_verb(action, expected_revision=expected_revision)
             return self._store_new_password(user, reason="iam.password.reset", expected_revision=expected_revision)
 
     def set_active(self, active: bool, *, confirmed: bool, expected_revision: int) -> None:
@@ -1067,7 +1082,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
         _require_confirmed(confirmed, "Confirm changing this account's access.")
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.SET_ACTIVE), expected_revision=expected_revision)
+            user = self.lock_for_account_verb(str(UserAccountAction.SET_ACTIVE), expected_revision=expected_revision)
             if user.is_active != active:
                 user.is_active = active
                 user.sudo(reason="iam.account.set_active").save(
@@ -1084,7 +1099,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         if not (first_name or last_name):
             raise ValidationError({"first_name": "Enter a first or last name."})
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.RENAME), expected_revision=expected_revision)
+            user = self.lock_for_account_verb(str(UserAccountAction.RENAME), expected_revision=expected_revision)
             user.first_name, user.last_name = first_name, last_name
             user.clean_fields(
                 exclude=[field.name for field in user._meta.fields if field.name not in {"first_name", "last_name"}]
@@ -1145,7 +1160,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Set another person's password through the revision-checked administration and write gates."""
 
         with transaction.atomic():
-            user = self._lock_for_account_action(
+            user = self.lock_for_account_verb(
                 str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
             )
             actor, _bypass = user.effective_actor(strict=True)

@@ -18,6 +18,8 @@ import { subjectsWidget } from "./assignment-subject-widget";
 import { USER_LIST_COLUMNS, USER_LIST_PRESETS } from "./users-list";
 
 export {
+  ACCOUNT_ACTION_FIELDS,
+  AccountActionBar,
   offersAccountAction,
   useIssuePasswordAction,
   useIssueSignInLinkAction,
@@ -25,7 +27,6 @@ export {
   useResetPasswordAction,
   useSetActiveActions,
   useSetPasswordAction,
-  type UserAccountAction,
 } from "./account-actions";
 export {
   IamLoginPage,

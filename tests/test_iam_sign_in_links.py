@@ -35,6 +35,7 @@ from tests.conftest import create_platform_admin
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.iam_models import SignInLink
 from tests.test_iam_graphql import _schema
+from tests.test_iam_login_throttle import LOGIN, _refusals
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -47,8 +48,7 @@ DELIVERABLE = {
 }
 ISSUE = "mutation($id: ID!) { issue_user_sign_in_link(id: $id) { ok message } }"
 REDEEM = "mutation($token: String!) { redeem_sign_in_link(token: $token) { ok user { username } } }"
-LOGIN = "mutation($username: String!, $password: String!) { login(username: $username, password: $password) { ok } }"
-SPENT_MARK = "angee_iam_spent_sign_in_link"
+SPENT_MARK = "angee_iam_spent_credential"
 LIST = "{ users(limit: 100) { username account_actions } }"
 # IAM's own order, axes first: the bare harness authors ModelBackend ahead of it.
 BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
@@ -282,7 +282,7 @@ def test_account_actions_offer_the_link_where_the_verb_acts(deliverable, iam_adm
     _person("guest-inactive", is_active=False)
     _person("guest-staff", is_staff=True)
     rows = result_data(execute_schema(_schema("console"), LIST, user=iam_admin))["users"]
-    offered = {row["username"]: "ISSUE_SIGN_IN_LINK" in row["account_actions"] for row in rows}
+    offered = {row["username"]: "issue_sign_in_link" in row["account_actions"] for row in rows}
     assert offered["guest-offered"] is True
     assert offered["guest-inactive"] is offered["guest-staff"] is offered["campaign-admin"] is False
 
@@ -525,39 +525,6 @@ def test_links_open_the_route_iams_web_fragment_declares():
     assert f'const SIGN_IN_LINK_PATH = "{SIGN_IN_LINK_PATH}";' in manifest.read_text()
 
 
-def _logins(attempts: list[tuple[str, str, str]]) -> str:
-    """One GraphQL document carrying one aliased ``login`` per ``(alias, username, password)``."""
-
-    fields = " ".join(
-        f'{alias}: login(username: "{user}", password: "{password}") {{ ok }}' for alias, user, password in attempts
-    )
-    return f"mutation {{ {fields} }}"
-
-
-def _refusals(result: Any) -> dict[str, str]:
-    return {str(error.path[0]): error.message for error in result.errors or ()}
-
-
-@override_settings(AUTHENTICATION_BACKENDS=BACKENDS, AXES_FAILURE_LIMIT=3)
-def test_a_request_makes_one_sign_in_attempt_however_many_fields_it_aliases(db):
-    _person("guest-guarded", password="guarded-secret-pw")
-    _person("guest-own", password="own-secret-pw")
-    attempts = [
-        ("g1", "guest-guarded", "bad-1"),
-        ("me", "guest-own", "own-secret-pw"),
-        ("hit", "guest-guarded", "guarded-secret-pw"),
-    ]
-
-    request = _at("203.0.113.50", session=True)
-    result = execute_schema(_schema("public"), _logins(attempts), request=request)
-
-    # The second field is refused, which nulls the payload and stops the fields after it.
-    assert result.data is None
-    assert _refusals(result) == {"me": ONE_ATTEMPT_MESSAGE}
-    assert SESSION_KEY not in request.session
-    assert AccessAttempt.objects.get(ip_address="203.0.113.50").failures_since_start == 1
-
-
 @override_settings(AUTHENTICATION_BACKENDS=BACKENDS)
 def test_a_batched_request_shares_the_one_sign_in_attempt(deliverable, iam_admin, sent):
     owner = _person("guest-batch", password="batch-secret-pw")
@@ -570,24 +537,6 @@ def test_a_batched_request_shares_the_one_sign_in_attempt(deliverable, iam_admin
     assert result_data(first)["login"] == {"ok": False}
     assert [error.message for error in second.errors or ()] == [ONE_ATTEMPT_MESSAGE]
     assert SignInLink._base_manager.get(user=owner).used_at is None
-
-
-@override_settings(AUTHENTICATION_BACKENDS=BACKENDS, AXES_FAILURE_LIMIT=3)
-def test_a_clients_own_sign_ins_never_clear_its_guesses(db):
-    _person("guest-targeted", password="targeted-secret-pw")
-    _person("guest-guesser", password="guesser-secret-pw")
-
-    def login(username: str, password: str) -> Any:
-        request = _at("203.0.113.53", session=True)
-        return result_data(
-            execute_schema(_schema("public"), LOGIN, {"username": username, "password": password}, request=request)
-        )
-
-    assert login("guest-targeted", "bad-1") == {"login": {"ok": False}}
-    assert login("guest-targeted", "bad-2") == {"login": {"ok": False}}
-    assert login("guest-guesser", "guesser-secret-pw") == {"login": {"ok": True}}
-    assert login("guest-targeted", "bad-3") == {"login": {"ok": False}}
-    assert login("guest-targeted", "targeted-secret-pw") == {"login": {"ok": False}}
 
 
 @override_settings(

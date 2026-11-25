@@ -108,7 +108,6 @@ from angee.iam.roles import subject_permitted as _subject_permitted_owner
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
-strawberry.enum(cast(Any, UserAccountAction))
 
 
 def _view_as(info: strawberry.Info) -> ViewAs | None:
@@ -163,17 +162,16 @@ class UserType(AngeeNode):
     revision: int = strawberry_django.field(field_name="account_revision")
 
     @strawberry_django.field(
-        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in UserAccountAction.values}
+        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in User.account_verbs()}
     )
-    def account_actions(self) -> list[UserAccountAction]:
-        """Account verbs the viewer may run on this row, from the verbs' own owner."""
+    def account_actions(self) -> list[str]:
+        """Account verbs the viewer may run on this row, each named by its Zed permission, from the verbs' owner."""
 
         user = cast(Any, self)
-        if all(hasattr(user, f"_iam_{action}") for action in UserAccountAction.values):
-            allowed = [action for action in UserAccountAction.values if getattr(user, f"_iam_{action}")]
-        else:
-            allowed = user.account_actions_for(current_actor())
-        return [UserAccountAction(action) for action in allowed]
+        verbs = User.account_verbs()
+        if all(hasattr(user, f"_iam_{action}") for action in verbs):
+            return [action for action in verbs if getattr(user, f"_iam_{action}")]
+        return cast(list[str], user.account_actions_for(current_actor()))
 
     @strawberry_django.field
     def assignment_subject(self) -> str:

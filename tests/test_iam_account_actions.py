@@ -1,11 +1,15 @@
 """Managed people: account verbs, protected accounts, field gates and the verbs' projection."""
 
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.signals import user_logged_in
+from django.core.checks.registry import registry
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
@@ -16,20 +20,28 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     actor_context,
+    backend,
     system_context,
     to_object_ref,
     to_subject_ref,
     write_relationships,
 )
+from rebac.schema import Schema
+from rebac.schema.ast import PermBinOp, PermRef
+from rebac.testing import install_schema
 
+from angee.base.build import extension_source_map
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
+from angee.iam.checks import check_account_disclosures
+from angee.iam.models import PROTECTED_ACCOUNT_MESSAGE
 from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import create_platform_admin
 from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.test_iam_graphql import _schema
+from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
 User = get_user_model()
 UPDATE = """mutation($id: String!, $set: users_set_input!, $revision: Int) {
@@ -76,7 +88,7 @@ def _stored(user: Any) -> Any:
 
 def _actions(schema: Any, viewer: Any) -> dict[str, list[str]]:
     rows = result_data(execute_schema(schema, LIST, user=viewer))["users"]
-    return {row["username"]: [action.lower() for action in row["account_actions"]] for row in rows}
+    return {row["username"]: row["account_actions"] for row in rows}
 
 
 def test_field_gates_keep_identity_and_authority_columns_with_administrators(db):
@@ -382,3 +394,97 @@ def test_verbs_require_their_permission_and_an_actor(iam_admin):
             first_name="Late", last_name="", confirmed=True, expected_revision=revision + 5,
         )
     assert _stored(target).is_active and _stored(target).first_name == ""
+
+
+def test_a_verb_iam_does_not_declare_meets_the_person_and_protection_blockers(db):
+    """A contributed verb is refused on every account IAM's verbs refuse, before its own blockers."""
+
+    admin = create_platform_admin("contributed-admin", password=None)
+    targets = {
+        "person": User.objects.create_user("contributed-person"),
+        "staff": User.objects.create_user("contributed-staff", is_staff=True),
+        "superuser": User.objects.create_user("contributed-super", is_superuser=True),
+        "peer admin": create_platform_admin("contributed-peer", password=None),
+        "own": admin,
+        "service": User.objects.create_user("contributed-service", kind="service"),
+    }
+    actor = to_subject_ref(admin)
+    assert {name: target.account_action_error("contributed_verb", actor) for name, target in targets.items()} == {
+        "person": None,
+        "staff": PROTECTED_ACCOUNT_MESSAGE,
+        "superuser": PROTECTED_ACCOUNT_MESSAGE,
+        "peer admin": PROTECTED_ACCOUNT_MESSAGE,
+        "own": PROTECTED_ACCOUNT_MESSAGE,
+        "service": "Only person accounts can be managed.",
+    }
+
+
+_DISCLOSURE_ARMS = {
+    "active_granted": ("active_account_granted", False),
+    "nonstaff_granted": ("nonstaff_account_granted", False),
+    "active": ("active_account", True),
+    "nonstaff": ("nonstaff_account", True),
+}
+
+
+@pytest.mark.parametrize("arm", sorted(_DISCLOSURE_ARMS))
+def test_fragments_extend_the_disclosures_only_through_their_union_points(tmp_path: Path, arm: str) -> None:
+    permission, refused = _DISCLOSURE_ARMS[arm]
+    declaration = Path(apps.get_app_config("iam").path, "permissions.zed").read_text(encoding="utf-8")
+    iam = _addon(tmp_path, "iam", "permissions.zed", declaration)
+    contrib = _contrib_addon(
+        tmp_path,
+        f"definition auth/user {{\n    relation helper: auth/user\n    permission {permission} = helper\n}}\n",
+        name="disclosure_contrib",
+    )
+    assert check_account_disclosures([iam]) == []
+    sources = extension_source_map([iam, contrib])
+    runtime = tmp_path / "runtime"
+    for relative, text in sources.items():
+        output = runtime / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text)
+    _apply_emitted_schema_paths([iam, contrib], runtime, sources=sources)
+
+    errors = check_account_disclosures([iam, contrib])
+    if not refused:
+        assert errors == []
+    else:
+        [error] = errors
+        assert error.id == "angee.iam.E004"
+        assert f"auth/user#{permission}" in error.msg
+        assert "disclosure_contrib" in error.msg
+
+
+def test_the_installed_composition_keeps_the_disclosures_and_iam_registers_their_seal_once() -> None:
+    assert check_account_disclosures() == []
+    assert sum(candidate is check_account_disclosures for candidate in registry.registered_checks) == 1
+
+
+@pytest.mark.parametrize("disclosure", ["active_account", "nonstaff_account"])
+def test_a_disclosure_reads_the_same_sql_as_its_grants_written_inline(db, disclosure: str) -> None:
+    """A union point is a same-object reference, which compiles inline: the query is no deeper."""
+
+    admin = create_platform_admin(f"inline-{disclosure}", password=None)
+    composed = backend().schema()
+    definition = composed.get_definition("auth/user")
+    assert definition is not None
+    expressions = {permission.name: permission.expression for permission in definition.permissions}
+    derived = expressions[disclosure]
+    assert isinstance(derived, PermBinOp) and derived.left == PermRef(f"{disclosure}_granted")
+    inline = replace(definition, permissions=tuple(
+        replace(permission, expression=replace(derived, left=expressions[f"{disclosure}_granted"]))
+        if permission.name == disclosure else permission
+        for permission in definition.permissions
+    ))
+
+    def sql(schema: Schema) -> str:
+        install_schema(schema)
+        # The statement's template; its parameters also bind the installed schema's own identity.
+        return User.objects.with_actor(admin).with_action(disclosure).scoped().query.sql_with_params()[0]
+
+    written_inline = sql(Schema(
+        definitions=[inline if item.resource_type == "auth/user" else item for item in composed.definitions],
+        caveats=list(composed.caveats), directives=list(composed.directives), headers=dict(composed.headers),
+    ))
+    assert sql(composed) == written_inline
