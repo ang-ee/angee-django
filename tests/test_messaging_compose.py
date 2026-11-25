@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
@@ -35,7 +36,9 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
+from angee.messaging.email import header_text
 from angee.messaging.managers import MessageManager, _preview
+from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.messaging_integrate_imap.parser import parse_message
 from angee.provenance import context as provenance_context
@@ -287,6 +290,39 @@ def test_a_reply_to_a_title_holding_an_encoded_word_is_written_on_one_line(desk:
     stored, wire, provided = _subjects(desk, reply)
     assert stored == wire == provided
     assert stored.startswith("Re: ") and _one_plain_line(stored)
+
+
+MAILERS = {
+    "default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"},
+    "smtp": {"BACKEND": "django.core.mail.backends.smtp.EmailBackend", "OPTIONS": {"host": "localhost"}},
+}
+"""The test mailer delivers; the SMTP one is only asked for the envelope it would send, never connected."""
+
+
+def _delivered(message: Any) -> EmailMessage:
+    """Deliver ``message`` through the test mailer as the worker does, and return the bytes it sent, parsed."""
+
+    assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+    return message_from_bytes(mail.outbox[-1].message().as_bytes(), policy=email.policy.default)
+
+
+def test_an_answer_to_a_sender_named_with_an_encoded_word_is_delivered_to_that_sender(desk: Any, settings: Any) -> None:
+    """A hostile inbound name reaches the wire as written, never decoded into another name the envelope refuses."""
+
+    settings.MAILERS = MAILERS
+    raw = (
+        b"From: =?utf-8?q?=3D=3Futf-8=3Fq=3Fceo=3D40bank.test=3F=3D?= <mallory@example.test>\r\n"
+        b"To: desk@example.test\r\nMessage-ID: <hostile-name@example.test>\r\nSubject: Hello\r\n\r\nbody\r\n"
+    )
+    with system_context(reason="tests.messaging.compose.hostile_name"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        stored = (parent.sender.display_name, parent.sender.value)
+    assert stored == ("=?utf-8?q?ceo=40bank.test?=", "mallory@example.test")
+    reply = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner, queued=True)
+    (to,) = _delivered(reply)["To"].addresses
+    assert (to.display_name, to.addr_spec) == (header_text(stored[0]), stored[1])
+    assert to.display_name == "= ?utf-8?q?ceo=40bank.test?="
+    assert mail.mailers["smtp"].prep_address(str(to)) == stored[1]
 
 
 @pytest.mark.parametrize(

@@ -65,7 +65,9 @@ would read as another address or as several, or whose name or address a mail
 header would not carry as read (a NUL byte, a control character, an
 encoded-word opener: [`header_text`](email.py), the rule every subject and
 display name the email backend writes takes), is refused (`invalid`) under its
-role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
+role, never re-read. A name inbound mail stored with a literal encoded word is
+written on the wire as `header_text` carries it, so an answer to its sender
+still reaches that sender. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
 addresses across `to`, `cc`
 and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)

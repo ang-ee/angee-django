@@ -81,7 +81,9 @@ live in code docstrings.
     break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
     so no mail library, client or provider decodes anything out of it: the subject
     stored, sent and read back are one string (`angee.messaging.email.header_text`,
-    the one rule for text a mail header carries); a typed line
+    the one rule for text a mail header carries, which every display name the
+    email backend writes also takes, so a sender name inbound mail stored with a
+    literal encoded word no longer makes an answer to that sender fail); a typed line
     break is still refused. A channel's own sender handle is landed with no
     creator, under a non-user attribution (`messaging/system:outgoing`): the
     first person to compose on a channel no longer holds read, write and delete

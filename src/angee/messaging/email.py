@@ -243,7 +243,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         values = _source_addresses(message, "from")
         if values:
             return values[0]
-        return formataddr(self.outbound_sender())
+        return _mailbox(*self.outbound_sender())
 
     def _recipients(self, message: Any) -> dict[str, list[str]]:
         """The message's addresses per envelope role, else its source's for a role it has none in."""
@@ -298,15 +298,27 @@ class AnymailEmailChannelBackend(ChannelBackend):
         return headers
 
 
+def _mailbox(name: str, address: str) -> str:
+    """One mailbox as this backend writes it into a header; its display name as :func:`header_text` carries it.
+
+    Every name the backend writes (a recipient's, a sender's, a retained source
+    header's) is written here, so a name holding a literal encoded word, which
+    inbound mail can store, reaches the wire as written instead of decoded into
+    another name or address.
+    """
+
+    return formataddr((header_text(name), address))
+
+
 def _address(handle: Any) -> str:
     value = str(handle.value or "").strip()
     if "@" not in value:
         return ""
-    return formataddr((str(handle.display_name or "").strip(), value))
+    return _mailbox(str(handle.display_name or ""), value)
 
 
 def _source_addresses(message: Any, header: str) -> list[str]:
-    return [formataddr((name, address)) for name, address in getaddresses(message.source_header_values(header))
+    return [_mailbox(name, address) for name, address in getaddresses(message.source_header_values(header))
             if address]
 
 
