@@ -469,6 +469,21 @@ def test_an_entry_is_refused_or_lands_exactly_the_address_it_names(entry: str) -
     assert addressee.address == typed or typed.endswith(f"<{addressee.address}>")
 
 
+def test_the_channels_sender_handle_has_no_creator_and_a_typed_contact_keeps_its_composer(desk: Any) -> None:
+    """The first composer on a channel holds nothing of its sender; the person who types a contact holds that."""
+
+    replier = make_user("compose-first-replier")
+    grant(desk, "replier", replier)
+    message = Message.objects.compose(channel=desk, to=["first-contact@example.test"], text="Hi.", actor=replier)
+    with system_context(reason="tests.messaging.compose.sender_creator"):
+        sender = Handle._base_manager.get(pk=message.sender_id)
+        recipient = Recipient._base_manager.select_related("handle").get(message=message).handle
+    assert sender.created_by_id is None
+    for action in ("read", "write", "delete"):
+        assert not Handle._base_manager.get(pk=sender.pk).with_actor(replier).has_access(action), action
+    assert recipient.created_by_id == replier.pk
+
+
 def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: Any) -> None:
     """The channel's sender, a typed recipient and ingest store an address in the handle owner's one form."""
 

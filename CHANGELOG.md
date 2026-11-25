@@ -23,7 +23,8 @@ live in code docstrings.
     `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
     entry a mail library would read as another address or as several (a
     comment, a group, a list, trailing text) is refused, never re-read; a caller
-    asks `clean_recipient` before expensive work. A new message also takes a one-line `subject`,
+    asks `clean_recipient` before expensive work. A new message also takes a
+    one-line `subject`,
     `text`, `html` and readable `attachments`, and starts a thread of its own
     through the new `ThreadManager.open_thread`, which `resolve` now shares.
     `Message.require_reply(actor)` decides who may answer a message and returns
@@ -61,7 +62,13 @@ live in code docstrings.
     break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
     so no mail library, client or provider decodes anything out of it: the subject
     stored, sent and read back are one string (`outgoing_subject`); a typed line
-    break is still refused. A recipient row's thread
+    break is still refused. A channel's own sender handle is landed with no
+    creator, under a non-user attribution (`messaging/system:outgoing`): the
+    first person to compose on a channel no longer holds read, write and delete
+    on it, so cannot rename, re-address or delete the desk's sender. A recipient
+    a person types keeps that person as its creator, as the handle owner rules.
+    A sender handle created before the upgrade keeps the creator it was given; a
+    deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
     `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A

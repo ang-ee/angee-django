@@ -3102,6 +3102,14 @@ class _Outgoing:
     scheduled_at: datetime | None = None
 
 
+_OUTGOING_ACTOR = SubjectRef.of("messaging/system", "outgoing")
+"""Non-user attribution for handles messaging lands on nobody's behalf: a handle it creates there has no creator.
+
+A channel's own sender handle is the channel's, not the first composer's; a recipient a
+person types keeps that person as creator, by the handle owner's rule.
+"""
+
+
 def _require_landable(handle_model: Any, addresses: Iterable[tuple[str, str]]) -> None:
     """Refuse, under its key, each ``(key, address)`` whose email address the handle owner cannot land."""
 
@@ -3408,11 +3416,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     ).pk
                 sender = outgoing.sender
                 if sender_address is not None:
-                    # The channel's configured name is the operator's, so it refreshes the handle.
+                    # The channel's configured name is the operator's, so it refreshes the handle;
+                    # the handle is the channel's, so no composer becomes its creator.
                     name, address = sender_address
-                    sender = handle_model.objects.upsert(
-                        platform=handle_model.Platform.EMAIL, value=address, display_name=name,
-                    )
+                    with actor_context(_OUTGOING_ACTOR):
+                        sender = handle_model.objects.upsert(
+                            platform=handle_model.Platform.EMAIL, value=address, display_name=name,
+                        )
                 message = self.create(
                     parent=outgoing.parent, thread_id=thread_id, channel_id=outgoing.channel.pk, sender=sender,
                     platform=outgoing.platform, direction=self.model.Direction.OUTBOUND,
