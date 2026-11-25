@@ -2398,6 +2398,9 @@ def _preview_cases() -> dict[str, Any]:
     for name, (part, count) in WALKED_PARTS.items():
         for index in range(count):
             _row("part", f"{name}{index}", source=part)
+    for index in range(45):
+        _row("part", f"commented{index}", source=COMMENTED_QUOTES)
+    combined = _loop(DATED + _deep_ifs(6) + CHAINS)
     hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
     loop = _loop(DATED + _deep_ifs(30))
     heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
@@ -2432,7 +2435,37 @@ def _preview_cases() -> dict[str, Any]:
         **{name: _mail("\n".join(f'{{% include "parts/{name}{index}" only %}}' for index in range(count)),
                        format="html", text_source="x", key=f"tests.{name}")
            for name, (_, count) in WALKED_PARTS.items()},
+        "combined": _mail(
+            combined + "\n" + "\n".join(f'{{% include "parts/commented{index}" only %}}' for index in range(45)),
+            {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"}, format="html", text_source=combined,
+            key="tests.combined", subject=LINE, sample={**review, "items": [0] * 450, "few": [0] * 50},
+        ),
     }
+
+
+COMMENTED_QUOTES = "{% comment %}\n\n" + "\n\n".join(["> > > a"] * 333) + "\n\n{% endcomment %}"
+"""A part admitted alone that renders nothing, whose comment the Markdown pass and the HTML checks read in full: 333
+three-deep quotes, each quote an element carrying two brand outputs."""
+
+
+def test_a_walk_stops_at_what_its_checks_read(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The heavy review loop beside 45 commented parts was admitted and read 8.6 million form characters; the walk
+    now stops once the forms its checks have read pass the walk's read caps, comments included."""
+
+    del plain
+    with system_context(reason="tests.messaging_templates.render.walk"):
+        _unsaved("part", "alone", source=COMMENTED_QUOTES).full_clean()
+    template = _preview_cases()["combined"]
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    assert _refusals(template) == [
+        "tests.combined: the forms of the rows it reaches hold over 600000 characters or 4000 template spans for its "
+        "checks to read, comments included"]
+    assert len(checked) == CHECKED_FOR_THE_READ_CAP, checked
+
+
+CHECKED_FOR_THE_READ_CAP = 4
+"""The template, its layout and two commented parts, whose forms pass the walk's span read cap."""
 
 
 WALKED_PARTS = {
@@ -2581,6 +2614,7 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
     "single": (8_067, [], []),
     "fivedeep": (4_968, [], []),
     "thousand": (6_304, [], []),
+    "combined": (19_515, [], []),
     "rules": (49_068, [], []),
     "dated": (
         23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],

@@ -96,6 +96,11 @@ LINE_LIMIT = 1_000
 OPENERS_PER_LINE = 30
 FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
+WALK_READ_LIMIT = 600_000
+WALK_SPAN_READ_LIMIT = 4_000
+"""What the checks of the rows a walk reaches read at most, summed as it gathers them: characters of their forms and
+template spans, a comment's content included. A comment renders nothing, but the Markdown pass and the HTML checks
+read all of it, and a Markdown pass multiplies its source; so the walk stops once its rows' forms pass either."""
 NESTING_LIMIT = 16
 CONDITION_OPERATOR_LIMIT = 10
 """The most operators (``and``, ``or``, ``not``, ``in``, comparisons) one ``if`` or ``elif`` condition holds. Django
@@ -383,6 +388,9 @@ class _RowCheck:
     sizes: Mapping[RowPiece, tuple[int, int, int]] = field(default_factory=dict)
     """What each body form's own nodes add to any tree reaching the row, at least: nodes, outputs, text
     (:func:`_own_size`)."""
+    read: tuple[int, int] = (0, 0)
+    """What the row's checks read: its forms' characters and template spans, comments included; nothing for a row
+    its own form caps refuse, whose refusal ends the walk."""
 
 
 def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
@@ -1167,9 +1175,12 @@ class TemplateWalker:
         except RowRefusal as refusal:
             refuse(str(refusal))
             return _RowCheck(name, refusals=tuple(refusals))
+        read = [0, 0]
         for form_name, form in forms._asdict().items():
             # Before anything else reads the form: a Markdown pass multiplies its source many times over.
             spans = tag_re.findall(form)
+            read[0] += len(form)
+            read[1] += len(spans)
             if len(spans) > FORM_SPAN_LIMIT:
                 refuse(f"its {form_name} form holds over {FORM_SPAN_LIMIT} template spans")
             elif len(form) - sum(map(len, spans)) > TEXT_LIMIT:
@@ -1214,7 +1225,7 @@ class TemplateWalker:
         sizes = {piece: _own_size(pieces[piece].nodelist) for piece in (RowPiece.HTML, RowPiece.TEXT)
                  if piece in pieces}
         return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals),
-                         sizes=sizes)
+                         sizes=sizes, read=(read[0], read[1]))
 
     @staticmethod
     def _structure(nodelist: NodeList, piece: RowPiece, row: WalkedRow, refuse: Callable[[str], None]) -> None:
@@ -1277,11 +1288,12 @@ class TemplateWalker:
 
         Each checked row's own size (:attr:`_RowCheck.sizes`) adds to the walk's totals, and the walk stops as soon as
         a total passes a tree cap: every row reached is in the tree at least once, so no admitted walk reaches it.
+        What each row's checks read (:attr:`_RowCheck.read`) adds up too, against :data:`WALK_READ_LIMIT`.
         """
 
         checks: dict[str, _RowCheck] = {}
         totals: dict[RowPiece, tuple[int, int, int]] = {}
-        characters = 0
+        characters = read = spans = 0
         level = [walk.root_name]
         while level:
             wanted: list[str] = []
@@ -1295,6 +1307,13 @@ class TemplateWalker:
                     return checks
                 check = checks[name] = self.check(row)
                 walk.refusals.extend(check.refusals)
+                read, spans = read + check.read[0], spans + check.read[1]
+                if read > WALK_READ_LIMIT or spans > WALK_SPAN_READ_LIMIT:
+                    walk.refusals.append(
+                        f"{walk.root_name}: the forms of the rows it reaches hold over {WALK_READ_LIMIT} characters "
+                        f"or {WALK_SPAN_READ_LIMIT} template spans for its checks to read, comments included",
+                    )
+                    return checks
                 for piece, size in check.sizes.items():
                     total = totals[piece] = cast(tuple[int, int, int], tuple(
                         map(sum, zip(totals.get(piece, (0, 0, 0)), size, strict=True))))
