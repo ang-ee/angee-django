@@ -58,10 +58,13 @@ live in code docstrings.
   rows are a projection of each message's stored envelope. Provision prunes the
   retired REBAC type `messaging/participant`; grants written directly on its
   `editor` or `reader` relations, which no framework surface wrote, are not
-  carried over. Upgrade cutoff: the template ships through the 3.x releases and is
-  removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id` stays
-  while retained migrations import it; a host upgrading from an earlier release
-  applies the template through a 3.x release first.
+  carried over. On a stack whose `operator-schema` job does not wait for
+  `provision`, the first chained restart after this upgrade can fail `rebac.E009`
+  on the retired `messaging/participant` type until provision's sync has run; run
+  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
+  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
+  stays while retained migrations import it; a host upgrading from an earlier
+  release applies the template through a 3.x release first.
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
     kind for one key and one language: a message template of the kind `template`
