@@ -70,10 +70,21 @@ Anything else fails to compile.
   gives an empty link for anything but a safe URL; dates go through `date`
   (`date:"DATE_FORMAT"`), money through `floatformat`. A path printed with a
   time (`DATETIME_FORMAT`, `H:i`) takes an aware `datetime`, never a bare date.
-- A start tag holding template code is written plainly: lower-case names, each
-  attribute once, each value double-quoted, with `&amp;`, `&lt;`, `&gt;` and
-  `&quot;` for those characters. Every row's HTML ends in text, outside any tag,
-  comment or `<style>`, since the row it is included in continues it.
+- HTML is written in one strict spelling that every reader tokenises alike
+  (`SpellingRule` in the [HTML checks](html_checks.py) states each rule with
+  its refusal): no NUL; a `<` only to open a tag, an end tag, or in a layout
+  its opening `<!doctype html>` and Outlook's comments, `&lt;` anywhere else;
+  each attribute once, every value double-quoted with `&amp;`, `&lt;`, `&gt;`
+  and `&quot;` for those characters (the case of names and the white space
+  between attributes are free); `/>` only on a void element; an end tag
+  written `</name>`; template code only in text or a double-quoted value; no
+  element that changes how a reader reads what follows but `title` and
+  `style`; and every form ending in text, outside any tag, comment or
+  `<style>`, since the row it is included in continues it.
+- A link sits in `href`, `src`, `background`, `cite`, `poster` or `action`, as
+  one `url` output or a static link `url` leaves unchanged; the other URL
+  attributes (`ping`, `longdesc`, `srcset`, `usemap`…) are refused, and text
+  attributes such as `alt` and `title` are text.
 - A Markdown row is rendered by markdown-it first, with raw HTML off: template
   code stays whole, `[label]({{ link }})` is a link through `url`, a paragraph
   holding only tags writes no `<p>`, and an `include` stands alone in its
@@ -83,11 +94,10 @@ The walker (`TemplateWalker`) refuses what would not render safely when a row is
 saved (`clean()`, when what it renders changed), after each resource load, and
 again before every render: oversized sources and lines, literals holding `<`,
 `>` or `"`, costly filter use or filter arguments Django's filters fail on,
-template code the Markdown pass would not keep whole, HTML a mail may not carry
-(scripts, raw-text elements such as `noscript` and `textarea`, event
-attributes, comments but a layout's Outlook block, a link that is not one `url`
-output or a safe static URL, a static value reaching a scheme `url` refuses,
-styles reading anything but the brand's colours and fonts), reads no row
+template code the Markdown pass would not keep whole, HTML not in the strict
+spelling or that a mail may not carry (event attributes, a link that is not
+one `url` output or a safe static URL, styles reading anything but the brand's
+colours and fonts), reads no row
 declares (`subject` and `preheader` are read in the HTML form alone), include
 cycles, and the walk's bounds on nodes, outputs, loops, includes, text and the
 rows it reaches.
@@ -101,11 +111,14 @@ read through `date`), and renders it on Django's template engine in the row's
 language: the subject and preheader on one line each, the HTML body escaping
 every value, and the plain-text body from the rows' text forms. A render reads
 rows and the brand kit through the caller's scope, the default kit when `kit` is
-`None`. It raises `ValidationError` and nothing else: when the row, the values
-(a number no float holds, a moment the local zone cannot hold, a bare date
-printed with a time), a row it needs, the kit or a pass's work budget
-(`RenderBudget`; the subject and preheader get a tenth of a body's) refuses, and
-with the code `render_failed` for any other failure in a pass. The subject and
+`None`. It raises `ValidationError` and nothing else, and each item of the error
+carries its code in `error_list`, so a sender tells them apart:
+`invalid_values` (a value missing, misshapen, a lone surrogate, a number no
+float holds where `floatformat` or `pluralize` reads it, a moment the local zone
+cannot hold, a bare date printed with a time), `message_template_refused` (the
+walk), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
+tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
+any other failure, which is logged with its traceback first. The subject and
 preheader drop control and bidirectional override characters. A sender picks the
 row with `effective("template", key, person=recipient)` and renders it as the
 system actor.
@@ -133,10 +146,12 @@ A baseline is walked among the shipped rows alone, when it saves and again after
 every load, so a shipped defect fails the load. After a load each baseline is
 also judged among the rows that render: a refusal reached only through the
 deployment's own row or override, one the shipped row includes or is laid out
-by, does not fail the load. It is logged as a warning naming the shipped row,
-the deployment's row and the refusal, and the shipped row refuses at render
-until the deployment fixes its row. Saving an included row does not judge the
-rows that include it.
+by, does not fail the load. It is logged as a warning on the
+`angee.messaging_templates.models` logger naming the shipped row, the
+deployment's row and the refusal, which an operator sees in the load command's
+error output unless the host configures logging otherwise; the shipped row
+refuses at render until the deployment fixes its row. Saving an included row
+does not judge the rows that include it.
 
 This addon ships the `base` layout, the `header`, `footer`, `button`, `quote` and
 `record_card` blocks and the `greeting`, `ignore_notice` and `signature` parts, in

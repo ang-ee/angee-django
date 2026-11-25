@@ -5,9 +5,9 @@ the blocks and parts it includes, at any depth) as Django compiles them, and
 refuses what may not render: oversized or pathological sources before anything
 parses them, compile errors, literals that could carry markup, costly or unsafe
 filter use, template spans the Markdown pass does not keep whole, HTML a mail may
-not carry (:mod:`~angee.messaging_templates.html_checks`), reads of values no row declares, lookups that
-could reach a method of a ``dict``, ``list`` or ``str``, include cycles, and every
-bound in the walk's caps. It runs from ``clean()`` and after a resource load (at
+not carry (:mod:`~angee.messaging_templates.html_checks`), reads of values no row
+declares, lookups that could reach a method of a ``dict``, ``list`` or ``str``,
+include cycles, and every bound in the walk's caps. It runs from ``clean()`` and after a resource load (at
 save) and from ``render()`` and ``preview()`` before anything renders.
 
 A walk that passes is a :class:`TemplateWalk`: the values the render reads (``D``,

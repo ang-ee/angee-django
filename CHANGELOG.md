@@ -34,19 +34,27 @@ live in code docstrings.
     walks a row and every row it reaches and refuses what may not render safely:
     oversized sources and lines, literals holding `<`, `>` or `"`, costly or
     unsafe filter use, template code the Markdown pass would not keep whole, HTML
-    a mail may not carry (scripts, raw-text elements, event attributes, comments,
-    a start tag holding template code that is not written plainly, a row that
-    ends inside a tag or a `<style>`, a link that is not one `url` output or a
-    safe static link, styles reading anything but the brand's colours and fonts),
-    reads no row declares, include cycles and the walk's bounds. A layout alone
-    may carry Outlook's conditional comments, static and balanced, their markup
-    checked. It runs from `clean()` when what a row renders changed
+    a mail may not carry (event attributes, a link that is not one `url` output
+    or a safe static link, styles reading anything but the brand's colours and
+    fonts), reads no row declares, include cycles and the walk's bounds. Every
+    HTML form is admitted only in one strict spelling every reader tokenises
+    alike (`SpellingRule` in `angee.messaging_templates.html_checks`: no NUL, a
+    `<` only to open a tag, canonical start and end tags, `/>` on void elements
+    alone, template code only in text or a double-quoted value, no element that
+    changes how a reader reads what follows but `title` and `style`, and a form
+    ending in text). A link sits only in `href`, `src`, `background`, `cite`,
+    `poster` or `action`; the other URL attributes are refused. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. It runs from `clean()` when what a row renders changed
     (`MessageTemplate.validate_source()`), after every resource load, and before
     every render. `TemplateWalk.prepare(values)` drops undeclared keys, refuses a
     required value missing or null, fills every declared path and parses ISO
     dates read through `date`; a path printed with a time takes an aware
-    `datetime`. A render raises `ValidationError` and nothing else
-    (`render_failed` for a failure nobody foresaw).
+    `datetime`. It costs a constant per declared path per value. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
   - **Preview.** `MessageTemplate.preview(*, kit=None)` renders a row's `sample`
     (a layout around a fixed body, a block or part alone) and returns a
     `TemplatePreview` with `TemplateWarning`s: the subject or preheader length,
@@ -61,10 +69,12 @@ live in code docstrings.
     other rows include can no longer be deleted while its key would stop
     resolving. A baseline is walked among shipped rows, so a shipped defect fails
     its load; a refusal reached only through a deployment's override or own row
-    is logged as a warning, the load completes, and that shipped row refuses at
-    render until the deployment's row is fixed.
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
   - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
-    `markdown-it-py`.
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
   - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
     install tier (`resources load`), and regenerate the console schema and its
     codegen. No migration: no column changed. Existing rows are walked when they
