@@ -20,6 +20,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import (
+    PermissionDenied,
     RelationshipTuple,
     actor_context,
     system_context,
@@ -33,7 +34,7 @@ from angee.base.testing.queries import statement_startswith
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.graphql.testing.documents import execute_schema, result_data
+from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data
 from tests.conftest import SchemaAddon, create_platform_admin, create_user
 from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
 
@@ -1124,3 +1125,68 @@ def test_owner_lock_rechecks_write_permission_for_lines_only_save(db, monkeypatc
     ]}, user=owner)
     assert result.errors and waited
     assert not DocumentLine.system_queryset().filter(document=doc).exists()
+
+
+# The measured cost of one admitted document insert with one product line. Decoding
+# the product (and the document's ids) a second time added five statements, each
+# a repeat; a keyed insert also reads, first, whether its key holds an earlier
+# creation. A lower measure lowers these, a higher one is a regression.
+STATEMENTS_KEYLESS, REPEATED_KEYLESS = 54, 12
+STATEMENTS_KEYED, REPEATED_KEYED = 84, 17
+
+_INSERT_WITH_PRODUCT_LINE = """
+mutation($product: ID!, $key: String) {
+  insert_documents_prod_one(
+    object: {title: "With a line", lines: {data: [{label: "L", quantity: 1, position: 0, product: $product}]}},
+    idempotency_key: $key
+  ) { id }
+}
+"""
+
+
+def test_insert_decides_the_document_before_its_lines(db: None) -> None:
+    """A refused caller gets the document's refusal before a line's product is resolved.
+
+    Only an anonymous caller may not create a document, and an anonymous key is
+    refused ahead of the backend; a keyed insert's claim waits for the same
+    decision (``test_a_defaulting_insert_is_decided_before_its_key_is_claimed``).
+    """
+
+    with system_context(reason="seed"):
+        hidden = Product.objects.create(name="Hidden")
+
+    result = execute_schema(_SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": hidden.public_id, "key": None})
+
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, PermissionDenied), result.errors[0].original_error
+    with system_context(reason="test read"):
+        assert not Document.objects.exists()
+
+
+@pytest.mark.parametrize(
+    ("key", "statements", "repeated"),
+    ((None, STATEMENTS_KEYLESS, REPEATED_KEYLESS), ("admitted-request", STATEMENTS_KEYED, REPEATED_KEYED)),
+    ids=("keyless", "keyed"),
+)
+def test_insert_decodes_each_public_id_once(db: None, key: str | None, statements: int, repeated: int) -> None:
+    """An admitted insert resolves its line's product once, with or without an idempotency key."""
+
+    author = create_platform_admin("decode-once-author")
+    with system_context(reason="seed"):
+        product = Product.objects.create(name="Visible")
+    _grant(product, "manager", author)
+
+    # Measured after one warm execution, as document budgets are (docs/checks.md).
+    warm = None if key is None else f"warm-{key}"
+    result_data(execute_schema(
+        _SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": product.public_id, "key": warm}, user=author,
+    ))
+
+    read = measure_graphql_document(
+        _SCHEMA_WITH_PRODUCT, _INSERT_WITH_PRODUCT_LINE, {"product": product.public_id, "key": key}, actor=author,
+    )
+
+    read.assert_ceiling(statements=statements, repeated=repeated)
+    with system_context(reason="test read"):
+        created = Document.objects.get(sqid=read.data["insert_documents_prod_one"]["id"])
+        assert created.lines.get().product_id == product.pk
