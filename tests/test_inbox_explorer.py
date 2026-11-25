@@ -706,6 +706,25 @@ def test_related_participants_list_the_message_sender_then_its_recipients():
         assert hidden_sender.page(text="hidden").count == 0
 
 
+def test_related_handles_rows_carry_no_role_and_keep_their_handles_platform():
+    """A Handles row's role is empty: the platform is its handle's own, so ``role`` holds one vocabulary."""
+    owner = User.objects.create_user(username="explorer-handles")
+    make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="seed party handles"):
+        party = Party._base_manager.create(created_by=owner, display_name="Ada")
+        email, phone = (
+            Handle._base_manager.create(
+                created_by=owner, platform=platform, value=value, party=party, party_link_confirmed=True,
+            )
+            for platform, value in (("email", "ada@example.com"), ("whatsapp", "+15550001"))
+        )
+    with actor_context(owner):
+        related = InboxRelated(Message.objects.all().explorer(), f"handles:{party.sqid}")
+        assert sorted((row.id, row.role, row.handle.platform) for row in related.page().rows) == sorted([
+            (str(email.sqid), "", "email"), (str(phone.sqid), "", "whatsapp"),
+        ])
+
+
 def test_unreadable_thread_is_not_exposed_as_a_group():
     owner = User.objects.create_user(username="explorer-readable")
     other = User.objects.create_user(username="explorer-hidden-thread")

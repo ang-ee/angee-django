@@ -36,7 +36,9 @@ live in code docstrings.
   `participantChanged` is `recipientChanged`; the role enum is `RecipientRole`,
   without `FROM`; and `ThreadType.participants` is removed. The inbox
   Participants pane keeps its name and lists the sender, labelled From, then the
-  recipients, each labelled by its role.
+  recipients, each labelled by its role. `InboxConnection.role` holds one
+  vocabulary, a recipient's role or `sender` for the message's sender: a Handles
+  row's is now empty, its platform being its `handle.platform`.
   **Upgrade:** copy the migration template
   `src/angee/messaging/compose_migrations/messaging/participants_to_recipients.py`
   into `runtime/messaging/migrations/` as its docstring says, run `makemigrations

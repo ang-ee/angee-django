@@ -196,7 +196,11 @@ class InboxRelatedTarget:
 
 @strawberry.type
 class InboxConnection:
-    """A typed use, participant, confirmed handle, or produced relation; its page carries the messages."""
+    """A typed use, participant, confirmed handle, or produced relation; its page carries the messages.
+
+    ``role`` is a participant's: a recipient's envelope role, or ``sender`` for the
+    message's sender; every other row's is empty.
+    """
 
     id: str
     label: str

@@ -64,30 +64,29 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
           filterOptions={[]} customFilterFields={[]}
           search={{ box: true }}
           pane={{ selector: <Button type="button" variant="ghost" size="iconSm" aria-label={close.label} title={close.label} onClick={close.onClick}><Glyph name={close.icon} /></Button> }}
-          renderPaneRow={(row) => <ConnectionRow row={row} navigation={navigation} kind={target?.kind} />}
+          renderPaneRow={(row) => <ConnectionRow row={row} navigation={navigation} />}
           emptyContent={t("inbox.noRelated")} />
       </>}
     </section>
   );
 }
 
-/** One row of the pinned target's collection; `kind` is the target's kind as the server answers it. */
-function ConnectionRow({ row, navigation, kind }: { row: InboxConnectionRow; navigation: InboxNavigation; kind?: string }) {
+function ConnectionRow({ row, navigation }: { row: InboxConnectionRow; navigation: InboxNavigation }) {
   const t = useNexusT();
   const href = useResourceRecordHrefLookup();
-  // A Handles row's role is its platform. A Participants row's role is a recipient's envelope role,
-  // or the pane token `sender`, which the pane's own copy labels.
   const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
   const recipientRoles = useEnumOptions("messaging.Recipient", "role", { casing: "upper" });
-  const roles = kind === "participants" ? recipientRoles : platforms;
+  // A row's role is a recipient's envelope role or the pane token `sender`, which the pane's own copy
+  // labels; a row without one is labelled by its handle's platform, or not at all.
+  const detail = row.role ? connectionLabel(t, "role", row.role) ?? optionLabel(recipientRoles, row.role)
+    : row.handle ? optionLabel(platforms, row.handle.platform) : undefined;
   const message = row.message;
   if (message) return <MessagePaneRow message={message}
     {...(message.id === navigation.relatedFrom ? { detail: t("inbox.source") } : {})}
     onOpenConversation={message.thread ? () => navigation.conversation(message.thread!.id, message.id) : undefined}
     onOpen={() => navigation.read(message.id, row.part?.id)} />;
   // Connection roles and provenance are server tokens: each reads through its label, or not at all.
-  if (row.handle) return <PaneRow icon="user" title={row.label}
-    detail={connectionLabel(t, "role", row.role) ?? optionLabel(roles, row.role)} sub={row.handle.value}
+  if (row.handle) return <PaneRow icon="user" title={row.label} detail={detail} sub={row.handle.value}
     href={href("parties.Handle", row.handle.id)} verb={t("graph.openRecord")} />;
   if (row.src && row.dst) return <PaneRows>
     <PaneLabel>{connectionLabel(t, "relation", row.label) ?? row.label}</PaneLabel>
@@ -98,6 +97,5 @@ function ConnectionRow({ row, navigation, kind }: { row: InboxConnectionRow; nav
         onOpen={() => navigation.read(message.id)} />
     </li>)}
   </PaneRows>;
-  return <PaneRow icon="link" title={row.label}
-    detail={connectionLabel(t, "role", row.role) ?? optionLabel(recipientRoles, row.role)} />;
+  return <PaneRow icon="link" title={row.label} detail={detail} />;
 }

@@ -13,22 +13,20 @@ import { InboxRelatedPane } from "./Related";
 import { InboxAccounts, InboxConnections, InboxNavigator, InboxNavigatorGroups, InboxRelatedTarget, InboxResultGroups, InboxResults, InboxSelection } from "./documents";
 import { COLLECTION_INITIAL, RESULTS_INITIAL, useInboxNavigation } from "./state";
 
-// The recipient role's enum, as resource metadata serves it; every other model reads as it does.
+// The model metadata a test serves, as resource metadata would; every other model reads as it does.
+const served = vi.hoisted(() => ({ models: {} as Record<string, unknown> }));
 vi.mock("@angee/metadata", async (original) => {
   const actual = await original<typeof import("@angee/metadata")>();
-  const recipient = { fields: { role: { values: [
-    { value: "TO", description: "To" }, { value: "CC", description: "Cc" }, { value: "BCC", description: "Bcc" },
-  ] } } };
   function useModelMetadata(label: string) {
-    const served = actual.useModelMetadata(label);
-    return (label === "messaging.Recipient" ? recipient : served) as never;
+    const metadata = actual.useModelMetadata(label);
+    return (served.models[label] ?? metadata) as never;
   }
   return { ...actual, useModelMetadata };
 });
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://nexus-panes", providerNames: [],
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } } });
-afterEach(() => { cleanup(); clearClients(); });
+afterEach(() => { cleanup(); clearClients(); served.models = {}; });
 
 const message = {
   id: "msg-one", title: "A message", preview: "A preview", platform: "email", direction: "INBOUND",
@@ -36,10 +34,10 @@ const message = {
   sender: { display_name: "Ada", value: "ada@example.com", party: null }, thread: { id: "thread-one", title: { text: "A conversation" } },
 };
 
-/** `pending` documents never resolve, so a pane stays in its loading shape; `participants` pins a Participants target with those rows. */
+/** `pending` documents never resolve, so a pane stays in its loading shape; `pinned` is a target of that kind with those rows. */
 function fixture(
   pane: "navigator" | "results" | "related", initialSearch = "", status = false, pending: readonly unknown[] = [],
-  participants?: readonly unknown[],
+  pinned?: { kind: string; rows: readonly unknown[] },
 ) {
   const rowMessage = status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
     thread: { ...message.thread, modality: "STATUS" } } : message;
@@ -79,15 +77,15 @@ function fixture(
       } } };
     }
     if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [resultRow], messages: resultMessages } } };
-    if (document === InboxRelatedTarget) return { data: { inbox_related_target: participants ? {
-      id: "participants:msg-one", kind: "participants", label: "Participants", count: participants.length,
-      unit: "participants", source: null, part: null, file: null, fragment: null,
+    if (document === InboxRelatedTarget) return { data: { inbox_related_target: pinned ? {
+      id: `${pinned.kind}:pinned`, kind: pinned.kind, label: "Pinned", count: pinned.rows.length,
+      unit: pinned.kind, source: null, part: null, file: null, fragment: null,
     } : {
       id: "file:one", kind: "file", label: "Pinned file", count: 60, unit: "messages", source: null, part: null, file: null,
       fragment: null,
     } } };
-    if (document === InboxConnections) return { data: { inbox_connections: participants ? {
-      count: participants.length, message_count: participants.length, rows: participants, messages: [],
+    if (document === InboxConnections) return { data: { inbox_connections: pinned ? {
+      count: pinned.rows.length, message_count: pinned.rows.length, rows: pinned.rows, messages: [],
     } : {
       count: 60, message_count: 60,
       rows: [{ id: "connection-one", message_id: rowMessage.id, part: null, handle: null, src_id: null, dst_id: null }],
@@ -234,22 +232,38 @@ const handle = (id: string, name: string, value: string) => ({
   id, display_name: name, value, platform: "EMAIL", party_link_confirmed: false, avatar: null, party: null, merged_into: null,
 });
 const connection = { provenance: "", confidence: null, message_id: null, part: null, src_id: null, dst_id: null };
+const enumOf = (...labels: string[]) => ({ values: labels.map((label) => ({ value: label.toUpperCase(), description: label })) });
+/** The visible text of each pinned row the pane lists. */
+const pinnedRows = () => screen.getAllByRole("listitem")
+  .map((row) => row.textContent?.replace(/\s+/g, " ").trim() ?? "")
+  .filter((text) => /^(Ada|Bob|Unavailable identity)\b/.test(text));
 
 test("the Participants pane labels its sender From and each recipient by its role, readable or not", async () => {
-  fixture("related", "?related=participants:msg-one&relatedFrom=msg-one", false, [], [
+  served.models = { "messaging.Recipient": { fields: { role: enumOf("To", "Cc", "Bcc") } } };
+  fixture("related", "?related=participants:msg-one&relatedFrom=msg-one", false, [], { kind: "participants", rows: [
     { ...connection, id: "sender:msg-one", label: "Ada", role: "sender", handle: handle("h-ada", "Ada", "ada@example.com") },
     { ...connection, id: "rcp_bob", label: "Bob", role: "to", handle: handle("h-bob", "Bob", "bob@example.com") },
     { ...connection, id: "rcp_ada", label: "Ada", role: "cc", handle: handle("h-ada", "Ada", "ada@example.com") },
     { ...connection, id: "rcp_hidden", label: "Unavailable identity", role: "bcc", handle: null },
-  ]);
-  await screen.findByText("Bob");
-  const rows = () => [...document.querySelectorAll("li")]
-    .map((row) => row.textContent?.replace(/\s+/g, " ").trim() ?? "")
-    .filter((text) => /^(Ada|Bob|Unavailable identity) ·/.test(text));
-  await waitFor(() => expect(rows()).toEqual([
+  ] });
+  await waitFor(() => expect(pinnedRows()).toEqual([
     "Ada · Fromada@example.com", "Bob · Tobob@example.com", "Ada · Ccada@example.com", "Unavailable identity · Bcc",
   ]));
-  expect(rows().some((text) => text.endsWith("·"))).toBe(false);
+});
+
+test("a Handles row carries no role and is labelled by its handle's platform", async () => {
+  served.models = { "messaging.Message": { fields: { platform: enumOf("Email") } } };
+  fixture("related", "?related=handles:party-ada", false, [], { kind: "handles", rows: [
+    { ...connection, id: "hnd_bob", label: "Bob", role: "", handle: handle("h-bob", "Bob", "bob@example.com") },
+  ] });
+  await waitFor(() => expect(pinnedRows()).toEqual(["Bob · Emailbob@example.com"]));
+});
+
+test("a row with neither a role nor a readable handle shows its label alone", async () => {
+  fixture("related", "?related=participants:msg-one", false, [], { kind: "participants", rows: [
+    { ...connection, id: "rcp_hidden", label: "Unavailable identity", role: "", handle: null },
+  ] });
+  await waitFor(() => expect(pinnedRows()).toEqual(["Unavailable identity"]));
 });
 
 test("closing Related clears only its target and native collection state", async () => {

@@ -32,7 +32,10 @@ class InboxRelatedTarget:
 class InboxConnection:
     """One distinct use, participant, confirmed handle or readable relation endpoint pair.
 
-    Message endpoints are public IDs of messages the page carries.
+    Message endpoints are public IDs of messages the page carries. ``role`` is a
+    Participants row's: a recipient's envelope role, or the pane token ``sender``
+    for the message's sender. Every other row carries none; a handle's platform is
+    the handle's own.
     """
 
     id: str
@@ -245,7 +248,7 @@ class InboxRelated:
                 handles = handles.filter(Q(_sender_name__icontains=text.strip()) | Q(value__icontains=text.strip()))
             return InboxPage(
                 [
-                    InboxConnection(str(handle.sqid), handle._sender_name, role=handle.platform, handle=handle)
+                    InboxConnection(str(handle.sqid), handle._sender_name, handle=handle)
                     for handle in handles.order_by("created_at" if oldest else "-created_at", "pk")[window]
                 ],
                 handles.count(),
