@@ -1199,6 +1199,35 @@ class Message(
             if self.delivery_resolution_error(retry=action == "retry") is None
         ]
 
+    def delivery_error(self, permissions: Collection[str]) -> str | None:
+        """Why delivery last failed, for a viewer holding :attr:`delivery_action_permission`; else ``None``.
+
+        Settlement records the refusal in words safe for operators
+        (``safe_integration_failure``), so it is read by those who may act on it,
+        as :meth:`delivery_actions` is. Acceptance clears it; an operator's retry
+        keeps it until the next settlement. A list's rows carry it annotated as
+        ``_delivery_error``.
+        """
+
+        if self.delivery_action_permission not in permissions:
+            return None
+        error = self.__dict__.get("_delivery_error", models.DEFERRED)
+        if error is models.DEFERRED:
+            error = self.local_metadata.get("delivery_error")
+        return str(error) if error else None
+
+    @property
+    def delivery_attempts(self) -> int:
+        """The provider attempts settlement has counted, ``0`` before the first; an operator's retry resets it.
+
+        A list's rows carry it annotated as ``_delivery_attempts``.
+        """
+
+        attempts = self.__dict__.get("_delivery_attempts", models.DEFERRED)
+        if attempts is models.DEFERRED:
+            attempts = self.local_metadata.get("delivery_attempts")
+        return int(attempts or 0)
+
     def delivery_resolution_error(self, *, retry: bool) -> ValidationError | None:
         """The retained row's admission for an operator retry or acknowledgement.
 

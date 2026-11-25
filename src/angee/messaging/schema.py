@@ -20,6 +20,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
+from django.db.models.fields.json import KT
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, current_actor
@@ -36,6 +37,7 @@ from angee.graphql.actions import (
     action_target,
     authorized_permission_target,
     resolve_action_target,
+    session_user,
 )
 from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
 from angee.graphql.data.hasura import (
@@ -127,6 +129,9 @@ _CHANNEL_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 @strawberry_django.type(Channel)
 class ChannelType(BridgeTypeMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
+
+    # ``reply``: the viewer may answer the channel's messages and send new ones on it.
+    permissions = permissions_field(("reply",))
 
     @strawberry_django.field
     def pairing_state(self) -> PairingState | None:
@@ -341,6 +346,22 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 
         row = cast(Any, self)
         return row.delivery_actions(held_permissions(row, (Message.delivery_action_permission,)))
+
+    @strawberry_django.field(
+        annotate={"_delivery_error": KT("metadata__local__delivery_error")},
+        extensions=[PermissionsExtension((Message.delivery_action_permission,))],
+    )
+    def delivery_error(self) -> str | None:
+        """Why delivery last failed, for a viewer who may act on it as ``delivery_actions`` offers; else null."""
+
+        row = cast(Any, self)
+        return row.delivery_error(held_permissions(row, (Message.delivery_action_permission,)))
+
+    @strawberry_django.field(annotate={"_delivery_attempts": models.F("metadata__local__delivery_attempts")})
+    def delivery_attempts(self) -> int:
+        """The provider attempts delivery has made, for every reader of the message."""
+
+        return cast(Any, self).delivery_attempts
 
     platform: auto
     direction: auto
@@ -1307,6 +1328,24 @@ class MessagingQuery:
         edges = ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk")
         return list(with_record_reference_access(edges))
 
+
+_COMPOSED: dict[str, tuple[str, str]] = {
+    Message.MessageStatus.DRAFT: ("Message held for approval.", "Message scheduled."),
+    Message.MessageStatus.QUEUED: ("Message queued for delivery.", "Message queued; delivery will be retried."),
+    Message.MessageStatus.SENT: ("Message sent.", "Message sent."),
+    Message.MessageStatus.SYNCED: ("Message sent.", "Message sent."),
+    Message.MessageStatus.EDITED: ("Message sent.", "Message sent."),
+    Message.MessageStatus.FAILED: ("Message not delivered.", "Message not delivered."),
+    Message.MessageStatus.UNCERTAIN: ("Message delivery is uncertain.", "Message delivery is uncertain."),
+}
+"""What ``compose_message`` reports by the status of the message it returns, ``(unscheduled, scheduled)``.
+
+Closed over every status: a keyed replay returns its original as it is now,
+held, queued, retrying, sent or failed. The second banner applies when the row
+carries a release or retry time.
+"""
+
+
 @strawberry.type
 class MessagingMutation:
     """Inbox lifecycle verbs and record-backed chatter mutations."""
@@ -1320,6 +1359,49 @@ class MessagingMutation:
         other = require_instance_for_id(Message, right, queryset=rows)
         first.identify_source_copy(other, same=same)
         return True
+
+    @strawberry.mutation(name="compose_message")
+    @action_guard("Message not sent.")
+    def compose_message(
+        self,
+        info: strawberry.Info,
+        text: str,
+        idempotency_key: str,
+        queued: bool,
+        parent: PublicID | None = None,
+        channel: PublicID | None = None,
+        to: list[str] | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        subject: str = "",
+        attachments: list[PublicID] | None = None,
+        scheduled_at: datetime | None = None,
+    ) -> ActionResult:
+        """Write one outgoing message (``MessageManager.compose``): an answer to ``parent``, or an email on ``channel``.
+
+        A verb, not the messages resource's insert: that insert decides the
+        message's ``create`` rather than ``reply`` on the channel, looks its replay
+        up before deciding, and fingerprints the request as sent, where compose
+        replays the same intent whatever its hold; and none of compose's
+        arguments is a message column. ``compose`` owns every decision and
+        refusal; ``id`` is the message, fresh or replayed.
+        """
+
+        message = Message.objects.compose(
+            actor=session_user(info),
+            # compose refuses an answer that names a channel before it reads
+            # anything, so the parent is read, under the actor, only when answered.
+            parent=(
+                None if parent is None
+                else _message(parent) if channel is None else Message(pk=public_pk_decoder(Message)(parent))
+            ),
+            channel=None if channel is None else Channel(pk=public_pk_decoder(Channel)(channel)),
+            to=to or (), cc=cc or (), bcc=bcc or (), subject=subject, text=text,
+            attachments=[File(pk=public_pk_decoder(File)(file)) for file in attachments or ()],
+            idempotency_key=idempotency_key, queued=queued, scheduled_at=scheduled_at,
+        )
+        unscheduled, scheduled = _COMPOSED[message.status]
+        return ActionResult(ok=True, message=scheduled if message.scheduled_at else unscheduled, id=message.sqid)
 
     @strawberry.mutation(name="acknowledge_message_delivery")
     @action_guard("Delivery acknowledgement refused.")
