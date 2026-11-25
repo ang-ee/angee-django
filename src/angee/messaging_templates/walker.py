@@ -1173,6 +1173,10 @@ class TemplateWalker:
                     line.count(opener) for opener in OPENERS) > OPENERS_PER_LINE), None)) is not None:
                 refuse(f"a line of {column} is over {LINE_LIMIT} characters or holds over {OPENERS_PER_LINE} "
                        f"{{{{, {{% or {{# ({line[:40]!r})")
+            elif any(opener in tag_re.sub("", text) for opener in OPENERS):
+                # A comment swallows one at render, but the Markdown pass scans each to the end of its line first.
+                refuse(f"{column} holds {{{{, {{% or {{# that opens no template code: write "
+                       "{% templatetag openvariable %} and its kin for a literal one")
         refusals.extend(f"{name}: {reason}" for reason in markup.source_refusals(row.source))
         if refusals:
             return _RowCheck(name, refusals=tuple(refusals))

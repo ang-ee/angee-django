@@ -70,6 +70,7 @@ from angee.messaging_templates.html_checks import (
     check_html,
     compiled_expression,
 )
+from angee.messaging_templates.rendering import MarkdownFormatHandler
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
@@ -391,7 +392,8 @@ LONG = "a" * 1_001
                      "filters an object or a list", id="5-container-filter"),
         pytest.param({"source": "{{ a|linebreaksbr:'x' }}", "variables": {"a": "x"}, "format": "html",
                       "text_source": "x"}, "linebreaksbr takes no argument", id="5-linebreaksbr-argument"),
-        pytest.param({"source": "a {{ b", "format": "html", "text_source": "x"}, "text holds {{", id="6-text-opener"),
+        pytest.param({"source": "a {{ b", "format": "html", "text_source": "x"}, "opens no template code",
+                     id="6-text-opener"),
         pytest.param({"source": "<p>{{ a }}</p>", "format": "html", "text_source": "{{ a|linebreaksbr }}",
                       "variables": {"a": "x"}}, "writes <br> into plain text", id="7-linebreaksbr-text"),
         pytest.param({"source": "Hi{% endblock %}{% block x %}X"}, "a template writes neither", id="8-author-block"),
@@ -1119,7 +1121,7 @@ def test_reference_definitions_off(plain: Any) -> None:
     source = f'[r]: /u "{title}"\n\n' + "\n".join(["[r]" * 30] * 40)
     with _within(0.5):
         refusals = _refusals(_unsaved(source=source))
-        assert any("text holds {{" in message for message in refusals), refusals
+        assert any("opens no template code" in message for message in refusals), refusals
         assert not any("form holds over 60" in message for message in refusals), refusals
     with system_context(reason="tests.messaging_templates.render.forms"):
         forms = TemplateWalker().check(_unsaved(source="[r]: /u\n\n[r] and [r]")).forms
@@ -1800,6 +1802,8 @@ def test_the_markdown_pass_reads_internals_markdown_it_still_has() -> None:
     for method in ("normalizeLink", "validateLink", "add_render_rule"):
         assert callable(getattr(parser, method)), method
     assert callable(parser.inline.ruler.before) and callable(parser.core.ruler.push)
+    # The label-scan cap reads the block pass alone, before the inline pass runs.
+    assert list(inspect.signature(parser.block.parse).parameters) == ["src", "md", "env", "outTokens"]
     tokens = parser.parse("# Title\n\n[a](https://example.test/) **b**\n")
     assert [token.type for token in tokens] == [
         "heading_open", "inline", "heading_close", "paragraph_open", "inline", "paragraph_close"]
@@ -2264,7 +2268,7 @@ def test_line_caps_bound_lexing(plain: Any) -> None:
             assert _refusals(_unsaved(source=source)), case
     with _within(1.0):
         admitted = (("{{" * 30 + "x" * 999)[:999] + "\n") * 50
-        assert any("text holds {{" in message for message in _refusals(_unsaved(source=admitted)))
+        assert any("opens no template code" in message for message in _refusals(_unsaved(source=admitted)))
 
 
 def test_budget_sticky_through_if(plain: Any, kit: Any) -> None:
@@ -2404,7 +2408,7 @@ def _pass_case(name: str) -> tuple[TemplateWalk, dict[str, Any]]:
     return _walk(template), values
 
 
-ADMITTED_PREVIEWS = ("admitted", "review", "dated")
+ADMITTED_PREVIEWS = ("admitted", "review", "dated", "onebracket")
 
 
 def _preview_cases() -> dict[str, Any]:
@@ -2468,12 +2472,68 @@ def _preview_cases() -> dict[str, Any]:
         **{name: _mail("\n".join(f'{{% include "parts/{name}{index}" only %}}' for index in range(count)),
                        format="html", text_source="x", key=f"tests.{name}")
            for name, (_, count) in WALKED_PARTS.items()},
+        "onebracket": _bracketed("onebracket", "![" + STARS[:997]),
+        "images": _bracketed("images", IMAGES),
         "combined": _mail(
             combined + "\n" + "\n".join(f'{{% include "parts/commented{index}" only %}}' for index in range(45)),
             {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"}, format="html", text_source=combined,
             key="tests.combined", subject=LINE, sample={**review, "items": [0] * 450, "few": [0] * 50},
         ),
     }
+
+
+STARS = ("*_" * 499)[:999]
+IMAGES = "".join(("![" if index % 33 == 0 else "") + "*_" for index in range(485))[:999]
+"""A line of emphasis delimiters, and one with thirty image openers among them: an author's costliest Markdown."""
+
+
+def _bracketed(prefix: str, first: str) -> Any:
+    """The review loop beside three commented parts of star lines, each opening on ``first``: the same caps."""
+
+    lines = "\n".join([first] + [STARS] * 48)
+    heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
+    hidden = f'\n{{% include "parts/{prefix}0" only %}}{{% include "parts/{prefix}1" only %}}'
+    commented = "{% comment %}\n\n" + lines + "\n\n{% endcomment %}"
+    for index in range(2):
+        _row("part", f"{prefix}{index}", source=commented)
+    room = 150_000 - len(heavy + hidden) - len(heavy) - 2 * len(commented) - 300
+    _row("part", f"{prefix}2", source="{% comment %}\n\n" + lines[:room] + "\n\n{% endcomment %}")
+    return _mail(heavy + hidden + f'{{% include "parts/{prefix}2" only %}}',
+                 {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"}, format="html", text_source=heavy,
+                 key=f"tests.{prefix}", subject=LINE,
+                 sample={**TIMED_VALUES, "x": "a" * 9_999 + "b", "y": "a" * 9_999 + "c", "items": [0] * 450,
+                         "few": [0] * 50})
+
+
+def test_a_markdown_row_s_label_scans_are_capped(plain: Any) -> None:
+    """Each [ makes the Markdown pass scan the rest of its paragraph, list item or heading: a row whose scans would
+    cover over 50,000 characters is refused before the pass runs; one [ before a whole paragraph, and a list of fifty
+    links, are admitted."""
+
+    del plain
+    paragraph = "\n".join(["![" + STARS[:997]] + [STARS] * 48)
+    assert _refusals(_unsaved("part", "one", source="{% comment %}\n\n" + paragraph + "\n\n{% endcomment %}")) == []
+    links = "\n".join(f"- [Link {index}](https://example.test/{index})" for index in range(50))
+    assert _refusals(_unsaved("part", "list", source=links)) == []
+    for source in ("![![" + paragraph[4:], "\n".join([IMAGES] * 49)):
+        refusals = _refusals(_unsaved("part", "many", source=source))
+        assert len(refusals) == 1 and "would scan across" in refusals[0] and "over 50000" in refusals[0], refusals
+
+
+def test_an_opener_that_opens_no_template_code_is_refused_before_the_markdown_pass(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unclosed {{ inside a comment renders nothing, but the Markdown pass scanned each to the end of its line:
+    refused before it runs, comments included; template code holding {{ as text stays."""
+
+    del plain
+    passes: list[Any] = []
+    _recording(monkeypatch, MarkdownFormatHandler, "forms", lambda handler, row: passes.append(row))
+    refusals = _refusals(_unsaved("part", "open", source="{% comment %}{{ x{% endcomment %}"))
+    assert refusals == ["parts/open: source holds {{, {% or {# that opens no template code: write "
+                        "{% templatetag openvariable %} and its kin for a literal one"], refusals
+    assert passes == []
+    assert _refusals(_unsaved("part", "noted", source="Hi {# a {{ b #}")) == []
 
 
 COMMENTED_QUOTES = "{% comment %}\n\n" + "\n\n".join(["> > > a"] * 333) + "\n\n{% endcomment %}"
@@ -2718,6 +2778,13 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
     "fivedeep": (4_968, [], []),
     "thousand": (6_304, [], []),
     "combined": (19_515, [], []),
+    # The costliest admitted Markdown: the review case's work exactly, its parts opening on one [ each.
+    "onebracket": (
+        149_985, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]],
+        [(50, 0, 30_000), (453, 18_900, 450_000), (450, 18_900, 450_000)],
+    ),
+    # Refused by each part's own label-scan cap, before the Markdown pass runs.
+    "images": (149_981, [], []),
     "rules": (49_068, [], []),
     "dated": (
         23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
@@ -2808,6 +2875,8 @@ def test_preview_time(plain: Any, kit: Any) -> None:
     bound = _scaled(2.0)
     print(f"preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < bound, (spent, bound)
+    # The costliest admitted Markdown, measured back to back with the review case it extends.
+    assert spent["onebracket"] < 1.3 * spent["review"], spent
 
 
 # ---------- preview, its warnings and its read ----------
