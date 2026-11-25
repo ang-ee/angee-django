@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/refine`: A caller's write cancels a refetch that no enabled observer
+  watches. `invalidateAuthoredQueries` cancelled only reads with no data and
+  refetched only active reads, so a read that had data and was still
+  refetching after its last observer had left, or whose observers are all
+  disabled, committed its pre-write answer after the write and cleared the
+  invalid mark; returning within the stale time showed that answer with no
+  refetch. The refetch is now cancelled: the read keeps the data it had, stays
+  invalid and refetches when an enabled observer mounts. A refresh asked of an
+  on-demand read just before the write is dropped with it.
 - `@angee/ui`: A form section that holds only hidden fields shows nothing. A
   `hidden` field keeps its value and renders no control, but a group whose
   fields were all hidden still counted as having something to show: the sheet

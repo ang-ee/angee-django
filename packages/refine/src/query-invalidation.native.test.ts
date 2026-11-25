@@ -268,6 +268,112 @@ test.each([true, false])("empty %s-disabled/inactive initial requests cancel wit
   }
 });
 
+test("a caller write cancels a refetch that outlived its last observer: its pre-write answer never commits, and a return refetches", async () => {
+  const cache = client();
+  const left = pending<string[]>();
+  let requests = 0;
+  const options = {
+    queryKey: ["notes", "left"],
+    meta: { angeeModels: ["notes.Note"] },
+    // The transport ignores abort, so a refetch keeps running after its last observer has gone.
+    queryFn: () => (++requests === 2 ? left.promise : Promise.resolve([`answer ${requests}`])),
+  };
+  const first = new QueryObserver(cache, options);
+  const leave = first.subscribe(() => undefined);
+  try {
+    await vi.waitFor(() => expect(first.getCurrentResult().data).toEqual(["answer 1"]));
+    void first.refetch();
+    await vi.waitFor(() => expect(requests).toBe(2));
+    leave();
+    // The premise: nobody observes the read, and its refetch is still on its way.
+    expect(cache.getQueryCache().find({ queryKey: options.queryKey })?.getObserversCount()).toBe(0);
+    expect(cache.getQueryState(options.queryKey)).toMatchObject({ data: ["answer 1"], fetchStatus: "fetching" });
+
+    await invalidateAuthoredQueries(cache, ["notes.Note"]);
+    expect(cache.getQueryState(options.queryKey)).toMatchObject({ data: ["answer 1"], fetchStatus: "idle", isInvalidated: true });
+    expect(requests).toBe(2);
+    left.resolve(["answer from before the write"]);
+    await left.promise;
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+    expect(cache.getQueryState(options.queryKey)).toMatchObject({ data: ["answer 1"], isInvalidated: true });
+
+    const back = new QueryObserver(cache, options);
+    const leaveAgain = back.subscribe(() => undefined);
+    await vi.waitFor(() => expect(back.getCurrentResult().data).toEqual(["answer 3"]));
+    expect(cache.getQueryState(options.queryKey)?.isInvalidated).toBe(false);
+    leaveAgain();
+  } finally {
+    left.resolve([]);
+    cache.clear();
+  }
+});
+
+test("a caller write cancels a refetch that only a disabled observer watches: it keeps the data it had, invalid, and is not sent again", async () => {
+  const cache = client();
+  const asked = pending<string[]>();
+  let requests = 0;
+  const options = {
+    queryKey: ["notes", "on demand"],
+    meta: { angeeModels: ["notes.Note"] },
+    queryFn: () => (++requests === 2 ? asked.promise : Promise.resolve([`answer ${requests}`])),
+  };
+  await cache.fetchQuery(options);
+  // A read that fetches only when the person asks, and is asked while a write is on its way.
+  const observer = new QueryObserver(cache, { ...options, enabled: false });
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    void observer.refetch();
+    await vi.waitFor(() => expect(requests).toBe(2));
+    expect(cache.getQueryCache().find({ queryKey: options.queryKey })?.getObserversCount()).toBe(1);
+
+    await invalidateAuthoredQueries(cache, ["notes.Note"]);
+    expect(cache.getQueryState(options.queryKey)).toMatchObject({ data: ["answer 1"], fetchStatus: "idle", isInvalidated: true });
+    asked.resolve(["answer from before the write"]);
+    await asked.promise;
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+    expect(cache.getQueryState(options.queryKey)).toMatchObject({ data: ["answer 1"], isInvalidated: true });
+    expect(requests).toBe(2);
+  } finally {
+    asked.resolve([]);
+    unsubscribe(); cache.clear();
+  }
+});
+
+test("a caller write during an observed refetch replaces it, and whoever awaits that refetch waits for the resend's answer", async () => {
+  const cache = client();
+  const before = pending<string[]>();
+  const after = pending<string[]>();
+  let requests = 0;
+  const options = {
+    queryKey: ["notes", "observed"],
+    meta: { angeeModels: ["notes.Note"] },
+    queryFn: () => { requests++; return requests === 1 ? Promise.resolve(["first answer"]) : requests === 2 ? before.promise : after.promise; },
+  };
+  const observer = new QueryObserver(cache, options);
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["first answer"]));
+    const awaited = observer.refetch();
+    let settled = false;
+    void awaited.then(() => { settled = true; });
+    await vi.waitFor(() => expect(requests).toBe(2));
+    const invalidated = invalidateAuthoredQueries(cache, ["notes.Note"]);
+    // The resend is on its way; the awaited refetch has not settled with the data from before it.
+    expect(requests).toBe(3);
+    for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+    expect(settled).toBe(false);
+    after.resolve(["answer after the write"]);
+    await invalidated;
+    expect((await awaited).data).toEqual(["answer after the write"]);
+    before.resolve(["answer from before the write"]);
+    await before.promise;
+    expect(observer.getCurrentResult().data).toEqual(["answer after the write"]);
+  } finally {
+    before.resolve([]); after.resolve([]);
+    unsubscribe(); cache.clear();
+  }
+});
+
 test("populated disabled/inactive queries retain data and unrelated initial queries remain pending", async () => {
   const cache = client();
   const unrelated = pending<string[]>();
