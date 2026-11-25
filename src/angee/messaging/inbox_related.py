@@ -77,11 +77,10 @@ class InboxRelated:
     def recipients(self) -> Any:
         """The message's recipient rows, including unavailable handles without leaking their identity.
 
-        The Participants pane lists the sender first, from ``Message.sender``; a
-        ``from`` row repeats it and is never listed.
+        The Participants pane lists the sender first, from ``Message.sender``.
         """
 
-        return self.inbox.participants.filter(message=self.message, role__in=("to", "cc", "bcc"))
+        return self.inbox.recipients.filter(message=self.message)
 
     def participant_count(self) -> int:
         """The pane's participants: the sender, when the message has one, and its recipients."""
@@ -263,11 +262,11 @@ class InboxRelated:
             if sender_id is not None and not found.filter(pk=sender_id).exists():
                 sender_id = None
         # The sender leads the recipients in either order; the recipients' window shifts past it.
+        # A sender has no envelope role, so its row carries none.
         lead = int(sender_id is not None)
         ordered = recipients.order_by("created_at" if oldest else "-created_at", "pk")
         selected = [
-            *([(f"sender:{message.sqid}", sender_id, recipients.model.ParticipantRole.FROM.value)]
-              if lead and window.start == 0 else []),
+            *([(f"sender:{message.sqid}", sender_id, "")] if lead and window.start == 0 else []),
             *((str(row.sqid), row.handle_id, row.role)
               for row in ordered[max(window.start - lead, 0):window.stop - lead]),
         ]

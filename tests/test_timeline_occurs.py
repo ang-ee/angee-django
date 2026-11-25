@@ -237,7 +237,7 @@ def test_correspondence_probe_finds_only_eligible_mail(correspondence, target, m
     data = correspondence
     message = type(data.message)._base_manager.filter(pk=data.message.pk)
     if mail in ("received", "trashed", "chatter"):
-        apps.get_model("messaging", "Participant")._base_manager.create(
+        apps.get_model("messaging", "Recipient")._base_manager.create(
             message=data.message, thread=data.thread, handle=data.handle, role="to",
         )
     if mail in ("received", "none"):

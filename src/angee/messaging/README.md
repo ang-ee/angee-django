@@ -29,11 +29,20 @@ statement, and a kept-separate decision splits the redirect and refuses a later
 fold. The pair rule principal is granted read and write on threads and messages
 like the parties statement sources.
 
+Whom a message is addressed to is one concept at two levels. As addresses it is
+the message's `Recipient` rows, one per handle and envelope role (`to`, `cc`,
+`bcc`) beside its one sender, `Message.sender`; as accounts it is chatter's direct
+addressees, `recipient_user_ids` when a comment is posted and
+`suggested_recipients` when one is composed. A project whose migration history
+still has messaging's `Participant` copies the template
+`compose_migrations/messaging/participants_to_recipients.py`, which renames the
+model with its rows; `CHANGELOG.md` gives the steps.
+
 An authoritative source audience correction uses
 `Message.objects.correct_source_thread(message, channel=..., expected_thread=..., thread=...)`.
 The native owner compares the locked previous thread, requires the envelope and
 both threads to belong to that channel, and refuses locally authored messages.
-It preserves content and repairs participants and both physical thread counters.
+It preserves content and repairs recipients and both physical thread counters.
 `ingest(..., explicit_thread=..., expected_thread=...)` composes the same command
 with envelope ingestion; absent the exact precondition, changing an explicit
 source thread remains refused. Historical ingestion suppresses live message
@@ -42,7 +51,7 @@ events while retaining native content history and counter updates.
 `Message.objects.compose_reply(parent, *, body, sender, actor, ...)` writes a reply
 on its parent's thread and channel under the channel's `reply` grant; the reply's
 `parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
-complete envelope: `to` participants naming the parent's `Reply-To` addresses
+complete envelope: `to` recipients naming the parent's `Reply-To` addresses
 when it carries any (`Message.reply_addresses`, the one reader of that header),
 else the handle it was sent from (RFC 5322 §3.6.2); the
 subject `Re: <thread title>` (the title is the normalized subject, so prefixes

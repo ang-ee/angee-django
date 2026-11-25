@@ -271,7 +271,7 @@ test.each([false, true])("a Message record reads like an email, offers shared mo
     id: "msg-1", platform: null, thread: null, parent: null, channel: { id: "channel", display_name: "AP mailbox" },
     title: "Invoice 42", preview: "Please find the invoice attached.", starred: false, sender: SENDER,
     sent_at: "2026-10-01T09:00:00Z", created_at: "2026-10-01T09:00:01Z",
-    participants: [{ id: "ptp-2", role: "TO", handle: { display_name: "Accounts", value: "ap@example.test" } }],
+    recipients: [{ id: "rcp-2", role: "TO", handle: { display_name: "Accounts", value: "ap@example.test" } }],
     parts: [
       { id: "part-body", fragment: { text: "The complete retained message body." } },
       { id: "part-file", name: "invoice.pdf", type: "application/pdf", file: { filename: "invoice.pdf", url: "/files/invoice.pdf" } },

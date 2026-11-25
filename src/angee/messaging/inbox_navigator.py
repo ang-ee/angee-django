@@ -114,12 +114,9 @@ class InboxNavigator(MessageInbox):
         activity = self.coverage(self.coverage_input)
         if self.options.recipient_activity:
             activity = activity.annotate(
-                _recipient=FilteredRelation(
-                    "participants",
-                    condition=Q(direction="outbound", participants__role__in=("to", "cc", "bcc")),
-                ),
+                _recipient=FilteredRelation("recipients", condition=Q(direction="outbound")),
             ).annotate(
-                _recipient_readable=Exists(self.participants.filter(pk=OuterRef("_recipient__pk"))),
+                _recipient_readable=Exists(self.recipients.filter(pk=OuterRef("_recipient__pk"))),
             ).filter(
                 Q(direction="inbound") | Q(direction="outbound", _recipient_readable=True)
             ).alias(

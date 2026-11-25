@@ -33,7 +33,7 @@ from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUn
 
 logger = logging.getLogger(__name__)
 
-# Rendered from the message's own facts (participants, TITLE, external id, parent),
+# Rendered from the message's own facts (sender, recipients, TITLE, external id, parent),
 # so a retained header part never adds a second copy of one.
 _ENVELOPE_HEADERS = frozenset({"bcc", "cc", "from", "in-reply-to", "message-id", "references", "subject", "to"})
 _HEADER_NAME_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
@@ -163,9 +163,8 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
         part_model = apps.get_model("messaging", "Part")
         parts = part_model.objects.reading_order_for_message(message)
-        participants = list(message.participants.select_related("handle").order_by("role", "pk"))
         sender = self._sender(message)
-        recipients = self._recipients(message, participants)
+        recipients = self._recipients(message)
         subject = next(
             (
                 fragment.text
@@ -221,15 +220,14 @@ class AnymailEmailChannelBackend(ChannelBackend):
             return values[0]
         return formataddr(self.outbound_sender())
 
-    def _recipients(self, message: Any, participants: list[Any]) -> dict[str, list[str]]:
+    def _recipients(self, message: Any) -> dict[str, list[str]]:
+        """The message's addresses per envelope role, else its source's for a role it has none in."""
+
         recipients: dict[str, list[str]] = {"to": [], "cc": [], "bcc": []}
-        for participant in participants:
-            role = str(participant.role)
-            if role not in recipients:
-                continue
-            address = _address(participant.handle)
+        for row in message.recipients.select_related("handle").order_by("role", "pk"):
+            address = _address(row.handle)
             if address:
-                recipients[role].append(address)
+                recipients[str(row.role)].append(address)
         for role in recipients:
             if not recipients[role]:
                 recipients[role].extend(_source_addresses(message, role))

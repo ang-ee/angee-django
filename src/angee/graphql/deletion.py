@@ -257,7 +257,7 @@ class DeletePreview:
         channel's ``Integration`` row) as one more, since deleting an MTI child deletes
         its parent rows too. ``counts`` names the *additional* purged models and their
         totals — the deletion scope **including** the ``CASCADE`` subtrees (for a channel:
-        its threads and messages plus their parts, reactions, participants, followers,
+        its threads and messages plus their parts, reactions, recipients, followers,
         activities, notifications, edges, stars, and tracking values) — so summing them
         equals the rows the delete removes. Any ``type(target)`` entry in ``counts`` is
         ignored so a caller that re-counts the root cannot double it against the root's

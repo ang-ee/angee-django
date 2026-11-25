@@ -16,7 +16,7 @@ from angee.messaging.inbox_navigator import InboxNavigator, InboxNavigatorOption
 from angee.messaging.inbox_related import InboxRelated
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.inbox_transcript import InboxTranscript
-from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Participant, Party, Thread
+from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Party, Recipient, Thread
 from angee.nexus.inbox import NexusInboxNavigator, NexusInboxNavigatorOptions
 from tests.conftest import make_integration
 from tests.test_messaging import _storage_drive
@@ -344,7 +344,7 @@ def test_confirmed_senders_consolidate_but_suggestions_do_not():
             channel=channel, created_by=owner, status="sent", direction="outbound", sent_at=T0
         )
         for handle in handles[:2]:
-            Participant._base_manager.create(created_by=owner, message=outbound, handle=handle, role="to")
+            Recipient._base_manager.create(created_by=owner, message=outbound, handle=handle, role="to")
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         inbound = InboxNavigator(Message.objects.all(), InboxCoverage(), InboxNavigatorOptions()).page()
@@ -480,7 +480,7 @@ def test_navigator_name_fallbacks_and_recipient_overlap_keep_exact_totals():
             channel=channel, created_by=owner, status="sent", direction="outbound", sent_at=T0
         )
         for handle in handles:
-            Participant._base_manager.create(created_by=owner, message=outbound, handle=handle, role="to")
+            Recipient._base_manager.create(created_by=owner, message=outbound, handle=handle, role="to")
     with actor_context(owner):
         for options, count, messages, labels in (
             (InboxNavigatorOptions(sort="name"), 2, 3, ["Alpha", "Beta"]),
@@ -645,9 +645,8 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
         assert inbox.relation_kinds() == ["quote", "reply"]
 
 
-@pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
-def test_related_participants_list_the_message_sender_then_its_recipients_once(from_row):
-    """The pane lists rows, so a read ``from`` row would show the sender a second time; it never does."""
+def test_related_participants_list_the_message_sender_then_its_recipients():
+    """The pane lists the sender from the message, with no envelope role, then the recipient rows."""
     owner = User.objects.create_user(username="explorer-participants")
     other = User.objects.create_user(username="explorer-participants-hidden")
     channel = make_integration(owner.username, model=Channel, owner=owner)
@@ -665,21 +664,18 @@ def test_related_participants_list_the_message_sender_then_its_recipients_once(f
             for sender in (ada, hidden, None)
         )
         to, cc, unsent_to = (
-            Participant._base_manager.create(created_by=owner, message=row, handle=handle, role=role)
+            Recipient._base_manager.create(created_by=owner, message=row, handle=handle, role=role)
             for row, handle, role in ((message, bob, "to"), (message, hidden, "cc"), (unsent, bob, "to"))
         )
         for minutes, row in enumerate((to, cc)):
-            Participant._base_manager.filter(pk=row.pk).update(created_at=T0 + timedelta(minutes=minutes))
-        if from_row:
-            for row in (message, unattributed):
-                Participant._base_manager.create(created_by=owner, message=row, handle=row.sender, role="from")
+            Recipient._base_manager.filter(pk=row.pk).update(created_at=T0 + timedelta(minutes=minutes))
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         related = InboxRelated(inbox, f"participants:{message.sqid}")
         assert (related.summary().label, related.summary().count) == ("Participants", 3)
         page = related.page(oldest=True)
         assert [(row.id, row.label, row.role, row.handle) for row in page.rows] == [
-            (f"sender:{message.sqid}", "Ada", "from", ada),
+            (f"sender:{message.sqid}", "Ada", "", ada),
             (str(to.sqid), "Bob", "to", bob),
             (str(cc.sqid), "Unavailable identity", "cc", None),
         ]
