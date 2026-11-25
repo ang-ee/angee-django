@@ -51,6 +51,42 @@ describe("deserializeFormSpec", () => {
     expect(fields[0]?.itemTemplate).toBeUndefined();
   });
 
+  describe("a string's declared format", () => {
+    const date = { type: "string", format: "date", widget: "date" };
+
+    test("is carried for the backend's shape: at the top level, nullable, as a list item and as a nested member", () => {
+      const [top, nullable, list, nested] = deserializeFormSpec({ type: "object", properties: {
+        top: date,
+        nullable: { ...date, nullable: true },
+        list: { type: "array", widget: "list", items: date },
+        nested: { type: "object", widget: "object", properties: { at: { type: "string", format: "date-time", widget: "datetime" } } },
+      } }, defaultWidgets);
+      expect(top).toMatchObject({ kind: "string", widget: "date", format: "date" });
+      expect(nullable).toMatchObject({ kind: "string", widget: "date", format: "date", nullable: true });
+      expect(list?.itemTemplate).toMatchObject({ kind: "string", widget: "date", format: "date" });
+      expect(nested?.objectTemplate?.[0]).toMatchObject({ kind: "string", widget: "datetime", format: "date-time" });
+    });
+
+    test.each(["date", "date-time", "time"] as const)("is carried for a raw schema's %s, nullable or not, under the text widget it takes", (format) => {
+      const [plain, nullable] = deserializeFormSpec({ properties: {
+        plain: { type: "string", format },
+        nullable: { anyOf: [{ type: "string", format }, { type: "null" }] },
+      } }, defaultWidgets);
+      expect(plain).toMatchObject({ kind: "string", widget: "text", format });
+      expect(nullable).toMatchObject({ kind: "string", widget: "text", format, nullable: true });
+    });
+
+    test.each([
+      ["an email", { type: "string", format: "email" }],
+      ["an address", { type: "string", format: "uri" }],
+      ["a duration", { type: "string", format: "duration" }],
+      ["a date on a type that is not a string", { type: "integer", format: "date" }],
+    ])("guard: is not carried for %s, which only the validator reads", (_case, schema) => {
+      const [field] = deserializeFormSpec({ properties: { value: schema } }, defaultWidgets);
+      expect(field).not.toHaveProperty("format");
+    });
+  });
+
   test("projects declared objects through nested fields while keeping explicit JSON opaque", () => {
     const schema = { type: "object", properties: {
       identity: { type: "string", title: "Identity", readOnly: true, default: "retained" },

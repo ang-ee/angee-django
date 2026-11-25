@@ -12,6 +12,7 @@ import {
 import { testDataResource } from "@angee/metadata/testing";
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -760,12 +761,40 @@ describe("ActionFormDialog", () => {
     expect(submit.mock.calls[0]![0]).toStrictEqual({ name: "Main" });
   });
 
-  test.fails("defect: a schema dialog's date carried as text, a string kind with only its widget to tell it from text, holding null offers Set value, which writes an empty text", async () => {
+  test("a schema dialog's date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
     renderDialog({ id: "plan", label: "Plan", submit: vi.fn(), args: jsonSchemaActionArgs({
-      type: "object", properties: { due: { anyOf: [{ type: "string", widget: "date" }, { type: "null" }], label: "Due" } },
+      type: "object", properties: { due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" } },
     }, defaultWidgets) });
     await screen.findByText("Left empty");
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  test("a schema dialog treats Add item on a list of dates carried as text as it treats a list of integers", async () => {
+    const stateAfterAddItem = async (items: Record<string, unknown>) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Planned." });
+      renderDialog({ id: "plan", label: "Plan", submit, args: jsonSchemaActionArgs({
+        type: "object", properties: { days: { type: "array", widget: "list", label: "Days", items } },
+      }, defaultWidgets) });
+      const messages = () => screen.queryAllByText(/^(This field is required\.|Enter a valid)/).map((node) => node.textContent);
+      fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+      const button = screen.getByRole("button", { name: "Plan" }) as HTMLButtonElement;
+      // The gate read the new item's rule: it disabled the submit. A dialog with a resolver shows a rule's
+      // message only on a submit attempt, so none can appear before one.
+      await waitFor(() => expect(button.disabled).toBe(true));
+      const added = { disabled: button.disabled, messages: messages() };
+      fireEvent.submit(button.closest("form")!);
+      // The message is the check's answer to this attempt, which it refused: the form calls the action's
+      // submit only when the check passes, so it never started and a slow one cannot land later.
+      await screen.findByText("This field is required.");
+      const attempted = { submitted: submit.mock.calls.length, messages: messages() };
+      cleanup();
+      return { added, attempted };
+    };
+    const dates = await stateAfterAddItem({ type: "string", format: "date", widget: "date" });
+    const integers = await stateAfterAddItem({ type: "integer" });
+    expect(integers.added).toStrictEqual({ disabled: true, messages: [] });
+    expect(integers.attempted.submitted).toBe(0);
+    expect(dates).toStrictEqual(integers);
   });
 
   test("serializes datetime args with the picked local UTC offset", async () => {
