@@ -27,6 +27,9 @@ with the codes ``not_a_baseline`` and ``no_baseline``). A row's
 preview it (``MessageTemplate.preview``), in the kit it names or the default one;
 it refuses as the verbs do: a signed-out caller gets the session's GraphQL error,
 and a reader who may not preview the row a ``PERMISSION_DENIED`` GraphQL error.
+Its rendered message carries the row's ``language`` and the ``direction`` of the
+mail's own text (``RenderedMessage.direction``), for a page that shows the
+subject, preheader or plain text outside the HTML.
 """
 
 from __future__ import annotations

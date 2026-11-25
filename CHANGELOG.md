@@ -290,7 +290,9 @@ live in code docstrings.
     the rows naming its kind and key, a read for one record's page. Each verb
     asks one predicate first (`MessageTemplate.override_refusal()`,
     `keep_override_refusal()`), and a row projects its answers for the reader as
-    `can_override` and `can_keep_override`. The mutations refuse as the
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`rtl` or `ltr`) for the subject, preheader and plain
+    text a page shows outside the mail's frame. The mutations refuse as the
     framework's actions do: a signed-out caller gets the session's GraphQL error,
     a caller who may not create or write the override a `PERMISSION_DENIED`
     GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or

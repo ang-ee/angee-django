@@ -1,5 +1,6 @@
 """What the message templates console reads and creates: a row's permissions, its kind's message fields, the rows
-naming it, and the deployment's own row, decided before any work and seeded by the server."""
+naming it, the direction its preview says, and the deployment's own row, decided before any work and seeded by the
+server."""
 
 from __future__ import annotations
 
@@ -414,6 +415,37 @@ def test_backlinks_time(blocks: None) -> None:
     print(f"backlinks CPU 25 blocks {spent:.3f}s load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     assert len(rows) == 25
     assert spent < 1.0
+
+
+# ---------- what a preview says ----------
+
+
+_DIRECTED = "query($id: ID!) { message_template_preview(template: $id) { rendered { subject html direction } } }"
+_UNDIRECTED = "query($id: ID!) { message_template_preview(template: $id) { rendered { subject html } } }"
+
+
+def test_a_preview_says_the_direction_of_the_mails_own_text(library: dict[str, Any]) -> None:
+    """An Arabic mail whose subject starts with a Latin brand name reads right to left, as its HTML's ``dir`` says,
+    and an English one left to right. Reading the direction costs no statement and adds no gate."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-director")
+    member = create_user("messaging-templates-console-undirected")
+    schema = _schema()
+    arabic = _row("template", "tests.welcome", "ar", subject="Acme: مرحبا", source="مرحبا بك.")
+    english = _row("template", "tests.welcome", subject="Acme: welcome", source="Welcome.")
+    for row, direction in ((arabic, "rtl"), (english, "ltr")):
+        variables = {"id": public_id_of(row)}
+        undirected = _measured(schema, _UNDIRECTED, variables, admin)
+        directed = _measured(schema, _DIRECTED, variables, admin)
+        rendered = directed.data["message_template_preview"]["rendered"]
+        assert (rendered["direction"], rendered["subject"]) == (direction, row.subject)
+        assert f'<html lang="{row.language}" dir="{direction}"' in rendered["html"]
+        assert (directed.statements, directed.repeated) == (undirected.statements, undirected.repeated)
+        for user in (member, AnonymousUser()):
+            answers = [execute_schema(schema, document, variables, user=user) for document in (_DIRECTED, _UNDIRECTED)]
+            refusals = [[(error.extensions["code"], error.message) for error in answer.errors] for answer in answers]
+            assert refusals[0] == refusals[1] and [code for code, _ in refusals[0]] == ["PERMISSION_DENIED"], refusals
 
 
 # ---------- creating the deployment's own row ----------
