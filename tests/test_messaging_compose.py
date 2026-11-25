@@ -485,6 +485,58 @@ def test_an_entry_is_refused_or_lands_exactly_the_address_it_names(entry: str) -
     assert addressee.address == typed or typed.endswith(f"<{addressee.address}>")
 
 
+def _addresses(role: str, count: int) -> list[str]:
+    return [f"{role}-{index}@example.test" for index in range(count)]
+
+
+@pytest.mark.parametrize(("to", "cc", "bcc", "key"), [(51, 0, 0, "to"), (30, 21, 0, "cc"), (20, 20, 11, "bcc")])
+def test_more_recipients_than_the_bound_are_refused_under_the_role_that_crosses_it(
+    desk: Any, to: int, cc: int, bcc: int, key: str,
+) -> None:
+    """The three roles share one bound (50 by default), checked before anything is read."""
+
+    with CaptureQueriesContext(connection) as queries, pytest.raises(ValidationError) as refused:
+        Message.objects.compose(
+            channel=desk, to=_addresses("to", to), cc=_addresses("cc", cc), bcc=_addresses("bcc", bcc),
+            text="Hi.", actor=desk.owner,
+        )
+    assert [(field, error.code) for field, errors in refused.value.error_dict.items() for error in errors] == [
+        (key, "too_many"),
+    ]
+    assert not queries.captured_queries
+
+
+def test_a_message_at_the_recipient_bound_is_sent(desk: Any) -> None:
+    message = Message.objects.compose(
+        channel=desk, to=_addresses("to", 48), cc=_addresses("cc", 1), bcc=_addresses("bcc", 1),
+        text="Hi.", actor=desk.owner,
+    )
+    with system_context(reason="tests.messaging.compose.bound"):
+        assert Recipient._base_manager.filter(message=message).count() == 50
+
+
+def test_more_attachments_than_the_bound_are_refused_before_any_file_is_read(desk: Any, settings: Any) -> None:
+    files = [_file(desk.owner, f"attachment {index}".encode(), name=f"a{index}.txt") for index in range(3)]
+    with CaptureQueriesContext(connection) as queries, pytest.raises(ValidationError) as refused:
+        Message.objects.compose(
+            channel=desk, to=["bound@example.test"], text="Hi.", attachments=[files[0]] * 21, actor=desk.owner,
+        )
+    assert [(field, error.code) for field, errors in refused.value.error_dict.items() for error in errors] == [
+        ("attachments", "too_many"),
+    ]
+    assert not queries.captured_queries
+    settings.ANGEE_MESSAGING_MAX_ATTACHMENTS = 2
+    with _refused(key="attachments", code="too_many"):
+        Message.objects.compose(
+            channel=desk, to=["bound@example.test"], text="Hi.", attachments=files, actor=desk.owner,
+        )
+    message = Message.objects.compose(
+        channel=desk, to=["bound@example.test"], text="Hi.", attachments=files[:2], actor=desk.owner,
+    )
+    with system_context(reason="tests.messaging.compose.bound"):
+        assert Part._base_manager.filter(message=message, file__isnull=False).count() == 2
+
+
 def test_the_channels_sender_handle_has_no_creator_and_a_typed_contact_keeps_its_composer(desk: Any) -> None:
     """The first composer on a channel holds nothing of its sender; the person who types a contact holds that."""
 

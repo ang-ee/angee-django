@@ -40,6 +40,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -3110,6 +3111,18 @@ person types keeps that person as creator, by the handle owner's rule.
 """
 
 
+def _require_at_most(limit: int, what: str, groups: Iterable[tuple[str, Sequence[Any]]]) -> None:
+    """Refuse more than ``limit`` entries across ``groups`` together, under the key of the group that crosses it."""
+
+    total = 0
+    for key, entries in groups:
+        total += len(entries)
+        if total > limit:
+            raise ValidationError({key: ValidationError(
+                "A message takes at most %(limit)s %(what)s.", code="too_many", params={"limit": limit, "what": what},
+            )})
+
+
 def _require_landable(handle_model: Any, addresses: Iterable[tuple[str, str]]) -> None:
     """Refuse, under its key, each ``(key, address)`` whose email address the handle owner cannot land."""
 
@@ -3153,8 +3166,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         ``channel`` sends a new email, on ``record``'s chatter when given and else
         on a thread of its own (:meth:`ThreadManager.open_thread`).
 
-        It runs as its actor and refuses an elevated call. Who may write it is
-        decided first: :meth:`Message.require_reply` for an answer, else
+        It runs as its actor and refuses an elevated call. Its shape is checked
+        first, reading nothing: its anchor, and at most
+        ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses across ``to``, ``cc`` and
+        ``bcc`` and ``ANGEE_MESSAGING_MAX_ATTACHMENTS`` attachments, each refused
+        (``too_many``) under the argument that crosses it. Who may write it is
+        decided next: :meth:`Message.require_reply` for an answer, else
         ``reply`` on ``channel`` and the record's post gate
         (:meth:`ThreadedModelMixin.require_post`), and read on every attachment.
         Its arguments are checked next (:meth:`_validate_outgoing`), and
@@ -3181,6 +3198,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )})
         if parent is None and channel is None:
             raise ValidationError({"channel": ValidationError("Choose the channel to send from.", code="required")})
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_ATTACHMENTS, "attachments", (("attachments", attachments),))
         values = dict(local or {})
         intent = {
             "channel": channel, "parent": parent, "record": record, "sender": sender,

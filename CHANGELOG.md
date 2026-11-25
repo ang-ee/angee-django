@@ -23,7 +23,13 @@ live in code docstrings.
     `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
     entry a mail library would read as another address or as several (a
     comment, a group, a list, trailing text) is refused, never re-read; a caller
-    asks `clean_recipient` before expensive work. A new message also takes a
+    asks `clean_recipient` before expensive work. A message takes at most
+    `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
+    (default 50, the strictest common provider's per-message limit; each new
+    address costs a call about 34 statements) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
+    statements each); more is refused (`too_many`) under the argument that
+    crosses the bound, before anything is read. A new message also takes a
     one-line `subject`,
     `text`, `html` and readable `attachments`, and starts a thread of its own
     through the new `ThreadManager.open_thread`, which `resolve` now shares.

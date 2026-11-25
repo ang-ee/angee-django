@@ -57,7 +57,11 @@ decides before it claims or writes: who may answer a message is
 `Message.reply_envelope` (its refusal is `Message.reply_error`, which intake's
 email route asks too), and posting on a record is the chatter's own gate,
 `ThreadedModelMixin.require_post`. An email is sent from its channel's default
-sender, and its text part is only its own text, never made from its HTML. The
+sender, and its text part is only its own text, never made from its HTML. A
+message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc`
+and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
+contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
+under the argument that crosses the bound, before anything is read. The
 docstrings own the exact refusals and hold rules.
 
 An email answer carries a Message-ID minted as Django mints one and renders
