@@ -4185,6 +4185,30 @@ describe("FormView", () => {
     expect(banner()).not.toContain("highlighted");
   });
 
+  test("a save the server refuses for shown fields moves focus to the first of them in the form's order, not the answer's", async () => {
+    sdkMocks.mutate.mockRejectedValue({ graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: { code: "VALIDATION", validationErrors: { code: ["Code is taken."], label: ["Label is taken."] }, formErrors: [] },
+    }] });
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code" }]} />);
+    const label = await screen.findByLabelText("Label");
+    fireEvent.change(label, { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText("Label is taken.");
+    await screen.findByText("Code is taken.");
+    expect(document.activeElement).toBe(label);
+  });
+
+  test("a save the server refuses for no shown field moves focus to its banner", async () => {
+    refuse(["Note is misconfigured."]);
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);
+    fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = (await screen.findByText("Note is misconfigured.")).closest<HTMLElement>('[role="alert"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(alert.getAttribute("tabindex")).toBe("-1");
+  });
+
   test("a field of a group the record does not display that the server refuses shows the server's own text in the banner, called highlighted nowhere and marked invalid nowhere", async () => {
     refuse([]);
     renderWithProviders(<FormView resource="notes.Note"><Field name="label" label="Label" />

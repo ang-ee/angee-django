@@ -683,6 +683,7 @@ export function useFormViewSave({
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
+      focus: true,
     }) ? null : result;
   }, [checkFields, fieldByName, form, linesField, t]);
   const commitSavedRecord = React.useCallback(

@@ -251,6 +251,13 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     fieldNames?: Iterable<string>;
     fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
     fallback?: string;
+    /**
+     * Bring the person to the refusal: move focus to the first rendered field it names, in the
+     * order of `fieldNames` (the server's order without them), through the form library's own
+     * `shouldFocus`. A submit's answer asks for it; an owner that projects issues while the person
+     * edits elsewhere does not.
+     */
+    focus?: boolean;
   } = {},
 ): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
   let issues: ValidationErrors;
@@ -277,13 +284,16 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       return assertNeverResult(result);
   }
   const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
+  const named = Object.keys(issues.fieldErrors).filter((name) => issues.fieldErrors[name]!.length > 0);
+  const focused = !options.focus ? undefined
+    : fieldNames ? fieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
   const bound: Record<string, readonly string[]> = {};
   const unclaimed: Record<string, readonly string[]> = {};
   for (const [name, messages] of Object.entries(issues.fieldErrors)) {
     if (messages.length === 0) continue;
     form.setError(name as Path<TValues>, {
       type, message: messages.join(" "), types: { [type]: [...messages] },
-    });
+    }, name === focused ? { shouldFocus: true } : undefined);
     const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
     target[name] = messages;
   }
@@ -308,7 +318,8 @@ export function formErrorsFromForm(errors: object): readonly string[] {
   if (!server || typeof server !== "object") return EMPTY_FIELD_NAMES;
   const type = "type" in server && typeof server.type === "string" ? server.type : undefined;
   const listed = type && "types" in server && server.types && typeof server.types === "object" ? (server.types as Record<string, unknown>)[type] : undefined;
-  if (Array.isArray(listed)) return listed.filter((message): message is string => typeof message === "string");
+  // The stored list itself, so its identity changes exactly when a new answer lands.
+  if (Array.isArray(listed) && listed.every((message) => typeof message === "string")) return listed;
   return "message" in server && typeof server.message === "string" && server.message ? [server.message] : EMPTY_FIELD_NAMES;
 }
 

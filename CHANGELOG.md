@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A refused save brings the person to its reason. With the
+  record's sheet scrolled down to the field being edited, the banner at its
+  top was out of view, and focus fell to the page because Save was disabled
+  while it ran. The answer now moves focus to the first shown field it names,
+  in the form's order (`applyFormErrors` takes `focus`, through the form
+  library's `shouldFocus`; the record form's save passes it); a refusal that
+  names no shown field focuses the banner; and Save stays focusable while a
+  save runs (`aria-disabled`). The form's own required check already behaved
+  so. Not changed: a dialog's refusal, and an owner that projects issues while
+  the person edits elsewhere, move no focus. **Upgrade:** a test that expected
+  a pending Save to carry `disabled` finds `aria-disabled="true"`.
 - `@angee/ui`: **Changed API.** A refusal's form-level messages stay several.
   `applyFormErrors` (`validation-errors.ts`) joined the form-level messages
   and each message no rendered field claims with a space into the one
