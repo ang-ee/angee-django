@@ -25,6 +25,7 @@ from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.transitions import StateTransitions
+from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256, json_safe
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
@@ -795,7 +796,11 @@ class AngeeResource(resources.ModelResource):
         instance: models.Model,
         row: Mapping[str, Any],
     ) -> None:
-        """Persist explicit values for auto-managed fields when provided."""
+        """Persist explicit values for auto-managed fields when provided.
+
+        A model whose queryset closes collection edits (``ClosedUpdateQuerySet``)
+        takes them through its ``owner_update``, as a retained reference does.
+        """
 
         updates: dict[str, Any] = {}
         for field in self._meta.model._meta.fields:
@@ -815,7 +820,12 @@ class AngeeResource(resources.ModelResource):
 
         if not updates:
             return
-        type(instance)._default_manager.filter(pk=instance.pk).update(**updates)
+        rows = type(instance)._default_manager.filter(pk=instance.pk)
+        # A model that closes collection edits still takes the loader's stamp, an owner write.
+        if isinstance(rows, ClosedUpdateQuerySet):
+            rows.owner_update(**updates)
+        else:
+            rows.update(**updates)
         instance.refresh_from_db(fields=list(updates))
 
 

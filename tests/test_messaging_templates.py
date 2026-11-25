@@ -818,6 +818,21 @@ def test_a_caller_who_reads_no_layout_gets_one_answer_for_any_layout_key(db: Non
     assert answers[0] == answers[1]
 
 
+def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
+    """The loader restores a stated ``created_at`` through the owner's write, past the closed ``update()``."""
+
+    del db
+    row = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One", "2020-01-02 03:04:05")
+    assert _load(row, headers=[*_LAYOUT_HEADERS, "created_at"]).created == 1
+    with system_context(reason="tests.messaging_templates.read"):
+        loaded = MessageTemplate.objects.get(key="base")
+    assert (loaded.created_at.year, loaded.created_at.month, loaded.created_at.day) == (2020, 1, 2)
+    fingerprint = loaded.content_hash
+    with system_context(reason="tests.messaging_templates.resave"):
+        loaded.save()
+    assert _read(loaded).content_hash == fingerprint  # the stamp is outside the hash
+
+
 def test_an_unchanged_reload_writes_no_message_template_row(db: None) -> None:
     del db
     row = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One")
