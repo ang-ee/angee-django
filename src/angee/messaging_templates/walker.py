@@ -59,7 +59,10 @@ from django.utils import translation
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.functional import Promise
 from django.utils.html import escape
-from django.utils.timezone import template_localtime  # type: ignore[attr-defined]  # django-stubs lacks it
+from django.utils.timezone import (
+    get_current_timezone,
+    template_localtime,  # type: ignore[attr-defined]  # django-stubs lacks it
+)
 
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
@@ -367,6 +370,10 @@ class TemplateWalk:
            cannot hold, and one ``date`` cannot print in a format the row prints
            it in: a bare date printed with a time takes an aware ``datetime``.
            Named formats resolve in the active language, the row's in a render.
+
+        Nothing here costs more than a constant per declared path per value: what
+        a format prints is decided once per format, never per value
+        (:class:`_DatePrinter`).
         """
 
         if not isinstance(values, Mapping):
@@ -392,8 +399,9 @@ class TemplateWalk:
         if errors:
             raise ValidationError(errors, code="invalid_values")
         filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
-        for path, formats in sorted(self.date_paths.items()):
-            _parse_dates(filled, path, path, sorted(formats), errors)
+        printer = _DatePrinter(self.date_paths)
+        for path in sorted(self.date_paths):
+            _parse_dates(filled, path, path, printer, errors)
         if errors:
             raise ValidationError(errors, code="invalid_values")
         return filled
@@ -614,11 +622,11 @@ def _filled(value: Any, tree: dict[str, Any]) -> Any:
     return {key: _filled(present.get(key), subtree) for key, subtree in tree.items()}
 
 
-def _parse_dates(value: Any, path: Path, full: Path, formats: Sequence[str], errors: list[str]) -> None:
+def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, errors: list[str]) -> None:
     """Turn each non-empty string at ``path`` into a ``date``, else an aware ``datetime``, in place.
 
     Refuse, naming the path, a string that is neither, and a moment the render
-    could not print in one of ``formats`` (:func:`_unprintable`).
+    could not print in a format the row prints it in (:class:`_DatePrinter`).
     """
 
     head, rest = path[0], path[1:]
@@ -627,7 +635,7 @@ def _parse_dates(value: Any, path: Path, full: Path, formats: Sequence[str], err
     )
     for key, child in children:
         if rest:
-            _parse_dates(child, rest, full, formats, errors)
+            _parse_dates(child, rest, full, printer, errors)
             continue
         if child == "":
             continue
@@ -643,33 +651,64 @@ def _parse_dates(value: Any, path: Path, full: Path, formats: Sequence[str], err
         if parsed is None:
             errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: {str(child)[:40]!r}.")
             continue
-        if (refusal := _unprintable(parsed, formats)) is not None:
+        if (refusal := printer.refusal(full, parsed)) is not None:
             errors.append(f"{_dotted(full)} {refusal}")
             continue
         value[key] = parsed
 
 
-def _unprintable(moment: date | datetime, formats: Sequence[str]) -> str | None:
-    """Why the render could not print ``moment`` in one of ``formats``, or ``None``.
+class _DatePrinter:
+    """Whether the render can print a moment at a date path, at a constant cost per value.
 
-    The engine converts an aware datetime to the current time zone before
-    ``date`` reads it (``template_localtime``); Django's ``date`` filter then
-    raises ``TypeError`` for a bare date printed with a time and fails on a moment
-    outside the range it prints. Both are asked of Django itself.
+    What a format can print depends on the format, the language, the kind of
+    moment (a ``date`` or an aware ``datetime``) and the end of the calendar it
+    sits at (year 1, year 9999, or between), never on the moment itself: so it
+    is asked of Django's own ``date`` filter once per format, kind and end, on a
+    probe, and the verdict for a path's formats is remembered. Per value there
+    remains the conversion to local time (``template_localtime``, which the
+    engine applies before ``date`` reads a datetime) and a lookup.
     """
 
-    try:
-        local = template_localtime(moment)
-    except (OverflowError, ValueError):
-        return "is a moment the local time zone cannot hold."
-    for name in formats:
-        try:
-            date_filter(local, name)
-        except TypeError:
-            return f"is printed with a time ({name}): pass a date and time with its offset."
-        except (OverflowError, ValueError):
-            return f"cannot be printed as {name}."
-    return None
+    def __init__(self, date_paths: Mapping[Path, set[str]]) -> None:
+        self.formats = {path: sorted(formats) for path, formats in date_paths.items()}
+        self.zone = get_current_timezone()
+        self.verdicts: dict[tuple[Path, str, int], str | None] = {}
+        self.probed: dict[tuple[str, str, int], str | None] = {}
+
+    def refusal(self, path: Path, moment: date | datetime) -> str | None:
+        """Why ``moment`` cannot be printed at ``path``, or ``None``."""
+
+        if isinstance(moment, datetime):
+            try:
+                moment = template_localtime(moment)
+            except (OverflowError, ValueError):
+                return "is a moment the local time zone cannot hold."
+        kind = "datetime" if isinstance(moment, datetime) else "date"
+        end = moment.year if moment.year in (1, 9999) else 0
+        key = (path, kind, end)
+        if key not in self.verdicts:
+            self.verdicts[key] = next(
+                (refusal for name in self.formats[path] if (refusal := self.probe(name, kind, end)) is not None), None,
+            )
+        return self.verdicts[key]
+
+    def probe(self, name: str, kind: str, end: int) -> str | None:
+        """Ask Django's ``date`` filter to print a probe of ``kind`` at ``end`` in the format ``name``."""
+
+        key = (name, kind, end)
+        if key not in self.probed:
+            year, month, day = {0: (2000, 1, 1), 1: (1, 1, 1), 9999: (9999, 12, 31)}[end]
+            probe: date | datetime = (
+                datetime(year, month, day, 12, tzinfo=self.zone) if kind == "datetime" else date(year, month, day)
+            )
+            try:
+                date_filter(probe, name)
+                self.probed[key] = None
+            except TypeError:
+                self.probed[key] = f"is printed with a time ({name}): pass a date and time with its offset."
+            except (OverflowError, ValueError):
+                self.probed[key] = f"cannot be printed as {name}" + (f" in year {end}." if end else ".")
+        return self.probed[key]
 
 
 # ---------- one row's own checks ----------

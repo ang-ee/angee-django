@@ -25,7 +25,7 @@ from django.core.exceptions import ValidationError
 from django.template import Engine, TemplateSyntaxError
 from django.template.base import DebugLexer, Node, Parser, tag_re
 from django.template.defaulttags import TemplateLiteral
-from django.utils import timezone
+from django.utils import timezone, translation
 from django.utils.safestring import SafeString, mark_safe
 from hypothesis import HealthCheck, event, example, given, settings
 from hypothesis import strategies as st
@@ -35,6 +35,7 @@ from angee.base.models.identity import public_id_of
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging_templates import schema as messaging_templates_schema
+from angee.messaging_templates import walker as walker_module
 from angee.messaging_templates.engine import (
     ALLOWED_FILTERS,
     ALLOWED_TAGS,
@@ -1625,6 +1626,17 @@ LINE = "{% for i in few %}{% with " + " ".join(f"v{index}=d|date:{R20}" for inde
     " %}{% endwith %}{% endfor %}"
 """The costliest subject a 255-character column holds: six such dates an item, as many items as its pass allows."""
 TIMED_VALUES = {"items": [0] * 500, "a": {}, "d": "2026-11-24T15:30:00+00:00"}
+
+
+def _dated(first: int, count: int) -> str:
+    """A loop printing each item's date in ``count`` distinct 20-character formats, none of them reached."""
+
+    lines = [f"{{{{ i.when|date:'rrrrrrrrrrrrrrrrr{index:03d}' }}}}" for index in range(first, first + count)]
+    return "{% for i in items %}{% if forloop.counter > 600 %}\n" + "\n".join(lines) + "\n{% endif %}{% endfor %}"
+
+
+DATED_VALUES = {"items": [{"when": "2026-11-24T15:30:00+00:00"}] * 500}
+"""500 items whose date the dated row prints in 560 formats: once a format in prepare(), never once a value."""
 TIMED_VARIABLES = {"items.*": "x", DEEP: "x", "d": "x"}
 
 PASS_CASES: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
@@ -1639,6 +1651,9 @@ def _pass_case(name: str) -> tuple[TemplateWalk, dict[str, Any]]:
     rows, values = PASS_CASES[name]
     template = _mail(rows["source"], rows.get("variables", TIMED_VARIABLES), format="html", text_source="x")
     return _walk(template), values
+
+
+ADMITTED_PREVIEWS = ("admitted", "review", "dated")
 
 
 def _preview_cases() -> dict[str, Any]:
@@ -1685,6 +1700,8 @@ def _preview_cases() -> dict[str, Any]:
         ),
         "refused": _mail("\n\n".join(f'{{% include "parts/star{index}" only %}}' for index in range(3)),
                          key="tests.refused"),
+        "dated": _mail(_dated(0, 280), {"items.*.when": "x"}, format="html", text_source=_dated(300, 280),
+                       key="tests.dated", sample=DATED_VALUES),
     }
 
 
@@ -1749,8 +1766,33 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
         149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
     ),
     "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
+    "dated": (
+        23_322, [("html", 578, 284, 382), ("text", 568, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
+    ),
 }
 """The work of the costliest previews: the walk's 150,000 characters, its caps, and every pass's budget."""
+
+
+def test_prepare_asks_each_format_once_whatever_the_number_of_values(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Section 3: prepare() costs a constant per declared path per value; formats are judged once each."""
+
+    del plain
+    calls: list[str] = []
+    _recording(monkeypatch, walker_module, "date_filter", lambda value, name: calls.append(name))
+    walk = _walk(_unsaved(format="html", source=_dated(0, 280), text_source=_dated(300, 280),
+                          variables={"items.*.when": "x"}))
+    assert {path: len(formats) for path, formats in walk.date_paths.items()} == {("items", "*", "when"): 560}
+    for items in (1, 500):
+        calls.clear()
+        with translation.override("en"):
+            walk.prepare({"items": DATED_VALUES["items"][:items]})
+        assert len(calls) == 560, items
+    calls.clear()
+    with translation.override("en"):
+        walk.prepare({"items": [{"when": "2026-11-24T15:30:00+00:00"}, {"when": "2026-11-24"}] * 250})
+    assert len(calls) == 2 * 560  # each format once for each kind of moment met: a datetime and a bare date
 
 
 def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dict[str, list[Any]]) -> None:
@@ -1764,7 +1806,7 @@ def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dic
             walk = TemplateWalker().judge(template, MessageTemplate.objects)
             preview = template.preview(kit=kit)
         source = sum(len(row.source) + len(row.text_source) for row in walk.rows.values())
-        assert (preview.rendered is not None) is (name in ("admitted", "review")), preview.warnings
+        assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
         assert (source, work["trees"][len(work["trees"]) // 2:], _charges(work["passes"])) == PREVIEW_WORK[name]
 
 
@@ -1785,16 +1827,21 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest previews the caps admit take under two seconds of CPU: walk, prepare() and passes 2 to 4."""
+    """The costliest previews and renders the caps admit take under two seconds of CPU: walk, prepare(), passes."""
 
     del plain
-    spent = {}
+    spent: dict[str, float] = {}
     for name, template in _preview_cases().items():
         started = time.process_time()
         with system_context(reason="tests.messaging_templates.render.timed"):
             preview = template.preview(kit=kit)
         spent[name] = round(time.process_time() - started, 3)
-        assert (preview.rendered is not None) is (name in ("admitted", "review")), preview.warnings
+        assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
+        if name in ADMITTED_PREVIEWS:
+            started = time.process_time()
+            with system_context(reason="tests.messaging_templates.render.timed"):
+                template.render(template.sample, kit=kit)
+            spent[f"{name} render"] = round(time.process_time() - started, 3)
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < 2.0
 
