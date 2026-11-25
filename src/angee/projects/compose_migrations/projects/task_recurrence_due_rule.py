@@ -9,8 +9,9 @@ Before this release ``projects.Task.recurrence`` held an RFC-5545 RRULE that
 nothing acted on; a task's repetition is now its due rule's ``repeat``
 (``angee.scheduling.due``). The migration adds ``due_at``, ``due_rule`` and
 ``due_basis`` to the task table and its history table, moves the values, and
-removes ``recurrence`` from both, which the drop guard refuses to remove by
-autodetection while the column holds rules. Run ``makemigrations`` afterwards for
+removes ``recurrence`` from both. The drop guard refuses a removal of a column that
+holds rules, autodetected or pending, unless its migration declares it: these two
+are declared (``IntendedRemoveField``). Run ``makemigrations`` afterwards for
 the release's other columns. The upgrade is **irreversible**: the removed RRULE
 text is not restored.
 
@@ -35,6 +36,7 @@ from django.core.exceptions import ValidationError
 from django.db import migrations, models
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.utils import timezone
+from django_compose.operations import IntendedRemoveField
 
 from angee.scheduling.due import DueRule, Repeat, Term
 from angee.scheduling.fields import DueRuleField
@@ -125,6 +127,6 @@ class Migration(migrations.Migration):
             for name, field in _DUE_COLUMNS
         ),
         migrations.RunPython(task_recurrence_due_rule),
-        migrations.RemoveField("task", "recurrence"),
-        migrations.RemoveField("historicaltask", "recurrence"),
+        IntendedRemoveField("task", "recurrence"),
+        IntendedRemoveField("historicaltask", "recurrence"),
     ]
