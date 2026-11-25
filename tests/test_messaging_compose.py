@@ -234,6 +234,28 @@ def test_a_chat_reply_is_plain_text_from_an_explicit_sender_on_its_platform(desk
     assert not Recipient._base_manager.filter(message=reply).exists()
 
 
+def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: Any) -> None:
+    """The channel's sender, a typed recipient and ingest store an address in the handle owner's one form."""
+
+    del db
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    channel = make_integration("compose-case", model=Channel, backend_class="email",
+                               config={"from_email": "Desk <Desk@Example.TEST>"})
+    with system_context(reason="tests.messaging.compose.case"):
+        Message.objects.ingest([ParsedMessage(
+            external_id="<case@example.test>", platform="email", subject="Hello",
+            sender=ParsedHandle(platform="email", value=Handle.email_value(" Client@Example.TEST ")),
+            recipients=(ParsedRecipient(handle=ParsedHandle(platform="email", value="desk@example.test")),),
+            body=ParsedPart(text="Hello."),
+        )], channel=channel)
+    message = Message.objects.compose(channel=channel, to=["CLIENT@example.test"], text="Hi.", actor=channel.owner)
+    with system_context(reason="tests.messaging.compose.case.read"):
+        values = sorted(Handle._base_manager.filter(value__iendswith="@example.test").values_list("value", flat=True))
+        recipient = Recipient._base_manager.get(message=message).handle_id
+        assert (message.sender.value, values) == ("desk@example.test", ["client@example.test", "desk@example.test"])
+        assert recipient == Handle._base_manager.get(value="client@example.test").pk
+
+
 def test_a_typed_name_never_renames_a_known_handle_and_an_invalid_address_writes_no_handle(desk: Any) -> None:
     with system_context(reason="tests.messaging.compose.names"):
         known = Handle.objects.upsert(platform="email", value="known@example.test", display_name="Known")

@@ -1329,7 +1329,7 @@ class Message(
 
         addresses: dict[str, str] = {}
         for name, address in getaddresses(self.source_header_values("reply-to", actor=actor)):
-            address = address.strip().lower()
+            address = Handle.email_value(address)
             if Handle.is_email_address(address):
                 addresses.setdefault(address, name.strip())
         return addresses

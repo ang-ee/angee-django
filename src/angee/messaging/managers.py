@@ -3255,7 +3255,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         else:
             kind, platform = email_kind, handle_model.Platform.EMAIL
             recipients = tuple(
-                _Addressee(role, address.strip().lower(), name.strip())
+                _Addressee(role, handle_model.email_value(address), name.strip())
                 for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
                 for name, address in getaddresses([str(entry) for entry in entries])
             )
@@ -3361,7 +3361,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     # The channel's configured name is the operator's, so it refreshes the handle.
                     name, address = outgoing.sender_address
                     sender = handle_model.objects.upsert(
-                        platform=handle_model.Platform.EMAIL, value=address, display_name=name,
+                        platform=handle_model.Platform.EMAIL,
+                        value=handle_model.email_value(address),
+                        display_name=name,
                     )
                 message = self.create(
                     parent=outgoing.parent, thread_id=thread_id, channel_id=outgoing.channel.pk, sender=sender,
