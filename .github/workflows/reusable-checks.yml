@@ -432,8 +432,13 @@ jobs:
               subprocess.run(["git", "-C", str(target), "fetch", "--depth=1", "origin", ref], check=True)
               subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
           PY
+      # Into the job's own directory: no root, and nothing outlives the job on a reused
+      # self-hosted runner.
       - name: Install the angee CLI (the public install path)
-        run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} ANGEE_INSTALL_DIR="$RUNNER_TEMP/bin" sh
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # uv runs from the stack root, above the framework checkout, where it would not
       # find the framework's .python-version.
       - name: Use the framework's Python
