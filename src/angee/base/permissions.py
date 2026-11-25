@@ -444,20 +444,30 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
 
 
 def require_save_allowed(instance: models.Model, *, update_fields: Iterable[str] | None = None) -> None:
-    """Refuse, as ``instance.save(update_fields=...)`` would, a save its REBAC gates deny, without writing.
+    """Refuse a save its REBAC gates deny, before anything validates or writes it.
 
-    REBAC's ``check_save`` rehearses the save (the model's own ``save()``
-    preparation, then its gates) in a transaction it rolls back; this raises
-    the save's own ``PermissionDenied`` when that verdict refuses. A verb calls
-    it before it validates the row, so a caller the save would refuse runs none
-    of the row's validators. A ``ValidationError`` the model's ``save()`` raises
-    before its gates propagates, as it would from the save. A model without
-    REBAC write gates has no save to refuse.
+    REBAC's ``check_save`` rehearses ``instance.save(update_fields=...)`` (the
+    model's own ``save()``, then its gates) in a transaction it rolls back; a
+    refused verdict raises ``PermissionDenied`` with the save's own denial text.
+    A verb calls this before it validates the row, so a caller the save would
+    refuse runs none of the row's field validators, ``clean()``, uniqueness or
+    constraint checks.
+
+    The limit: validation a model's own ``save()`` performs runs inside the
+    rehearsal, before the gates, and its ``ValidationError`` answers the caller
+    as it would from the save. An unscoped instance (sudo, a system context)
+    has no gate to ask, and a model without REBAC write gates no save to refuse.
+
+    The raising form is REBAC's to own: it moves there with REBAC deciding a
+    save before validating and writing it, which retires this rehearsal.
     """
 
-    from rebac import RebacTrackedMixin
+    # This module loads before Django setup, and REBAC defines its mixins with its models.
+    from rebac import RebacMixin, RebacTrackedMixin
 
     if not isinstance(instance, RebacTrackedMixin):
+        return
+    if isinstance(instance, RebacMixin) and instance.effective_actor()[1]:
         return
     verdict = instance.check_save(update_fields=update_fields)
     if not verdict.allowed:

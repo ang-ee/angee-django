@@ -1,7 +1,7 @@
 // Authorization schema for the local-scope create-gate demo (test-only).
 // @rebac_package: scopedemo
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 8
+// @rebac_schema_revision: 9
 
 definition scopedemo/proposal_target {
     relation owner: auth/user // rebac:field=owner
@@ -64,14 +64,17 @@ definition scopedemo/shared_doc {
 }
 
 // Only a platform admin creates; anyone signed in reads, so a refused member
-// could otherwise meet a stored row in the insert's uniqueness check.
+// could otherwise meet a stored row in the insert's uniqueness check. Anyone
+// signed in writes a stored row, but only an admin writes its code, so a partial
+// save decides differently from a full one.
 definition scopedemo/validated_doc {
     relation admin: angee/role // rebac:const=admin
 
-    permission create = admin->member
-    permission read   = authenticated
-    permission write  = admin->member
-    permission delete = admin->member
+    permission create      = admin->member
+    permission read        = authenticated
+    permission write       = authenticated
+    permission write__code = admin->member
+    permission delete      = admin->member
 }
 
 // An identity-only target for the native file-attachment lock fixture.

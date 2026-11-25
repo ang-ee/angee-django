@@ -200,6 +200,21 @@ class _MutationResultExtension(FieldExtension):
         return await sync_to_async(self.refetch)(row, info)
 
 
+CreationClaim = Callable[[dict[str, Any]], Any]
+"""An idempotency adapter's claim: given a creation's decoded values, the row it replays, or ``None``."""
+
+
+def _overrides_below(cls: type, base: type, names: Iterable[str]) -> bool:
+    """Whether a class above ``base`` in ``cls``'s MRO defines one of ``names``."""
+
+    for klass in cls.__mro__:
+        if klass is base:
+            return False
+        if any(name in vars(klass) for name in names):
+            return True
+    return False
+
+
 class _DeletePreviewBackend(WriteBackend, Protocol):
     """Angee's preview extension to the native authorized-write contract."""
 
@@ -212,9 +227,11 @@ class AngeeHasuraWriteBackend:
     ``strawberry-django-hasura`` owns the Hasura mutation envelope. This class
     owns the Angee write semantics inside that envelope: Django validation,
     REBAC row-scoped write targets, model save/delete signals, and returning a
-    deleted instance in Hasura's ``delete_<res>_by_pk`` shape. Every write is
-    decided before it is validated: an update, a save and a delete on the
-    target's own permission, an insert on the verdict its save would reach.
+    deleted instance in Hasura's ``delete_<res>_by_pk`` shape. An insert is
+    decided on the verdict its save would reach before the row is validated;
+    an update, a save and a delete decide the target row's own permission
+    first, while per-field ``write__`` gates still run inside ``save()``, after
+    validation.
 
     Values for input-extension fields that are not model fields never reach
     strawberry-django, which would ignore them: each write persists the row,
@@ -268,20 +285,52 @@ class AngeeHasuraWriteBackend:
             raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
         return instance
 
-    def create(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one row through this backend's native insertion contract."""
+    def create(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Create one row through this backend's native insertion contract.
 
-        return self.insert(info, data)
+        ``claim`` is an idempotency adapter's: it is asked with the row's decoded
+        creation values (``object``, ``lines``) before anything is written, and a
+        row it returns is replayed instead of created. This backend asks it once
+        the row's create is decided, with public ids decoded once and the lines
+        only after the decision. A subclass whose own ``insert`` or
+        ``_create_row`` decides as it writes is claimed first, before that
+        decision, as the claim cannot reach inside it.
+        """
+
+        if claim is None:
+            return self.insert(info, data)
+        if _overrides_below(type(self), AngeeHasuraWriteBackend, ("insert", "_create_row")):
+            with transaction.atomic():
+                replay = claim(self._creation_values(data))
+                return replay if replay is not None else self.insert(info, data)
+        return self._insert(info, data, claim)
 
     def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Insert one row, its declared nested child lines and input extensions atomically."""
+        """Insert one row, its declared nested child lines and input extensions atomically.
+
+        The row's create is decided first (:meth:`_create_row`); its lines are decoded only then.
+        """
+
+        return self._insert(info, data, None)
+
+    def _insert(self, info: strawberry.Info, data: dict[str, Any], claim: CreationClaim | None) -> Any:
+        """Decide, then claim when an adapter asks, then validate and persist the row with its lines."""
 
         data, extensions = self._split_input(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
         with transaction.atomic():
-            instance = self._create_row(info, data)
-            if self.lines is not None and line_rows is not None:
-                lines = self._prepare_line_rows(line_rows)
+            if claim is None:
+                instance = self._create_row(info, data)
+                lines = self._prepare_line_rows(line_rows) if line_rows is not None else None
+            else:
+                values = self._decode_public_id_fields(data)
+                self._require_create(info, values)
+                lines = self._prepare_line_rows(line_rows) if line_rows is not None else None
+                replay = claim({"object": {**values, **extensions}, "lines": lines})
+                if replay is not None:
+                    return replay
+                instance = self._create_decided(info, values)
+            if self.lines is not None and lines is not None:
                 # The caller's creation admitted this row and the lines created with it, even when
                 # the caller may not write the row afterwards: name that admission explicitly.
                 instance.replace_lines(
@@ -295,16 +344,15 @@ class AngeeHasuraWriteBackend:
                 instance.apply_input_extensions(**extensions)
         return instance
 
-    def creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Return decoded creation values, including input extensions and child lines."""
+    def _creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Decode raw write input into the creation values a claim fingerprints, lines included."""
 
         data, extensions = self._split_input(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
-        content = {
+        return {
             "object": {**self._decode_public_id_fields(data), **extensions},
             "lines": self._prepare_line_rows(line_rows) if line_rows is not None else None,
         }
-        return content
 
     def save(
         self,
@@ -354,30 +402,46 @@ class AngeeHasuraWriteBackend:
             return instance
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create one row through strawberry-django's resolver and native manager, once its save is admitted.
+        """Create one row from its write input: decode its public ids once, decide its create, then write it.
 
-        The resolver validates (``full_clean``) before the manager's ``insert``
-        reaches REBAC's create gate in ``save()``, so the create is decided
-        first: the row the manager would build from the resolver's prepared
-        values is rehearsed through its own ``save()`` and gates
-        (:func:`~angee.base.permissions.require_save_allowed`), which sees what
-        that save sets (an owner, a scope, a user it defaults). A caller the
-        gate refuses gets the save's own refusal, and none of the row's
-        validators runs.
+        A factory backend overrides this hook; its factory decides as it writes.
         """
 
-        decoded_data = self._decode_public_id_fields(data)
-        _prepared, values, _m2m = mutation_resolvers.prepare_create_update(
+        values = self._decode_public_id_fields(data)
+        self._require_create(info, values)
+        return self._create_decided(info, values)
+
+    def _require_create(self, info: strawberry.Info, values: dict[str, Any]) -> None:
+        """Decide the create of decoded ``values`` before anything validates them.
+
+        strawberry-django's resolver validates (``full_clean``) before the
+        manager's ``insert`` reaches REBAC's create gate in ``save()``, so the
+        create is decided first: the resolver's own preparation (which resolves
+        what the backend did not decode and sets many-to-many values aside)
+        gives the values the manager would build the row from, and that row is
+        rehearsed through its save
+        (:func:`~angee.base.permissions.require_save_allowed`), which sees what
+        the save sets (an owner, a scope, a user it defaults). A caller the gate
+        refuses gets the save's refusal before any field validator,
+        ``clean()``, uniqueness or constraint check runs; validation the model's
+        own ``save()`` performs is that rule's limit.
+        """
+
+        _prepared, prepared, _m2m = mutation_resolvers.prepare_create_update(
             info=info,
             instance=self.model(),
-            data=decoded_data,
+            data=values,
             key_attr=PUBLIC_ID_FIELD_NAME,
         )
-        require_save_allowed(self.model(**values))
+        require_save_allowed(self.model(**prepared))
+
+    def _create_decided(self, info: strawberry.Info, values: dict[str, Any]) -> Any:
+        """Validate and persist decided ``values`` through strawberry-django's resolver and the native manager."""
+
         return mutation_resolvers.create(
             info,
             self.model,
-            decoded_data,
+            values,
             key_attr=PUBLIC_ID_FIELD_NAME,
             full_clean=True,
         )

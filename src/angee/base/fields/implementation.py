@@ -8,7 +8,7 @@ from functools import cache, partialmethod
 from typing import Any, cast
 
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django_choices_field import TextChoicesField
 
@@ -98,6 +98,20 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         if accessor in cls.__dict__:
             raise ImproperlyConfigured(f"{cls.__name__}.{accessor} collides with implementation field {name!r}.")
         setattr(cls, accessor, partialmethod(_resolve_bound_implementation, field=self))
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
+        """Refuse, as the row is written, a key no implementation is registered under.
+
+        The write runs after the save's REBAC gates, so a caller who may not save
+        the row gets its refusal; ``full_clean`` refuses the same key as an
+        invalid choice. Historical migration fields keep whatever they stored.
+        """
+
+        value = super().pre_save(model_instance, add)
+        if self.base_class is None or value in (None, "") or self.key_for(value) in self.registered_keys():
+            return value
+        message = self.error_messages["invalid_choice"] % {"value": value}
+        raise ValidationError({self.name: ValidationError(message, code="invalid_choice")})
 
     def resolve_class(self, key: Any, *, default: str | None = None) -> type[T]:
         """Return the impl class the configured mapping binds to ``key``."""

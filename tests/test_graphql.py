@@ -306,7 +306,7 @@ def test_hasura_write_backend_decodes_public_relations_through_write_owner(
 def test_hasura_write_backend_create_delegates_prepared_insertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Hasura decodes public IDs and decides the create before native preparation and insertion, in one transaction."""
+    """Hasura decodes public IDs once and decides its prepared row before native validation and insertion."""
 
     related = SimpleNamespace(pk=7)
     created: dict[str, Any] = {}

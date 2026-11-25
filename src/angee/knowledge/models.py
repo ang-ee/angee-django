@@ -1139,7 +1139,7 @@ class MarkdownPageManager[MarkdownT: MarkdownPage](_MarkdownPageManager[Markdown
             if title is not None:
                 markdown.title = title
                 fields.add("title")
-                # Decided before the title is validated: a caller who may not write the page runs no validator.
+                # Decided first: a caller who may not write the page runs none of its field validators.
                 require_save_allowed(markdown, update_fields=fields)
                 markdown.full_clean()
             markdown.save(update_fields=fields, expected_revision=expected_revision)

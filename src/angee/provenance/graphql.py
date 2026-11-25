@@ -27,38 +27,42 @@ from angee.provenance.context import (
 
 def _claimed_create(
     model: type[models.Model],
-    idempotency_key: str | None,
-    *,
-    values: Any,
-    insert: Callable[[], Any],
+    idempotency_key: str,
+    create: Callable[[Callable[[Any], Any]], Any],
 ) -> Any:
     """Insert once for one actor-scoped resource and replay its claimed row.
 
-    Without a key the insert runs as the backend wrote it: a custom backend owns
-    its own transaction, as upstream calls it.
+    ``create`` runs the insert and hands it the claim: the insert asks it with
+    its creation values before writing anything, and a row the claim returns is
+    the earlier creation, replayed when the actor can still read it.
     """
 
-    if idempotency_key is None:
-        return insert()
     with changeset(fresh=True), transaction.atomic():
         actor = current_actor()
         if not model_resource_type(model) or actor is None:
             raise ImproperlyConfigured("Idempotent resources require an actor-scoped queryset.")
-        replay = changeset_model().objects.claim_created(
-            f"graphql.create:{model._meta.label_lower}:{actor}",
-            idempotency_key,
-            values=values, model=model,
-            unavailable=ValidationError(
-                {"idempotency_key": "The claimed creation result is unavailable."},
-            ),
-        )
-        if replay is not None:
+        replayed: list[Any] = []
+
+        def claim(values: Any) -> Any:
+            replay = changeset_model().objects.claim_created(
+                f"graphql.create:{model._meta.label_lower}:{actor}",
+                idempotency_key,
+                values=values, model=model,
+                unavailable=ValidationError(
+                    {"idempotency_key": "The claimed creation result is unavailable."},
+                ),
+            )
+            if replay is None:
+                return None
             instance = require_rebac_queryset(model, actor=actor).filter(pk=replay.pk).first()
             if instance is None:
                 raise PermissionDenied("The claimed creation result is not readable.")
+            replayed.append(instance)
             return instance
-        instance = insert()
-        require_changeset().record_created(instance)
+
+        instance = create(claim)
+        if not replayed:
+            require_changeset().record_created(instance)
         return instance
 
 
@@ -75,11 +79,24 @@ class ClaimingWriteBackend:
     def create(
         self, info: strawberry.Info, data: dict[str, Any], *, idempotency_key: str | None = None,
     ) -> Any:
-        values = self.backend.creation_values(data) if isinstance(self.backend, AngeeHasuraWriteBackend) else data
-        return _claimed_create(
-            self.model, idempotency_key, values=values,
-            insert=lambda: self.backend.create(info, data),
-        )
+        """Create as the backend does; with a key, claim the creation once the backend has decided it.
+
+        Without a key nothing happens ahead of the backend. An Angee backend asks
+        the claim itself, between deciding the row's create and writing it; any
+        other backend's raw input is claimed before its insert runs.
+        """
+
+        if idempotency_key is None:
+            return self.backend.create(info, data)
+        backend = self.backend
+        if isinstance(backend, AngeeHasuraWriteBackend):
+            return _claimed_create(self.model, idempotency_key, lambda claim: backend.create(info, data, claim=claim))
+
+        def claim_first(claim: Callable[[Any], Any]) -> Any:
+            replay = claim(data)
+            return replay if replay is not None else backend.create(info, data)
+
+        return _claimed_create(self.model, idempotency_key, claim_first)
 
 
 def write_backend(model: type[models.Model], backend: WriteBackend) -> tuple[WriteBackend, dict[str, Any]]:

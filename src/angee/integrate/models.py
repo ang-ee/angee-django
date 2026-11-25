@@ -2399,7 +2399,8 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
 
         It carries the effective actor when there is one, its implementation's
         defaults (its vendor among them, ``ImplDefaultsMixin.prepare_impl_defaults``;
-        an unknown implementation key is refused on its field) and the account of
+        an unknown implementation key prepares nothing, and its field refuses it
+        when the row is validated or written) and the account of
         its credential, unless ``fields`` name one. A connect verb or a connect
         query builds one to ask what the capability reads with
         (:meth:`Integration.connectable_credentials`) or connects through
@@ -2419,16 +2420,16 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
     def create_capability(self, **fields: Any) -> IntegrationT:
         """Insert the row :meth:`build` prepares once its create is allowed, after native validation.
 
-        An actor (or sudo) is required. The create is decided before the row is
-        validated, so a caller the create gate refuses runs none of its
-        validators; :meth:`build` carries this manager's actor, the one the
-        insert authorizes. An unscoped insert has no create gate to ask.
+        An actor (or sudo) is required. The create is decided first
+        (:func:`~angee.base.permissions.require_save_allowed`), as the insert's
+        actor, which :meth:`build` carries, so a caller the create gate refuses
+        runs none of the row's field validators and learns nothing of the
+        implementation key; config validation in ``save()`` is that rule's limit.
         """
 
-        _actor, unscoped = self.effective_actor(strict=True)
+        self.effective_actor(strict=True)
         instance = self.build(**fields)
-        if not unscoped:
-            require_save_allowed(instance)
+        require_save_allowed(instance)
         instance.full_clean()
         return self.get_queryset().insert(instance)
 

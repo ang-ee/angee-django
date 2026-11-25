@@ -148,7 +148,12 @@ class ImplDefaultsMixin(models.Model):
         self._loaded_impl_keys = loaded
 
     def prepare_impl_defaults(self) -> None:
-        """Prepare unsupplied implementation defaults before validation or insertion."""
+        """Prepare unsupplied implementation defaults before validation or insertion.
+
+        A key no implementation is registered under prepares nothing: its
+        :class:`ImplClassField` refuses it when the row is validated or written,
+        so a caller who may not save the row gets that save's refusal instead.
+        """
 
         if not self._state.adding:
             return
@@ -161,6 +166,8 @@ class ImplDefaultsMixin(models.Model):
                 continue
             key = field.key_for(key)
             setattr(self, field.attname, key)
+            if key not in field.registered_keys():
+                continue
             try:
                 impl = field.resolve_class(key)
             except ValueError as error:
@@ -230,7 +237,11 @@ class ImplDefaultsMixin(models.Model):
         return {"config"}
 
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
-        """Validate declared config models on save, leaving untyped row config alone."""
+        """Validate declared config models on save, leaving untyped row config alone.
+
+        A key no implementation is registered under has no config model; its
+        field refuses the key as the row is written.
+        """
 
         if not self._state.adding and (
             (update_fields is not None and "config" not in update_fields)
@@ -243,7 +254,7 @@ class ImplDefaultsMixin(models.Model):
             if not isinstance(field, ImplClassField):
                 continue
             key = getattr(self, field.attname, None)
-            if not key:
+            if not key or field.key_for(key) not in field.registered_keys():
                 continue
             impl = field.resolve_class(key)
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:

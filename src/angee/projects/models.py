@@ -898,7 +898,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
                 **generic_target(record).lookups(self.model, "subject"),
                 activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
-            # Decided before it is validated: a caller who may not write the record runs no validator.
+            # Decided first: a caller who may not write the record runs none of its field validators.
             require_save_allowed(task)
             task.full_clean(validate_unique=False, validate_constraints=False)
             task.save()

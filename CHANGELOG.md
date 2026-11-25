@@ -10,13 +10,31 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`:
-  **Changed behaviour.** A generic GraphQL insert, an integration's creation, a
-  scheduled record task and a page title saved with its body are now refused
-  before the row is validated when the caller may not save it: each asks REBAC
-  for the save's verdict first (`angee.base.permissions.require_save_allowed`,
-  over `check_save`) and raises the save's own `PermissionDenied`, so no
-  validator, uniqueness check or constraint check runs for that caller.
+- `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
+  `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`: **Changed behaviour.**
+  A generic GraphQL insert, and the verbs that validate a row before saving it (an
+  integration's creation, a scheduled record task, a page title saved with its body,
+  a product promoted from a project, a project or initiative report, a captured need),
+  now ask REBAC whether the caller may make that save before validating the row
+  (`angee.base.permissions.require_save_allowed`, over REBAC's `check_save`); a caller
+  it refuses gets the save's `PermissionDenied` text, and no field validator, `clean()`,
+  uniqueness check or constraint check runs for them. A dashboard snapshot validates its
+  widget queries only once its write is decided.
+  - The limit: validation a model's own `save()` performs runs inside that rehearsal,
+    before the decision, and still answers a refused caller. Today that is the
+    implementation config check (`ImplDefaultsMixin`), the workflow trigger's
+    recurrence rule, and arp's venue, event type, registration and bank rows. It closes
+    when REBAC decides a save before validating and writing it, which also retires the
+    rehearsal.
+  - For a caller who may save, a `ValidationError` a model's `save()` raises now comes
+    before the field errors `full_clean` reports, and an admitted insert rehearses its
+    save once more.
+  - An unknown implementation key is a field `ValidationError` on that key, raised when
+    the row is validated or written, instead of a configuration error.
+  - With an idempotency key, the generic insert claims the key only once the create is
+    decided; a backend whose own insert or factory decides as it writes still claims
+    first. Without a key, the provenance adapter no longer decodes the input ahead of
+    the backend.
 
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and

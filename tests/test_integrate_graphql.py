@@ -2357,3 +2357,42 @@ def test_integration_insert_refuses_before_the_capability_is_validated(
     assert str(refused.value) == str(saved.value)
     spy.assert_not_called()
     assert not NotionConnection._base_manager.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", ("anonymous", "member"))
+def test_integration_insert_refuses_an_unknown_key_as_it_refuses_a_known_one(caller: str) -> None:
+    """A caller the create gate refuses learns nothing of which implementation keys exist."""
+
+    with system_context(reason="test.integration_insert.vendor"):
+        Vendor.objects.create(slug="notion", display_name="Notion")
+    user = AnonymousUser() if caller == "anonymous" else User.objects.create_user(username="integration-key-member")
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(user):
+        with pytest.raises(PermissionDenied) as unknown:
+            backend.create(SimpleNamespace(), {"display_name": "Refused", "backend_class": "no-such-backend"})
+        with pytest.raises(PermissionDenied) as known:
+            backend.create(SimpleNamespace(), {"display_name": "Refused", "backend_class": "notion"})
+
+    assert str(unknown.value) == str(known.value)
+    assert not NotionConnection._base_manager.exists()
+
+
+@pytest.mark.django_db
+def test_an_unknown_implementation_key_is_refused_on_its_field() -> None:
+    """A caller who may create learns the unknown key from its field, as a direct save does."""
+
+    with system_context(reason="test.integration_insert.vendor"):
+        vendor = Vendor.objects.create(slug="notion", display_name="Notion")
+    admin = _platform_admin("integration-key-admin")
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(admin), pytest.raises(ValidationError) as validated:
+        backend.create(SimpleNamespace(), {"display_name": "Typo", "backend_class": "no-such-backend"})
+    with system_context(reason="test.integration_insert.direct"), pytest.raises(ValidationError) as written:
+        NotionConnection(display_name="Direct", backend_class="no-such-backend", vendor=vendor).save()
+
+    assert "backend_class" in validated.value.message_dict
+    assert list(written.value.message_dict) == ["backend_class"]
+    assert not NotionConnection._base_manager.exists()

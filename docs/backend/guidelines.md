@@ -962,9 +962,15 @@ data through REBAC, never a queryset bypass.
   Manual factories needing an explicit relationship preflight call native
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
   retain the verified actor on the instance. A factory or verb that validates
-  a row before saving it decides that save first with
+  a row before saving it decides that save first, so a caller the save would
+  refuse runs none of its field validators, `clean()`, uniqueness or constraint
+  checks: `require_access("create")` or `rebac.check_new` when the create gate
+  reads only the candidate's own fields, and
   [`require_save_allowed`](../../src/angee/base/permissions.py) (REBAC's
-  `check_save`), so a caller the save would refuse runs none of its validators.
+  `check_save` rehearsal) when it reads what `save()` sets (an owner, a scope,
+  a user). The rehearsal's limit: validation a model's own `save()` performs
+  runs inside it, before the decision; REBAC deciding a save before
+  validating and writing it closes that.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
@@ -1840,14 +1846,25 @@ open fresh evaluator scopes for authorization and change-feed reads.
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
 - **Create writes are decided, then validate the final input contract.**
-  `hasura_model_resource` creation prepares one instance, decides it by
-  rehearsing its `save()` through REBAC's gates (`check_save`), and only then
-  `full_clean`s it before persistence: a caller who may not create the row gets
-  the save's refusal, and no validator runs or answers for them. A default the
-  create permission reads is set by `save()`, which the decision sees, not only
-  by `clean()`, which it does not. The locked Strawberry version then persists
-  through `manager.create(**kwargs)`, so the prepared instance is not the saved
-  instance. Model and input defaults must agree: required fields and defaults
+  `hasura_model_resource` creation decodes the input's public ids once, prepares
+  the row's values with strawberry-django's own preparation, and decides the
+  row its manager would build by rehearsing that row's `save()` through REBAC's
+  gates (`require_save_allowed`, over `check_save`). Only then does the resolver
+  prepare its instance again and `full_clean` it before persistence. A caller
+  who may not create the row gets the save's refusal, and none of the row's
+  field validators, `clean()`, uniqueness or constraint checks runs for them.
+  The limit: validation a model's own `save()` performs runs inside the
+  rehearsal, before the decision, and answers that caller; today the
+  implementation config check (`ImplDefaultsMixin`), the workflow trigger's
+  recurrence rule, and arp's venue, event type, registration and bank rows.
+  REBAC deciding a save before validating and writing it closes the limit and
+  retires the rehearsal. For a caller who may create, a `ValidationError` a
+  model's `save()` raises comes before the field errors `full_clean` reports,
+  and an admitted insert rehearses its save once more. A default the create
+  permission reads is set by `save()`, which the decision sees, not only by
+  `clean()`, which it does not. The locked Strawberry version then persists
+  through `manager.create(**kwargs)`, so the instance it validated is not the
+  saved instance. Model and input defaults must agree: required fields and defaults
   come from the final input contract, never a second list in a consumer form;
   model-owned defaults belong in `clean()` and `save()`
   ([`Cadence`](../../src/angee/nexus/models.py)); a required field that
