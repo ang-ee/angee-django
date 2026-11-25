@@ -128,9 +128,15 @@ the table as a whole.
 | Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute. A value reaches it as the brand's outputs (above), or by the author's own choice: CSS reads an output's attribute (`content: attr(title)`, `[title^=…]` selectors) | — | — |
 
 Work is bounded by caps, not by a list, and each cap bounds the work only where it
-applies. `test_preview_time` and `test_pass_time` (CPU, under `ANGEE_TIMED_TESTS=1`) and
-the counted work of `test_the_costliest_preview_does_bounded_work` pin each bound on a
-measured case.
+applies. What is guaranteed is the work, counted, which does not depend on the
+machine: the caps below, and the counted work of
+`test_the_costliest_preview_does_bounded_work`, `test_the_costliest_pass_does_bounded_work`
+and `test_a_saving_walk_resolves_a_level_in_one_query`. The time is a
+measurement: CPU seconds on an 18-core Apple M-series machine with CPython 3.14.9,
+taken at the load each run states. `test_preview_time` and `test_pass_time` (under
+`ANGEE_TIMED_TESTS=1`) state their bounds as measured there at a load near 13 (2 s
+a preview, 1 s a pass) and scale them by a fixed reference workload measured in
+the same process, so a busy machine slows the case and the bound alike.
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|

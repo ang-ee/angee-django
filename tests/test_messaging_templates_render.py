@@ -164,14 +164,42 @@ TIMED_RUN = os.environ.get("ANGEE_TIMED_TESTS") == "1"
 """Whether CPU-time bounds are asserted: every one of them runs on request (docs/checks.md), never by default."""
 
 
+REFERENCE_ITERATIONS = 1_000_000
+NOMINAL_REFERENCE_SECONDS = 0.048
+"""The reference workload's CPU seconds on the machine class the bounds were set on: an 18-core Apple M-series
+machine, CPython 3.14.9, at a load near 13. A bound written in seconds holds that many there."""
+
+
+def _reference_seconds() -> float:
+    """CPU seconds of a fixed pure-Python workload (string building and arithmetic), the least of three runs."""
+
+    best = math.inf
+    for _ in range(3):
+        started = time.process_time()
+        total = 0
+        for index in range(REFERENCE_ITERATIONS):
+            total += len(str(index)) + index % 7
+        best = min(best, time.process_time() - started)
+    return best
+
+
+def _scaled(seconds: float) -> float:
+    """``seconds`` as a bound here: scaled by the reference workload measured now, in this process, so a busy machine
+    slows the case and the unit alike and the bound neither fails for a neighbour nor loosens for a fast host."""
+
+    return seconds * _reference_seconds() / NOMINAL_REFERENCE_SECONDS
+
+
 @contextmanager
 def _within(seconds: float, case: object = None) -> Iterator[None]:
-    """Time the block in CPU seconds; the bound is asserted only when ``ANGEE_TIMED_TESTS=1``, as every CPU bound is."""
+    """Time the block in CPU seconds against :func:`_scaled` ``seconds``; the bound is asserted only when
+    ``ANGEE_TIMED_TESTS=1``, as every CPU bound is."""
 
+    bound = _scaled(seconds) if TIMED_RUN else math.inf
     started = time.process_time()
     yield
     spent = time.process_time() - started
-    assert not TIMED_RUN or spent < seconds, (case, f"{spent:.3f} s of CPU, over {seconds} s")
+    assert spent < bound, (case, f"{spent:.3f} s of CPU, over {bound:.3f} s ({seconds} s at the reference)")
 
 
 def _mail(source: str, variables: dict[str, str] | None = None, **values: Any) -> Any:
@@ -2695,7 +2723,7 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
         walk.render(values, kit=kit)
     spent = time.process_time() - started
     print(f"pass CPU {name} {spent:.3f}s load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
-    assert spent < 1.0
+    assert spent < _scaled(1.0), (spent, _scaled(1.0))
 
 
 @TIMED
@@ -2724,7 +2752,9 @@ def test_preview_time(plain: Any, kit: Any) -> None:
                 template.render(template.sample, kit=kit)
                 spent[f"{name} render"] = round(time.process_time() - started, 3)
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
-    assert max(spent.values()) < 2.0
+    bound = _scaled(2.0)
+    print(f"preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
+    assert max(spent.values()) < bound, (spent, bound)
 
 
 # ---------- preview, its warnings and its read ----------
