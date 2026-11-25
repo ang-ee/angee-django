@@ -23,7 +23,6 @@ jobs:
     uses: ./.github/workflows/reusable-checks.yml
     secrets: inherit
     with:
-      python-version: "3.14"
       # Packages are checked hermetically; addon fragments are checked again
       # against generated GraphQL documents in the composed-stack lane.
       pnpm-enabled: true
