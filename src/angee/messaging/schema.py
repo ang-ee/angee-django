@@ -129,8 +129,8 @@ _CHANNEL_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 class ChannelType(BridgeTypeMixin, AngeeNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
-    # ``reply``: the viewer may answer the channel's messages and send new ones on it.
-    permissions = permissions_field(("reply",))
+    # The permission to send: the viewer may answer the channel's messages and send new ones on it.
+    permissions = permissions_field((Channel.reply_permission,))
 
     @strawberry_django.field
     def pairing_state(self) -> PairingState | None:

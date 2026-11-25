@@ -3626,7 +3626,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             self._set_reconciliation_horizon(row, now=moment)
         row.metadata = {**(row.metadata or {}), "local": {
             **row.local_metadata,
-            "delivery_attempts": int(row.local_metadata.get("delivery_attempts", 0)) + 1,
+            "delivery_attempts": row.delivery_attempts + 1,
             "delivery_error": "Delivery may have succeeded; reconcile or acknowledge before retrying.",
         }}
         row.save(update_fields=(
@@ -3722,7 +3722,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
                 result = "retry"
             else:
-                attempts = int(local.get("delivery_attempts", 0)) + (0 if reconciling else 1)
+                attempts = row.delivery_attempts + (0 if reconciling else 1)
                 local["delivery_attempts"] = attempts
                 if error is not None and uncertain_error:
                     if row.delivery_claim is None:
