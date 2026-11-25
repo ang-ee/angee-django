@@ -2,6 +2,8 @@
 @import "@angee/ui/styles.css";
 
 @source "../../ui/src/**/*.{ts,tsx}";
+/* @angee/app draws pages too (the sign-in page), and a host's generated sources include it. */
+@source "../../app/src/**/*.{ts,tsx}";
 @source "../.storybook/**/*.{ts,tsx,mjs,js}";
 @source "./**/*.{ts,tsx}";
 @source "../../../../*/src/*/*/web/src/**/*.{ts,tsx}";
