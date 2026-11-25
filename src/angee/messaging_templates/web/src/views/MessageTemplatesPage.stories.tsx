@@ -20,9 +20,9 @@ export default {
 
 type StoryContext = { globals: Record<string, unknown> };
 
-/** The library: every row, grouped by kind. Open a row to read it beside the list. */
+/** The library: every row, grouped by kind; presets Default updated and Effective. Open a row to read it. */
 export const Library = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} /> };
-/** A shipped template nobody overrides: read-only, the notice, Override, and its Preview. Override it: the override opens. */
+/** A shipped template nobody overrides: read-only, the notice, Override, and its Preview; choose Sandstone in Brand kit and the preview reads again in that kit. Override it: the deployment's override opens. */
 export const ShippedDefault = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcome} /> };
 /** A current override of a shipped block: editable, no Message section, and Delete in the record's menu. */
 export const Override = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.quote} /> };
@@ -30,35 +30,33 @@ export const Override = { render: (_args: unknown, { globals }: StoryContext) =>
 export const DefaultUpdated = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.recordCard} /> };
 /** Every save is refused as the console refused a template set to HTML with no layout: choose HTML in Format, empty Layout and save. One banner holds every reason, run together. */
 export const RefusedSave = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} refuseSave /> };
-/** New: the name, kind, key and language, nothing else. Create Template, example.announcement, en, Announcement: the seeded template opens, its identity fixed. */
+/**
+ * New: the name, kind, key and language, nothing else. The recorded inserts: Template, example.announcement, en,
+ * Announcement opens the seeded template with its identity fixed; Layout, base, en refuses a shipped default's
+ * identity and Block, notice, en an identity the deployment has, each in the banner; Block, Not A Key, en refuses the
+ * key under Key.
+ */
 export const NewMessageTemplate = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
-/** New, refused for a shipped default's identity: create Layout, base, en, Base. */
-export const CreateRefusedShipped = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
-/** New, refused for an identity the deployment has: create Block, notice, en, Notice. */
-export const CreateDuplicate = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
-/** New, refused under the key: create Block, Not A Key, en, Bad key. */
-export const CreateBadKey = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
 /** A template whose preview warns: an empty preheader and a value nothing reads. */
 export const PreviewWarnings = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
 /** A template whose sample no longer renders: each reason as the server words it, and no frame. */
 export const PreviewRenderError = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.invoiceSent} /> };
-/** Choose Sandstone in Brand kit: the preview reads again, in that kit's colours, fonts and footer. */
-export const PreviewOtherKit = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcome} /> };
 /** The deployment's own Arabic template: the frame's document reads right to left, and so does its plain text. */
 export const RightToLeft = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcomeArabic} /> };
 /** The deployment's own block an override includes: Delete in the record's menu shows the server's refusal. */
 export const DeleteRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.notice} /> };
-/** Keep override is refused, as for an override whose shipped default is gone: a toast with the server's words. */
+/** Keep override is refused, as for a row that overrides no shipped default: a toast with the server's words. */
 export const KeepRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.recordCard} refuseKeep /> };
-/** A member: the facts alone in the notice, no verb, no Preview, the sample as a restriction, no Backlinks. */
-export const MemberView = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.invoiceSent} viewer="member" /> };
+/** A member on a shipped default: the fact alone in the notice, no verb, no Preview, the sample as a restriction, no Backlinks. */
+export const MemberView = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcome} viewer="member" /> };
 
 const documents = { console: operationDocuments };
 
 /**
  * The real Message templates page and message template form over the console wire
  * fake (`messageTemplateSchemas`), in the routed console shell with the addon's
- * routes, containers, presets and glyph.
+ * routes, containers, presets and glyph. The fake answers what the recording holds
+ * and refuses anything else with a GraphQL error that names it.
  */
 export function MessageTemplateStory({
   appearance, open, viewer = "admin", refuseSave = false, refuseKeep = false, onRequest, onCall,

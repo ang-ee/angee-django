@@ -1,4 +1,6 @@
 import { composeAddons } from "@angee/app";
+import type { DocumentType } from "@angee/gql/console";
+import type { ActionResult, DeletePreview } from "@angee/gql/console/actions";
 import { defineAngeeSchemaMetadata, type DataResourceMetadata, type Row } from "@angee/metadata";
 import {
   GraphQLError,
@@ -9,55 +11,40 @@ import {
 } from "@angee/storybook/testing";
 import { baseIcons, createRouteHref, defaultWidgets, type AppRuntime, type ChatterViewContext } from "@angee/ui";
 
-import messagingTemplates from "./index";
-import { MESSAGE_TEMPLATE_MODEL, MESSAGE_TEMPLATES_PRESENCE, MESSAGE_TEMPLATES_ROUTE } from "./resources";
+import type { MessageTemplateBacklinks, MessageTemplatePreview } from "./documents.console";
 import recordedFixtures from "./fixtures.recorded.json";
+import messagingTemplates from "./index";
+import {
+  BRAND_KIT_MODEL, MESSAGE_TEMPLATE_MODEL, MESSAGE_TEMPLATES_PRESENCE, MESSAGE_TEMPLATES_ROUTE,
+} from "./resources";
 
 /**
  * The message templates console's workshop and test fixture, over refine's GraphQL
  * wire fake.
  *
- * Every value the server words or decides is in `fixtures.recorded.json`, which a
- * scratch script records from the framework's bare test host and writes whole; it
- * is regenerated, never edited (the command is in the lane report that added it):
- * the console resource metadata of `messaging_templates.MessageTemplate` as a host
- * enabling the addon alone emits it; the library's rows as an administrator reads
- * them and what a member reads differently; each row's backlinks, preview (in the
- * default kit, and Welcome's in the other kit) and delete preview; the brand kits;
- * and what Override, Keep override, Delete, the insert and a refused save answer,
- * with what each changed in the library. Public ids are stable aliases of a row's
- * kind, key, language and whether it is shipped.
+ * Every value the server words or decides is in `fixtures.recorded.json`, which
+ * `tests/test_messaging_templates_console_fixture.py` records from the framework's
+ * test host and checks for drift; re-record it with the command in `docs/checks.md`,
+ * never edit it. The recorded shapes the console's own documents read are typed from
+ * their generated results, so a schema change that moves them fails the type-check.
  *
- * The fake answers from those recordings and keeps the library across requests:
- * a verb applies the changes recorded for it. Two things it stands in for rather
- * than recorded: a save applies its patch as it is, and an insert of an identity
- * the recording has no answer for starts as the recorded new row of its kind
- * (what a key with no row at all starts as), with no preview. Lists, counts and
- * groups are `resourceSnapshotOperations` over the current rows, so filters and
- * grouping are the resource metadata's own.
+ * The fake answers from those recordings and keeps the library across requests: a
+ * verb applies what the recording says it changed. A save applies its patch as it
+ * is. A read or a verb the recording has no answer for is answered with a GraphQL
+ * error naming it. Lists, counts and groups are `resourceSnapshotOperations` over the
+ * current rows, so filters and grouping are the resource metadata's own.
  */
 
 type WireRow = Row & { id: string };
-
-interface RecordedPreview {
-  rendered: { subject: string; preheader: string; html: string; plain_text: string; language: string } | null;
-  warnings: readonly { code: string; detail: string }[];
-}
+type Preview = DocumentType<typeof MessageTemplatePreview>["message_template_preview"];
+type Backlinks = NonNullable<DocumentType<typeof MessageTemplateBacklinks>["message_templates_by_pk"]>["backlinks"];
 
 interface RecordedChanges {
   /** New rows whole, first; then each changed row as its id and the fields that changed. */
   rows: readonly WireRow[];
   removed: readonly string[];
-  previews: Readonly<Record<string, RecordedPreview>>;
-  backlinks: Readonly<Record<string, readonly WireRow[] | null>>;
-}
-
-interface RecordedOutcome {
-  ok: boolean;
-  message: string;
-  code: string | null;
-  validation_errors: unknown;
-  id: string | null;
+  previews: Readonly<Record<string, Preview>>;
+  backlinks: Readonly<Record<string, Backlinks>>;
 }
 
 interface RecordedError {
@@ -70,57 +57,44 @@ type RecordedInsert =
   | { object: Readonly<Record<string, string>>; changes: RecordedChanges }
   | { object: Readonly<Record<string, string>>; error: RecordedError };
 
+/** The names the stories and tests open rows by, as the recorder names them (`OPENED`). */
+type OpenedRow = "welcome" | "welcomeArabic" | "passwordReset" | "invoiceSent" | "button" | "quote" | "recordCard"
+  | "notice";
+
 interface RecordedFixtures {
-  metadata: unknown;
-  kits: readonly { id: string; name: string; is_default: boolean }[];
+  metadata: Readonly<Record<string, unknown>>;
+  opened: Readonly<Record<OpenedRow, string>>;
   rows: readonly WireRow[];
-  member: { rows: Readonly<Record<string, Partial<Row>>>; backlinks: Readonly<Record<string, null>> };
-  backlinks: Readonly<Record<string, readonly WireRow[] | null>>;
-  previews: Readonly<Record<string, RecordedPreview>>;
-  previewsInKit: Readonly<Record<string, Readonly<Record<string, RecordedPreview>>>>;
-  delete: Readonly<Record<string, { preview: Row & { has_blockers: boolean; refusals: readonly string[] }; changes?: RecordedChanges }>>;
-  override: Readonly<Record<string, { result: RecordedOutcome; changes: RecordedChanges }>>;
-  keep: Readonly<Record<string, { result: RecordedOutcome; changes: RecordedChanges }>>;
+  member: Readonly<Record<string, Partial<Row>>>;
+  kits: readonly WireRow[];
+  backlinks: Readonly<Record<string, Backlinks>>;
+  previews: Readonly<Record<string, Preview>>;
+  previewsInKit: Readonly<Record<string, Readonly<Record<string, Preview>>>>;
+  delete: Readonly<Record<string, { preview: DeletePreview; changes?: RecordedChanges }>>;
+  override: Readonly<Record<string, { result: ActionResult; changes: RecordedChanges }>>;
+  keep: Readonly<Record<string, { result: ActionResult; changes: RecordedChanges }>>;
   insert: readonly RecordedInsert[];
   save: readonly { id: string; set: Readonly<Record<string, unknown>>; error: RecordedError }[];
 }
 
-/** What the recording script wrote. */
+/** What the recorder wrote: JSON, so its values are checked by the recorder's own test, its shapes by these types. */
 export const RECORDED = recordedFixtures as unknown as RecordedFixtures;
 
-/** The console resource for `messaging_templates.MessageTemplate`, as the recorded metadata states it. */
-export const MESSAGE_TEMPLATE_RESOURCE: DataResourceMetadata = (() => {
-  const resource = defineAngeeSchemaMetadata({ angee: { resources: [RECORDED.metadata] } }).angee?.resources?.[0];
-  if (!resource) throw new Error("The recorded fixtures carry no message template resource.");
+function recordedResource(model: string): DataResourceMetadata {
+  const resource = defineAngeeSchemaMetadata({ angee: { resources: [RECORDED.metadata[model]] } }).angee?.resources?.[0];
+  if (!resource) throw new Error(`The recorded fixtures carry no ${model} resource.`);
   return resource;
-})();
-
-/** The recorded rows the stories and tests open, by what each is. */
-export const ROW = {
-  /** A shipped template nobody overrides. */
-  welcome: "mtl_template_example_welcome_en_shipped",
-  /** The deployment's own Arabic translation of it. */
-  welcomeArabic: "mtl_template_example_welcome_ar",
-  /** A current override of a shipped template, whose preview warns. */
-  passwordReset: "mtl_template_example_password_reset_en",
-  /** An override whose shipped default changed, and whose sample no longer renders. */
-  invoiceSent: "mtl_template_example_invoice_sent_en",
-  /** A shipped block every template includes. */
-  button: "mtl_block_button_en_shipped",
-  /** A current override of a shipped block nothing includes. */
-  quote: "mtl_block_quote_en",
-  /** An override of a shipped block whose default changed. */
-  recordCard: "mtl_block_record_card_en",
-  /** The deployment's own block, which an override includes. */
-  notice: "mtl_block_notice_en",
-} as const;
-
-for (const id of Object.values(ROW)) {
-  if (!RECORDED.rows.some((row) => row.id === id)) throw new Error(`The recorded fixtures have no row ${id}.`);
 }
 
-/** The answer to Keep override on a row whose shipped default is gone, as the console words it. */
-export const KEEP_REFUSAL: RecordedOutcome = (() => {
+/** The console resources for message templates and brand kits, as the recorded metadata states them. */
+export const MESSAGE_TEMPLATE_RESOURCE = recordedResource(MESSAGE_TEMPLATE_MODEL);
+const BRAND_KIT_RESOURCE = recordedResource(BRAND_KIT_MODEL);
+
+/** The recorded rows the stories and tests open, by what each is (the recorder's `OPENED` says which). */
+export const ROW = RECORDED.opened;
+
+/** The answer to Keep override on a row that overrides no shipped default, as the console words it. */
+export const KEEP_REFUSAL: ActionResult = (() => {
   const refusal = Object.values(RECORDED.keep).find((entry) => !entry.result.ok)?.result;
   if (!refusal) throw new Error("The recorded fixtures carry no refused Keep override.");
   return refusal;
@@ -139,7 +113,7 @@ export interface MessageTemplateFixtureOptions {
   viewer?: MessageTemplateViewer;
   /** Every save is refused as the console refused the recorded one. */
   refuseSave?: boolean;
-  /** Keep override is refused as the console refuses it for an override whose shipped default is gone. */
+  /** Keep override is refused as the console refuses it for a row that overrides no shipped default. */
   refuseKeep?: boolean;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
@@ -149,6 +123,11 @@ function recordedError(error: RecordedError): GraphQLError {
   return new GraphQLError(error.message, { path: error.path, extensions: error.extensions });
 }
 
+/** The answer to a read or a verb the recording holds none for: a GraphQL error, which the client does not retry. */
+function unrecorded(what: string): GraphQLError {
+  return new GraphQLError(`The recorded fixtures hold no answer for ${what}.`);
+}
+
 function sameObject(left: Readonly<Record<string, unknown>>, right: unknown): boolean {
   if (typeof right !== "object" || right === null) return false;
   const other = right as Record<string, unknown>;
@@ -156,33 +135,14 @@ function sameObject(left: Readonly<Record<string, unknown>>, right: unknown): bo
   return keys.length === Object.keys(other).length && keys.every((key) => left[key] === other[key]);
 }
 
-/** The recorded new row of a kind, given the asked identity: what a key with no row at all starts as. */
-function standInInsert(object: Readonly<Record<string, unknown>>): RecordedChanges {
-  const kind = String(object.kind ?? "");
-  const seeded = RECORDED.insert.find((entry): entry is Extract<RecordedInsert, { changes: RecordedChanges }> =>
-    "changes" in entry && entry.object.kind === kind)?.changes.rows[0];
-  if (!seeded) throw new Error(`The recorded fixtures have no new row of the kind ${kind}.`);
-  const key = String(object.key ?? "");
-  const language = String(object.language ?? "");
-  const name = String(object.name ?? "");
-  return {
-    rows: [{ ...seeded, id: `mtl_${kind}_${key.replaceAll(".", "_")}_${language}`, key, language, name, display_name: name }],
-    removed: [],
-    previews: {},
-    backlinks: {},
-  };
-}
-
 /** The schemas a story or a test mounts: the console over the fake, with the recorded metadata. */
 export function messageTemplateSchemas({
   viewer = "admin", refuseSave = false, refuseKeep = false, onRequest, onCall,
 }: MessageTemplateFixtureOptions = {}) {
   const member = viewer === "member";
-  let rows: WireRow[] = RECORDED.rows.map((row) => (member ? { ...row, ...RECORDED.member.rows[row.id], id: row.id } : row));
-  const previews: Record<string, RecordedPreview> = member ? {} : { ...RECORDED.previews };
-  const backlinks: Record<string, readonly WireRow[] | null> = member
-    ? { ...RECORDED.member.backlinks }
-    : { ...RECORDED.backlinks };
+  let rows: WireRow[] = RECORDED.rows.map((row) => (member ? { ...row, ...RECORDED.member[row.id], id: row.id } : row));
+  const previews: Record<string, Preview> = member ? {} : { ...RECORDED.previews };
+  const backlinks: Record<string, Backlinks> = member ? {} : { ...RECORDED.backlinks };
   const find = (id: unknown) => rows.find((row) => row.id === id) ?? null;
   const apply = (changes: RecordedChanges) => {
     for (const change of changes.rows) {
@@ -195,8 +155,11 @@ export function messageTemplateSchemas({
     Object.assign(backlinks, changes.backlinks);
   };
   const snapshot = (root: string): GraphQLWireOperation => (args, request) => {
-    const operation = resourceSnapshotOperations([MESSAGE_TEMPLATE_RESOURCE], { [MESSAGE_TEMPLATE_MODEL]: rows })[root];
-    if (!operation) throw new Error(`The message template resource has no root ${root}.`);
+    const operation = resourceSnapshotOperations(
+      [MESSAGE_TEMPLATE_RESOURCE, BRAND_KIT_RESOURCE],
+      { [MESSAGE_TEMPLATE_MODEL]: rows, [BRAND_KIT_MODEL]: RECORDED.kits },
+    )[root];
+    if (!operation) throw unrecorded(root);
     return operation(args, request);
   };
   const operations: Record<string, GraphQLWireOperation> = {
@@ -204,62 +167,53 @@ export function messageTemplateSchemas({
     message_templates_aggregate: snapshot("message_templates_aggregate"),
     message_templates_groups: snapshot("message_templates_groups"),
     message_templates_groups_count: snapshot("message_templates_groups_count"),
+    brand_kits: snapshot("brand_kits"),
+    brand_kits_aggregate: snapshot("brand_kits_aggregate"),
     message_templates_by_pk: ({ id }) => {
       const row = find(id);
-      return row ? { ...row, backlinks: backlinks[row.id] ?? null } : null;
+      if (!row) return null;
+      return Object.hasOwn(backlinks, row.id) ? { ...row, backlinks: backlinks[row.id] } : row;
     },
     message_template_preview: ({ template, brand_kit }) => {
       const preview = typeof brand_kit === "string"
         ? (member ? undefined : RECORDED.previewsInKit[brand_kit]?.[String(template)])
         : previews[String(template)];
-      if (!preview) throw new Error(`No preview of ${String(template)} in ${String(brand_kit ?? "the default kit")} is recorded for this reader.`);
+      if (!preview) throw unrecorded(`the preview of ${String(template)} in ${String(brand_kit ?? "the default kit")}`);
       return preview;
     },
-    brand_kits: () => RECORDED.kits,
     override_message_template: ({ template }) => {
       const entry = RECORDED.override[String(template)];
-      if (!entry) throw new Error(`No override of ${String(template)} is recorded.`);
+      if (!entry) throw unrecorded(`Override on ${String(template)}`);
       apply(entry.changes);
       return entry.result;
     },
     keep_message_template_override: ({ template }) => {
       if (refuseKeep) return KEEP_REFUSAL;
       const entry = RECORDED.keep[String(template)];
-      if (!entry) throw new Error(`No Keep override of ${String(template)} is recorded.`);
+      if (!entry) throw unrecorded(`Keep override on ${String(template)}`);
       if (entry.result.ok) apply(entry.changes);
       return entry.result;
     },
     insert_message_templates_one: ({ object }) => {
       const recorded = RECORDED.insert.find((candidate) => sameObject(candidate.object, object));
-      if (recorded && "error" in recorded) throw recordedError(recorded.error);
-      const changes = recorded && "changes" in recorded
-        ? recorded.changes
-        : standInInsert(object as Record<string, unknown>);
-      apply(changes);
-      return changes.rows[0];
+      if (!recorded) throw unrecorded(`the insert of ${JSON.stringify(object)}`);
+      if ("error" in recorded) throw recordedError(recorded.error);
+      apply(recorded.changes);
+      return recorded.changes.rows[0];
     },
     update_message_templates_by_pk: ({ pk_columns, _set }) => {
       const { id } = pk_columns as { id: string };
       const refusal = RECORDED.save[0];
       if (refuseSave && refusal) throw recordedError(refusal.error);
       const current = find(id);
-      if (!current) throw new Error(`No message template ${id} is recorded.`);
-      const changes = _set as Row;
-      const { format, name } = changes;
-      // The server reads a choice column back in its member's name, and a row's display name is its name.
-      const saved: WireRow = {
-        ...current,
-        ...changes,
-        id,
-        ...(typeof format === "string" ? { format: format.toUpperCase() } : {}),
-        ...(typeof name === "string" ? { display_name: name } : {}),
-      };
+      if (!current) throw unrecorded(`the row ${id}`);
+      const saved: WireRow = { ...current, ...(_set as Row), id };
       rows = rows.map((row) => (row.id === id ? saved : row));
       return saved;
     },
     message_templates_delete: ({ id, confirm }) => {
       const entry = RECORDED.delete[String(id)];
-      if (!entry) throw new Error(`No delete of ${String(id)} is recorded.`);
+      if (!entry) throw unrecorded(`Delete on ${String(id)}`);
       if (confirm === true && !entry.preview.has_blockers && entry.changes) apply(entry.changes);
       return entry.preview;
     },
@@ -274,7 +228,7 @@ export function messageTemplateSchemas({
   const fixture = storySchema(answered, onRequest).public!;
   return {
     public: fixture,
-    console: { ...fixture, metadata: { angee: { resources: [MESSAGE_TEMPLATE_RESOURCE] } } },
+    console: { ...fixture, metadata: { angee: { resources: [MESSAGE_TEMPLATE_RESOURCE, BRAND_KIT_RESOURCE] } } },
   };
 }
 
@@ -282,7 +236,7 @@ export function messageTemplateSchemas({
 export const MESSAGE_TEMPLATE_ROUTE_HREF = createRouteHref(messagingTemplates.routes ?? []);
 export const MESSAGE_TEMPLATE_RECORD_ROUTE = `${MESSAGE_TEMPLATES_ROUTE}.record`;
 
-/** The aside's route for a message template record, as the composed app derives it from the route and metadata. */
+/** The aside's route for a message template record, which the app derives from the route and the metadata. */
 const RECORD_CHATTER_ROUTE = {
   name: MESSAGE_TEMPLATE_RECORD_ROUTE,
   path: "/message-templates/$id",
