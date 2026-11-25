@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
-from angee.messaging.constants import RELEASE_MESSAGES_TASK
+from angee.messaging.constants import RELEASE_MESSAGES_TASK, SYSTEM_CHANNEL_BACKEND
 
 _Settings = TypedDict(
     "_Settings",
@@ -35,11 +35,13 @@ SETTINGS: _Settings = {
     "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.messaging.schema.related_counts"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
-    # registry). Source addons add their own with a yamlconf dotted key, e.g.
+    # registry); ``system`` is the system channel's, offered to nobody. Source addons
+    # add their own with a yamlconf dotted key, e.g.
     # ``"ANGEE_CHANNEL_BACKEND_CLASSES.imap"`` from ``messaging_integrate_imap``.
     "ANGEE_CHANNEL_BACKEND_CLASSES": {
         "email": "angee.messaging.email.AnymailEmailChannelBackend",
         "manual": "angee.messaging.backends.ManualChannelBackend",
+        SYSTEM_CHANNEL_BACKEND: "angee.messaging.email.SystemChannelBackend",
     },
     # A channel that stores ``webform`` needs the web forms bridge, which registers
     # that backend; ``angee.E052`` gives this to a host that holds one without it.

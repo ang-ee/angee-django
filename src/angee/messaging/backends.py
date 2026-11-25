@@ -331,6 +331,13 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     """
 
     registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
+    offered: ClassVar[bool] = True
+    """Whether people choose a channel on this protocol to send from or to watch.
+
+    A channel whose backend is not offered (the system channel's) is never
+    selected for outbound email (``ChannelQuerySet.outbound_email``) and never
+    accepted as a workflow trigger's source.
+    """
     delivery_visibility_delay: ClassVar[timedelta] = timedelta()
     """Minimum age of a possibly accepted claim before reconciliation; feeds extend it."""
     source_kind: ClassVar[SourceKind | None] = None

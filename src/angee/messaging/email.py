@@ -31,6 +31,7 @@ from urllib3.exceptions import MaxRetryError, NewConnectionError
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.errors import IntegrationError, is_transient_status
 from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
+from angee.messaging.constants import SYSTEM_CHANNEL_BACKEND
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +297,19 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 continue
             headers[name] = str(part.fragment.text)
         return headers
+
+
+class SystemChannelBackend(AnymailEmailChannelBackend):
+    """The system channel's backend: Django's own mail is recorded on it, and nobody chooses it.
+
+    It delivers as every email channel does. It is not offered: no person sends
+    from it or watches it, so it is never selected for outbound email and never a
+    workflow trigger's source.
+    """
+
+    key = SYSTEM_CHANNEL_BACKEND
+    label = "System mail"
+    offered = False
 
 
 def _mailbox(name: str, address: str) -> str:

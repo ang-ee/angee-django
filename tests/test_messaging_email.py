@@ -236,6 +236,22 @@ def test_outbound_email_names_why_its_selection_is_empty(db: None) -> None:
     assert off.value.code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
 
 
+def test_a_channel_whose_backend_is_not_offered_is_never_selected_to_send_from(db: None) -> None:
+    """The system channel delivers email, yet nobody chooses it: every outbound selection leaves it out."""
+
+    del db
+    billing = make_integration("billing", model=Channel, backend_class="email")
+    system = make_integration("system-mail", model=Channel, backend_class="system")
+    configured = override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    with system_context(reason="test.messaging.outbound_email"), configured:
+        assert billing.lifecycle == system.lifecycle == Channel.Lifecycle.CONNECTED
+        assert set(Channel.objects.outbound_email()) == {billing}
+        assert set(Channel.objects.require_outbound_email(backend_class="email")) == {billing}
+        assert not Channel.objects.outbound_email(backend_class="system").exists()
+        with pytest.raises(OutboundEmailNotConfigured):
+            Channel.objects.require_outbound_email(backend_class="system")
+
+
 @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
 def test_outbound_email_predicate_is_lazy_and_chainable() -> None:
     # No database fixture: constructing either selection must not execute SQL.

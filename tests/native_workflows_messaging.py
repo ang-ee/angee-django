@@ -85,12 +85,12 @@ class MessageTriggerTests(TransactionTestCase):
         )
         self.channel = self.make_channel("message-source")
 
-    def make_channel(self, key):
+    def make_channel(self, key, *, backend_class="manual"):
         """Create the native channel connection without external transport."""
         with system_context(reason="message source channel"):
             vendor = apps.get_model("integrate.Vendor").objects.create(slug=key, display_name=key)
             return Channel.objects.create(
-                vendor=vendor, owner=self.owner, backend_class="manual", lifecycle="connected",
+                vendor=vendor, owner=self.owner, backend_class=backend_class, lifecycle="connected",
             )
 
     def trigger(self, *, channel=None, actor=None, enabled=True):
@@ -202,6 +202,18 @@ class MessageTriggerTests(TransactionTestCase):
         with self.assertRaisesMessage(ValidationError, "channel grant scope"):
             Trigger.objects.enable(trigger, actor=self.admin)
         self.assertFalse(Trigger.system_queryset().get(pk=trigger.pk).enabled)
+
+    def test_a_channel_not_offered_is_refused_as_a_source_before_any_grant(self):
+        """An administrator reads the system channel, yet cannot make it a trigger's source."""
+        system = self.make_channel("system-source", backend_class="system")
+        trigger = self.trigger(channel=system, enabled=False)
+        with self.assertRaises(ValidationError) as refused:
+            Trigger.objects.enable(trigger, actor=self.admin)
+        self.assertEqual(refused.exception.error_dict["channel"][0].code, "not_offered")
+        trigger = Trigger.system_queryset().get(pk=trigger.pk)
+        self.assertFalse(trigger.enabled)
+        self.assertEqual(trigger.granted_relationships(actor=self.admin), ())
+        self.assertFalse(system.with_actor(self.workflow.user).has_access("read"))
 
     def test_admission_rechecks_channel_read_under_workflow_principal(self):
         """The standing channel grant survives a change in the enabler's reach."""

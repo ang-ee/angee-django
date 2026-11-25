@@ -268,11 +268,14 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         )
 
     def _outbound_email_backends(self, backend_class: str | None) -> list[str]:
-        """Configured email implementations in the channel's declared registry."""
+        """Offered, configured email implementations in the channel's declared registry."""
 
         field = self.model.backend_class.field
         candidates = field.registered_keys() if backend_class is None else (backend_class,)
-        return [key for key in candidates if field.resolve_class(key).outbound_email_configured()]
+        return [
+            key for key in candidates
+            if (backend := field.resolve_class(key)).offered and backend.outbound_email_configured()
+        ]
 
     def require_outbound_email(self, *, backend_class: str | None = None) -> Self:
         """Require configured transport and at least one connected channel in this selection."""
