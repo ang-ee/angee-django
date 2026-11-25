@@ -42,9 +42,21 @@ from angee.messaging_templates.engine import (
     register,
     url,
 )
-from angee.messaging_templates.rendering import TemplateWarningCode, check_html, compiled_expression, render_message
 from angee.messaging_templates.testing.models import MessageTemplate
-from angee.messaging_templates.walker import WALKED_NODES, TemplateWalk, TemplateWalker, _RowRules, _Tree, _TreeWalker
+from angee.messaging_templates.walker import (
+    WALKED_NODES,
+    RowPiece,
+    TemplateWalk,
+    TemplateWalker,
+    TemplateWarningCode,
+    _frame,
+    _RowRules,
+    _Tree,
+    _TreeWalker,
+    check_html,
+    compiled_expression,
+    walked,
+)
 from tests.conftest import addon_schema, create_platform_admin, create_user
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,7 +98,7 @@ def _row(kind: str = "template", key: str = "tests.mail", language: str = "en", 
 def _refusals(row: Any, *, saving: bool = True) -> list[str]:
     with system_context(reason="tests.messaging_templates.render.walk"):
         try:
-            MessageTemplate.template_walker(saving=saving).walk(row)
+            TemplateWalker(saving=saving).walk(row, MessageTemplate.objects)
         except ValidationError as error:
             return list(error.messages)
     return []
@@ -94,7 +106,7 @@ def _refusals(row: Any, *, saving: bool = True) -> list[str]:
 
 def _walk(row: Any) -> TemplateWalk:
     with system_context(reason="tests.messaging_templates.render.walk"):
-        return MessageTemplate.template_walker().walk(row)
+        return TemplateWalker().walk(row, MessageTemplate.objects)
 
 
 def _render(row: Any, values: dict[str, Any], kit: Any = None) -> Any:
@@ -224,6 +236,10 @@ def test_walker_reads_every_node(plain: Any, kit: Any) -> None:
                 met[type(node).__name__] = (
                     type(node).child_nodelists, sorted(set(vars(node)) - {"token", "origin"}),
                 )
+                # The walker's table renders what Django renders under each node.
+                assert [child for nodelist in walked(node).nodelists(node) for child in nodelist] == [
+                    child for name in type(node).child_nodelists for child in getattr(node, name, None) or ()
+                ], type(node)
                 for condition, _ in getattr(node, "conditions_nodelists", ()):
                     if condition is not None:
                         conditions(condition)
@@ -251,9 +267,9 @@ def test_walker_reads_every_node(plain: Any, kit: Any) -> None:
     spaceless = Engine().from_string("{% spaceless %}x{% endspaceless %}").nodelist[0]
     with pytest.raises(TypeError, match="does not know SpacelessNode"):
         _RowRules([], "probe", text_form=False).node(spaceless)
-    tree_walker = _TreeWalker(TemplateWalker(MessageTemplate.objects), walk, {})
+    tree_walker = _TreeWalker(walk, {})
     with pytest.raises(TypeError, match="does not know SpacelessNode"):
-        tree_walker.node(TemplateWalker._frame("probe", template, top=True), spaceless, _Tree("html"))
+        tree_walker.node(_frame("probe", template, top=True), spaceless, _Tree(RowPiece.HTML))
 
 
 # ---------- the walker's refusals, one rule at a time ----------
@@ -556,7 +572,7 @@ def test_reference_definitions_off(plain: Any) -> None:
     assert not any("form holds over 60" in message for message in refusals), refusals
     assert time.process_time() - started < 0.5
     with system_context(reason="tests.messaging_templates.render.forms"):
-        forms = MessageTemplate.template_walker().check(_unsaved(source="[r]: /u\n\n[r] and [r]")).forms
+        forms = TemplateWalker().check(_unsaved(source="[r]: /u\n\n[r] and [r]")).forms
     assert forms is not None and "<a" not in forms.html and "[r]: /u" in forms.html
 
 
@@ -1027,7 +1043,7 @@ def test_pass_time(plain: Any, kit: Any, rows: dict[str, Any], values: dict[str,
     walk = _walk(template)
     started = time.process_time()
     with system_context(reason="tests.messaging_templates.render.timed"):
-        render_message(walk, values, kit=kit)
+        walk.render(values, kit=kit)
     spent = time.process_time() - started
     print(f"pass CPU {spent:.3f}s")  # noqa: T201 -- the report quotes it
     assert spent < 1.0

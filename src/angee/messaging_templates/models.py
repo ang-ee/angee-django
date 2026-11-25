@@ -58,20 +58,18 @@ from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
-from angee.messaging_templates.rendering import (
-    MessageTemplateFormat,
+from angee.brandkit.models import BrandKit
+from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
+from angee.messaging_templates.resources import MessageTemplateResource
+from angee.messaging_templates.walker import (
     PreviewFrame,
     RenderedMessage,
     TemplatePreview,
+    TemplateWalker,
     TemplateWarning,
     TemplateWarningCode,
     in_layout,
-    preview_warnings,
-    render_message,
-    validate_variables,
 )
-from angee.messaging_templates.resources import MessageTemplateResource
-from angee.messaging_templates.walker import RowReader, TemplateWalker
 from angee.parties.fields import LanguageCodeField, normalize_language_code
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
@@ -222,7 +220,7 @@ class IncludedHandler(MessageTemplateKindHandler):
         """
 
         name = self.template_name(key)
-        walker = TemplateWalker(cast(RowReader, rows))
+        walker = TemplateWalker()
         candidates = rows.filter(models.Q(source__contains=name) | models.Q(text_source__contains=name))
         return rows.filter(pk__in=[row.pk for row in candidates if name in walker.includes(row)])
 
@@ -708,15 +706,6 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             return False
         return True
 
-    @classmethod
-    def template_walker(cls, *, saving: bool = False) -> TemplateWalker:
-        """Return a walker reading the rows a walk names through the acting reader's scope.
-
-        ``saving`` asks, as a save does, that every included key resolve for every recipient.
-        """
-
-        return TemplateWalker(cls.objects, saving=saving)
-
     def validate_source(self) -> None:
         """Walk this row as it would be saved, among its language's effective rows; raise ``ValidationError``.
 
@@ -728,24 +717,24 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         they render.
         """
 
-        type(self).template_walker(saving=True).walk(self)
+        TemplateWalker(saving=True).walk(self, type(self).objects)
 
-    def render(self, values: Mapping[str, Any], *, kit: Any | None = None) -> RenderedMessage:
+    def render(self, values: Mapping[str, Any], *, kit: BrandKit | None = None) -> RenderedMessage:
         """Render this row with ``values``, in ``kit``'s name and colours (the default kit when ``None``).
 
         Walks the row first, so a row written past :meth:`clean` that would not
         render fails before anything renders; then
-        :func:`~angee.messaging_templates.rendering.render_message`. Every required
+        :meth:`~angee.messaging_templates.walker.TemplateWalk.render`. Every required
         value is present and not null, dates are ``date``, aware ``datetime`` or
         ISO 8601, and money is a ``Decimal`` printed through ``floatformat``. Reads
         rows and the kit through the acting reader's scope: a sender renders as the
         system actor. Raises ``ValidationError``.
         """
 
-        walk = type(self).template_walker().walk(self)
-        return render_message(walk, values, kit=self._brand_kit(kit))
+        walk = TemplateWalker().walk(self, type(self).objects)
+        return walk.render(values, kit=self._brand_kit(kit))
 
-    def preview(self, *, kit: Any | None = None) -> TemplatePreview:
+    def preview(self, *, kit: BrandKit | None = None) -> TemplatePreview:
         """Render this row with its ``sample`` and say what a sender should know about it.
 
         Requires ``preview`` on the row before anything else (named system work
@@ -757,37 +746,32 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         self.require_access("preview")
         try:
-            walk = type(self).template_walker().walk(self)
-            rendered = render_message(walk, self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
+            walk = TemplateWalker().walk(self, type(self).objects)
+            rendered = walk.render(self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
         except ValidationError as error:
             return TemplatePreview(
                 rendered=None, warnings=[TemplateWarning(TemplateWarningCode.RENDER_ERROR, " ".join(error.messages))],
             )
-        return TemplatePreview(
-            rendered=rendered,
-            warnings=preview_warnings(
-                walk, rendered, self.sample, carries_message_fields=self.handler.carries_message_fields,
-            ),
-        )
+        return TemplatePreview(rendered=rendered, warnings=walk.preview_warnings(rendered, self.sample))
 
     @staticmethod
-    def _brand_kit(kit: Any | None) -> Any:
+    def _brand_kit(kit: BrandKit | None) -> BrandKit:
         """Return ``kit``, or the default kit the acting reader reads; refuse when there is none."""
 
         if kit is None:
             kit = apps.get_model("brandkit", "BrandKit").objects.default()
         if kit is None:
             raise ValidationError(NO_BRAND_KIT_MESSAGE, code="no_brand_kit")
-        return kit
+        return cast(BrandKit, kit)
 
     @classmethod
     def after_resource_load(cls, instances: Iterable[Self], *, tier: str, source: str) -> None:
         """Walk every loaded row, unchanged ones included, as a save walks it (:meth:`validate_source`)."""
 
         loaded = tuple(instances)
-        walker = cls.template_walker(saving=True)
+        walker = TemplateWalker(saving=True)
         for instance in loaded:
-            walker.walk(instance)
+            walker.walk(instance, cls.objects)
         super().after_resource_load(loaded, tier=tier, source=source)
 
     def delete_blocker(self, *, cascaded: bool = False) -> str | None:

@@ -14,8 +14,8 @@ from rebac import system_context
 
 from angee.brandkit.testing.models import BrandKit
 from angee.messaging_templates.models import MessageTemplateKind
-from angee.messaging_templates.rendering import TemplateWarningCode
 from angee.messaging_templates.testing.models import MessageTemplate
+from angee.messaging_templates.walker import TemplateWarningCode
 from angee.resources.testing.models import Resource
 
 ROOT = Path(__file__).resolve().parents[1]

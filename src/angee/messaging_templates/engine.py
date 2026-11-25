@@ -16,7 +16,9 @@ A render with no budget set fails.
 
 :class:`MessageTemplateContext` keeps the globals every row reads (``brand``,
 ``lang``, ``dir``) through the ``only`` of an include, which otherwise starts an
-empty context. This module imports nothing else of the addon.
+empty context. :class:`MessageTemplateLoader` serves the engine the forms of the
+rows one render reached, by template name. This module imports nothing else of
+the addon.
 """
 
 from __future__ import annotations
@@ -28,11 +30,22 @@ from contextvars import ContextVar
 from typing import Any, ClassVar, cast
 
 from django.core.exceptions import ValidationError
-from django.template import Context, Engine, Library, TemplateSyntaxError, defaultfilters, defaulttags, loader_tags
+from django.template import (
+    Context,
+    Engine,
+    Library,
+    Origin,
+    TemplateDoesNotExist,
+    TemplateSyntaxError,
+    defaultfilters,
+    defaulttags,
+    loader_tags,
+)
 from django.template.base import FilterExpression, Node, NodeList, Parser, Token
 from django.template.loader_tags import IncludeNode
+from django.template.loaders.base import Loader
 from django.utils.safestring import SafeString
-from markdown_it.common.normalize_url import normalizeLink, validateLink
+from markdown_it import MarkdownIt
 
 ALLOWED_TAGS = ("if", "for", "with", "comment", "block", "include", "extends", "templatetag")
 """The tags a message template may use; ``templatetag`` writes a literal ``{{``, ``{%`` or ``{#``."""
@@ -203,6 +216,17 @@ def _charged(function: Callable[..., Any]) -> Callable[..., Any]:
     return charged
 
 
+_LINKS = MarkdownIt("commonmark")
+"""The parser whose public ``normalizeLink`` and ``validateLink`` judge a link, as Markdown links are judged."""
+
+
+def _link(text: str) -> str:
+    """Return ``text`` normalised as a link, or ``""`` for a scheme markdown-it refuses or any ``data:`` URL."""
+
+    link = _LINKS.normalizeLink(text.strip())
+    return link if _LINKS.validateLink(link) and not link.lower().startswith("data:") else ""
+
+
 def url(value: Any) -> str:
     """Return ``value`` as a link a message may carry, or ``""``.
 
@@ -212,12 +236,7 @@ def url(value: Any) -> str:
     """
 
     text = str(value)
-    if len(text) > URL_INPUT_LIMIT:
-        return ""
-    link = normalizeLink(text.strip())
-    if not validateLink(link) or link.lower().startswith("data:"):
-        return ""
-    return link
+    return "" if len(text) > URL_INPUT_LIMIT else _link(text)
 
 
 for _name in ALLOWED_FILTERS[:-1]:
@@ -225,16 +244,20 @@ for _name in ALLOWED_FILTERS[:-1]:
     register.filter(_name, _charged(defaultfilters.register.filters[_name]))
 register.filter("url", _charged(url), is_safe=False)
 
-FILTER_NAMES: Mapping[Callable[..., Any], str] = {function: name for name, function in register.filters.items()}
-"""Each registered filter callable's name, as a compiled ``FilterExpression`` holds the callable."""
+
+def filter_names(expression: FilterExpression) -> list[str]:
+    """The names of ``expression``'s filters, in order, as ``Library.filter`` recorded each on its callable."""
+
+    return [str(function._filter_name) for function, _ in expression.filters]
 
 
 class MessageTemplateContext(Context):
     """A render's context, whose ``only`` scopes keep the globals every row reads.
 
     Built only by :meth:`MessageTemplateEngine.context`. It declares no class
-    attribute: Django's lookup reaches a context's attribute only through a class
-    attribute that is absent or falsy (``Variable._resolve_lookup``).
+    attribute: Django's lookup reaches a context's instance attribute only when
+    the context's class declares the same name with a falsy value
+    (``Variable._resolve_lookup``), so a template never reads ``mail_globals``.
     """
 
     def __init__(self, values: Mapping[str, Any], *, mail_globals: Mapping[str, Any], autoescape: bool) -> None:
@@ -275,3 +298,30 @@ class MessageTemplateEngine(Engine):
         return MessageTemplateContext(
             {**values, **(extra or {})}, mail_globals=self.mail_globals, autoescape=self.autoescape,
         )
+
+
+class MessageTemplateLoader(Loader):
+    """Serve one form of the rows a render reached, by template name, on ``locmem.Loader``'s contract.
+
+    Names are a row's template name (``layouts/base``, ``blocks/button``, a
+    template's bare key); none holds ``#``, which Django reads as a partial.
+    """
+
+    def __init__(self, engine: Engine, forms: Mapping[str, str]) -> None:
+        """Serve ``forms``, each row's form by its template name."""
+
+        super().__init__(engine)
+        self.forms = forms
+
+    def get_contents(self, origin: Origin) -> str:
+        """Return the form of the row ``origin`` names."""
+
+        form = self.forms.get(origin.name)
+        if form is None:
+            raise TemplateDoesNotExist(origin)
+        return form
+
+    def get_template_sources(self, template_name: str) -> Iterator[Origin]:
+        """Name the one origin a row has."""
+
+        yield Origin(name=template_name, template_name=template_name, loader=self)

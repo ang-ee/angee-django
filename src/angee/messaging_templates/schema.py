@@ -33,7 +33,7 @@ from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.messaging_templates.models import MessageTemplate as MessageTemplateModel
 from angee.messaging_templates.models import MessageTemplateQuerySet
-from angee.messaging_templates.rendering import RenderedMessage, TemplatePreview, TemplateWarning, TemplateWarningCode
+from angee.messaging_templates.walker import RenderedMessage, TemplatePreview, TemplateWarning, TemplateWarningCode
 
 MessageTemplate = apps.get_model("messaging_templates", "MessageTemplate")
 BrandKit = apps.get_model("brandkit", "BrandKit")

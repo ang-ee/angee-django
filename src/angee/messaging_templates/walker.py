@@ -1,69 +1,83 @@
-"""The walker: the one owner of every refusal a message template meets, at save and at render.
+"""The walker: the one owner of every refusal a message template meets, at save and at render, and the renderer.
 
 :meth:`TemplateWalker.walk` reads a row and every row it reaches (its layout and
 the blocks and parts it includes, at any depth) as Django compiles them, and
 refuses what may not render: oversized or pathological sources before anything
 parses them, compile errors, literals that could carry markup, costly or unsafe
 filter use, template spans the Markdown pass does not keep whole, HTML a mail may
-not carry, reads of values no row declares, lookups that could reach a method of
-a ``dict``, ``list`` or ``str``, include cycles, and every bound in the walk's
-caps. It runs from ``clean()`` and after a resource load (at save) and from
-``render()`` and ``preview()`` before anything renders.
+not carry (:func:`check_html`), reads of values no row declares, lookups that
+could reach a method of a ``dict``, ``list`` or ``str``, include cycles, and every
+bound in the walk's caps. It runs from ``clean()`` and after a resource load (at
+save) and from ``render()`` and ``preview()`` before anything renders.
 
 A walk that passes is a :class:`TemplateWalk`: the values the render reads (``D``,
 the union of a template's and its layout's ``variables``), which of them are
 required, which are dates, and the forms the renderer serves.
-:meth:`TemplateWalk.prepare` turns a render's values into exactly that shape.
+:meth:`TemplateWalk.prepare` turns a render's values into exactly that shape, and
+:meth:`TemplateWalk.render` renders the walked rows on two
+:class:`~angee.messaging_templates.engine.MessageTemplateEngine` engines, one
+escaping values for the HTML body and one writing them as they are for the
+subject, preheader and plain-text body, each pass in its own
+:class:`~angee.messaging_templates.engine.RenderBudget` under the row's language.
 
 The walker reads compiled nodes by their attributes, which Django does not
-document; ``docs/stack.md`` (the Django row) lists each one. It dispatches on the
-exact node class (:data:`WALKED_NODES`) and raises ``TypeError`` on any other, so a
-Django upgrade that changes the nodes fails loudly.
+document; ``docs/stack.md`` (the Django row) lists each one. :data:`WALKED_NODES`
+is its one table of node classes, what each evaluates and the node lists it
+renders; both of its passes look a node up there and raise ``TypeError`` on any
+other class, so a Django upgrade that changes the nodes fails loudly.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+import quopri
+import re
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
+from enum import StrEnum
+from html.parser import HTMLParser
+from operator import attrgetter
 from typing import Any, Protocol, cast
 
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.template import TemplateSyntaxError
 from django.template.base import (
+    DebugLexer,
     FilterExpression,
     Lexer,
     Node,
     NodeList,
     Template,
     TextNode,
+    Token,
     TokenType,
     VariableNode,
 )
 from django.template.defaulttags import CommentNode, ForNode, IfNode, TemplateLiteral, TemplateTagNode, WithNode
 from django.template.loader_tags import BlockNode, ExtendsNode
+from django.utils import translation
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.functional import Promise
+from django.utils.html import escape
 
-from angee.messaging_templates.engine import FILTER_NAMES, BudgetedIncludeNode, BudgetedLoopBody, MessageTemplateEngine
+from angee.brandkit.models import BrandKit, MailRole, MailScheme
+from angee.messaging_templates.engine import (
+    BudgetedIncludeNode,
+    BudgetedLoopBody,
+    MessageTemplateEngine,
+    RenderBudget,
+    filter_names,
+    url,
+)
 from angee.messaging_templates.rendering import (
-    BRAND_PATHS,
     RESERVED_VARIABLE_ROOTS,
     MessageTemplateFormat,
     RowForms,
     RowRefusal,
-    check_html,
-    compiled_expression,
     validate_variables,
 )
-
-WALKED_NODES = (
-    TextNode, VariableNode, IfNode, ForNode, BudgetedLoopBody, WithNode, CommentNode, BudgetedIncludeNode,
-    ExtendsNode, BlockNode, TemplateTagNode,
-)
-"""Every node class the allowlisted library compiles to; the walker raises on any other."""
 
 SOURCE_LIMIT = 50_000
 LINE_LIMIT = 1_000
@@ -88,6 +102,13 @@ DECLARED_LIMIT = 100
 VALUES_JSON_LIMIT = 50_000
 VALUE_STRING_LIMIT = 10_000
 VALUE_ITEMS_LIMIT = 500
+SUBJECT_LIMIT = 1_000
+"""The longest rendered subject or preheader, after it is made one line."""
+
+SUBJECT_WARNING_LENGTH = 60
+PREHEADER_WARNING_LENGTH = 100
+SIZE_WARNING_BYTES = 104_448
+"""Gmail clips a message's HTML past about 102 KB."""
 
 FORLOOP_KEYS = frozenset({"counter", "counter0", "revcounter", "revcounter0", "first", "last", "length"})
 FORLOOP_PATHS = frozenset({("forloop",), *(("forloop", key) for key in FORLOOP_KEYS)})
@@ -101,13 +122,29 @@ CONTENT_BLOCK = "content"
 type Path = tuple[str, ...]
 
 
+class RowPiece(StrEnum):
+    """A piece of a row a pass renders: its two forms, and a template's subject and preheader."""
+
+    HTML = "html"
+    TEXT = "text"
+    SUBJECT = "subject"
+    PREHEADER = "preheader"
+
+
 class WalkedKind(Protocol):
     """What the walker asks a row's kind handler."""
 
-    carries_message_fields: bool
-    includable: bool
-    reads_message_fields: bool
-    holds_content: bool
+    @property
+    def carries_message_fields(self) -> bool: ...
+
+    @property
+    def includable(self) -> bool: ...
+
+    @property
+    def reads_message_fields(self) -> bool: ...
+
+    @property
+    def holds_content(self) -> bool: ...
 
     def template_name(self, key: str) -> str: ...
 
@@ -116,8 +153,26 @@ class WalkedKind(Protocol):
     def wrap(self, row: Any, form: str) -> str: ...
 
 
+class WalkedRow(Protocol):
+    """What the walker and the renderer read of a row: its columns, its kind's handler and its fingerprint."""
+
+    key: str
+    language: str
+    format: Any
+    subject: str
+    preheader: str
+    source: str
+    text_source: str
+    variables: Any
+
+    @property
+    def handler(self) -> WalkedKind: ...
+
+    def compute_content_hash(self) -> str: ...
+
+
 class RowReader(Protocol):
-    """Where a walk reads the rows it names: the model's scoped manager."""
+    """Where a walk reads the rows it names: the model's scoped manager, or a queryset of it."""
 
     def named_rows(self, names: Iterable[str], *, language: str) -> Mapping[str, Any]: ...
 
@@ -134,7 +189,363 @@ def _prefixes(paths: Iterable[Path]) -> frozenset[Path]:
     return frozenset(path[:end] for path in paths for end in range(1, len(path) + 1))
 
 
+# ---------- what the mail around a row supplies ----------
+
+BRAND_FIELDS: Mapping[Path, Callable[[BrandKit], object]] = {
+    ("name",): attrgetter("name"),
+    ("font", "heading"): attrgetter("font_heading"),
+    ("font", "body"): attrgetter("font_body"),
+    ("footer", "organization"): attrgetter("footer_organization"),
+    ("footer", "address"): attrgetter("footer_address"),
+}
+"""What ``brand`` holds besides the mail colours, each path with the brand kit column it reads."""
+
+MAIL_COLOURS = tuple((str(scheme), str(role)) for scheme in MailScheme for role in MailRole)
+"""The mail colours ``brand`` holds, ``<scheme>.<role>``, from :meth:`~angee.brandkit.models.BrandKit.mail_palette`."""
+
+BRAND_PATHS = frozenset(("brand", *path) for path in (*BRAND_FIELDS, *MAIL_COLOURS))
+"""Every value ``brand`` holds (:func:`brand_values`), as a path."""
+
 BRAND_PREFIXES = _prefixes(BRAND_PATHS)
+
+STYLE_ELEMENT_OUTPUTS = frozenset(("brand", *path) for path in MAIL_COLOURS)
+"""The outputs a ``<style>`` element may hold, without filters: the mail colours."""
+
+STYLE_OUTPUTS = STYLE_ELEMENT_OUTPUTS | {("brand", "font", "heading"), ("brand", "font", "body"), ("dir",)}
+"""The outputs a ``style`` attribute may hold, without filters: a mail colour, a font stack, the direction."""
+
+
+def brand_values(kit: BrandKit) -> dict[str, Any]:
+    """Return what ``brand`` holds in a render, built from a brand kit as plain strings.
+
+    :data:`BRAND_FIELDS` and :data:`MAIL_COLOURS` are its one declaration. The mail
+    colours come from :meth:`~angee.brandkit.models.BrandKit.mail_palette`, which
+    raises ``ValidationError`` for a kit stored past its validation.
+    """
+
+    palette = kit.mail_palette()
+    values: dict[str, Any] = {}
+    readings = [(path, read(kit)) for path, read in BRAND_FIELDS.items()]
+    readings.extend(((scheme, role), palette[scheme][role]) for scheme, role in MAIL_COLOURS)
+    for path, value in readings:
+        node = values
+        for segment in path[:-1]:
+            node = node.setdefault(segment, {})
+        node[path[-1]] = str(value)
+    return values
+
+
+# ---------- what a render gives ----------
+
+
+@dataclass(frozen=True)
+class PreviewFrame:
+    """A fixed subject, preheader and body a row with no body of its own is previewed with."""
+
+    subject: str
+    preheader: str
+    html: str
+    text: str
+
+
+@dataclass
+class RenderedMessage:
+    """One rendered message: subject and preheader on one line each, the HTML and plain-text bodies."""
+
+    subject: str
+    preheader: str
+    html: str
+    plain_text: str
+    language: str
+
+
+class TemplateWarningCode(StrEnum):
+    """What a preview warns about."""
+
+    SUBJECT_LENGTH = "subject_length"
+    PREHEADER = "preheader"
+    UNUSED_VARIABLE = "unused_variable"
+    STOP_LINK = "stop_link"
+    PLAIN_TEXT = "plain_text"
+    SIZE = "size"
+    RENDER_ERROR = "render_error"
+
+
+@dataclass
+class TemplateWarning:
+    """One thing a preview warns about, and what it found."""
+
+    code: TemplateWarningCode
+    detail: str
+
+
+@dataclass
+class TemplatePreview:
+    """A row rendered with its sample, or ``None`` when the walk or the render raised, and its warnings."""
+
+    rendered: RenderedMessage | None
+    warnings: list[TemplateWarning] = field(default_factory=list)
+
+
+def in_layout(layout_name: str, form: str) -> str:
+    """Return ``form`` as the content of the layout named ``layout_name``, as the loader serves a template."""
+
+    return '{% extends "' + layout_name + '" %}{% block content %}' + form + "{% endblock %}"
+
+
+# ---------- the node classes the walker reads ----------
+
+
+@dataclass(frozen=True)
+class WalkedNode:
+    """What the walker reads on one node class: the expressions it evaluates and the node lists it renders."""
+
+    expressions: Callable[[Any], tuple[FilterExpression, ...]]
+    nodelists: Callable[[Any], tuple[NodeList, ...]]
+
+
+def _nothing(node: Any) -> tuple[()]:
+    del node
+    return ()
+
+
+WALKED_NODES: Mapping[type[Node], WalkedNode] = {
+    TextNode: WalkedNode(_nothing, _nothing),
+    VariableNode: WalkedNode(lambda node: (node.filter_expression,), _nothing),
+    # An if's expressions sit in its conditions, which both passes read operand by operand.
+    IfNode: WalkedNode(_nothing, lambda node: tuple(nodelist for _, nodelist in node.conditions_nodelists)),
+    ForNode: WalkedNode(lambda node: (node.sequence,), lambda node: (node.nodelist_loop, node.nodelist_empty)),
+    BudgetedLoopBody: WalkedNode(_nothing, lambda node: (node.nodelist,)),
+    WithNode: WalkedNode(lambda node: tuple(node.extra_context.values()), lambda node: (node.nodelist,)),
+    CommentNode: WalkedNode(_nothing, _nothing),
+    BudgetedIncludeNode: WalkedNode(lambda node: tuple(node.extra_context.values()), _nothing),
+    ExtendsNode: WalkedNode(_nothing, lambda node: (node.nodelist,)),
+    BlockNode: WalkedNode(_nothing, lambda node: (node.nodelist,)),
+    TemplateTagNode: WalkedNode(_nothing, _nothing),
+}
+"""Every node class the allowlisted library compiles to, what it evaluates and the node lists it renders."""
+
+
+def walked(node: Node) -> WalkedNode:
+    """Return what the walker reads on ``node``; another class is a defect to fix here, never a refusal."""
+
+    reads = WALKED_NODES.get(type(node))
+    if reads is None:
+        raise TypeError(f"The message template walker does not know {type(node).__qualname__}.")
+    return reads
+
+
+# ---------- the HTML checks ----------
+
+REFUSED_ELEMENTS = frozenset({"script", "iframe", "object", "embed", "form", "link", "base", "svg", "math"})
+REFUSED_ATTRIBUTES = frozenset(
+    {"http-equiv", "srcset", "background", "poster", "action", "formaction", "xlink:href", "cite"},
+)
+LINK_ATTRIBUTES = frozenset({"href", "src"})
+OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
+CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
+
+_PLACEHOLDER = re.compile("\x00(\\d+)\x00")
+_SPAN_OPENS_TAG = re.compile("<[/!?]?\x00")
+_RAW_ATTRIBUTE = re.compile(r"""([^\s"'/>=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?""")
+
+
+class _HtmlChecker(HTMLParser):
+    """Read an HTML form whose template spans are placeholders, and record what a mail may not carry."""
+
+    def __init__(self, spans: Sequence[Token], expression: Callable[[str], FilterExpression | None]) -> None:
+        super().__init__(convert_charrefs=False)
+        self.spans = spans
+        self.expression = expression
+        self.refusals: list[str] = []
+        self.in_style = False
+
+    def refuse(self, reason: str) -> None:
+        self.refusals.append(reason)
+
+    def span_ids(self, text: str) -> list[int]:
+        return [int(index) for index in _PLACEHOLDER.findall(text)]
+
+    def output_path(self, index: int) -> tuple[tuple[str, ...] | None, list[str]]:
+        """The path and filter names of an output span, from its compiled expression."""
+
+        token = self.spans[index]
+        if token.token_type != TokenType.VAR:
+            return None, []
+        expression = self.expression("{{ " + token.contents + " }}")
+        if expression is None:
+            return None, []
+        lookups = expression.var.lookups if expression.is_var else None
+        return (tuple(lookups) if lookups else None), filter_names(expression)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.check_tag(tag, attrs)
+        if tag == "style":
+            self.in_style = True
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.check_tag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "style":
+            self.in_style = False
+
+    def check_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if "\x00" in tag:
+            return self.refuse("template code in a tag name")
+        if tag in REFUSED_ELEMENTS:
+            self.refuse(f"<{tag}> is not allowed in a mail")
+        quoted = self.double_quoted(self.get_starttag_text() or "")
+        for name, raw_value in attrs:
+            value = raw_value or ""
+            if "\x00" in name:
+                self.refuse(f"template code in an attribute name of <{tag}>")
+                continue
+            if name in REFUSED_ATTRIBUTES or name.startswith("on"):
+                self.refuse(f"the {name} attribute is not allowed in a mail")
+                continue
+            ids = self.span_ids(value)
+            if ids and name not in quoted:
+                self.refuse(f"template code in the {name} attribute of <{tag}>, which is not double-quoted")
+            self.check_conditions(name, ids)
+            if name in LINK_ATTRIBUTES:
+                self.check_link(tag, name, value, ids)
+            elif name == "style":
+                self.check_spans(f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True)
+            else:
+                self.check_spans(
+                    f"the {name} attribute of <{tag}>", ids, None if name in OUTPUT_ATTRIBUTES else frozenset(),
+                    conditions=True,
+                )
+
+    @staticmethod
+    def double_quoted(start_tag: str) -> set[str]:
+        """The attributes a start tag writes double-quoted."""
+
+        body = re.sub(r"^<[^\s/>]*", "", start_tag)
+        return {
+            match.group(1).lower() for match in _RAW_ATTRIBUTE.finditer(body)
+            if match.group(2) and match.group(2).startswith('"')
+        }
+
+    def check_conditions(self, name: str, ids: list[int]) -> None:
+        """Refuse an ``if`` whose pair an attribute value does not hold whole."""
+
+        depth = 0
+        for index in ids:
+            token = self.spans[index]
+            command = (token.contents.split() or [""])[0] if token.token_type == TokenType.BLOCK else ""
+            if command == "if":
+                depth += 1
+            elif command == "endif":
+                depth -= 1
+            elif command in ("elif", "else") and depth < 1:
+                depth = -1
+            if depth < 0:
+                break
+        if depth:
+            self.refuse(f"the {name} attribute holds an if without its whole tag pair")
+
+    def check_link(self, tag: str, name: str, value: str, ids: list[int]) -> None:
+        if not ids:
+            if url(value) != value:
+                self.refuse(f"the {name} of <{tag}> is not a link a mail may carry")
+            return
+        _path, filters = self.output_path(ids[0])
+        if value != f"\x00{ids[0]}\x00" or not filters or filters[-1] != "url":
+            self.refuse(f"the {name} of <{tag}> is one output whose last filter is url, or a static link")
+
+    def check_spans(
+        self, where: str, ids: list[int], outputs: frozenset[tuple[str, ...]] | None, *, conditions: bool,
+    ) -> None:
+        """Refuse a span ``where`` does not admit: outputs in ``outputs`` (``None``: any), conditions, comments."""
+
+        for index in ids:
+            token = self.spans[index]
+            if token.token_type == TokenType.COMMENT and conditions:
+                continue
+            if token.token_type == TokenType.BLOCK:
+                command = (token.contents.split() or [""])[0]
+                if conditions and command in CONDITION_TAGS:
+                    continue
+                self.refuse(f"{{% {command} %}} in {where}")
+                continue
+            if token.token_type == TokenType.VAR:
+                path, filters = self.output_path(index)
+                if outputs is None or (not filters and path in outputs):
+                    continue
+                self.refuse(f"{{{{ {token.contents} }}}} in {where}")
+                continue
+            self.refuse(f"template code in {where}")
+
+    def handle_data(self, data: str) -> None:
+        if self.in_style:
+            self.check_spans("a <style> element", self.span_ids(data), STYLE_ELEMENT_OUTPUTS, conditions=False)
+
+    def handle_comment(self, data: str) -> None:
+        self.refuse("an HTML comment, conditional ones included, is not allowed in a mail")
+
+    def handle_decl(self, decl: str) -> None:
+        if "\x00" in decl or not decl.lower().startswith("doctype"):
+            self.refuse("a declaration other than the doctype is not allowed in a mail")
+
+    def unknown_decl(self, data: str) -> None:
+        self.refuse("a marked section is not allowed in a mail")
+
+    def handle_pi(self, data: str) -> None:
+        self.refuse("a processing instruction is not allowed in a mail")
+
+
+def check_html(form: str, expression: Callable[[str], FilterExpression | None]) -> list[str]:
+    """Return what an HTML form holds that a mail may not, its template spans read as placeholders.
+
+    Refused: the elements in :data:`REFUSED_ELEMENTS`; the attributes in
+    :data:`REFUSED_ATTRIBUTES` and every ``on*``; an ``if`` an attribute value does
+    not hold whole; template code in a tag name, an attribute name or an attribute
+    that is not double-quoted, and any HTML comment; in ``href`` or ``src``
+    anything but one output whose last filter is ``url``, or a static link
+    :func:`~angee.messaging_templates.engine.url` leaves as ``html.parser`` decodes
+    it; in ``style`` an output but :data:`STYLE_OUTPUTS`; in a ``<style>`` element
+    a span but :data:`STYLE_ELEMENT_OUTPUTS`; in any other attribute an output
+    outside :data:`OUTPUT_ATTRIBUTES` or a tag other than an ``if`` family one.
+    ``expression`` compiles one output span to its ``FilterExpression``.
+    """
+
+    spans: list[Token] = []
+    parts: list[str] = []
+    last = 0
+    for token in DebugLexer(form).tokenize():
+        if token.token_type == TokenType.TEXT:
+            continue
+        start, end = cast(tuple[int, int], token.position)
+        parts.extend((form[last:start], f"\x00{len(spans)}\x00"))
+        spans.append(token)
+        last = end
+    parts.append(form[last:])
+    text = "".join(parts)
+    checker = _HtmlChecker(spans, expression)
+    if _SPAN_OPENS_TAG.search(text):
+        checker.refuse("template code where a tag starts")
+    checker.feed(text)
+    checker.close()
+    return list(dict.fromkeys(checker.refusals))
+
+
+def compiled_expression(engine: MessageTemplateEngine) -> Callable[[str], FilterExpression | None]:
+    """Return a function compiling one output span in ``engine`` to its ``FilterExpression``."""
+
+    def expression(span: str) -> FilterExpression | None:
+        try:
+            nodelist = engine.from_string(span).nodelist
+        except TemplateSyntaxError:
+            return None
+        node = nodelist[0] if len(nodelist) == 1 else None
+        return node.filter_expression if type(node) is VariableNode else None
+
+    return expression
+
+
+# ---------- a walked row ----------
 
 
 @dataclass(frozen=True)
@@ -143,19 +554,9 @@ class _RowCheck:
 
     name: str
     forms: RowForms | None = None
-    pieces: Mapping[str, Template] = field(default_factory=dict)
+    pieces: Mapping[RowPiece, Template] = field(default_factory=dict)
     includes: frozenset[str] = frozenset()
     refusals: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class TemplateRead:
-    """One read of a value: by which row, as which path there and in ``D``, and how."""
-
-    row: str
-    local: Path
-    effective: Path | None
-    use: str
 
 
 @dataclass
@@ -164,32 +565,30 @@ class TemplateWalk:
 
     ``rows`` and ``forms`` are keyed by template name; ``declared`` is ``D``;
     ``required`` the paths a render's values must hold, not null, in every list
-    item present; ``date_paths`` the paths read through ``date``; ``counts`` the
-    largest tree's nodes, outputs and text, and the deepest loops and includes.
+    item present; ``date_paths`` the paths read through ``date``; ``reads`` every
+    path of ``D`` some row reads.
     """
 
-    root: Any
+    root: WalkedRow
     root_name: str
     language: str
-    rows: dict[str, Any] = field(default_factory=dict)
+    rows: dict[str, WalkedRow] = field(default_factory=dict)
     forms: dict[str, RowForms] = field(default_factory=dict)
     declared: dict[str, str] = field(default_factory=dict)
     required: set[Path] = field(default_factory=set)
     date_paths: set[Path] = field(default_factory=set)
-    reads: list[TemplateRead] = field(default_factory=list)
+    reads: set[Path] = field(default_factory=set)
     includes: set[str] = field(default_factory=set)
-    counts: dict[str, int] = field(default_factory=dict)
     refusals: list[str] = field(default_factory=list)
 
     @property
     def unused(self) -> list[str]:
         """The paths of the root row's own ``variables`` no read reaches."""
 
-        reached = {read.effective for read in self.reads if read.effective is not None}
         unused = []
         for path in self.root.variables if isinstance(self.root.variables, dict) else ():
             segments = tuple(path.split("."))
-            if not any(segments[:end] in reached for end in range(1, len(segments) + 1)):
+            if not any(segments[:end] in self.reads for end in range(1, len(segments) + 1)):
                 unused.append(path)
         return unused
 
@@ -238,6 +637,118 @@ class TemplateWalk:
         if errors:
             raise ValidationError(errors, code="invalid_values")
         return filled
+
+    def render(self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None = None) -> RenderedMessage:
+        """Render the walked row with ``values``, the mail colours from ``kit``.
+
+        Passes, each in ``translation.override`` of the row's language and its own
+        :class:`~angee.messaging_templates.engine.RenderBudget`: (1) :meth:`prepare`
+        and the globals ``brand``, ``lang`` and ``dir``; (2) the subject and
+        preheader on the text engine, each made one line; (3) the HTML body on the
+        HTML engine, the subject and preheader at its top level; (4) the plain-text
+        body on the text engine, from the rows' text forms. ``frame`` renders a
+        layout around a fixed body, subject and preheader. Raises ``ValidationError``.
+        """
+
+        language = self.language
+        with translation.override(language):
+            prepared = self.prepare(values)
+            mail_globals = {
+                "brand": brand_values(kit), "lang": language,
+                "dir": "rtl" if translation.get_language_bidi() else "ltr",
+            }
+            text_engine = self._engine(RowPiece.TEXT, mail_globals)
+            html_engine = self._engine(RowPiece.HTML, mail_globals)
+            with RenderBudget().spend():
+                subject = _one_line(
+                    text_engine.from_string(frame.subject if frame else str(self.root.subject)).render(
+                        text_engine.context(prepared)), "subject",
+                )
+                preheader = _one_line(
+                    text_engine.from_string(frame.preheader if frame else str(self.root.preheader)).render(
+                        text_engine.context(prepared)), "preheader",
+                )
+            html_root = (
+                html_engine.from_string(in_layout(self.root_name, frame.html)) if frame
+                else html_engine.get_template(self.root_name)
+            )
+            with RenderBudget().spend():
+                html = html_root.render(
+                    html_engine.context(prepared, extra={"subject": subject, "preheader": preheader}),
+                )
+            text_root = (
+                text_engine.from_string(in_layout(self.root_name, frame.text)) if frame
+                else text_engine.get_template(self.root_name)
+            )
+            with RenderBudget().spend():
+                text = text_root.render(text_engine.context(prepared))
+        return RenderedMessage(
+            subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
+        )
+
+    def _engine(self, form: RowPiece, mail_globals: Mapping[str, Any]) -> MessageTemplateEngine:
+        """An engine serving ``form`` of every walked row, through a per-render ``cached.Loader``."""
+
+        forms = {name: getattr(row_forms, form) for name, row_forms in self.forms.items()}
+        loader = ("angee.messaging_templates.engine.MessageTemplateLoader", forms)
+        return MessageTemplateEngine(
+            autoescape=form == RowPiece.HTML,
+            loaders=[("django.template.loaders.cached.Loader", [loader])],
+            mail_globals=mail_globals,
+        )
+
+    def preview_warnings(self, rendered: RenderedMessage, sample: Mapping[str, Any]) -> list[TemplateWarning]:
+        """Return what a preview of ``rendered``, the row's ``sample`` rendered, warns about.
+
+        The subject and preheader are judged on a row that carries them; every row is
+        judged on its own unused ``variables``, the stop link it declares, its plain
+        text and its size, raw or quoted-printable.
+        """
+
+        warnings: list[TemplateWarning] = []
+        carries_message_fields = self.root.handler.carries_message_fields
+        if carries_message_fields and len(rendered.subject) > SUBJECT_WARNING_LENGTH:
+            warnings.append(TemplateWarning(
+                TemplateWarningCode.SUBJECT_LENGTH, f"The subject is {len(rendered.subject)} characters long.",
+            ))
+        if carries_message_fields and not 0 < len(rendered.preheader) <= PREHEADER_WARNING_LENGTH:
+            warnings.append(TemplateWarning(
+                TemplateWarningCode.PREHEADER, f"The preheader is {len(rendered.preheader)} characters long.",
+            ))
+        warnings.extend(
+            TemplateWarning(TemplateWarningCode.UNUSED_VARIABLE, f"Nothing reads {path}.") for path in self.unused
+        )
+        if isinstance(self.root.variables, dict) and "unsubscribe_url" in self.root.variables:
+            stop = sample.get("unsubscribe_url")
+            links = {stop, url(stop)} - {""} if isinstance(stop, str) else set()
+            if not any(escape(link) in rendered.html for link in links) or not any(
+                link in rendered.plain_text for link in links
+            ):
+                warnings.append(TemplateWarning(
+                    TemplateWarningCode.STOP_LINK, "The HTML or plain-text body lacks the sample's unsubscribe_url.",
+                ))
+        if not rendered.plain_text.strip():
+            warnings.append(TemplateWarning(TemplateWarningCode.PLAIN_TEXT, "The plain-text body is empty."))
+        raw = rendered.html.encode()
+        size = max(len(raw), len(quopri.encodestring(raw)))
+        if size > SIZE_WARNING_BYTES:
+            warnings.append(TemplateWarning(TemplateWarningCode.SIZE, f"The HTML is {size} bytes."))
+        return warnings
+
+
+def _one_line(text: str, name: str) -> str:
+    line = " ".join(text.split())
+    if len(line) > SUBJECT_LIMIT:
+        raise ValidationError(
+            "The rendered %(name)s is over %(limit)s characters.",
+            code="subject_too_long", params={"name": name, "limit": SUBJECT_LIMIT},
+        )
+    return line
+
+
+def _plain(text: str) -> str:
+    lines = [line.rstrip() for line in text.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip() + "\n"
 
 
 def _value_errors(data: Any) -> list[str]:
@@ -413,39 +924,25 @@ class _RowRules:
             self.node(node)
 
     def node(self, node: Node) -> None:
+        reads = walked(node)
         if type(node) is TextNode:
             if any(opener in node.s for opener in OPENERS):
                 self.refuse("text holds {{, {% or {# that is not template code")
-        elif type(node) is VariableNode:
-            self.expression(node.filter_expression)
         elif type(node) is IfNode:
-            for condition, nodelist in node.conditions_nodelists:
+            for condition, _ in node.conditions_nodelists:
                 if condition is not None:
                     self.condition(condition)
-                self.nodes(nodelist)
         elif type(node) is ForNode:
-            sequence = cast(FilterExpression, node.sequence)
             if len(node.loopvars) != 1:
                 self.refuse("for takes one loop variable")
-            if sequence.filters:
+            if cast(FilterExpression, node.sequence).filters:
                 self.refuse("for loops over a value, not a filtered one")
-            self.expression(sequence)
-            self.nodes(cast(NodeList, node.nodelist_loop))
-            self.nodes(cast(NodeList, node.nodelist_empty))
-        elif type(node) is BudgetedLoopBody or type(node) is BlockNode:
-            self.nodes(node.nodelist)
-        elif type(node) is WithNode:
-            for expression in node.extra_context.values():
-                self.expression(expression)
-            self.nodes(node.nodelist)
         elif type(node) is BudgetedIncludeNode:
             self.includes.add(str(node.template.var))
-            for expression in node.extra_context.values():
-                self.expression(expression)
-        elif type(node) is ExtendsNode:
-            self.nodes(node.nodelist)
-        elif type(node) is not CommentNode and type(node) is not TemplateTagNode:
-            raise TypeError(f"The message template walker does not know {type(node).__qualname__}.")
+        for expression in reads.expressions(node):
+            self.expression(expression)
+        for nodelist in reads.nodelists(node):
+            self.nodes(nodelist)
 
     def literal(self, value: Any) -> None:
         if (reason := _literal_refusal(value)) is not None:
@@ -460,7 +957,7 @@ class _RowRules:
                 self.literal(variable.var)
         else:
             self.literal(variable)
-        names = [FILTER_NAMES[function] for function, _ in expression.filters]
+        names = filter_names(expression)
         if len(names) > FILTERS_PER_EXPRESSION:
             self.refuse(f"over {FILTERS_PER_EXPRESSION} filters in {expression.token}")
         for position, ((_, arguments), name) in enumerate(zip(expression.filters, names, strict=True)):
@@ -503,11 +1000,46 @@ class _RowRules:
 # ---------- the walk ----------
 
 
+class BindingKind(StrEnum):
+    """What a name in a row stands for."""
+
+    VALUE = "value"
+    """A declared value: the root's own, or an argument an include passed."""
+    UNPASSED = "unpassed"
+    """An included row's argument its include did not pass."""
+    BRAND = "brand"
+    GLOBAL = "global"
+    """``lang`` or ``dir``."""
+    CONSTANT = "constant"
+    """``True``, ``False`` or ``None``."""
+    MESSAGE = "message"
+    """``subject`` or ``preheader``."""
+    FORLOOP = "forloop"
+    COMPUTED = "computed"
+    """A filtered expression's result."""
+    LITERAL = "literal"
+
+
+class ReadUse(StrEnum):
+    """How an expression's value is used where it is read."""
+
+    OUTPUT = "output"
+    ARGUMENT = "argument"
+    """A ``with`` value or an include argument that runs a filter."""
+    ALIAS = "alias"
+    """A ``with`` value or an include argument that names a value as it is."""
+    TEST = "test"
+    SEQUENCE = "sequence"
+
+
+_VALUES = frozenset({BindingKind.VALUE, BindingKind.UNPASSED})
+
+
 @dataclass(frozen=True)
 class _Binding:
     """What a name stands for in a row: a value (its paths here and in ``D``), or a name the mail supplies."""
 
-    kind: str
+    kind: BindingKind
     local: Path = ()
     effective: Path | None = None
 
@@ -517,7 +1049,7 @@ class _Frame:
     """One row as the walk stands in it: its scope, guards, loops and the includes above it."""
 
     name: str
-    row: Any
+    row: WalkedRow
     declared: frozenset[Path]
     leaves: frozenset[Path]
     top: bool
@@ -531,7 +1063,7 @@ class _Frame:
 class _Tree:
     """One piece a pass renders, from the root through the layout and every include site."""
 
-    form: str
+    form: RowPiece
     content: tuple[_Frame, NodeList] | None = None
     nodes: int = 0
     outputs: int = 0
@@ -541,15 +1073,15 @@ class _Tree:
 class TemplateWalker:
     """Walk message templates: each row's own checks, then the walk from a root through what it reaches.
 
-    ``rows`` reads the rows a walk names (the model's scoped manager); ``saving``
-    asks, as a save does, that every included key resolve for every recipient.
-    A row's own checks are remembered by its content hash for the walker's life.
+    ``saving`` asks, as a save does, that every included key resolve for every
+    recipient. A row's own checks are remembered by its name and content hash for
+    the walker's life; they read no other row, so :meth:`check` and
+    :meth:`includes` need no reader.
     """
 
-    def __init__(self, rows: RowReader, *, saving: bool = False) -> None:
-        """Walk rows read through ``rows``."""
+    def __init__(self, *, saving: bool = False) -> None:
+        """Start a walker; ``saving`` judges includes as a save does."""
 
-        self.reader = rows
         self.saving = saving
         self.html_engine = MessageTemplateEngine(autoescape=True)
         self.text_engine = MessageTemplateEngine(autoescape=False)
@@ -557,7 +1089,7 @@ class TemplateWalker:
 
     # -- one row's own checks --------------------------------------------------
 
-    def check(self, row: Any) -> _RowCheck:
+    def check(self, row: WalkedRow) -> _RowCheck:
         """Return ``row``'s own checks (rules 1 to 12), remembered by its name and content hash."""
 
         name = row.handler.template_name(row.key)
@@ -566,12 +1098,12 @@ class TemplateWalker:
             self.checked[key] = self._check(row, name)
         return self.checked[key]
 
-    def includes(self, row: Any) -> frozenset[str]:
+    def includes(self, row: WalkedRow) -> frozenset[str]:
         """The template names ``row``'s compiled forms include; none when they do not compile."""
 
         return self.check(row).includes
 
-    def _check(self, row: Any, name: str) -> _RowCheck:
+    def _check(self, row: WalkedRow, name: str) -> _RowCheck:
         refusals: list[str] = []
 
         def refuse(reason: str) -> None:
@@ -610,14 +1142,14 @@ class TemplateWalker:
             return _RowCheck(name, refusals=tuple(refusals))
         handler = row.handler
         served = RowForms(html=handler.wrap(row, forms.html), text=handler.wrap(row, forms.text))
-        pieces_to_compile: dict[str, tuple[str, str, MessageTemplateEngine]] = {
-            "html": (forms.html, served.html, self.html_engine),
-            "text": (forms.text, served.text, self.text_engine),
+        pieces_to_compile: dict[RowPiece, tuple[str, str, MessageTemplateEngine]] = {
+            RowPiece.HTML: (forms.html, served.html, self.html_engine),
+            RowPiece.TEXT: (forms.text, served.text, self.text_engine),
         }
         if handler.carries_message_fields:
-            pieces_to_compile["subject"] = (row.subject, row.subject, self.text_engine)
-            pieces_to_compile["preheader"] = (row.preheader, row.preheader, self.text_engine)
-        pieces: dict[str, Template] = {}
+            pieces_to_compile[RowPiece.SUBJECT] = (row.subject, row.subject, self.text_engine)
+            pieces_to_compile[RowPiece.PREHEADER] = (row.preheader, row.preheader, self.text_engine)
+        pieces: dict[RowPiece, Template] = {}
         includes: set[str] = set()
         for piece, (authored, compiled, engine) in pieces_to_compile.items():
             if _nesting(authored) > NESTING_LIMIT:
@@ -633,19 +1165,20 @@ class TemplateWalker:
                 continue
             rules = _RowRules(refusals, f"{name} ({piece})", text_form=engine is self.text_engine)
             rules.nodes(template.nodelist)
-            self._structure(template.nodelist, piece, handler, row, rules.refuse)
+            self._structure(template.nodelist, piece, row, rules.refuse)
             includes |= rules.includes
             pieces[piece] = template
-        if "html" in pieces:
+        if RowPiece.HTML in pieces:
             refusals.extend(f"{name}: {reason}" for reason in check_html(forms.html, compiled_expression(
                 self.html_engine)))
         return _RowCheck(name, forms=served, pieces=pieces, includes=frozenset(includes), refusals=tuple(refusals))
 
     @staticmethod
-    def _structure(nodelist: NodeList, piece: str, handler: WalkedKind, row: Any, refuse: Any) -> None:
+    def _structure(nodelist: NodeList, piece: RowPiece, row: WalkedRow, refuse: Callable[[str], None]) -> None:
         """Rule 8: ``extends`` and ``block`` only as the wrapper and each layout form's one empty content block."""
 
-        if piece in ("subject", "preheader"):
+        handler = row.handler
+        if piece in (RowPiece.SUBJECT, RowPiece.PREHEADER):
             if any(nodelist.get_nodes_by_type(kind) for kind in (BudgetedIncludeNode, ExtendsNode, BlockNode)):
                 refuse("include, extends and block are not used in a subject or preheader")
             return
@@ -670,22 +1203,25 @@ class TemplateWalker:
 
     # -- the walk --------------------------------------------------------------
 
-    def walk(self, root: Any) -> TemplateWalk:
-        """Walk ``root`` and every row it reaches in its language; raise ``ValidationError`` listing refusals."""
+    def walk(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
+        """Walk ``root`` and every row it reaches in its language, read through ``rows``.
+
+        Raise ``ValidationError`` listing every refusal.
+        """
 
         handler = root.handler
         root_name = handler.template_name(root.key)
         walk = TemplateWalk(root=root, root_name=root_name, language=str(root.language), rows={root_name: root})
-        checks = self._gather(walk)
+        checks = self._gather(walk, rows)
         if not walk.refusals:
-            self._declare(walk, checks)
+            self._declare(walk)
         if not walk.refusals:
             self._walk_trees(walk, checks)
         if walk.refusals:
             raise ValidationError(list(dict.fromkeys(walk.refusals)), code="message_template_refused")
         return walk
 
-    def _gather(self, walk: TemplateWalk) -> dict[str, _RowCheck]:
+    def _gather(self, walk: TemplateWalk, reader: RowReader) -> dict[str, _RowCheck]:
         """Rows reached, level by level, each counted before it is parsed and checked alone."""
 
         checks: dict[str, _RowCheck] = {}
@@ -712,23 +1248,24 @@ class TemplateWalker:
                         wanted.append(target)
             if walk.refusals or not wanted:
                 return checks
-            found = self.reader.named_rows(wanted, language=walk.language)
+            found = reader.named_rows(wanted, language=walk.language)
             for target in wanted:
-                row = found.get(target)
-                if row is None:
+                reached = found.get(target)
+                if reached is None:
                     walk.refusals.append(f"{walk.root_name}: no message template {target} in {walk.language}")
-                elif target in walk.includes and not row.handler.includable:
+                elif target in walk.includes and not reached.handler.includable:
                     walk.refusals.append(f"{walk.root_name}: only blocks and parts are included, not {target}")
-                elif self.saving and target in walk.includes and not self.reader.resolves_name(target):
+                elif self.saving and target in walk.includes and not reader.resolves_name(target):
                     walk.refusals.append(
                         f"{walk.root_name}: {target} has no shipped default or row in the default language",
                     )
                 else:
-                    walk.rows[target] = row
+                    walk.rows[target] = reached
             level = [target for target in wanted if target in walk.rows]
         return checks
 
-    def _declare(self, walk: TemplateWalk, checks: Mapping[str, _RowCheck]) -> None:
+    @staticmethod
+    def _declare(walk: TemplateWalk) -> None:
         """``D``: the root's ``variables``, and a template's layout's, judged as one set."""
 
         layout = walk.root.handler.layout_name(walk.root)
@@ -742,41 +1279,41 @@ class TemplateWalker:
 
     def _walk_trees(self, walk: TemplateWalk, checks: Mapping[str, _RowCheck]) -> None:
         root = walk.root
-        frame = self._frame(walk.root_name, root, top=True)
+        frame = _frame(walk.root_name, root, top=True)
         pieces = checks[walk.root_name].pieces
         layout = root.handler.layout_name(root)
-        walker = _TreeWalker(self, walk, checks)
-        for form in ("html", "text"):
+        walker = _TreeWalker(walk, checks)
+        for form in (RowPiece.HTML, RowPiece.TEXT):
             tree = _Tree(form)
             if layout is not None:
                 extends = cast(ExtendsNode, pieces[form].nodelist[0])
                 tree.content = (frame, extends.blocks[CONTENT_BLOCK].nodelist)
                 tree.nodes += 2
-                walker.nodes(self._frame(layout, walk.rows[layout], top=True), checks[layout].pieces[form].nodelist,
-                             tree)
+                walker.nodes(_frame(layout, walk.rows[layout], top=True), checks[layout].pieces[form].nodelist, tree)
             else:
                 walker.nodes(frame, pieces[form].nodelist, tree)
             walker.close(tree)
-        for piece in ("subject", "preheader"):
+        for piece in (RowPiece.SUBJECT, RowPiece.PREHEADER):
             if piece in pieces:
                 tree = _Tree(piece)
                 walker.nodes(frame, pieces[piece].nodelist, tree)
                 walker.close(tree)
 
-    @staticmethod
-    def _frame(name: str, row: Any, *, top: bool, scope: Mapping[str, _Binding] | None = None, **state: Any) -> _Frame:
-        variables = row.variables if isinstance(row.variables, dict) else {}
-        leaves = frozenset(tuple(path.split(".")) for path in variables)
-        return _Frame(
-            name=name, row=row, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {}, **state,
-        )
+
+def _frame(name: str, row: WalkedRow, *, top: bool, scope: Mapping[str, _Binding] | None = None,
+           loops: int = 0, includes: tuple[str, ...] = ()) -> _Frame:
+    variables = row.variables if isinstance(row.variables, dict) else {}
+    leaves = frozenset(tuple(path.split(".")) for path in variables)
+    return _Frame(
+        name=name, row=row, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {}, loops=loops,
+        includes=includes,
+    )
 
 
 class _TreeWalker:
     """Rules 13 to 18: every read resolved through scope, alias and include argument, and every walk bound."""
 
-    def __init__(self, owner: TemplateWalker, walk: TemplateWalk, checks: Mapping[str, _RowCheck]) -> None:
-        self.owner = owner
+    def __init__(self, walk: TemplateWalk, checks: Mapping[str, _RowCheck]) -> None:
         self.walk = walk
         self.checks = checks
         self.d_prefixes = _prefixes(tuple(path.split(".")) for path in walk.declared)
@@ -786,8 +1323,6 @@ class _TreeWalker:
         self.walk.refusals.append(f"{frame.name}: {reason}")
 
     def close(self, tree: _Tree) -> None:
-        for count, value in (("nodes", tree.nodes), ("outputs", tree.outputs), ("text", tree.text)):
-            self.walk.counts[count] = max(self.walk.counts.get(count, 0), value)
         if tree.nodes > NODE_LIMIT:
             self.walk.refusals.append(f"{self.walk.root_name}: its {tree.form} reaches over {NODE_LIMIT} nodes")
         if tree.outputs > OUTPUT_LIMIT:
@@ -804,22 +1339,21 @@ class _TreeWalker:
             self.node(frame, node, tree)
 
     def node(self, frame: _Frame, node: Node, tree: _Tree) -> None:
-        if type(node) is BudgetedLoopBody:
-            self.nodes(frame, node.nodelist, tree)
-            return
-        tree.nodes += 1
+        reads = walked(node)
+        if type(node) is not BudgetedLoopBody:
+            tree.nodes += 1
         if type(node) is TextNode:
             tree.text += len(node.s)
         elif type(node) is VariableNode:
             tree.outputs += 1
-            self.expression(frame, node.filter_expression, "output")
+            self.expression(frame, node.filter_expression, ReadUse.OUTPUT)
         elif type(node) is IfNode:
             for condition, nodelist in node.conditions_nodelists:
                 guards = frame.guards
                 if condition is not None:
                     tree.nodes += self.condition(frame, condition)
                     guards = guards | self.guards(frame, condition)
-                self.nodes(_replace(frame, guards=guards), nodelist, tree)
+                self.nodes(replace(frame, guards=guards), nodelist, tree)
         elif type(node) is ForNode:
             self.loop(frame, node, tree)
         elif type(node) is WithNode:
@@ -828,7 +1362,7 @@ class _TreeWalker:
                 tree.nodes += 1
                 self.bindable(frame, name)
                 scope[name] = self.bind(frame, expression)
-            self.nodes(_replace(frame, scope=scope), node.nodelist, tree)
+            self.nodes(replace(frame, scope=scope), node.nodelist, tree)
         elif type(node) is BudgetedIncludeNode:
             self.include(frame, node, tree)
         elif type(node) is BlockNode:
@@ -837,8 +1371,9 @@ class _TreeWalker:
                 self.nodes(content_frame, content, tree)
         elif type(node) is ExtendsNode:
             self.refuse(frame, "extends is the wrapper's alone")
-        elif type(node) is not CommentNode and type(node) is not TemplateTagNode:
-            raise TypeError(f"The message template walker does not know {type(node).__qualname__}.")
+        else:
+            for nodelist in reads.nodelists(node):
+                self.nodes(frame, nodelist, tree)
 
     # -- names and paths -------------------------------------------------------
 
@@ -853,36 +1388,36 @@ class _TreeWalker:
         binding = frame.scope.get(head)
         if binding is None:
             if head == "brand":
-                binding = _Binding("brand", effective=("brand",))
+                binding = _Binding(BindingKind.BRAND, effective=("brand",))
             elif head in ("lang", "dir"):
-                binding = _Binding("global", effective=(head,))
+                binding = _Binding(BindingKind.GLOBAL, effective=(head,))
             elif head in CONSTANTS:
-                binding = _Binding("constant", effective=(head,))
+                binding = _Binding(BindingKind.CONSTANT, effective=(head,))
             elif head in ("subject", "preheader"):
                 if not frame.row.handler.reads_message_fields:
                     self.refuse(frame, f"{head} is read in a template or a layout alone")
                     return None
-                binding = _Binding("message", effective=(head,))
+                binding = _Binding(BindingKind.MESSAGE, effective=(head,))
             elif head in ("forloop", "block"):
                 self.refuse(frame, f"{_dotted(lookups)} is read outside a loop or is the engine's own")
                 return None
             elif frame.top:
-                binding = _Binding("value", local=(head,), effective=(head,))
+                binding = _Binding(BindingKind.VALUE, local=(head,), effective=(head,))
             else:
-                binding = _Binding("unpassed", local=(head,))
+                binding = _Binding(BindingKind.UNPASSED, local=(head,))
         local = (*binding.local, *rest) if binding.local else ()
         if local and local not in frame.declared:
             self.refuse(frame, f"{_dotted(local)} is not in its variables")
             return None
-        if binding.kind in ("value", "unpassed"):
+        if binding.kind in _VALUES:
             effective = (*binding.effective, *rest) if binding.effective is not None else None
             if effective is not None and effective not in self.d_prefixes:
                 self.refuse(frame, f"{_dotted(effective)} is not a value the render declares")
                 return None
             return _Binding(binding.kind, local=local, effective=effective)
-        if binding.kind in ("brand", "forloop"):
+        if binding.kind in (BindingKind.BRAND, BindingKind.FORLOOP):
             path = (*(binding.effective or ()), *rest)
-            if path not in (BRAND_PREFIXES if binding.kind == "brand" else FORLOOP_PATHS):
+            if path not in (BRAND_PREFIXES if binding.kind == BindingKind.BRAND else FORLOOP_PATHS):
                 self.refuse(frame, f"{_dotted(path)} is not a value the mail supplies")
                 return None
             return _Binding(binding.kind, local=local, effective=path)
@@ -894,11 +1429,11 @@ class _TreeWalker:
     def leaf(self, frame: _Frame, binding: _Binding) -> bool:
         """Whether ``binding`` reads one value, not an object or a list, here and in ``D``."""
 
-        if binding.kind in ("value", "unpassed"):
+        if binding.kind in _VALUES:
             return binding.local in frame.leaves and (binding.effective is None or binding.effective in self.d_leaves)
-        if binding.kind == "brand":
+        if binding.kind == BindingKind.BRAND:
             return binding.effective in BRAND_PATHS
-        if binding.kind == "forloop":
+        if binding.kind == BindingKind.FORLOOP:
             return binding.effective in FORLOOP_PATHS and binding.effective != ("forloop",)
         return True
 
@@ -911,63 +1446,65 @@ class _TreeWalker:
 
     # -- expressions -----------------------------------------------------------
 
-    def expression(self, frame: _Frame, expression: FilterExpression, use: str) -> _Binding | None:
+    def expression(self, frame: _Frame, expression: FilterExpression, use: ReadUse) -> _Binding | None:
         """Judge one expression read as ``use`` (rules 5, 11, 13 to 17); return what it binds to."""
 
-        names = [FILTER_NAMES[function] for function, _ in expression.filters]
+        names = filter_names(expression)
         variable = expression.var
         if not expression.is_var or variable.lookups is None:
-            if use == "test" and names:
+            if use == ReadUse.TEST and names:
                 self.refuse(frame, f"an if tests a literal through a filter ({expression.token})")
-            if use == "sequence":
+            if use == ReadUse.SEQUENCE:
                 self.refuse(frame, f"for loops over a list a row declares, not {expression.token}")
-            return _Binding("computed" if names else "literal")
+            return _Binding(BindingKind.COMPUTED if names else BindingKind.LITERAL)
         binding = self.resolve(frame, tuple(variable.lookups))
         if binding is None:
             return None
         leaf = self.leaf(frame, binding)
-        value = binding.kind in ("value", "unpassed")
+        value = binding.kind in _VALUES
         if names and names[0] != "length" and not leaf:
             self.refuse(frame, f"{expression.token} filters an object or a list; only length reads one")
-        if use == "output" and not leaf and not (value and names[:1] == ["length"]):
+        if use == ReadUse.OUTPUT and not leaf and not (value and names[:1] == ["length"]):
             self.refuse(frame, f"{{{{ {expression.token} }}}} prints an object or a list")
-        if use == "test" and not (
+        if use == ReadUse.TEST and not (
             (value and (names == ["length"] or leaf and not names))
-            or (binding.kind in ("brand", "forloop", "global", "constant") and leaf and not names)
+            or (binding.kind in (BindingKind.BRAND, BindingKind.FORLOOP, BindingKind.GLOBAL, BindingKind.CONSTANT)
+                and leaf and not names)
         ):
             self.refuse(frame, f"an if tests a declared value, its length or a name the mail supplies, not "
                                f"{expression.token}")
-        if use == "sequence":
+        if use == ReadUse.SEQUENCE:
             if not value or (*binding.local, "*") not in frame.declared or (
                     binding.effective is not None and (*binding.effective, "*") not in self.d_prefixes):
                 self.refuse(frame, f"for loops over a list a row declares, not {expression.token}")
                 return None
         if value:
-            self.walk.reads.append(TemplateRead(frame.name, binding.local, binding.effective, use))
+            if binding.effective is not None:
+                self.walk.reads.add(binding.effective)
             optional = names[:1] == ["default"] or self.guarded(frame, binding)
-            if use in ("output", "argument") and not optional:
-                if binding.kind == "unpassed":
+            if use in (ReadUse.OUTPUT, ReadUse.ARGUMENT) and not optional:
+                if binding.kind == BindingKind.UNPASSED:
                     self.refuse(frame, f"{expression.token} reads {binding.local[0]}, which it was not passed")
                 elif binding.effective is not None:
                     self.walk.required.add(binding.effective)
             if names[:1] == ["date"] and binding.effective is not None:
                 self.walk.date_paths.add(binding.effective)
-        if names and use != "sequence":
-            return _Binding("computed")
+        if names and use != ReadUse.SEQUENCE:
+            return _Binding(BindingKind.COMPUTED)
         return binding
 
     def bind(self, frame: _Frame, expression: FilterExpression) -> _Binding:
         """What a ``with`` value or an include argument binds its name to."""
 
-        use = "argument" if expression.filters else "alias"
+        use = ReadUse.ARGUMENT if expression.filters else ReadUse.ALIAS
         binding = self.expression(frame, expression, use)
-        return binding if binding is not None else _Binding("computed")
+        return binding if binding is not None else _Binding(BindingKind.COMPUTED)
 
     def condition(self, frame: _Frame, condition: Any) -> int:
         """Judge each operand of an ``if``/``elif`` condition; return how many there are."""
 
         if type(condition) is TemplateLiteral:
-            self.expression(frame, cast(FilterExpression, condition.value), "test")
+            self.expression(frame, cast(FilterExpression, condition.value), ReadUse.TEST)
             return 1
         return sum(self.condition(frame, operand) for operand in (condition.first, condition.second)
                    if operand is not None)
@@ -979,7 +1516,7 @@ class _TreeWalker:
             expression = cast(FilterExpression, condition.value)
             if expression.is_var and expression.var.lookups is not None and not expression.filters:
                 binding = self.resolve_quietly(frame, tuple(expression.var.lookups))
-                if binding is not None and binding.kind in ("value", "unpassed"):
+                if binding is not None and binding.kind in _VALUES:
                     return frozenset({self.guard_key(binding)})
             return frozenset()
         if condition.id == "and":
@@ -995,7 +1532,7 @@ class _TreeWalker:
     # -- loops and includes ----------------------------------------------------
 
     def loop(self, frame: _Frame, node: ForNode, tree: _Tree) -> None:
-        sequence = self.expression(frame, cast(FilterExpression, node.sequence), "sequence")
+        sequence = self.expression(frame, cast(FilterExpression, node.sequence), ReadUse.SEQUENCE)
         loops = frame.loops + 1
         if loops > LOOP_DEPTH_LIMIT:
             self.refuse(frame, f"loops nest over {LOOP_DEPTH_LIMIT} deep, through includes too")
@@ -1007,8 +1544,8 @@ class _TreeWalker:
                     sequence.kind, local=(*sequence.local, "*"),
                     effective=(*sequence.effective, "*") if sequence.effective is not None else None,
                 )
-        scope["forloop"] = _Binding("forloop", effective=("forloop",))
-        self.nodes(_replace(frame, scope=scope, loops=loops), cast(NodeList, node.nodelist_loop), tree)
+        scope["forloop"] = _Binding(BindingKind.FORLOOP, effective=("forloop",))
+        self.nodes(replace(frame, scope=scope, loops=loops), cast(NodeList, node.nodelist_loop), tree)
         self.nodes(frame, cast(NodeList, node.nodelist_empty), tree)
 
     def include(self, frame: _Frame, node: BudgetedIncludeNode, tree: _Tree) -> None:
@@ -1032,11 +1569,7 @@ class _TreeWalker:
             binding = self.bind(frame, expression)
             scope[name] = _Binding(binding.kind, local=(name,), effective=binding.effective)
         self.nodes(
-            self.owner._frame(target, row, top=False, scope=scope, loops=frame.loops, includes=stack),
+            _frame(target, row, top=False, scope=scope, loops=frame.loops, includes=stack),
             self.checks[target].pieces[tree.form].nodelist,
             tree,
         )
-
-
-def _replace(frame: _Frame, **changes: Any) -> _Frame:
-    return _Frame(**{**frame.__dict__, **changes})
