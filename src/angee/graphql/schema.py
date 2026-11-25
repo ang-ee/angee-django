@@ -25,7 +25,9 @@ from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.resources import model_resource_type
 from strawberry.extensions import SchemaExtension
+from strawberry.scalars import JSON
 from strawberry.schema.schema_converter import GraphQLCoreConverter
+from strawberry.schema.types.scalar import DEFAULT_SCALAR_REGISTRY
 from strawberry.tools import merge_types
 from strawberry.types.arguments import convert_argument
 from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
@@ -90,6 +92,57 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 
 _NON_ROOT_KEYS = {"types", "extensions", "type_extensions", "input_extensions"}
 _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _NON_ROOT_KEYS}
+
+MAX_JSON_INPUT_DEPTH = 64
+"""How many arrays and objects may enclose a member of a ``JSON`` input value.
+
+The deepest values addons accept sit well inside it: a dashboard snapshot
+whose widget filter uses all ten of its logical levels nests 28, a web form
+definition with panels at their three-deep cap 14. The bound keeps the
+recursive walks a saved value meets (strawberry-django-hasura's input
+reduction, Django's ``JSONField``, JSON Schema validation) far inside Python's
+recursion limit.
+"""
+
+
+def nests_deeper_than(value: Any, depth: int) -> bool:
+    """Return whether a member of the JSON ``value`` sits in more than ``depth`` arrays or objects.
+
+    An explicit stack walks the value and stops at the first member past
+    ``depth``, so a value of any nesting is measured without recursion.
+    """
+
+    pending = [(value, 0)]
+    while pending:
+        node, level = pending.pop()
+        if level > depth:
+            return True
+        if isinstance(node, dict):
+            pending.extend((child, level + 1) for child in node.values())
+        elif isinstance(node, list):
+            pending.extend((child, level + 1) for child in node)
+    return False
+
+
+def _parse_json_input(value: Any) -> Any:
+    """Return a ``JSON`` input value unchanged once its nesting is within bound."""
+
+    if nests_deeper_than(value, MAX_JSON_INPUT_DEPTH):
+        raise GraphQLError(
+            f"JSON input nests deeper than {MAX_JSON_INPUT_DEPTH} levels.",
+            extensions={"code": "BAD_USER_INPUT"},
+        )
+    return value
+
+
+JSON_SCALAR: ScalarDefinition = replace(DEFAULT_SCALAR_REGISTRY[JSON], parse_value=_parse_json_input)
+"""Strawberry's ``JSON`` scalar, its input bounded by ``MAX_JSON_INPUT_DEPTH``.
+
+Every schema ``GraphQLSchemas`` builds maps ``strawberry.scalars.JSON`` to it.
+A variable or literal nested deeper is refused as ``BAD_USER_INPUT`` while the
+request is coerced, so no resolver, permission check or query runs for it.
+Output serialization and the printed SDL stay Strawberry's own.
+"""
 
 
 class AngeeSchema(strawberry.Schema):
@@ -399,15 +452,8 @@ class GraphQLSchemas:
         extensions, scalar coercion, public IDs and expression aliases are the
         same ones used by its GraphQL list field; callers supply their own scope.
         """
-        pending = [(value, 0)]
-        while pending:
-            node, depth = pending.pop()
-            if depth > max_depth:
-                raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
-            if isinstance(node, dict):
-                pending.extend((child, depth + 1) for child in node.values())
-            elif isinstance(node, list):
-                pending.extend((child, depth + 1) for child in node)
+        if nests_deeper_than(value, max_depth):
+            raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
         for name in sorted(self.names(), key=lambda name: (name != "console", name)):
             for surface in self.parts[name].query:
                 for contribution in data_resource_contributions(surface):
@@ -492,7 +538,7 @@ class GraphQLSchemas:
                     RebacDjangoOptimizerExtension,
                 ],
             ),
-            config=hasura_config(),
+            config=replace(hasura_config(), scalar_map={JSON: JSON_SCALAR}),
         )
         resources = finalize_data_resources(
             schema._schema,

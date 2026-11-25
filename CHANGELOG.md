@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.graphql`: **Changed behaviour.** A `JSON` input value, sent as a
+  variable or a literal, nests at most 64 arrays and objects deep
+  (`MAX_JSON_INPUT_DEPTH` in `angee.graphql.schema`). Every schema
+  `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to `JSON_SCALAR`,
+  which refuses a deeper value as `BAD_USER_INPUT` while the request is
+  coerced, before any resolver, permission check or query runs. A caller who
+  was not signed in could fail a save with an `INTERNAL` error, before its
+  permission check, by sending a value nested about a thousand levels deep:
+  strawberry-django-hasura's input reduction recursed through nested arrays,
+  and Django's `JSONField` check through nested objects, deeper still. The
+  deepest value an addon accepts, a dashboard snapshot whose widget filter uses
+  all ten of its logical levels, nests 28. Output and the printed SDL are
+  unchanged, and a resource condition keeps its own bound of 12, measured by
+  the same walk (`nests_deeper_than`). Follow-up: strawberry-django-hasura's
+  `input_to_dict` still recurses through nested lists; bounding it belongs to
+  that library's own release.
 - `angee.appearance_integrate`: **Changed behaviour.** Website appearance
   analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
   signed-in contract states. It refused only a request with no actor at all, so
