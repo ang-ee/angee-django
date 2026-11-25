@@ -167,9 +167,13 @@ lane's executed coverage.
 
 ### SQLite Version
 
-SQLite runs need SQLite 3.53 or newer. Earlier releases (3.51.2 and older were
+SQLite runs need SQLite 3.53.x. Earlier releases (3.51.2 and older were
 checked) reject a subquery whose `ORDER BY` names an outer query's column and report
-`no such column`; messaging's redirect-aware follower reads depend on that. Python
+`no such column`; messaging's redirect-aware follower reads depend on that. SQLite
+3.54.0 and 3.54.1 count every copy of a CTE's body against a limit of 1000 cursors per
+statement and refuse django-zed-rebac's largest permission reads with `VIEWs and/or
+subqueries nested too deep`; uv's managed CPython 3.14.10 bundles 3.54.1, so CI pins
+3.14.9 and a local run on the newer build sets `UV_PYTHON=3.14.9`. Python
 reports its library as `uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`.
 uv's managed CPython bundles a current SQLite, while a distribution's system Python
 links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1). CI sets
