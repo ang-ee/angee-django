@@ -53,6 +53,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.identity import public_id_of
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge import MergeableMixin, merge_maintenance
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.roles import role_anchor
@@ -853,16 +854,23 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
 
 
 class Handle(
-    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True,
+    ResourceLoadMixin, MergeableMixin, HistoryMixin, TaggedModel, ImmutableFieldsMixin, AuditMixin, AngeeDataModel,
+    concrete=True,
 ):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
-    idempotent. ``party`` is the resolved identity the Handle manager
-    materialises; it is null until a handle is linked, so a handle synced for an
-    unknown sender is still a valid row. A handle carries tags of its own, apart
-    from its party's (a consumer marks a company's accounts-payable address).
+    idempotent. The keys are written once (:attr:`immutable_fields`): a message
+    reads its addresses from its handles when it is sent, so a field write of one
+    would send messages already written somewhere else, and no save of one is
+    admitted, whoever makes it. Only the handle owner's verbs change a key:
+    ``HandleManager.upsert`` when a source's ``external_id`` matched and the
+    address behind it moved, and ``HandleManager.reidentify``. ``party`` is the
+    resolved identity the Handle manager materialises; it is null until a handle
+    is linked, so a handle synced for an unknown sender is still a valid row. A
+    handle carries tags of its own, apart from its party's (a consumer marks a
+    company's accounts-payable address).
     """
 
     @classmethod
@@ -908,6 +916,7 @@ class Handle(
             return cast(Handle.Platform, cls.EMAIL if "@" in (value or "") else cls.OTHER)
 
     sqid_prefix = "hdl_"
+    immutable_fields = ("platform", "value", "external_id")
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
     normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
