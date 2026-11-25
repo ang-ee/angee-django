@@ -31,10 +31,11 @@ import yaml
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.template import Engine, TemplateSyntaxError
 from django.template.base import DebugLexer, Node, Parser, tag_re
 from django.template.defaulttags import TemplateLiteral
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone, translation
 from django.utils.safestring import SafeString, mark_safe
 from hypothesis import HealthCheck, event, example, given, settings
@@ -1199,8 +1200,8 @@ class _Rows:
         del language
         return {name: self.rows[name] for name in names if name in self.rows}
 
-    def resolves_name(self, name: str) -> bool:
-        return name in self.rows
+    def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
+        return frozenset(name for name in names if name in self.rows)
 
 
 SENT_SCHEMES = ("https://", "http://", "mailto:", "tel:")
@@ -2503,6 +2504,27 @@ def test_a_walk_over_parts_each_admitted_alone_stops_at_the_trees_caps(
 
 CHECKED_BEFORE_THE_CAPS = ["tests.walked", "layouts/plain", "parts/walked0"]
 """The template, its layout and one part: the part's 300 outputs and the layout's pass the tree's caps."""
+
+
+def test_a_saving_walk_resolves_a_level_in_one_query(plain: Any) -> None:
+    """A part including 10 hubs of 49 parts each asked, on the saving walk, whether each of 490 targets resolves, one
+    query a target; it asks once a level."""
+
+    del plain
+    for hub in range(10):
+        for index in range(49):
+            _row("part", f"leaf{hub}x{index}", source="x")
+        _row("part", f"hub{hub}", source="\n\n".join(
+            f'{{% include "parts/leaf{hub}x{index}" only %}}' for index in range(49)))
+    fan = _unsaved("part", "fan", source="\n\n".join(f'{{% include "parts/hub{hub}" only %}}' for hub in range(10)))
+    with system_context(reason="tests.messaging_templates.render.save"), CaptureQueriesContext(connection) as queries:
+        with pytest.raises(ValidationError, match="reaches over 1000 nodes"):
+            fan.full_clean()
+    assert len(queries) == SAVING_WALK_QUERIES, len(queries)
+
+
+SAVING_WALK_QUERIES = 22
+"""The queries of that saving walk: 520 before a level resolved in one query."""
 
 
 def test_a_walk_compiles_each_span_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:

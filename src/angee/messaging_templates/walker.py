@@ -246,7 +246,7 @@ class RowReader(Protocol):
 
     def named_rows(self, names: Iterable[str], *, language: str) -> Mapping[str, Any]: ...
 
-    def resolves_name(self, name: str) -> bool: ...
+    def resolving_names(self, names: Iterable[str]) -> frozenset[str]: ...
 
 
 def _dotted(path: Sequence[str]) -> str:
@@ -1330,13 +1330,16 @@ class TemplateWalker:
             if walk.refusals or not wanted:
                 return checks
             found = reader.named_rows(wanted, language=walk.language)
+            # One query a level for what a save asks of every included key, never one a target.
+            resolving = reader.resolving_names(
+                [target for target in wanted if target in walk.includes]) if self.saving else frozenset()
             for target in wanted:
                 reached = found.get(target)
                 if reached is None:
                     walk.refusals.append(f"{walk.root_name}: no message template {target} in {walk.language}")
                 elif target in walk.includes and not reached.handler.includable:
                     walk.refusals.append(f"{walk.root_name}: only blocks and parts are included, not {target}")
-                elif self.saving and target in walk.includes and not reader.resolves_name(target):
+                elif self.saving and target in walk.includes and target not in resolving:
                     walk.refusals.append(
                         f"{walk.root_name}: {target} has no shipped default or row in the default language",
                     )

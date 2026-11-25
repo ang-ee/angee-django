@@ -460,11 +460,20 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         )
         return {identities[identity]: row for identity, row in rows.items() if identity in identities}
 
-    def resolves_name(self, name: str) -> bool:
-        """Whether every recipient finds the row a template name names (:meth:`resolves`)."""
+    def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
+        """The template names among ``names`` every recipient finds (:meth:`resolves`), judged in one query."""
 
-        identity = MessageTemplateKind.for_template_name(name)
-        return identity is not None and self.resolves(*identity)
+        identities: dict[tuple[str, str], str] = {}
+        for name in names:
+            if (identity := MessageTemplateKind.for_template_name(name)) is not None:
+                identities[identity] = name
+        if not identities:
+            return frozenset()
+        found = self.filter(
+            models.Q(is_baseline=True) | models.Q(language=self.default_language()),
+            kind__in={kind for kind, _ in identities}, key__in={key for _, key in identities},
+        ).values_list("kind", "key")
+        return frozenset(identities[identity] for identity in found if identity in identities)
 
     def with_row_facts(self) -> MessageTemplateQuerySet[TemplateT]:
         """Annotate each row fact as ``_<name>``, the annotation the model's properties read."""
