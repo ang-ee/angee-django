@@ -10,6 +10,38 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`, `angee.nexus`: **Changed behaviour.** A message's sender is
+  read from `Message.sender` alone. Ingest no longer writes a `from` participant
+  row beside it, so a message's participant rows are its recipients (`to`, `cc`,
+  `bcc`) and the GraphQL `participants` of a message ingested from now on no
+  longer lists its sender; a message ingested before still lists its `from` row
+  until the follow-up that renames recipients deletes those rows. Every read that
+  found a sender through that row reads the message instead: a party's and a
+  circle's correspondence timeline (`CorrespondenceKind`) and its invalidation,
+  untitled thread labels (`ThreadQuerySet.conversation_labels`), the inbox
+  Participants pane, which lists the sender first and then the recipients, and the
+  email envelope's `From`. Mail sent from here, whose messages never had a `from`
+  row, now appears on the sender's timeline and in their party reads. A trashed
+  inbound message no longer names an untitled thread, for any reader.
+  **Upgrade:** `MessageQuerySet.involving_parties` is removed; select
+  `pk__in=MessageQuerySet.ids_involving_parties(parties, handles=..., messages=...,
+  participants=...)`, the ids of the messages given parties sent or received, built
+  on `MessageQuerySet.ids_involving_handles` (the same for given handles), or test
+  `.exists()` on it with the eligibility inside `messages`.
+  `MessageQuerySet.involving_parties_filter(parties, handles=..., participants=...)`
+  is removed too; filter with `pk__in=MessageQuerySet.ids_involving_parties(parties,
+  handles=..., messages=..., participants=...)` instead.
+  `MessageQuerySet.involved_handle_ids` is the reverse, the handles that sent or
+  received given messages. Read a message's sender from `Message.sender`, never
+  from its `participants`.
+- `angee.base`: `MergeableQuerySet.redirect_groups` given a subquery selects
+  `pk IN` the `UNION ALL` of its two indexed arms, the survivors and the rows
+  redirecting to them, where it compiled to `pk IN (…) OR merged_into_id IN (…)`.
+  PostgreSQL cannot estimate that disjunction and planned it as a scan of most of
+  the table, under every party-membership read (a party's correspondence timeline,
+  the inbox's sender and handle scopes). A performance fix: the rows selected are
+  the same for every input, and values keep the disjunction, which the indexes
+  serve.
 - **Brand kits: the new addon `angee.brandkit`.**
   - **What it holds.** A brand kit (`BrandKit`) states one brand: its name; ten
     colours, one per hex input of theme customisation and named as the theme

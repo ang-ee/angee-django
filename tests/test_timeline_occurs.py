@@ -1,5 +1,7 @@
 """Structural occurrence probes prune absent record branches before authorization."""
 
+import re
+
 import pytest
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
@@ -9,6 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.models import PermissionAuditEvent
 
+from angee.base.refs import generic_pointer_target
 from angee.base.testing.queries import statement_startswith
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
@@ -222,3 +225,58 @@ def test_correspondence_probe_matches_parties_and_confirmed_subtrees(corresponde
         assert_occurs(kind, record, False, None)
     type(data.message)._base_manager.filter(pk=data.message.pk).update(is_trashed=True)
     assert_occurs(kind, data.party, False, None)
+
+
+@pytest.mark.parametrize("mail", ["sent", "received", "none", "trashed", "chatter"])
+@pytest.mark.parametrize("target", ["party", "circle"])
+def test_correspondence_probe_finds_only_eligible_mail(correspondence, target, mail):
+    """A party or circle occurs with mail it sent or received, and not with none, only trashed or only chatter.
+
+    Trashed and chatter mail reaches the party through both arms, sender and recipient.
+    """
+    data = correspondence
+    message = type(data.message)._base_manager.filter(pk=data.message.pk)
+    if mail in ("received", "trashed", "chatter"):
+        apps.get_model("messaging", "Participant")._base_manager.create(
+            message=data.message, thread=data.thread, handle=data.handle, role="to",
+        )
+    if mail in ("received", "none"):
+        message.update(sender=None)
+    elif mail == "trashed":
+        message.update(is_trashed=True)
+    elif mail == "chatter":
+        content_type, object_id = generic_pointer_target(data.party)
+        apps.get_model("messaging", "ThreadAttachment")._base_manager.create(
+            thread=data.thread, content_type=content_type, object_id=object_id, role="chatter",
+        )
+    record = data.party if target == "party" else data.circle
+    assert_occurs(CorrespondenceKind(), record, mail in ("sent", "received"), None)
+
+
+def test_correspondence_probe_applies_the_eligibility_inside_each_arm(correspondence):
+    """The probe tests the existence of the membership union, each arm already eligible.
+
+    With the eligibility outside a ``pk IN`` over every message, PostgreSQL answers
+    ``LIMIT 1`` by scanning messages in order against the whole membership.
+    """
+    kind = CorrespondenceKind()
+    kind.occurs(correspondence.circle)  # Warm native content-type identities.
+    with CaptureQueriesContext(connection) as queries:
+        assert kind.occurs(correspondence.circle)
+    (sql,) = [query["sql"] for query in queries]
+    trashed = f'{connection.ops.quote_name(type(correspondence.message)._meta.db_table)}."is_trashed"'
+    members = _outer_union_members(sql)
+    assert len(members) == 2
+    assert all(trashed in member and "'chatter'" in member for member in members)
+
+
+def _outer_union_members(sql: str) -> list[str]:
+    """Split a statement at its outermost ``UNION ALL``; a union nested in a subquery stays in its member."""
+    members, depth, start = [], 0, 0
+    for match in re.finditer(r"[()]|UNION ALL", sql):
+        if match.group() in "()":
+            depth += 1 if match.group() == "(" else -1
+        elif depth == 0:
+            members.append(sql[start:match.start()])
+            start = match.end()
+    return [*members, sql[start:]]

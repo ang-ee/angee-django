@@ -22,6 +22,7 @@ from rebac import (
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.graphql.testing.documents import result_data as _data
+from angee.messaging.managers import MessageQuerySet
 from angee.messaging.testing.models import (
     Handle,
     Message,
@@ -81,6 +82,17 @@ def _address(message: Any, handle: Any, role: str = "to") -> Any:
         handle=handle,
         role=role,
     )
+
+
+def _messages_involving(*parties: Any) -> list[Any]:
+    """The pks of the messages ``parties`` sent or received, as the correspondence timeline selects them."""
+
+    return sorted(Message._base_manager.filter(pk__in=MessageQuerySet.ids_involving_parties(
+        parties,
+        handles=Handle._base_manager.all(),
+        messages=Message._base_manager.all(),
+        participants=Participant._base_manager.all(),
+    )).values_list("pk", flat=True))
 
 
 def _schema() -> Any:
@@ -269,9 +281,39 @@ def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to
         new.with_actor(owner).merge(records=[old.public_id])
     with system_context(reason="test nexus handle merge readers"):
         assert Participant._base_manager.get(pk=recipient.pk).handle_id == old.pk
-        assert list(Message.objects.involving_parties([alice]).values_list("pk", flat=True)) == [message.pk]
+        assert _messages_involving(alice) == [message.pk]
         assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
         assert list(Tie._base_manager.values_list("party_a_id", "party_b_id")) == [tuple(sorted((alice.pk, bob.pk)))]
+
+
+@pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
+def test_involving_parties_reads_sent_messages_from_their_sender(db: None, from_row: bool) -> None:
+    """A party's messages include those its handles sent, through a merged alias too.
+
+    Membership is ``pk IN``, so no message can repeat by construction; the ``from``-row
+    case proves only that a row repeating the sender changes nothing.
+    """
+
+    del db
+    owner = User.objects.create_user(username="sender-membership-reader")
+    with system_context(reason="test nexus sender membership"):
+        alice, bob = Party._base_manager.create(display_name="Alice", created_by=owner), _party("Bob")
+        alice_handle, bob_handle = _handle(None, "alice@example.com"), _handle(bob, "bob@example.com")
+        # The fold re-resolves the survivor's party, so the link is a statement.
+        Party.objects.assert_handle(alice, alice_handle, asserted_by=owner)
+        alias = _handle(None, "alice@old.example.com")
+        sent = _message(sender=alias, thread=Thread._base_manager.create(platform="email"), sent_at=_T0,
+                        external_id="alice-to-bob")
+        _address(sent, bob_handle)
+        to_self = _message(sender=alice_handle, thread=sent.thread, sent_at=_T0, external_id="alice-to-alice")
+        _address(to_self, alice_handle)
+        alice_handle.fold([alias])
+        if from_row:
+            for message in (sent, to_self):
+                _address(message, message.sender, "from")
+
+        assert _messages_involving(alice) == sorted([sent.pk, to_self.pk])
+        assert _messages_involving(bob) == [sent.pk]
 
 
 def test_recompute_derives_addressed_reply_and_mention_edges_once(db: None) -> None:

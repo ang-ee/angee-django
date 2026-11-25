@@ -126,7 +126,7 @@ class ParsedRecipient:
     """One addressed party on a message and its envelope role."""
 
     handle: ParsedHandle
-    role: str = "to"  # from / to / cc / bcc
+    role: str = "to"  # to / cc / bcc; the sender is ``ParsedMessage.sender``
 
 
 @dataclass(frozen=True)

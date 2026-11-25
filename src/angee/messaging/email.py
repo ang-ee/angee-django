@@ -164,7 +164,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         part_model = apps.get_model("messaging", "Part")
         parts = part_model.objects.reading_order_for_message(message)
         participants = list(message.participants.select_related("handle").order_by("role", "pk"))
-        sender = self._sender(message, participants)
+        sender = self._sender(message)
         recipients = self._recipients(message, participants)
         subject = next(
             (
@@ -209,16 +209,13 @@ class AnymailEmailChannelBackend(ChannelBackend):
             )
         return email
 
-    def _sender(self, message: Any, participants: list[Any]) -> str:
+    def _sender(self, message: Any) -> str:
+        """``Message.sender``'s address, else the source's first ``From``, else the channel default."""
+
         if message.sender_id is not None:
             sender = _address(message.sender)
             if sender:
                 return sender
-        for participant in participants:
-            if str(participant.role) == "from":
-                sender = _address(participant.handle)
-                if sender:
-                    return sender
         values = _source_addresses(message, "from")
         if values:
             return values[0]
