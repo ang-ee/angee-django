@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import importlib.util
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Literal
+from uuid import UUID
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
+from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.hooks import resolve_hook, resolve_hooks
@@ -661,20 +662,65 @@ def test_typed_config_projects_native_input_constraints() -> None:
     assert spec["properties"]["names"]["maxItems"] == 3
 
 
-def test_typed_config_projects_native_date_widgets() -> None:
-    """Pydantic date formats use the existing FormSpec date controls."""
+@pytest.mark.parametrize(("annotation", "declared"), [
+    (date, {"type": "string", "format": "date", "widget": "date"}),
+    (datetime, {"type": "string", "format": "date-time", "widget": "datetime"}),
+], ids=["date", "date-time"])
+@pytest.mark.parametrize("shape", ["plain", "nullable", "list", "nested"])
+def test_typed_config_projects_native_date_widgets(annotation: type, declared: dict[str, str], shape: str) -> None:
+    """A Pydantic date or date and time keeps its declared format beside the date control it selects, at every depth."""
 
-    class DateConfig(BaseModel):
-        day: date
-        moment: datetime
+    required = {"label": "Value", "presenceRequired": True}
+    member, expected = {
+        "plain": ((annotation, ...), {**declared, **required}),
+        "nullable": (
+            (annotation | None, None),
+            {**declared, "nullable": True, "label": "Value", "defaultValue": None, "omittable": True},
+        ),
+        "list": ((list[annotation], ...), {"type": "array", "widget": "list", "items": declared, **required}),
+        "nested": ((create_model("Inner", value=(annotation, ...)), ...), {
+            "type": "object", "widget": "object", "properties": {"value": {**declared, **required}},
+            "required": ["value"], **required,
+        }),
+    }[shape]
 
     class DateImpl(ImplBase):
-        config_model = DateConfig
+        config_model = create_model("DateConfig", value=member)
 
     spec = DateImpl.config_form_spec()
     assert spec is not None
-    assert spec["properties"]["day"]["widget"] == "date"
-    assert spec["properties"]["moment"]["widget"] == "datetime"
+    assert spec["properties"]["value"] == expected
+
+
+def test_typed_config_keeps_a_date_format_under_an_authored_widget() -> None:
+    """An authored widget replaces the control and keeps the format; an authored JSON widget carries none."""
+
+    class AuthoredConfig(BaseModel):
+        day: date = Field(json_schema_extra={"widget": "text"})
+        moment: datetime = Field(json_schema_extra={"widget": "date"})
+        raw: date = Field(json_schema_extra={"widget": "json"})
+        started: datetime = datetime(2024, 1, 31, 12, 0)
+
+    class AuthoredImpl(ImplBase):
+        config_model = AuthoredConfig
+
+    spec = AuthoredImpl.config_form_spec()
+    assert spec is not None
+    required = {"presenceRequired": True}
+    assert spec["properties"]["day"] == {
+        "type": "string", "format": "date", "widget": "text", "label": "Day", **required,
+    }
+    assert spec["properties"]["moment"] == {
+        "type": "string", "format": "date-time", "widget": "date", "label": "Moment", **required,
+    }
+    # An authored JSON widget renders the member as raw JSON: no declared type travels with it.
+    assert spec["properties"]["raw"] == {"type": "any", "widget": "json", "label": "Raw", **required}
+    # A default the typed model accepts stands beside the format even where the format's own grammar
+    # (RFC 3339 wants an offset) refuses it: nothing asserts the format on the projected spec.
+    assert spec["properties"]["started"] == {
+        "type": "string", "format": "date-time", "widget": "datetime", "label": "Started",
+        "defaultValue": "2024-01-31T12:00:00", "omittable": True,
+    }
 
 
 def test_typed_config_projects_integer_exclusive_bounds_exactly() -> None:
@@ -761,6 +807,7 @@ def test_typed_config_projects_explicit_dynamic_json_and_datetime_widgets() -> N
     }
     assert spec["properties"]["scheduled_at"] == {
         "type": "string",
+        "format": "date-time",
         "widget": "datetime",
         "label": "Scheduled At",
         "presenceRequired": True,
@@ -930,6 +977,10 @@ def test_typed_config_omits_default_factory_without_invoking_it() -> None:
         (list[str | int], "config.payload[]", "union"),
         (dict[str, str], "config.payload", "mapping/additionalProperties"),
         (tuple[str, int], "config.payload", "keywords prefixItems"),
+        (time, "config.payload", "format 'time'"),
+        (timedelta, "config.payload", "format 'duration'"),
+        (UUID, "config.payload", "format 'uuid'"),
+        (AnyUrl, "config.payload", "format 'uri'"),
     ],
 )
 def test_typed_config_rejects_unsupported_shapes_with_exact_path(
@@ -1163,6 +1214,14 @@ def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_sha
         JsonImpl.parse_config({"patterned": "INVALID"})
     with pytest.raises(ImproperlyConfigured, match="pattern"):
         config_form_spec(Config.model_json_schema(by_alias=True), owner="Config")
+
+
+def test_json_fallback_renders_an_unsupported_format_as_an_untyped_member_without_its_format():
+    class Config(BaseModel):
+        at: time
+
+    fields = config_form_spec(Config.model_json_schema(by_alias=True), owner="Config", json_fields=True)["properties"]
+    assert fields["at"] == {"type": "any", "widget": "json", "label": "At", "presenceRequired": True}
 
 
 def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
