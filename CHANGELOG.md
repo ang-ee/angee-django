@@ -83,8 +83,13 @@ live in code docstrings.
     stored, sent and read back are one string (`angee.messaging.email.header_text`,
     the one rule for text a mail header carries, which every display name the
     email backend writes also takes, so a sender name inbound mail stored with a
-    literal encoded word no longer makes an answer to that sender fail); a typed line
-    break is still refused. A channel's own sender handle is landed with no
+    literal encoded word no longer makes an answer to that sender fail); a typed
+    line break is still refused. An address with an internationalised domain,
+    typed or taken from inbound mail, is now delivered: the backend writes its
+    domain in ASCII (IDNA) form and the stored address keeps what was typed.
+    **Known limit:** an address whose local part is outside ASCII is still
+    admitted and written, and its delivery fails, as no transport here speaks
+    SMTPUTF8. A channel's own sender handle is landed with no
     creator, under a non-user attribution (`messaging/system:outgoing`): the
     first person to compose on a channel no longer holds read, write and delete
     on it, so cannot rename, re-address or delete the desk's sender. A recipient

@@ -24,6 +24,7 @@ from django.core.exceptions import ValidationError
 from django.core.mail import mailers
 from django.core.mail.backends.base import BaseEmailBackend
 from django.core.validators import validate_email
+from django.utils.encoding import punycode
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
@@ -304,9 +305,16 @@ def _mailbox(name: str, address: str) -> str:
     Every name the backend writes (a recipient's, a sender's, a retained source
     header's) is written here, so a name holding a literal encoded word, which
     inbound mail can store, reaches the wire as written instead of decoded into
-    another name or address.
+    another name or address. An internationalised domain is written in its ASCII
+    (IDNA) form, as Django writes one in the headers it builds, so every
+    transport is given an address it can carry; the stored address keeps what
+    was typed. A local part outside ASCII still cannot be written: no transport
+    here speaks SMTPUTF8.
     """
 
+    local, at, domain = address.rpartition("@")
+    if at and not domain.isascii():
+        address = f"{local}@{punycode(domain)}"
     return formataddr((header_text(name), address))
 
 

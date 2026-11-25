@@ -325,6 +325,28 @@ def test_an_answer_to_a_sender_named_with_an_encoded_word_is_delivered_to_that_s
     assert mail.mailers["smtp"].prep_address(str(to)) == stored[1]
 
 
+def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, settings: Any) -> None:
+    """Typed or taken from an inbound sender, the address is stored as written and sent with its domain in IDNA form."""
+
+    settings.MAILERS = MAILERS
+    raw = (
+        "From: Ada <ada@exämple.test>\r\nTo: desk@example.test\r\nMessage-ID: <idn@example.test>\r\n"
+        "Subject: Hello\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.idn"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+    typed = Message.objects.compose(
+        channel=desk, to=["Ada <ada@exämple.test>"], text="Hi.", actor=desk.owner, queued=True,
+    )
+    answer = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner, queued=True)
+    for message in (typed, answer):
+        with system_context(reason="tests.messaging.compose.idn"):
+            assert Recipient._base_manager.get(message=message).handle.value == "ada@exämple.test"
+        (to,) = _delivered(message)["To"].addresses
+        assert (to.display_name, to.addr_spec) == ("Ada", "ada@xn--exmple-cua.test")
+        assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
+
+
 @pytest.mark.parametrize(
     ("values", "key", "code"),
     [
