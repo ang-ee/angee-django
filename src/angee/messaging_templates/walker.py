@@ -753,7 +753,9 @@ class TemplateWalk:
         Passes, each in ``translation.override`` of the row's language and its own
         :class:`~angee.messaging_templates.engine.RenderBudget`: (1) :meth:`prepare`
         and the globals ``brand``, ``lang`` and ``dir``; (2) the subject and
-        preheader on the text engine, each made one line; (3) the HTML body on the
+        preheader on the text engine, each made one line, on a tenth of a body
+        pass's budget (:meth:`~angee.messaging_templates.engine.RenderBudget.for_lines`);
+        (3) the HTML body on the
         HTML engine, the subject and preheader at its top level; (4) the plain-text
         body on the text engine, from the rows' text forms. ``frame`` renders a
         layout around a fixed body, subject and preheader. Raises ``ValidationError``
@@ -780,7 +782,7 @@ class TemplateWalk:
             }
             text_engine = self._engine(RowPiece.TEXT, mail_globals)
             html_engine = self._engine(RowPiece.HTML, mail_globals)
-            with RenderBudget().spend():
+            with RenderBudget.for_lines().spend():
                 subject = _one_line(
                     text_engine.from_string(frame.subject if frame else str(self.root.subject)).render(
                         text_engine.context(prepared)), "subject",

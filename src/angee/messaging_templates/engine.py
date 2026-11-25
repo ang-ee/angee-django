@@ -62,6 +62,10 @@ URL_INPUT_LIMIT = 2_048
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input`` besides the length of a string it reads."""
 
+LINE_BUDGET_SHARE = 10
+"""The pass rendering a subject and a preheader spends this fraction of a body pass's budget: two lines of at
+most 255 characters of source each, against a body's 50,000."""
+
 RENDER_BUDGET: ContextVar[RenderBudget] = ContextVar("RENDER_BUDGET")
 """The budget of the pass rendering now, set by :meth:`RenderBudget.spend`."""
 
@@ -89,6 +93,12 @@ class RenderBudget:
         self.limits = {"iterations": iterations, "output": output, "filter_input": filter_input}
         self.left = dict(self.limits)
         self.exceeded = False
+
+    @classmethod
+    def for_lines(cls) -> RenderBudget:
+        """Return the budget of the pass rendering a subject and a preheader: :data:`LINE_BUDGET_SHARE` of a body's."""
+
+        return cls(**{name: limit // LINE_BUDGET_SHARE for name, limit in cls().limits.items()})
 
     @classmethod
     def current(cls) -> RenderBudget:

@@ -6,6 +6,7 @@ import asyncio
 import datetime
 import inspect
 import logging
+import os
 import re
 import threading
 import time
@@ -1389,82 +1390,209 @@ def test_walk_character_cap(plain: Any) -> None:
     assert time.process_time() - started < 2.0
 
 
-# ---------- the timed passes ----------
+# ---------- the costliest work the caps admit: what it does, and its CPU on request ----------
+
+TIMED = pytest.mark.skipif(
+    os.environ.get("ANGEE_TIMED_TESTS") != "1",
+    reason="CPU-time bounds depend on the machine and its load; ANGEE_TIMED_TESTS=1 runs them",
+)
+"""The CPU bounds of the costliest passes and previews, run on request in the lane and at integration; the
+default suite pins the work the same cases do instead."""
 
 DEEP = "a." + ".".join(["b"] * 7)
 """The longest path a row declares: eight segments."""
 
+R20 = "'" + "r" * 20 + "'"
+"""The costliest date format a row may write: twenty characters, each a full RFC 5322 date."""
 
-def _loop(lines: list[str]) -> str:
-    return "{% for i in items %}\n" + "\n".join(lines) + "\n{% endfor %}"
+
+def _loop(lines: list[str], sequence: str = "items") -> str:
+    return "{% for i in " + sequence + " %}\n" + "\n".join(lines) + "\n{% endfor %}"
 
 
 def _deep_ifs(count: int) -> list[str]:
     return [("{% if " + DEEP + " %}{% endif %}") * 15] * count
 
 
-DATED = ["{% with x=d|date:'rrrrrrrrrrrrrrrrrrrr' %}{% endwith %}" * 10]
+DATED = [("{% with x=d|date:" + R20 + " %}{% endwith %}") * 10]
+CHAINS = ["{% if " + " or ".join(["x == y"] * 90) + " %}{% endif %}"] * 3
+"""Comparisons of two 10,000-character values that differ in their last character (the Django review's case)."""
+LINE = "{% for i in few %}{% with " + " ".join(f"v{index}=d|date:{R20}" for index in range(6)) + \
+    " %}{% endwith %}{% endfor %}"
+"""The costliest subject a 255-character column holds: six such dates an item, as many items as its pass allows."""
 TIMED_VALUES = {"items": [0] * 500, "a": {}, "d": "2026-11-24T15:30:00+00:00"}
 TIMED_VARIABLES = {"items.*": "x", DEEP: "x", "d": "x"}
 
+PASS_CASES: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
+    "q1-deep-operands": ({"source": _loop(_deep_ifs(31))}, TIMED_VALUES),
+    "q11b-combined": ({"source": _loop(DATED + _deep_ifs(31))}, TIMED_VALUES),
+    "p11-outputs-outside-loops": ({"source": "\n".join(["{{ q }}" * 29] * 10), "variables": {"q": "x"}},
+                                  {"q": '"' * 10_000}),
+}
 
-@pytest.mark.parametrize(
-    ("rows", "values"),
-    [
-        pytest.param({"source": _loop(_deep_ifs(31))}, TIMED_VALUES, id="q1-deep-operands"),
-        pytest.param({"source": _loop(DATED + _deep_ifs(31))}, TIMED_VALUES, id="q11b-combined"),
-        pytest.param({"source": "\n".join(["{{ q }}" * 29] * 10), "variables": {"q": "x"}}, {"q": '"' * 10_000},
-                     id="p11-outputs-outside-loops"),
-    ],
-)
-def test_pass_time(plain: Any, kit: Any, rows: dict[str, Any], values: dict[str, Any]) -> None:
-    """One pass of the costliest rows the caps admit takes under a second of CPU (passes 2 to 4, one heavy)."""
 
-    del plain
+def _pass_case(name: str) -> tuple[TemplateWalk, dict[str, Any]]:
+    rows, values = PASS_CASES[name]
     template = _mail(rows["source"], rows.get("variables", TIMED_VARIABLES), format="html", text_source="x")
-    walk = _walk(template)
-    started = time.process_time()
-    with system_context(reason="tests.messaging_templates.render.timed"):
-        walk.render(values, kit=kit)
-    spent = time.process_time() - started
-    print(f"pass CPU {spent:.3f}s")  # noqa: T201 -- the report quotes it
-    assert spent < 1.0
+    return _walk(template), values
 
 
-def test_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest previews the caps admit take under two seconds of CPU, walk, prepare() and passes 2 to 4 together.
+def _preview_cases() -> dict[str, Any]:
+    """The costliest previews, admitted and refused.
 
-    Admitted: a q11b loop in both forms beside two Markdown rows of 50,000 characters of ``*_`` (the costliest row
-    pattern) inside ``{% comment %}`` (a full row check for one node, q4). Refused: a walk reaching 150,000
-    characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over.
+    ``admitted``: a q11b loop in both forms beside Markdown rows of ``*_`` (the costliest row pattern) inside
+    ``{% comment %}`` (a full row check for one node, q4). ``review``: the Django review's case, ``==`` chains on
+    10,000-character values and a third hidden row up to the walk's 150,000 characters, with the costliest
+    subject its pass admits (50 items of six dates; the 500 list items are shared). ``review-subject``: the same
+    with the review's subject over every item, which the subject's budget stops. ``refused``: a walk reaching
+    150,000 characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over.
     """
 
-    del plain
     star_lines = [("*_" * 499)[:999]] * 49
     commented = "{% comment %}\n\n" + "\n".join(star_lines) + "\n\n{% endcomment %}"
     for index in range(3):
         # Just under a third of the walk's 150,000 characters each, so all three are checked, then refused.
         _row("part", f"star{index}", source="\n".join([line[:996] for line in [*star_lines, star_lines[0]]]))
+    for index in range(2):
         _row("part", f"hidden{index}", source=commented)
+    hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
     loop = _loop(DATED + _deep_ifs(30))
-    admitted = _mail(
-        loop + '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}', TIMED_VARIABLES,
-        format="html", text_source=loop, key="tests.admitted",
-        # The two includes charge two of the pass's 500 iterations.
-        sample={**TIMED_VALUES, "items": [0] * 498},
-    )
-    refused = _mail("\n\n".join(f'{{% include "parts/star{index}" only %}}' for index in range(3)),
-                    key="tests.refused")
+    heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
+    used = len(heavy + hidden) + len(heavy) + 2 * len(commented)
+    _row("part", "hidden2", source="{% comment %}\n\n" + "\n".join(star_lines)[: 150_000 - used - 300]
+         + "\n\n{% endcomment %}")
+    review = {**TIMED_VALUES, "x": "a" * 9_999 + "b", "y": "a" * 9_999 + "c"}
+    return {
+        "admitted": _mail(
+            loop + hidden, TIMED_VARIABLES, format="html", text_source=loop, key="tests.admitted",
+            # The two includes charge two of the pass's 500 iterations.
+            sample={**TIMED_VALUES, "items": [0] * 498},
+        ),
+        "review": _mail(
+            heavy + hidden + '{% include "parts/hidden2" only %}',
+            {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"},
+            format="html", text_source=heavy, key="tests.review", subject=LINE,
+            sample={**review, "items": [0] * 450, "few": [0] * 50},
+        ),
+        "review-subject": _mail(
+            heavy + hidden + '{% include "parts/hidden2" only %}', {**TIMED_VARIABLES, "x": "x", "y": "x"},
+            format="html", text_source=heavy, key="tests.review_subject", subject=LINE.replace(" few ", " items "),
+            sample={**review, "items": [0] * 497},
+        ),
+        "refused": _mail("\n\n".join(f'{{% include "parts/star{index}" only %}}' for index in range(3)),
+                         key="tests.refused"),
+    }
+
+
+@pytest.fixture
+def work(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+    """Record what walks and renders do: each tree's nodes, outputs and text, and what each pass charged."""
+
+    seen: dict[str, list[Any]] = {"trees": [], "passes": []}
+    close, spend = _TreeWalker.close, RenderBudget.spend
+    monkeypatch.setattr(_TreeWalker, "close", lambda walker, tree: seen["trees"].append(
+        (str(tree.form), tree.nodes, tree.outputs, tree.text)) or close(walker, tree))
+    monkeypatch.setattr(RenderBudget, "spend", lambda budget: seen["passes"].append(budget) or spend(budget))
+    return seen
+
+
+def _charges(budgets: list[RenderBudget]) -> list[tuple[int, int, int]]:
+    """What each pass spent: iterations, loop output and filter input."""
+
+    return [
+        (budget.limits["iterations"] - budget.left["iterations"], budget.limits["output"] - budget.left["output"],
+         budget.limits["filter_input"] - budget.left["filter_input"])
+        for budget in budgets
+    ]
+
+
+LINES = [("subject", 1, 0, 9), ("preheader", 1, 0, 11)]
+PASS_WORK = {
+    # Each tree's (piece, nodes, outputs, text); each pass's (iterations, loop output, filter input) charged.
+    "q1-deep-operands": ([("html", 976, 4, 133), ("text", 4, 0, 1), *LINES], [(0, 0, 0), (500, 16_000, 0), (0, 0, 0)]),
+    "q11b-combined": (
+        [("html", 997, 4, 134), ("text", 4, 0, 1), *LINES], [(0, 0, 0), (500, 16_500, 500_000), (0, 0, 0)],
+    ),
+    "p11-outputs-outside-loops": (
+        [("html", 312, 294, 110), ("text", 4, 0, 1), *LINES], [(0, 0, 0), (0, 0, 0), (0, 0, 0)],
+    ),
+}
+"""The work of the costliest passes: at the node, output and budget caps, which bound their CPU."""
+
+
+@pytest.mark.parametrize("name", list(PASS_CASES))
+def test_the_costliest_pass_does_bounded_work(plain: Any, kit: Any, work: dict[str, list[Any]], name: str) -> None:
+    """D4: the work of the passes ``test_pass_time`` times, as the walk counts it and the budget charges it."""
+
+    del plain
+    walk, values = _pass_case(name)
+    with system_context(reason="tests.messaging_templates.render.work"):
+        walk.render(values, kit=kit)
+    trees, charges = PASS_WORK[name]
+    assert work["trees"] == trees and _charges(work["passes"]) == charges
+
+
+PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[int, int, int]]]] = {
+    # Source the walk checks; each tree's (piece, nodes, outputs, text); each pass's charges, as PASS_WORK.
+    "admitted": (
+        130_977, [("html", 971, 4, 134), ("text", 956, 0, 32), *LINES],
+        [(0, 0, 0), (500, 15_936, 498_000), (498, 15_936, 498_000)],
+    ),
+    "review": (
+        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]],
+        [(50, 0, 30_000), (453, 6_750, 450_000), (450, 6_750, 450_000)],
+    ),
+    "review-subject": (
+        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
+    ),
+    "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
+}
+"""The work of the costliest previews: the walk's 150,000 characters, its caps, and every pass's budget."""
+
+
+def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dict[str, list[Any]]) -> None:
+    """D4: the work of the previews ``test_preview_time`` times: source checked, trees walked, passes charged."""
+
+    del plain
+    for name, template in _preview_cases().items():
+        work["trees"].clear()
+        work["passes"].clear()
+        with system_context(reason="tests.messaging_templates.render.work"):
+            walk = TemplateWalker().judge(template, MessageTemplate.objects)
+            preview = template.preview(kit=kit)
+        source = sum(len(row.source) + len(row.text_source) for row in walk.rows.values())
+        assert (preview.rendered is not None) is (name in ("admitted", "review")), preview.warnings
+        assert (source, work["trees"][len(work["trees"]) // 2:], _charges(work["passes"])) == PREVIEW_WORK[name]
+
+
+@TIMED
+@pytest.mark.parametrize("name", list(PASS_CASES))
+def test_pass_time(plain: Any, kit: Any, name: str) -> None:
+    """One pass of the costliest rows the caps admit takes under a second of CPU (passes 2 to 4, one heavy)."""
+
+    del plain
+    walk, values = _pass_case(name)
+    started = time.process_time()
+    with system_context(reason="tests.messaging_templates.render.timed"):
+        walk.render(values, kit=kit)
+    spent = time.process_time() - started
+    print(f"pass CPU {name} {spent:.3f}s load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
+    assert spent < 1.0
+
+
+@TIMED
+def test_preview_time(plain: Any, kit: Any) -> None:
+    """The costliest previews the caps admit take under two seconds of CPU: walk, prepare() and passes 2 to 4."""
+
+    del plain
     spent = {}
-    for name, template in (("admitted", admitted), ("refused", refused)):
+    for name, template in _preview_cases().items():
         started = time.process_time()
         with system_context(reason="tests.messaging_templates.render.timed"):
             preview = template.preview(kit=kit)
-        spent[name] = time.process_time() - started
-        assert (preview.rendered is not None) is (name == "admitted"), preview.warnings
-        if name == "refused":
-            assert "over 200000 characters of text" in preview.warnings[0].detail, preview.warnings
-    print(f"preview CPU {spent}")  # noqa: T201 -- the report quotes it
+        spent[name] = round(time.process_time() - started, 3)
+        assert (preview.rendered is not None) is (name in ("admitted", "review")), preview.warnings
+    print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < 2.0
 
 
