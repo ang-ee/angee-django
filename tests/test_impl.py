@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import pickle
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Literal
@@ -280,6 +281,16 @@ def test_registry_enum_identity_tracks_keys_and_preserves_names() -> None:
         assert expanded is not enum
         assert expanded.choices == [("base", "base"), ("refined", "refined")]
     assert impl_choices_enum(_EnumImpl) is enum
+
+
+@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
+def test_an_implementation_key_pickles_as_its_own_member() -> None:
+    """A runtime-built enum has no module name to pickle by, yet a key and a query filtering on it pickle."""
+
+    member = ImplClassField(_EnumImpl).to_python("base")
+    assert pickle.loads(pickle.dumps(member)) is member
+    query = VcsBridge.objects.filter(backend_class="stub").query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
 
 
 @override_settings(ANGEE_STORAGE_BACKEND_CLASSES={"local": "angee.storage.backends.LocalBackend"})
