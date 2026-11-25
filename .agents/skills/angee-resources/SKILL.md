@@ -41,6 +41,9 @@ description: "Declares and loads an addon's master, install and demo data: pypro
   `FormResource` (`src/angee/webforms/resources.py`: a form, published or `publish: false`, its xref-named config records resolved
   through `Resource.objects.resolve_config_references`); non-row declarations use `ResourceEntryKind`
   (`src/angee/resources/kinds.py`).
+- Shipped baselines beside deployment-authored rows: `BaselineResource` (`loader.py`) sets the
+  flag on every loaded row and refuses a row that states it or a derived column (`Dashboard` in
+  `src/angee/dashboards/models.py`, `MessageTemplateResource` in `src/angee/messaging_templates/resources.py`).
 
 ## Steps
 

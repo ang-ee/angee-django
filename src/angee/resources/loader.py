@@ -8,13 +8,14 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import tablib
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
+from django.utils.text import capfirst
 from import_export import fields, resources
 from import_export.instance_loaders import BaseInstanceLoader
 from import_export.utils import get_related_model
@@ -816,6 +817,39 @@ class AngeeResource(resources.ModelResource):
             return
         type(instance)._default_manager.filter(pk=instance.pk).update(**updates)
         instance.refresh_from_db(fields=list(updates))
+
+
+class BaselineResource(AngeeResource):
+    """Install every row as a baseline: an addon's shipped row, beside the rows a deployment authors.
+
+    A new row has :attr:`baseline_field` set, and no row states that flag or a
+    column of :attr:`unstated_columns`, which the model derives itself. The
+    entry declares no ``adopt`` key: the flag scopes the baseline's identity
+    constraint, so a natural key could adopt a deployment's row instead.
+    """
+
+    baseline_field: ClassVar[str] = "is_baseline"
+    """The boolean column that marks a shipped row."""
+
+    unstated_columns: ClassVar[tuple[str, ...]] = ()
+    """Further columns the model derives, which a row never states."""
+
+    def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
+        """Refuse a row that states the baseline flag or a derived column."""
+
+        name = capfirst(self._meta.model._meta.verbose_name)
+        if self.baseline_field in row:
+            raise ValidationError({self.baseline_field: f"{name} resources always install baselines."})
+        if stated := [column for column in self.unstated_columns if column in row]:
+            raise ValidationError(dict.fromkeys(stated, f"{name} resources never state this column."))
+        super().before_import_row(row, **kwargs)
+
+    def init_instance(self, row: Mapping[str, Any] | None = None) -> models.Model:
+        """Construct a new row as a baseline."""
+
+        instance = super().init_instance(row)
+        setattr(instance, self.baseline_field, True)
+        return instance
 
 
 class XrefInstanceLoader(BaseInstanceLoader):

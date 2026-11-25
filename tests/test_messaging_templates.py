@@ -378,11 +378,18 @@ def _load(*rows: tuple[Any, ...], headers: list[str]) -> Any:
 _LAYOUT_HEADERS = ["_xref", "kind", "key", "language", "name", "format", "source", "text_source"]
 
 
-@pytest.mark.parametrize("column", ["is_baseline", "content_hash", "baseline_hash"])
-def test_a_resource_row_never_states_the_flag_or_a_hash(db: None, column: str) -> None:
+@pytest.mark.parametrize(
+    ("column", "refusal"),
+    [
+        ("is_baseline", "always install baselines"),
+        ("content_hash", "never state this column"),
+        ("baseline_hash", "never state this column"),
+    ],
+)
+def test_a_resource_row_never_states_the_flag_or_a_hash(db: None, column: str, refusal: str) -> None:
     del db
     row = ("base", "layout", "base", "en", "Base", "html", "<main/>", "Body", "")
-    with pytest.raises(ResourceLoadError, match="never state this column"):
+    with pytest.raises(ResourceLoadError, match=refusal):
         _load(row, headers=[*_LAYOUT_HEADERS, column])
     with system_context(reason="tests.messaging_templates.read"):
         assert not MessageTemplate.objects.exists()
