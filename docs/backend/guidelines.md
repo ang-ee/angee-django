@@ -401,6 +401,11 @@ Use these owners instead of maintaining another contract in an addon:
   `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
   their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
   never has).
+  Kinds that share identity, override, language resolution and permissions, and
+  differ only in scalar columns that a single kind fills and the others leave
+  empty, stay one model with a write-once `StateField` kind: a check constraint
+  holds each kind-only column, and the kind's behaviour is an enum-owned handler
+  ([`MessageTemplate`](../../src/angee/messaging_templates/models.py)).
   Optional states declare `null=True, blank=True`; absence is `None` in Python
   and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
   Do not add blank-string sentinels or per-field GraphQL coercion;
