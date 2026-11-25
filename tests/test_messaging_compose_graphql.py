@@ -241,22 +241,34 @@ def test_whether_one_may_send_on_a_channel_is_answered_to_each_viewer(console: A
     assert answers == {"replier": ["reply"], "reader": []}
 
 
-def test_a_stored_fact_that_reads_as_json_comes_back_as_written(console: Any, desk: Any) -> None:
-    """A delivery error ``"null"`` reads as that text, and a conflict ``"0"`` still blocks a retry.
+@pytest.mark.parametrize(
+    ("local", "read"),
+    [
+        pytest.param({"delivery_error": "null", "delivery_conflict": "0"}, ("null", []), id="json-looking-texts"),
+        pytest.param({"delivery_error": "Refused.", "delivery_conflict": False}, ("Refused.", ["retry"]),
+                     id="a-false-conflict"),
+    ],
+)
+def test_a_stored_fact_reads_back_with_its_stored_type(
+    console: Any, desk: Any, local: dict[str, Any], read: tuple[str, list[str]],
+) -> None:
+    """An error ``"null"`` reads as that text; a conflict ``"0"`` blocks a retry, and a ``false`` one does not.
 
-    Both are read from the row's annotation on a list and by primary key.
+    The row's annotation is read on a list and by primary key, and agrees with
+    the stored facts as the delivery verbs read them.
     """
 
     message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
-    _settle(message, delivery_error="null", delivery_conflict="0", delivery_attempts=1)
+    _settle(message, delivery_attempts=1, **local)
     by_pk, _channel = _delivery(console, desk.owner, message.public_id, desk)
     thread = Thread._base_manager.get(pk=message.thread_id).public_id
     (listed,) = result_data(execute_schema(
         console, "query List($thread: String!) { messages(where: {thread: {_eq: $thread}}) {"
         " delivery_error delivery_actions } }", {"thread": thread}, user=desk.owner,
     ))["messages"]
-    assert (by_pk["delivery_error"], by_pk["delivery_actions"]) == ("null", [])
-    assert listed == {"delivery_error": "null", "delivery_actions": []}
+    assert (by_pk["delivery_error"], by_pk["delivery_actions"]) == read
+    assert (listed["delivery_error"], listed["delivery_actions"]) == read
+    assert Message._base_manager.get(pk=message.pk).delivery_blocked is (not read[1])
 
 
 def test_one_key_composes_one_message_and_other_content_under_it_conflicts(

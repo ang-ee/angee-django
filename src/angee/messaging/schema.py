@@ -337,7 +337,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
             "status", "scheduled_at", "delivery_lease_until", "is_trashed", "delivery_possibly_accepted",
             "direction", "channel", "external_id",
         ],
-        annotate=Message.local_fact_annotation("delivery_conflict"),
+        annotate=Message.local_metadata_annotation(),
         extensions=[PermissionsExtension((Message.delivery_action_permission,))],
     )
     def delivery_actions(self) -> list[str]:
@@ -347,7 +347,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         return row.delivery_actions(held_permissions(row, (Message.delivery_action_permission,)))
 
     @strawberry_django.field(
-        annotate=Message.local_fact_annotation("delivery_error"),
+        annotate=Message.local_metadata_annotation(),
         extensions=[PermissionsExtension((Message.delivery_action_permission,))],
     )
     def delivery_error(self) -> str | None:
@@ -356,7 +356,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         row = cast(Any, self)
         return row.delivery_error(held_permissions(row, (Message.delivery_action_permission,)))
 
-    @strawberry_django.field(annotate=Message.local_fact_annotation("delivery_attempts", number=True))
+    @strawberry_django.field(annotate=Message.local_metadata_annotation())
     def delivery_attempts(self) -> int:
         """The provider attempts delivery has made, for every reader of the message."""
 

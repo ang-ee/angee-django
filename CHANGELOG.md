@@ -17,7 +17,7 @@ live in code docstrings.
   - **New.** `MessageType.delivery_attempts` (`Message.delivery_attempts`) and
     `MessageType.delivery_error` (`Message.delivery_error(permissions)`, read
     only with `send_held`): what delivery made of a message. `Message.local_fact`
-    and `Message.local_fact_annotation` read a local fact on a row and in SQL.
+    and `Message.local_metadata_annotation` read a local fact on a row and in SQL.
   - **New.** `ChannelType.permissions`, answering `reply`.
   - **Changed.** On SQLite, `delivery_actions` no longer reads a delivery conflict
     whose stored provider id looks like JSON (`"0"`, `"null"`) as no conflict.

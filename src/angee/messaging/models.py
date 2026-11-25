@@ -37,7 +37,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
-from django.db.models.fields.json import KT, KeyTextTransform
+from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
@@ -1165,22 +1165,24 @@ class Message(
         return dict(local) if isinstance(local, dict) else {}
 
     @staticmethod
-    def local_fact_annotation(key: str, *, number: bool = False) -> dict[str, Any]:
-        """Annotate a list's rows with the local fact ``key`` as ``_<key>``, which :meth:`local_fact` reads.
+    def local_metadata_annotation() -> dict[str, Any]:
+        """Annotate a list's rows with their local facts, which :meth:`local_fact` then reads.
 
-        Text is read as text (``KT``): ``F()`` would let SQLite decode text that
-        looks like JSON, so ``"null"`` would read as null and ``"0"`` as zero. A
-        ``number`` is read through ``F()``, which decodes it on both databases.
+        The ``local`` object is read whole, as JSON, so every fact keeps its
+        stored type on SQLite as on PostgreSQL. Reading one key would not:
+        SQLite decodes a text that looks like JSON (``"0"``) as another value,
+        and renders ``false`` or ``null`` as text.
         """
 
-        path = f"metadata__local__{key}"
-        return {f"_{key}": models.F(path) if number else KT(path)}
+        return {"_local_metadata": models.F("metadata__local")}
 
     def local_fact(self, key: str) -> Any:
-        """The local fact ``key``, from the row's :meth:`local_fact_annotation` when a list loaded one."""
+        """The local fact ``key``, from the row's :meth:`local_metadata_annotation` when a list loaded it."""
 
-        value = self.__dict__.get(f"_{key}", models.DEFERRED)
-        return self.local_metadata.get(key) if value is models.DEFERRED else value
+        local = self.__dict__.get("_local_metadata", models.DEFERRED)
+        if local is models.DEFERRED:
+            return self.local_metadata.get(key)
+        return local.get(key) if isinstance(local, dict) else None
 
     @property
     def is_locally_written(self) -> bool:
