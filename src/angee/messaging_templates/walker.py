@@ -53,6 +53,7 @@ from django.template.base import (
     TextNode,
     TokenType,
     VariableNode,
+    tag_re,
 )
 from django.template.defaultfilters import date as date_filter
 from django.template.defaulttags import CommentNode, ForNode, IfNode, TemplateLiteral, TemplateTagNode, WithNode
@@ -66,6 +67,7 @@ from django.utils.timezone import get_current_timezone, template_localtime  # ty
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
     BRAND_PATHS,
+    MARKUP_FILTERS,
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
@@ -74,7 +76,13 @@ from angee.messaging_templates.engine import (
     filter_names,
     url,
 )
-from angee.messaging_templates.html_checks import SpellingRule, check_html, compiled_expression
+from angee.messaging_templates.html_checks import (
+    CONTROL_CHARACTERS,
+    SOURCE_CONTROLS,
+    SpellingRule,
+    check_html,
+    compiled_expression,
+)
 from angee.messaging_templates.rendering import (
     RESERVED_VARIABLE_ROOTS,
     MessageTemplateFormat,
@@ -89,6 +97,9 @@ OPENERS_PER_LINE = 30
 FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
 NESTING_LIMIT = 16
+CONDITION_OPERATOR_LIMIT = 10
+"""The most operators (``and``, ``or``, ``not``, ``in``, comparisons) one ``if`` or ``elif`` condition holds. Django
+parses and evaluates a condition recursively, an operator a level, and the walk counts each operator as a node."""
 LITERAL_LIMIT = 200
 FILTERS_PER_EXPRESSION = 4
 FLOATFORMAT_PRECISION = 6
@@ -102,6 +113,10 @@ OUTPUT_LIMIT = 300
 LOOP_DEPTH_LIMIT = 2
 INCLUDE_DEPTH_LIMIT = 3
 TEXT_LIMIT = 200_000
+FORM_SPAN_LIMIT = 2 * 1_000
+"""The most template spans one form of a row holds, checked straight after the Markdown pass and before the HTML
+checks read it: a walk admits at most :data:`NODE_LIMIT` nodes, and an opening tag is a node whose end tag is a
+second span."""
 DECLARED_LIMIT = 100
 VALUES_JSON_LIMIT = 50_000
 VALUE_STRING_LIMIT = 10_000
@@ -109,9 +124,13 @@ VALUE_ITEMS_LIMIT = 500
 SUBJECT_LIMIT = 1_000
 """The longest rendered subject or preheader, after it is made one line."""
 
-_UNPRINTED = re.compile("[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
-"""NUL, the C0 and C1 control characters and the bidirectional embeddings, overrides and isolates, which a
-subject or preheader drops."""
+_CONTROLS = re.compile(f"[{CONTROL_CHARACTERS}]")
+"""What :meth:`TemplateWalk.prepare` drops from every string value: the C0 and C1 control characters but tab, line
+feed and carriage return, so none reaches a body, a subject or a preheader."""
+
+_UNPRINTED = re.compile(f"[{CONTROL_CHARACTERS}\u202a-\u202e\u2066-\u2069]")
+"""What a subject or preheader drops from each of its words: the same control characters, and the bidirectional
+embeddings, overrides and isolates; splitting the line on white space has dropped tab, line feed and return."""
 
 SUBJECT_WARNING_LENGTH = 60
 PREHEADER_WARNING_LENGTH = 100
@@ -400,8 +419,9 @@ class TemplateWalk:
            surrogate).
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
-           string, number, boolean or null; at a :attr:`float_paths` path, a
-           number one a float holds.
+           string, number, boolean or null, a string without its control
+           characters (:data:`_CONTROLS`), so one holding nothing else is empty;
+           at a :attr:`float_paths` path, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
         4. Every absent or null declared segment filled: an object with ``{}``, a
            list with ``[]``, a leaf with ``""``; so every lookup lands on a key.
@@ -612,7 +632,9 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
     if value is None:
         return None
     if not tree:
-        if isinstance(value, (str, int, float, bool)):
+        if isinstance(value, str):
+            return _CONTROLS.sub("", value)
+        if isinstance(value, (int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
         return None
@@ -806,6 +828,18 @@ def _whole_number(name: str, argument: Any) -> int | None:
         return None
 
 
+def _operators(condition: Any) -> int:
+    """How many operators a compiled ``if`` condition holds, counted without recursion."""
+
+    count, pending = 0, [condition]
+    while pending:
+        operator = pending.pop()
+        if type(operator) is not TemplateLiteral:
+            count += 1
+            pending.extend(operand for operand in (operator.first, operator.second) if operand is not None)
+    return count
+
+
 def _nesting(text: str) -> int:
     """The deepest tag nesting in ``text``, counted on Django's tokens before anything compiles."""
 
@@ -850,7 +884,11 @@ class _RowRules:
                 self.refuse("text holds {{, {% or {# that is not template code")
         elif type(node) is IfNode:
             for condition, _ in node.conditions_nodelists:
-                if condition is not None:
+                if condition is None:
+                    continue
+                if _operators(condition) > CONDITION_OPERATOR_LIMIT:
+                    self.refuse(f"an if condition holds over {CONDITION_OPERATOR_LIMIT} operators")
+                else:
                     self.condition(condition)
         elif type(node) is ForNode:
             if len(node.loopvars) != 1:
@@ -860,7 +898,7 @@ class _RowRules:
         elif type(node) is BudgetedIncludeNode:
             self.includes.add(str(node.template.var))
         for expression in reads.expressions(node):
-            self.expression(expression)
+            self.expression(expression, printed=type(node) is VariableNode)
         for nodelist in reads.nodelists(node):
             self.nodes(nodelist)
 
@@ -868,7 +906,9 @@ class _RowRules:
         if (reason := _literal_refusal(value)) is not None:
             self.refuse(reason)
 
-    def expression(self, expression: FilterExpression) -> None:
+    def expression(self, expression: FilterExpression, *, printed: bool) -> None:
+        """Judge one expression's literals and filters; ``printed``: an output's, not a test's or an argument's."""
+
         variable = expression.var
         if expression.is_var:
             if variable.translate:
@@ -903,12 +943,14 @@ class _RowRules:
                 self.refuse(f"date is the first filter in {expression.token}")
             if name == "url" and (position != len(names) - 1 or set(names[:position]) - {"default"}):
                 self.refuse(f"url is the last filter, after default alone, in {expression.token}")
-            if name == "linebreaksbr" and self.text_form:
-                self.refuse("linebreaksbr writes <br> into plain text")
+            if name in MARKUP_FILTERS and self.text_form:
+                self.refuse(f"{name} writes <br> into plain text")
+            elif name in MARKUP_FILTERS and (not printed or position != len(names) - 1):
+                self.refuse(f"{name} writes markup, so it is the last filter of a printed value, in {expression.token}")
 
     def condition(self, condition: Any) -> None:
         if type(condition) is TemplateLiteral:
-            self.expression(cast(FilterExpression, condition.value))
+            self.expression(cast(FilterExpression, condition.value), printed=False)
             return
         if condition.id in ("in", "not in"):
             right = condition.second
@@ -1036,9 +1078,10 @@ class TemplateWalker:
 
         texts = {"source": row.source, "text_source": row.text_source, "subject": row.subject,
                  "preheader": row.preheader}
-        if holding := [column for column, text in texts.items() if "\x00" in text]:
+        if holding := [column for column, text in texts.items() if SOURCE_CONTROLS.search(text)]:
             # Before anything reads the text: a NUL would forge the HTML checks' placeholders.
-            refuse(f"{', '.join(holding)}: {SpellingRule.NO_NUL.message} (rule {SpellingRule.NO_NUL.value})")
+            rule = SpellingRule.NO_CONTROL
+            refuse(f"{', '.join(holding)}: {rule.message} (rule {rule.value})")
             return _RowCheck(name, refusals=tuple(refusals))
         try:
             validate_variables(row.variables)
@@ -1065,7 +1108,14 @@ class TemplateWalker:
             refuse(str(refusal))
             return _RowCheck(name, refusals=tuple(refusals))
         for form_name, form in forms._asdict().items():
-            if any(sum(line.count(opener) for opener in OPENERS) > FORM_OPENERS_PER_LINE for line in form.split("\n")):
+            # Before anything else reads the form: a Markdown pass multiplies its source many times over.
+            spans = tag_re.findall(form)
+            if len(spans) > FORM_SPAN_LIMIT:
+                refuse(f"its {form_name} form holds over {FORM_SPAN_LIMIT} template spans")
+            elif len(form) - sum(map(len, spans)) > TEXT_LIMIT:
+                refuse(f"its {form_name} form writes over {TEXT_LIMIT} characters of text")
+            elif any(sum(line.count(opener) for opener in OPENERS) > FORM_OPENERS_PER_LINE
+                     for line in form.split("\n")):
                 refuse(f"a line of its {form_name} form holds over {FORM_OPENERS_PER_LINE} {{{{, {{% or {{#")
         if refusals:
             return _RowCheck(name, refusals=tuple(refusals))
@@ -1460,13 +1510,14 @@ class _TreeWalker:
         return binding if binding is not None else _Binding(BindingKind.COMPUTED)
 
     def condition(self, frame: _Frame, condition: Any) -> int:
-        """Judge each operand of an ``if``/``elif`` condition; return how many there are."""
+        """Judge each operand of an ``if``/``elif`` condition; return how many operands and operators it holds, each a
+        node."""
 
         if type(condition) is TemplateLiteral:
             self.expression(frame, cast(FilterExpression, condition.value), ReadUse.TEST)
             return 1
-        return sum(self.condition(frame, operand) for operand in (condition.first, condition.second)
-                   if operand is not None)
+        return 1 + sum(self.condition(frame, operand) for operand in (condition.first, condition.second)
+                       if operand is not None)
 
     def guards(self, frame: _Frame, condition: Any) -> frozenset[tuple[str, Path]]:
         """The paths an ``if`` branch guards: its condition, or each operand of an ``and`` of them."""

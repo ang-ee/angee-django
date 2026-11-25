@@ -52,7 +52,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
-from rebac import actor_context, current_actor, system_context
+from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
 
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
@@ -98,6 +98,9 @@ def _fallback_order(language: str) -> tuple[bool, str]:
 
 CONTENT_HASH_FIELDS = ("kind", "format", "subject", "preheader", "source", "text_source", "layout", "variables")
 """The columns ``content_hash`` fingerprints: what a row is and renders, not what it is called."""
+
+TEXT_COLUMNS = ("subject", "preheader", "source", "text_source")
+"""The columns a row's text is written in, whose line endings :meth:`MessageTemplate.clean` makes newlines."""
 
 _KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\Z")
 """Anchored, since ``RegexValidator`` searches; ``\\Z`` refuses the trailing newline ``$`` admits."""
@@ -386,6 +389,15 @@ def _has_updated_default(rows: models.QuerySet[Any]) -> BaseExpression:
     )
 
 
+def _overrides_default(rows: models.QuerySet[Any]) -> BaseExpression:
+    """A non-baseline row with a baseline of its kind, key and language: the deployment's override of it."""
+
+    return models.ExpressionWrapper(
+        models.Q(is_baseline=False) & models.Exists(_siblings(rows).filter(is_baseline=True)),
+        output_field=models.BooleanField(),
+    )
+
+
 class _OneAtATimeQuerySet[TemplateT: MessageTemplate](ClosedUpdateQuerySet[TemplateT]):
     """Refuse every collection write: ``save()`` derives the content hash and guards the write-once columns."""
 
@@ -410,6 +422,7 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         "is_effective": _is_effective,
         "is_overridden": _is_overridden,
         "has_updated_default": _has_updated_default,
+        "overrides_default": _overrides_default,
     }
     """Each row fact's builder, taking a queryset of the model; the model's filter expressions are this mapping."""
 
@@ -544,9 +557,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     def override(self, baseline: TemplateT) -> TemplateT:
         """Return the deployment's override of ``baseline``, created from it when there is none.
 
-        Requires ``create`` on the override before anything is locked (named
-        system work always may). Then, in one transaction under ``baseline``'s row
-        lock, refuses a row that is not a baseline and returns the existing
+        Asks :meth:`MessageTemplate.override_refusal` first, before anything is
+        locked, and raises what it answers: the acting reader may not create the
+        override, or ``baseline`` is not a shipped default (named system work
+        skips the permission). Then, in one transaction under ``baseline``'s row
+        lock, refuses a row that is gone or not a baseline and returns the existing
         override, or saves a new one holding :meth:`MessageTemplate.override_values`,
         whose ``baseline_hash`` its save stamps. A writer that inserts the same
         row meanwhile, past the lock, is answered with that row. Calling it again
@@ -559,7 +574,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         if unscoped:
             override.sudo(reason="messaging_templates.message_template.override")
         else:
-            override.require_access("create", actor)
+            with actor_context(actor):
+                refusal = baseline.override_refusal()
+            if refusal is not None:
+                raise refusal
+            override.with_actor(actor)
         rows = self.model.system_queryset()
         with transaction.atomic():
             locked = self.model.system_queryset(lock=("self",)).filter(pk=baseline.pk).first()
@@ -590,14 +609,19 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     def keep_override(self, override: TemplateT) -> TemplateT:
         """Keep ``override``'s text over its baseline as it is now, which clears "has an updated default".
 
-        Requires ``write`` on ``override`` before anything is locked (named system
-        work always may). Then, under its row lock, refuses a row that overrides no
+        Asks :meth:`MessageTemplate.keep_override_refusal` first, before anything
+        is locked, and raises what it answers: the acting reader may not write
+        ``override``, or it overrides no shipped default (named system work skips
+        the permission). Then, under its row lock, refuses a row that overrides no
         baseline and stamps its ``baseline_hash`` with the baseline's ``content_hash``.
         """
 
         actor, unscoped = override.effective_actor(strict=True)
         if not unscoped:
-            override.require_access("write", actor)
+            with actor_context(actor):
+                refusal = override.keep_override_refusal()
+            if refusal is not None:
+                raise refusal
         with transaction.atomic():
             locked = self.model.system_queryset(lock=("self",)).filter(pk=override.pk).first()
             shipped = None if locked is None or locked.is_baseline else (
@@ -856,6 +880,49 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         return self._row_fact("has_updated_default")
 
+    @property
+    def overrides_default(self) -> bool:
+        """Whether this row is the deployment's override of a shipped default; a deployment's own row is not."""
+
+        return self._row_fact("overrides_default")
+
+    def override_refusal(self) -> Exception | None:
+        """What refuses the acting reader starting this row's override (:meth:`MessageTemplateManager.override`).
+
+        ``PermissionDenied`` when the reader may not create the override, the
+        row of this kind, key and language that is not a baseline; else
+        ``not_a_baseline`` when this row is not a shipped default; ``None`` when
+        nothing does. The verb asks it first, and the console projects
+        ``can_override`` from it. The create decision is the candidate
+        override's own, so it costs one permission decision per row asked.
+        """
+
+        candidate = type(self)(kind=self.kind, key=self.key, language=self.language)
+        try:
+            candidate.require_access("create", current_actor())
+        except PermissionDenied as refused:
+            return refused
+        if not self.is_baseline:
+            return ValidationError(NOT_A_BASELINE_MESSAGE, code="not_a_baseline")
+        return None
+
+    def keep_override_refusal(self) -> Exception | None:
+        """What refuses the acting reader keeping this override (:meth:`MessageTemplateManager.keep_override`).
+
+        ``PermissionDenied`` when the reader may not write this row
+        (:func:`~angee.graphql.capabilities.held_permissions`, the list's own
+        projection when it carries one); else ``no_baseline`` when the row
+        overrides no shipped default (:attr:`overrides_default`); ``None`` when
+        nothing does. The verb asks it first, and the console projects
+        ``can_keep_override`` from it.
+        """
+
+        if "write" not in held_permissions(self, ("write",)):
+            return PermissionDenied(f"Denied: the current actor lacks 'write' on {to_object_ref(self)}.")
+        if not self.overrides_default:
+            return ValidationError(NO_BASELINE_MESSAGE, code="no_baseline")
+        return None
+
     def _row_fact(self, name: str) -> bool:
         """Read one row fact: the annotation ``with_row_facts`` set, else one query for this fact alone."""
 
@@ -881,17 +948,25 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def clean(self) -> None:
         """Refuse what the columns' own validators and the constraints cannot see.
 
+        First the text columns' line endings become newlines, so text pasted with
+        carriage returns has the content hash of the same text written with newlines.
         A template's layout that does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
         judged through the acting reader's scope and only when the layout is new
         or changed, so a later change of the default language never refuses an
         edit of the rest of the row; ``variables`` or ``sample`` that is not an
-        object. Then, when what the row renders is new or changed (its content
-        hash differs from the stored row's), :meth:`validate_source`, through the
+        object. Then, when the columns a walk reads hold what their own validators
+        admit (:meth:`_walkable`, judged before the row is hashed) and what the row
+        renders is new or changed (its content hash differs from the stored
+        row's), :meth:`validate_source`, through the
         same scope: an edit of only the name, the description or the sample walks
         nothing.
         """
 
         super().clean()
+        for column in TEXT_COLUMNS:
+            text = getattr(self, column)
+            if isinstance(text, str) and "\r" in text:
+                setattr(self, column, text.replace("\r\n", "\n").replace("\r", "\n"))
         errors: dict[str, str] = {}
         stored_layout, stored_hash = (None, None) if self._state.adding else (
             type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
@@ -907,7 +982,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
                 errors[field] = "Give an object."
         if errors:
             raise ValidationError(errors)
-        if stored_hash != self.compute_content_hash() and self._walkable():
+        if self._walkable() and stored_hash != self.compute_content_hash():
             self.validate_source()
 
     def _walkable(self) -> bool:

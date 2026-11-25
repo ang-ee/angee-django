@@ -5,15 +5,20 @@ from __future__ import annotations
 
 import os
 import time
+from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, connection, transaction
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
+from rebac.backends import backend
+from rebac.schema.ast import PermNil
+from rebac.testing import install_schema
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
@@ -115,6 +120,123 @@ def test_presence_asks_preview_because_create_is_not_decidable_for_the_type(db: 
     member = create_user("messaging-templates-console-absent")
     assert subject_permitted(to_subject_ref(admin), [preview, create]) == [preview]
     assert subject_permitted(to_subject_ref(member), [preview, create]) == []
+
+
+# ---------- what the verbs admit ----------
+
+
+_ADMISSIONS = "{ message_templates { id overrides_default can_override can_keep_override } }"
+_OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok } }"
+_KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok } }"
+
+
+def _states() -> dict[str, Any]:
+    """A row in each state the two verbs tell apart."""
+
+    rows = {
+        "shipped default": _row("layout", "plain", baseline=True, **_LAYOUT),
+        "overridden default": _row("layout", "base", baseline=True, **_LAYOUT),
+        "override": _row("layout", "base", **_LAYOUT),
+        "override, default updated": _row("layout", "letter", **_LAYOUT),
+        "own row": _row("layout", "own", **_LAYOUT),
+    }
+    released = _row("layout", "letter", baseline=True, **_LAYOUT)
+    with system_context(reason="tests.messaging_templates.console.release"):
+        released.source = "<div>Released.{% block content %}{% endblock %}</div>"
+        released.save()
+    return rows
+
+
+def _admitted(user: Any, document: str, row: Any) -> bool:
+    """Whether the verb admits ``user`` on ``row``: it runs, and what it wrote is rolled back."""
+
+    with transaction.atomic():
+        result = execute_schema(_schema(), document, {"id": public_id_of(row)}, user=user)
+        transaction.set_rollback(True)
+    if result.errors:
+        assert [error.extensions["code"] for error in result.errors] == ["PERMISSION_DENIED"], result.errors
+        return False
+    (answer,) = result.data.values()
+    return bool(answer["ok"])
+
+
+def test_each_verb_is_projected_as_what_it_then_admits(db: None) -> None:
+    """For an administrator and a member, on every row state, each projected admission is what its verb does."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-verbs")
+    member = create_user("messaging-templates-console-onlooker")
+    rows = _states()
+    expected = {  # overrides_default, Override, Keep override, for an administrator
+        "shipped default": (False, True, False),
+        "overridden default": (False, True, False),
+        "override": (True, False, True),
+        "override, default updated": (True, False, True),
+        "own row": (False, False, False),
+    }
+    for user, administrator in ((admin, True), (member, False)):
+        listed = {row["id"]: row for row in result_data(execute_schema(_schema(), _ADMISSIONS, user=user))[
+            "message_templates"]}
+        for state, row in rows.items():
+            projected = listed[public_id_of(row)]
+            fact, override, keep = expected[state]
+            assert (projected["overrides_default"], projected["can_override"], projected["can_keep_override"]) == (
+                fact, override and administrator, keep and administrator), (state, user)
+            assert projected["can_override"] is _admitted(user, _OVERRIDE, row), (state, user)
+            assert projected["can_keep_override"] is _admitted(user, _KEEP, row), (state, user)
+    overrides = "{ message_templates(where: {overrides_default: {_eq: true}}) { key } }"
+    assert sorted(row["key"] for row in result_data(execute_schema(_schema(), overrides, user=member))[
+        "message_templates"]) == ["base", "letter"]
+
+
+def test_a_deployment_that_narrows_create_but_keeps_preview_is_not_offered_override(db: None) -> None:
+    """A deployment whose ``create`` admits nobody: the reader still previews, and Override is projected and refused."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-narrowed")
+    shipped = _row("layout", "plain", baseline=True, **_LAYOUT)
+    active = backend()
+    original = active.schema()
+    narrowed = deepcopy(original)
+    narrowed.definitions = [
+        replace(definition, permissions=tuple(
+            replace(permission, expression=PermNil(), raw_text="nil") if permission.name == "create" else permission
+            for permission in definition.permissions
+        )) if definition.resource_type == "messaging_templates/message_template" else definition
+        for definition in narrowed.definitions
+    ]
+    document = "{ message_templates { permissions can_override } }"
+    install_schema(narrowed, backend=active)
+    try:
+        listed = result_data(execute_schema(_schema(), document, user=admin))
+        assert listed["message_templates"] == [{"permissions": ["preview"], "can_override": False}]
+        assert _admitted(admin, _OVERRIDE, shipped) is False
+    finally:
+        install_schema(original, backend=active)
+
+
+_KEEPABLE = "{ message_templates { id overrides_default can_keep_override } }"
+_OVERRIDABLE = "{ message_templates { id can_override } }"
+
+
+def test_the_projected_admissions_cost_what_their_docstrings_say(db: None) -> None:
+    """``overrides_default`` and ``can_keep_override`` ride the list's statement; ``can_override`` decides ``create``
+    for each row, a read for one record's page."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-costed")
+    schema = _schema()
+    _row("layout", "layout_0", baseline=True, **_LAYOUT)
+    keep_one, override_one = (_measured(schema, document, {}, admin) for document in (_KEEPABLE, _OVERRIDABLE))
+    for index in range(1, 25):
+        _row("layout", f"layout_{index}", baseline=index % 2 == 0, **_LAYOUT)
+    keep_many, override_many = (_measured(schema, document, {}, admin) for document in (_KEEPABLE, _OVERRIDABLE))
+    assert [len(read.data["message_templates"]) for read in (keep_one, override_one, keep_many, override_many)] == [
+        1, 1, 25, 25]
+    keep_one.assert_ceiling(statements=9, repeated=5)
+    keep_many.assert_ceiling(statements=keep_one.statements, repeated=keep_one.repeated)
+    override_one.assert_ceiling(statements=11, repeated=5)
+    override_many.assert_ceiling(statements=107, repeated=101)  # four statements for each further row
 
 
 # ---------- backlinks: the rows naming a row ----------

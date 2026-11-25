@@ -67,40 +67,65 @@ Anything else fails to compile.
   (`brand.light.primary`), `lang` and `dir` the row's language and its writing
   direction, and a template or layout reads `subject` and `preheader`.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
-  gives an empty link for anything but a safe URL; dates go through `date`
-  (`date:"DATE_FORMAT"`), money through `floatformat`. A path printed with a
-  time (`DATETIME_FORMAT`, `H:i`) takes an aware `datetime`, never a bare date.
+  gives an absolute `https`, `http`, `mailto` or `tel` link, percent-encoded,
+  or none; dates go through `date` (`date:"DATE_FORMAT"`), money through
+  `floatformat`. A path printed with a time (`DATETIME_FORMAT`, `H:i`) takes an
+  aware `datetime`, never a bare date. `linebreaksbr` writes markup, so it is
+  the last filter of a printed value.
 - HTML is written in one strict spelling that every reader tokenises alike
   (`SpellingRule` in the [HTML checks](html_checks.py) states each rule with
-  its refusal): no NUL; a `<` only to open a tag, an end tag, or in a layout
-  its opening `<!doctype html>` and Outlook's comments, `&lt;` anywhere else;
-  each attribute once, every value double-quoted with `&amp;`, `&lt;`, `&gt;`
-  and `&quot;` for those characters (the case of names and the white space
-  between attributes are free); `/>` only on a void element; an end tag
-  written `</name>`; template code only in text or a double-quoted value; no
-  element that changes how a reader reads what follows but `title` and
-  `style`; and every form ending in text, outside any tag, comment or
-  `<style>`, since the row it is included in continues it.
-- A link sits in `href`, `src`, `background`, `cite`, `poster` or `action`, as
-  one `url` output or a static link `url` leaves unchanged; the other URL
-  attributes (`ping`, `longdesc`, `srcset`, `usemap`…) are refused, and text
-  attributes such as `alt` and `title` are text.
+  its refusal): no control character but tab and newline; a `<` only to open a
+  tag, an end tag, or in a layout its opening `<!doctype html>` and Outlook's
+  comments, `&lt;` anywhere else; each attribute once, every value
+  double-quoted with `&amp;`, `&lt;`, `&gt;` and `&quot;` for those characters
+  (the case of names and the white space between attributes are free); `/>`
+  only on a void element; an end tag written `</name>`; template code only in
+  text or a double-quoted value; only the elements a mail is written with; and
+  every form ending in text, outside any tag, comment or `<style>`, since the
+  row it is included in continues it. A note is written `{# … #}`.
 - A Markdown row is rendered by markdown-it first, with raw HTML off: template
-  code stays whole, `[label]({{ link }})` is a link through `url`, a paragraph
-  holding only tags writes no `<p>`, and an `include` stands alone in its
-  paragraph. Its plain-text form is written from the same Markdown.
+  code stays whole, `[label]({{ link }})` and `[{{ label }}]({{ link }})` are
+  links through `url`, a paragraph holding only tags writes no `<p>`, and an
+  `include` stands alone in its paragraph. Its plain-text form is written from
+  the same Markdown.
 
 The walker (`TemplateWalker`) refuses what would not render safely when a row is
 saved (`clean()`, when what it renders changed), after each resource load, and
-again before every render: oversized sources and lines, literals holding `<`,
-`>` or `"`, costly filter use or filter arguments Django's filters fail on,
-template code the Markdown pass would not keep whole, HTML not in the strict
-spelling or that a mail may not carry (event attributes, a link that is not
-one `url` output or a safe static URL, styles reading anything but the brand's
-colours and fonts), reads no row
-declares (`subject` and `preheader` are read in the HTML form alone), include
-cycles, and the walk's bounds on nodes, outputs, loops, includes, text and the
-rows it reaches.
+again before every render. It holds every list below, and the walk's bounds on
+nodes, outputs, loops, includes, text and the rows it reaches.
+
+## What a row and a value may vary in
+
+Promise 1, a value never becomes markup, an attribute, a link target, CSS or
+script, holds because every list a row or a value varies along is closed: each
+admits a stated set and refuses the rest. The value properties
+(`test_a_value_never_becomes_markup*`, read by html5lib as a browser reads a
+mail) and the mutation script `scripts/messaging_templates_mutations.py` guard
+the table as a whole.
+
+| Dimension | The closed list | Enforced in | Test |
+|---|---|---|---|
+| Tags | `ALLOWED_TAGS`: `if`, `for`, `with`, `comment`, `block`, `include`, `extends`, `templatetag` | [engine](engine.py) `register`: anything else fails to compile | `test_the_engine_registers_exactly_the_allowlist_and_compiles_nothing_else` |
+| Filters | `ALLOWED_FILTERS`: Django's thirteen and `url`; at most four to an expression; literal arguments | `register`; walker `_RowRules.expression` | `test_the_walker_refuses_each_rule` |
+| Filter order and markup | `MARKUP_FILTERS` (`linebreaksbr`) the last filter of a printed value; `url` last, after `default` alone; `date` first; no other filter's result marked safe | `_RowRules.expression`; engine `_charged` | `test_a_cut_line_break_is_refused_since_markup_is_the_last_filter`, `test_only_a_markup_filter_returns_markup`, `test_no_chain_of_filters_lets_a_value_become_markup` |
+| Literals | no `<`, `>` or `"`; at most 200 characters; never `_(…)` | walker `_literal_refusal` | `test_the_walker_refuses_each_rule` |
+| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); `clean()` writes a carriage return as a newline | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline` |
+| HTML spelling | `SpellingRule` 2 to 6 and 8 | [HTML checks](html_checks.py) | `test_each_spelling_rule_refuses_with_its_message`, `test_the_strict_spelling_admits_what_every_reader_reads_alike`, `test_a_refusal_says_how_to_write_the_row` |
+| Elements | `MAIL_ELEMENTS`; `OFFICE_ELEMENTS` inside a layout's Outlook comment alone | HTML checks (rule 7) | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
+| Attributes | `MAIL_ATTRIBUTES` | HTML checks | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
+| Where a value sits | text; `OUTPUT_ATTRIBUTES` (`title`, `alt`, `aria-label`, `lang`, `xml:lang`, `dir`); `LINK_ATTRIBUTES` as one output whose last filter is `url`; a `style` attribute, `STYLE_OUTPUTS`; a `<style>`, `STYLE_ELEMENT_OUTPUTS`; a `<title>`, any output; never a comment | HTML checks `check_spans`, `check_link` | `test_the_html_checks`, `test_link_attributes_follow_url_and_text_attributes_are_text` |
+| A link a value gives | `LINK_SCHEMES`: an absolute `https` or `http` link with a host, a `mailto:` or `tel:` link; any other gives none | engine `url` | `test_a_url_value_gives_a_link_or_nothing` |
+| A link an author writes | what `url` leaves unchanged, a `#fragment` or a `cid:` image (`STATIC_ANCHOR`) | HTML checks `check_link` | `test_a_static_link_is_absolute_or_a_fragment_or_a_cid_image` |
+| Comments and declarations | in a layout alone: its opening `<!doctype html>`, `<!--[if mso]>…<![endif]-->` and the `<!--[if !mso]><!-->…<!--<![endif]-->` pair, static and balanced | HTML checks | `test_a_layout_holds_outlooks_conditional_comments_alone`, `test_only_a_layout_carries_outlooks_comments` |
+| Character set | `utf-8` (`MAIL_CHARSET`) | HTML checks | `test_a_mail_declares_one_character_set` |
+| A value's shape | the declared paths; a leaf a string, number, boolean or null | `TemplateWalk.prepare` | `test_required_values_and_shapes` |
+| A value's characters | any but `CONTROL_CHARACTERS`, which are dropped, and a lone surrogate, refused; at most 10,000 characters, 500 list items, 50,000 characters of JSON | `TemplateWalk.prepare` | `test_a_value_drops_its_control_characters`, `test_a_lone_surrogate_is_refused_as_invalid_values`, `test_variables_caps` |
+| Numbers and dates | a number a float holds where `floatformat` or `pluralize` reads it; a date, or an aware datetime where a time is printed, where `date` reads it | `TemplateWalk.prepare` | `test_cheap_filters_spend_a_constant_and_a_raw_number_is_text`, `test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date` |
+| Conditions | at most `CONDITION_OPERATOR_LIMIT` (10) operators, each a node; a test reads a declared value, its length or a name the mail supplies; `in` takes a literal | walker | `test_a_condition_holds_at_most_ten_operators_each_a_node`, `test_condition_filters_refused` |
+| Work | the source and line caps; `FORM_SPAN_LIMIT` spans and `TEXT_LIMIT` characters of text in a form, straight after the Markdown pass; nesting, loops, includes, nodes, outputs, text and the walk's sources; a pass's `RenderBudget` | walker, engine | `test_a_form_over_its_caps_is_refused_before_the_html_checks_read_it`, `test_the_costliest_preview_does_bounded_work`, `test_preview_time` (timed) |
+| Markdown | raw HTML off; template spans whole; a link's target one output through `url` | `MarkdownFormatHandler` | `test_markdown_spans_reach_the_engine_whole`, `test_a_markdown_link_whose_label_and_target_are_values_is_admitted` |
+| Subject and preheader | one line; the control characters and the bidirectional overrides dropped; at most 1,000 characters | walker `_one_line` | `test_subject_and_preheader_drop_control_and_bidirectional_characters` |
+| Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute, which a value reaches only as the brand's outputs (above) | — | — |
 
 ## Rendering
 
@@ -118,10 +143,12 @@ float holds where `floatformat` or `pluralize` reads it, a moment the local zone
 cannot hold, a bare date printed with a time), `message_template_refused` (the
 walk), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
-any other failure, which is logged with its traceback first. The subject and
-preheader drop control and bidirectional override characters. A sender picks the
-row with `effective("template", key, person=recipient)` and renders it as the
-system actor.
+any other failure, which is logged with its traceback first. Every string value
+drops its control characters; the subject and preheader drop bidirectional
+overrides too. A sender picks the row with
+`effective("template", key, person=recipient)`, renders it as the system actor,
+and sends the HTML part as `charset=utf-8`, the one character set a row
+declares.
 
 `row.preview(kit=None)` renders the row's `sample`: a template whole, a layout
 around a fixed body, subject and preheader, a block or part alone. It returns
@@ -222,8 +249,9 @@ can race that key's delete; the render judges the result. A baseline a later
 release no longer ships stays, and stays effective.
 
 Each row reports `is_effective` (what renders for its kind, key and language),
-`is_overridden` (a baseline with an override) and `has_updated_default`, as fields
-and as console filters.
+`is_overridden` (a baseline with an override), `overrides_default` (the
+deployment's override of a baseline; a deployment's own row has none) and
+`has_updated_default`, as fields and as console filters.
 
 ## Access
 
@@ -265,6 +293,13 @@ actions do: a signed-out caller gets the session's GraphQL error, and a caller
 who may not create or write the override a `PERMISSION_DENIED` GraphQL error; an
 unreadable or missing row, a row that is not a shipped default (`not_a_baseline`)
 and an override of none (`no_baseline`) come back in band as `ok: false`.
+Each verb first asks one predicate on the row,
+`MessageTemplate.override_refusal()` and `keep_override_refusal()`, and raises
+what it answers; a row projects the same answers for its reader as
+`can_override` and `can_keep_override`, so a page offers a verb exactly where it
+runs. `can_keep_override` rides the list's statement; `can_override` decides the
+reader's `create` on the override for each row, so it is a read for one record's
+page.
 
 `message_template_preview(template, brand_kit)` returns a row's preview, in the
 named kit or the default one, to a caller who may preview it. It refuses as the

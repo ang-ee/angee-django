@@ -34,23 +34,29 @@ live in code docstrings.
     walks a row and every row it reaches and refuses what may not render safely:
     oversized sources and lines, literals holding `<`, `>` or `"`, costly or
     unsafe filter use, template code the Markdown pass would not keep whole, HTML
-    a mail may not carry (event attributes, a link that is not one `url` output
-    or a safe static link, styles reading anything but the brand's colours and
-    fonts), reads no row declares, include cycles and the walk's bounds. Every
-    HTML form is admitted only in one strict spelling every reader tokenises
-    alike (`SpellingRule` in `angee.messaging_templates.html_checks`: no NUL, a
-    `<` only to open a tag, canonical start and end tags, `/>` on void elements
-    alone, template code only in text or a double-quoted value, no element that
-    changes how a reader reads what follows but `title` and `style`, and a form
-    ending in text). A link sits only in `href`, `src`, `background`, `cite`,
-    `poster` or `action`; the other URL attributes are refused. A layout alone
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link) and one an author writes (that, a `#fragment` or a
+    `cid:` image); the one character set, `utf-8`; no control character in a
+    row's text, a carriage return written as a newline by `clean()`, and none in
+    a value, which drops them; at most ten operators in a condition, each a node;
+    and every form capped straight after the Markdown pass. A layout alone
     writes the doctype and Outlook's conditional comments, static and balanced,
-    their markup checked. It runs from `clean()` when what a row renders changed
-    (`MessageTemplate.validate_source()`), after every resource load, and before
-    every render. `TemplateWalk.prepare(values)` drops undeclared keys, refuses a
-    required value missing or null, fills every declared path and parses ISO
-    dates read through `date`; a path printed with a time takes an aware
-    `datetime`. It costs a constant per declared path per value. A render raises
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
     `ValidationError` and nothing else, every item carrying its code in
     `error_list` (`invalid_values`, `message_template_refused`,
     `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
@@ -103,8 +109,8 @@ live in code docstrings.
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -124,11 +130,14 @@ live in code docstrings.
     another language; only a key with no row starts from the kind's `defaults`.
     Each row projects `permissions` (`delete`, `preview`, `write`),
     `carries_message_fields` and, to a reader who may preview it, `backlinks`:
-    the rows naming its kind and key, a read for one record's page. The mutations
-    refuse as the framework's actions do: a signed-out caller gets the session's
-    GraphQL error, a caller who may not create or write the override a
-    `PERMISSION_DENIED` GraphQL error, and a row that is not a shipped default
-    (`not_a_baseline`) or overrides none (`no_baseline`) an in-band `ok: false`.
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The mutations refuse as the
+    framework's actions do: a signed-out caller gets the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
   - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
     adds **Message templates** to Settings for whoever holds
     `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
