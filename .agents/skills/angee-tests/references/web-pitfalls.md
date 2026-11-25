@@ -11,6 +11,12 @@ Traps moved from the frontend guide's Pitfalls and Checks sections. Commands and
   fixture a data-bound story declares (`parameters.angeeFixture`, `RuntimeFixture`,
   `storySchema`, `angeeOwnRuntime`, one provider stack) is the
   [rendering and testing contract](../../../../docs/frontend/guidelines.md#rendering-and-testing).
+- **A rendered test waits for the effect itself.** Wait for the save's call or
+  the element with the shared waiting limit; never pause a fixed time and then
+  assert that something HAS happened, and pass no per-test timeout, a shorter
+  one included: on a loaded runner a slow save lands in the next test. A test
+  written as an expected failure drops its short wait when it starts passing.
+  The limit's owner is [the shared waiting limit](../../../../docs/checks.md#frontend-packages-and-addon-fragments).
 
 Run the package vitest suite — not just `tsc` and a story render, which miss
 stale assertion drift. When verifying data-bound views, wait for the async query

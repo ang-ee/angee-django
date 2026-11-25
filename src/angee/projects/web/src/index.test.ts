@@ -10,6 +10,10 @@ describe("projects addon manifest", () => {
     expect(() => expectValidBaseAddon(projects)).not.toThrow();
   });
 
+  test("guard: the phase widget it registers writes its own value, so a record form leaves it its own editability", () => {
+    expect(projects.widgets?.["projects.phase"]).toHaveProperty("writesOwnValue", true);
+  });
+
   test("offers the Tasks tab only on records whose type takes tasks as their subject", () => {
     const tasks = (projects.containers?.["record#aside"] as Record<string, ContainerChild<ChatterTabContent>>)["projects.tasks"]!;
     const record = (recordEdges?: readonly string[]): ChatterViewContext => ({

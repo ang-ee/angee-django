@@ -136,6 +136,70 @@ live in code docstrings.
   below it (`settings.retries` for a column named `settings`); the configuration
   defaults seed that column; the model check (`angee.E046`) looks for it. Models
   that name none keep `config` and behave as before. Upgrade: nothing.
+- `@angee/ui`: **Changed behaviour.** A record form decides in one place
+  whether its save can write a field, and its check, its controls and what a
+  create displays read that. `pathWritable` (`form-view-model.ts`) holds the
+  rule: the paths the save writes (`formWritablePaths`) are, of the record's
+  form fields, those the form's mode writes (the model's updatable fields on
+  an edit, its create fields on a create), or every path under the form's own
+  submit owner, which receives the whole values. The save's fields are the
+  record's form fields it can write, which the payload reads, its resets of
+  hidden fields included. Whether the record redacts a field is a second fact
+  with one owner, `fieldIsRedacted`, which the body's locks and the save both
+  read; the body's copy is deleted. The check, the member marks and the
+  banner's claim read the save's fields the record does not redact, so the
+  check never asks a field the save cannot write or the record redacts,
+  whatever its widget; a redacted field the form itself wrote (a preset's
+  write, a hidden reset) is still sent, and a flat one it only loaded is not.
+  `fieldControlReadOnly` decides whether a control takes edits: a field
+  read-only as declared and resolved, one the record redacts whatever its
+  widget declares, or one the save cannot write (a path no form field declares
+  included, a page-rendered `BoundDescriptorField` among them) is read-only,
+  the last unless on a saved record its widget declares `writesOwnValue`.
+  `formDisplaysField` decides whether a create displays a field: not one the
+  save cannot write that holds no value (`isEmptyFieldValue`), in the sheet,
+  its panes, the status and the body, read from the form's live values; the
+  body's own rule for an empty read-only status on a create is folded into it,
+  keeping the one part it decided alone, a read-only status the save could
+  write. A section with nothing to show (`isEmptySection`) renders nothing and
+  is no pane, so a pane left with no field is no longer listed, on a create
+  and on an edit where a condition leaves it none. The record rail's rule that
+  a row's field must be one the metadata reads moved into
+  `displayedRailGroups`, so the save's fields leave such a row out as the
+  rail's display already did. The form's own lock still reads the declared
+  read-only of its fields, and what a form sends is unchanged. Before, a field
+  the model did not update kept an editable control on an edit, as a field
+  outside the create fields did on a create, and the save dropped what was
+  typed there; a required one left empty blocked the save; a create showed a
+  field it could not write, when it held no value, with that editable control
+  or, declared read-only, as a bare label; a redacted required field left
+  empty blocked the save with its message under the lock; a page-rendered
+  control for a path no form field declares took typing the save dropped; and
+  a required rail row whose field the metadata did not read blocked the save
+  with nothing on screen. `WidgetDefinition.writesOwnValue` marks a widget
+  that, on a saved record, commits through its own action, or not at all, and
+  decides its own editability; on a create it changes nothing. It is read from
+  the registered definition, so such a widget is registered eagerly, not
+  through `lazyWidget`. The shared `visibility` widget, `projects.phase` and
+  `angee.tags.recordTags` declare it. Limits: a page-rendered control for a
+  path the record redacts is read-only but shows no lock, since
+  `LabeledDescriptorField` shows the field's marks without the restricted one
+  the form's rows render; a structured field still goes whole once one of its
+  members changed, so where the record redacts it and a preset writes one
+  member, the untouched members go as the placeholders the form loaded, as
+  before; and where a value leaves a pane with no field, or gives it one,
+  while the form is open, and the number of panes thereby changes between one
+  and several, the remaining pane's content is rebuilt, so a control being
+  typed in there loses focus, and a pane the person had chosen is selected
+  again when it returns (a form draws one pane as a plain region and several
+  as tabs). **Upgrade:** a registered widget that writes by itself on a saved
+  record must declare `writesOwnValue: true`, or its control turns read-only
+  on an edit where the save cannot write its field; a component a form renders
+  directly is outside the rule. A control a page renders for a path no form
+  field declares is read-only unless the form's own submit owner saves it:
+  declare the field, hidden if need be. A create no longer displays the empty
+  read-only rows of fields outside the model's create input, nor a pane that
+  holds only such rows; a `defaultValue` or a create seed keeps one displayed.
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
   those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three
@@ -151,8 +215,8 @@ live in code docstrings.
   takes the predicate where it took `isCreate`. The record rail has its own,
   `displayedRailGroups` (`form-view-rail.tsx`): the child's admission, the group's
   and the child's permission and each row's permission, read by the rail's
-  display and by the save; a row whose field the metadata does not read stays a
-  display rule. The record's fields are the form's field list less the fields of
+  display and by the save, which both also leave out a row whose field the
+  metadata does not read. The record's fields are the form's field list less the fields of
   the page's own groups it does not display (a page's field list also lists its
   groups' fields), then the fields of the groups it displays, the first
   declaration of a name winning: where every group is displayed they are the
@@ -177,12 +241,13 @@ live in code docstrings.
   title, status and body are chosen among the record's form fields, so a field
   only an undisplayed group declares is no longer one on a create (a `savedOnly`
   group), on a record lacking a section's permission, or on an edit while its
-  record loads. Limits: a control a page renders itself for a field only an
-  undisplayed group declares still takes typing that the save drops (before, it
-  was sent: a `savedOnly` group's field on a create, a permission-gated section's
-  field on a create or on a record lacking the permission); a rail row sharing
-  its name with a field only an undisplayed section declares decides its own
-  visibility. `formFields` still registers every candidate, so any record's
+  record loads. A control a page renders itself for a field only an undisplayed
+  group declares is read-only and sends nothing, unless the form's own submit
+  owner saves it (before, what was typed there was sent: a `savedOnly` group's
+  field on a create, a permission-gated section's field on a create or on a
+  record lacking the permission). Limits: a rail row
+  sharing its name with a field only an undisplayed section declares decides its
+  own visibility. `formFields` still registers every candidate, so any record's
   values load.
 - Addons require django-zed-rebac 0.38.0, a security release (advisory
   GHSA-r4c4-cvfj-jgcf); versions before it are excluded. A queryset evaluated
@@ -293,16 +358,12 @@ live in code docstrings.
   control for a hidden member and a read-only control for a read-only one. A
   dialog reads a top-level key holding `undefined` as absent; a member holding
   one still fails `required` (a recorded defect). Where the record form still
-  checks, or no longer checks, a field against that rule: a redacted required
-  field left empty still blocks the save, with "This field is required." under
-  its lock and no control; a required field the
-  record cannot write keeps an editable control, blocks the save while empty,
-  and the save drops what is typed there; a field declared hidden whose control
-  the page renders itself (`BoundDescriptorField`) is no longer checked on the
-  client, and a server refusal of it shows under that control and in the banner;
-  and a control a page renders for a field outside the fields the save writes is
-  no longer checked, what is typed there being dropped by the save, as before.
-  The redacted and not-writable cases are recorded as expected failures. A
+  checks, or no longer checks, a field against that rule: a field declared
+  hidden whose control the page renders itself (`BoundDescriptorField`) is no
+  longer checked on the client, and a server refusal of it shows under that
+  control and in the banner; and a control a page renders for a field outside
+  the fields the save writes is no longer checked, and is read-only unless the
+  form's own submit owner saves it, which receives what is typed there. A
   server refusal of a record-form field whose descriptor is hidden, that lies
   outside the fields the save writes, or that its condition hides now shows in
   the banner with its own text, as `name: message` under the field's raw name,

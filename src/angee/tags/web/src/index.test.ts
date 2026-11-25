@@ -13,6 +13,10 @@ describe("angee.tags addon manifest", () => {
     expect(tags.forms?.["tags.Tag"]).toBeDefined();
   });
 
+  test("guard: the record-tags widget it registers writes its own value, so a record form leaves it its own editability", () => {
+    expect(tags.widgets?.["angee.tags.recordTags"]).toHaveProperty("writesOwnValue", true);
+  });
+
   test("routes the tag vocabulary and its categories under the Tags menu", () => {
     expect(tags.routes?.map((route) => route.name)).toEqual(
       expect.arrayContaining(["tags.tags", "tags.categories"]),

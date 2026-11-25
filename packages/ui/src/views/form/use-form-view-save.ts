@@ -30,7 +30,7 @@ import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-q
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
 import { createClientKey } from "../../lib/client-key";
-import { slugify } from "../../widgets";
+import { asWidgetDefinition, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
   diffLines,
@@ -45,13 +45,18 @@ import {
   createPresetMemory,
   dirtyArrayValues,
   emptyDraft,
+  fieldControlReadOnly,
+  fieldIsRedacted,
   fieldValidationSummary,
+  formDisplaysField,
   formRuleErrors,
+  formWritablePaths,
   hiddenDraftPaths,
   hiddenResetWrites,
   isFieldControlVisible,
   missingDraftValues,
   mutationData,
+  pathWritable,
   recordToValues,
   resolveField,
   seedPreset,
@@ -66,7 +71,7 @@ import {
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
 import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
-import { useRuntimeViewAs } from "../../runtime";
+import { useAppRuntime, useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 
 type RowRecord = BaseRecord & Row;
@@ -137,11 +142,12 @@ export interface UseFormViewSaveProps {
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
   /**
-   * The fields one record's form saves, when they depend on the record: its
-   * own, and those of the groups it displays and of its rail rows (a
-   * `savedOnly` group only on a saved record, a section or a rail row only with
-   * its permissions, a container child's only where the record admits it).
-   * `formFields` holds every candidate.
+   * One record's form fields, when they depend on the record: its own, and
+   * those of the groups it displays and of its rail rows (a `savedOnly` group
+   * only on a saved record, a section or a rail row only with its permissions,
+   * a rail row only where the metadata reads its field, a container child's
+   * only where the record admits it). The save writes those it can
+   * (`pathWritable`); `formFields` holds every candidate.
    */
   formFieldsFor?: (record: Row | null) => readonly FieldDescriptor[];
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
@@ -193,7 +199,19 @@ export interface FormViewSaveSurface {
   patchRecord: (patch: Record<string, unknown>) => void;
   reload: () => Promise<Row | null>;
   afterFieldChange: (field: FieldDescriptor, value: unknown, scope?: string) => void;
+  /**
+   * Whether the control of `field`, at its full path, is read-only: the form takes no edit, a
+   * preview runs, or `fieldControlReadOnly` says so (read-only as declared and resolved, a field the
+   * record redacts whatever its widget, or a field the save cannot write whose widget does not write
+   * its own value on a saved record).
+   */
   fieldReadOnly: (field: FieldDescriptor) => boolean;
+  /**
+   * Whether the form displays `field`, holding `value`, at all (`formDisplaysField`): on a create,
+   * not a field its save cannot write that holds no value, nor, as the form's `status`, one whose
+   * control is read-only and holds no value. A control a page renders itself does not ask it.
+   */
+  displaysField: (field: FieldDescriptor, value: unknown, options?: { status?: boolean }) => boolean;
   startFieldInteraction: (path: string) => void;
   commitFieldInteraction: (path: string) => void;
   /** Register submit-time validation owned by a composed controlled editor. */
@@ -228,6 +246,7 @@ export function useFormViewSave({
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const preview = useRuntimeViewAs();
+  const { widgets } = useAppRuntime();
   const previewBlocked = Boolean(preview.viewAs || preview.pending);
   const previewBlockedRef = useLatestRef(previewBlocked);
   const toast = useToast();
@@ -267,18 +286,18 @@ export function useFormViewSave({
         .map((field) => field.name),
     );
   }, [formFields, isCreate, modelMetadata]);
-  const writableFieldNames = React.useMemo<ReadonlySet<string> | null>(() => {
-    const writable = submitOwner
-      ? undefined
-      : isCreate
-        ? modelMetadata?.resource.createFields
-        : modelMetadata
-          ? formFields
-              .map((field) => field.name)
-              .filter((fieldName) => fieldUpdatable(modelMetadata, fieldName))
-          : undefined;
+  // What the form's mode lets its save write, a field or its root: the model's create fields on a
+  // create, its updatable fields on an edit; none without metadata.
+  const modeWritableNames = React.useMemo<ReadonlySet<string> | null>(() => {
+    const writable = isCreate
+      ? modelMetadata?.resource.createFields
+      : modelMetadata
+        ? formFields
+            .map((field) => field.name)
+            .filter((fieldName) => fieldUpdatable(modelMetadata, fieldName))
+        : undefined;
     return writable ? new Set(writable) : null;
-  }, [formFields, isCreate, modelMetadata, submitOwner]);
+  }, [formFields, isCreate, modelMetadata]);
   const queryClient = useQueryClient();
   const canonicalInvalidateModels = useCanonicalResourceModelLabels(invalidateModels);
   const dependentInvalidations = useResourceInvalidates(canonicalInvalidateModels);
@@ -305,13 +324,33 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
-  // The record's own fields (`formFieldsFor`): the check, the member marks, the banner's claim, the
-  // payload and the preset writes read these, so a field only an undisplayed group declares is in
-  // none of them; where several displayed declarations name one, the first saves, the page's own
-  // before a contribution's.
-  const saveFields = React.useMemo(
+  const recordFields = React.useMemo(
     () => formFieldsFor?.(displayRecord) ?? formFields,
     [displayRecord, formFields, formFieldsFor],
+  );
+  // The paths the save writes (`formWritablePaths`), every one under a custom submit owner.
+  const writableFieldNames = React.useMemo(
+    () => formWritablePaths(recordFields, modeWritableNames, Boolean(submitOwner)),
+    [modeWritableNames, recordFields, submitOwner],
+  );
+  // Two facts, two sets. The record's own fields (`formFieldsFor`) its save can write (`pathWritable`):
+  // what the save sends reads these, its resets of hidden fields included, and so do which declared
+  // preset applies and the draft's drop and restore of hidden fields. A field only an undisplayed group
+  // declares and one the mode cannot write are not among them, so they are never sent, though a preset
+  // may still write them into the form's values. A redacted one is among them, and is sent only when the
+  // form itself wrote it; a structured one, once the form wrote one member, goes whole, its untouched
+  // members as the form loaded them (a limit: they may be the record's placeholders). Of those, the ones
+  // the record does not redact (`fieldIsRedacted`): the check, the member marks and the banner's claim
+  // read these. Where several displayed declarations name one, the first saves, the page's own before a
+  // contribution's. Whether a control takes edits and whether a create displays a field read the same
+  // owners (`fieldReadOnly`, `displaysField`).
+  const saveFields = React.useMemo(
+    () => recordFields.filter((field) => pathWritable(field.name, writableFieldNames)),
+    [recordFields, writableFieldNames],
+  );
+  const checkFields = React.useMemo(
+    () => saveFields.filter((field) => !fieldIsRedacted(displayRecord, field.name)),
+    [displayRecord, saveFields],
   );
   const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? (nativeReadEnabled && (read.query.isPending || read.query.isFetching));
@@ -417,10 +456,10 @@ export function useFormViewSave({
     defaultValues: emptyValues,
     shouldUnregister: false,
     resolver: (formValues) => {
-      // The check asks the fields the save writes for this record.
-      const errors = formRuleErrors(formValues, saveFields, requiredFieldNames, t);
+      // The check asks the fields the save writes for this record that the record does not redact.
+      const errors = formRuleErrors(formValues, checkFields, requiredFieldNames, t);
       validateFields(formValues, (name, error) => set(errors, name, error));
-      markMemberErrors(errors, visibleFields(saveFields, formValues));
+      markMemberErrors(errors, visibleFields(checkFields, formValues));
       return Object.keys(errors).length
         ? { values: {}, errors }
         : { values: formValues, errors: {} };
@@ -581,17 +620,18 @@ export function useFormViewSave({
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
     if (!mounted.current) return null;
     // Every refused field's message is set at its path, so a control a page renders itself shows
-    // it; the summary calls highlighted only the save's fields whose descriptor is neither hidden
+    // it; the summary calls highlighted only the checked fields whose descriptor is neither hidden
     // nor excluded by its condition, and gives any other its own message, one only a group the
-    // record does not display declares among them.
+    // record does not display declares, one the save cannot write and one the record redacts
+    // among them.
     const values = form.getValues();
-    const shown = visibleFields(saveFields, values).filter((field) => isFieldControlVisible(field, values));
+    const shown = visibleFields(checkFields, values).filter((field) => isFieldControlVisible(field, values));
     return applyFormErrors(form, result, {
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
     }) ? null : result;
-  }, [fieldByName, form, linesField, saveFields, t]);
+  }, [checkFields, fieldByName, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -880,9 +920,18 @@ export function useFormViewSave({
     [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, presetMemory, saveFields, setValue],
   );
   const fieldReadOnly = React.useCallback(
-    (field: FieldDescriptor): boolean =>
-      formReadOnly || previewBlocked || Boolean(field.readOnly),
-    [formReadOnly, previewBlocked],
+    (field: FieldDescriptor): boolean => formReadOnly || previewBlocked || fieldControlReadOnly(field, {
+      writable: pathWritable(field.name, writableFieldNames), redacted: fieldIsRedacted(displayRecord, field.name), isCreate,
+      writesOwnValue: Boolean(asWidgetDefinition(widgets[fieldWidgetId(field)])?.writesOwnValue),
+    }),
+    [displayRecord, formReadOnly, isCreate, previewBlocked, widgets, writableFieldNames],
+  );
+  const displaysField = React.useCallback(
+    (field: FieldDescriptor, value: unknown, { status = false }: { status?: boolean } = {}): boolean => formDisplaysField(value, {
+      writable: pathWritable(field.name, writableFieldNames), isCreate,
+      readOnlyStatus: status && fieldReadOnly(field),
+    }),
+    [fieldReadOnly, isCreate, writableFieldNames],
   );
   const discardChanges = React.useCallback(() => {
     if (isCreate) localAcknowledgementRef.current = null;
@@ -936,6 +985,7 @@ export function useFormViewSave({
     reload,
     afterFieldChange,
     fieldReadOnly,
+    displaysField,
     startFieldInteraction,
     commitFieldInteraction,
     registerFieldValidation,

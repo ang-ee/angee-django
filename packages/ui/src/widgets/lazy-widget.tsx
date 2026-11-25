@@ -13,7 +13,9 @@ type WidgetSlot = "read" | "edit" | "cell";
  * `isWidgetDefinition` see an ordinary widget; on first render it lazy-loads the
  * real widget module and shows a skeleton meanwhile, composing the shared
  * {@link LazyBoundary}. `read` is always exposed; `edit`/`cell` only when asked
- * for (the registry reads `edit` to decide a field is editable).
+ * for (the registry reads `edit` to decide a field is editable). A widget that declares
+ * `writesOwnValue` is registered eagerly, because the flag is read from the registered
+ * definition before a lazy module loads.
  */
 export function lazyWidget<TValue = unknown, TRow = unknown>(
   load: () => Promise<WidgetDefinition<TValue, TRow>>,
