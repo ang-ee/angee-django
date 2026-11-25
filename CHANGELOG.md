@@ -36,7 +36,10 @@ live in code docstrings.
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
     fields it only fills while blank, and `Handle.email_value` is the one form an
     email address is stored in on a handle. `PartManager.attach_files` attaches
-    several files under one message lock.
+    several files under one message lock. `HandleManager.find_identities` (and so
+    `find_identity`, `upsert` and every compose lookup) names the platform in each
+    arm of its one statement, so the `(platform, value)` key's index serves it; it
+    was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
