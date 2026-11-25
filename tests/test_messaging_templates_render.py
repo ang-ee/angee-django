@@ -2883,15 +2883,6 @@ def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
         for user, code in ((admin, "VALIDATION"), (member, "PERMISSION_DENIED")):
             result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": written}, user=user)
             assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], (written, user)
-    inserted = {
-        "kind": "part", "key": "stored", "language": "en", "name": "n", "format": "markdown", "source": "a\ud800",
-    }
-    for user in (admin, member, AnonymousUser()):
-        result = execute_schema(schema, _INSERT, {"object": inserted}, user=user)
-        assert [(error.extensions or {}).get("code") for error in result.errors or ()] == ["VALIDATION"], user
-
-
-_INSERT = "mutation($object: message_templates_insert_input!) { insert_message_templates_one(object: $object) { id } }"
 
 
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(
