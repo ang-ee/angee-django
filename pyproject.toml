@@ -43,6 +43,7 @@ dependencies = [
     "angee-messaging==3.0.0",
     "angee-messaging-integrate-imap==3.0.0",
     "angee-messaging-integrate-slack==3.0.0",
+    "angee-messaging-templates==3.0.0",
     "angee-money==3.0.0",
     "angee-nexus==3.0.0",
     "angee-operator==3.0.0",
@@ -167,6 +168,7 @@ angee-mcp = {workspace = true}
 angee-messaging = {workspace = true}
 angee-messaging-integrate-imap = {workspace = true}
 angee-messaging-integrate-slack = {workspace = true}
+angee-messaging-templates = {workspace = true}
 angee-money = {workspace = true}
 angee-nexus = {workspace = true}
 angee-operator = {workspace = true}
@@ -318,6 +320,12 @@ name = "Web forms and messaging meet only in their bridge"
 type = "forbidden"
 source_modules = ["angee.messaging", "angee.intake"]
 forbidden_modules = ["angee.webforms", "angee.webforms_messaging"]
+
+[[tool.importlinter.contracts]]
+name = "Messaging does not import message templates"
+type = "forbidden"
+source_modules = ["angee.messaging"]
+forbidden_modules = ["angee.messaging_templates"]
 
 [[tool.importlinter.contracts]]
 name = "Web forms do not import messaging, intake or the bridge"

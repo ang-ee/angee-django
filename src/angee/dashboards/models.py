@@ -19,7 +19,6 @@ from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet, TrashMixin, TrashQuerySet
 from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
-from angee.dashboards.resources import DashboardResource
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.data.hasura import declared_hasura_resource_fields
 from angee.graphql.introspection import FieldPathError, require_field_for_path
@@ -27,6 +26,7 @@ from angee.provenance.context import changeset, changeset_model, require_changes
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.loader import BaselineResource
 from angee.resources.mixins import ResourceLoadMixin
 
 DASHBOARD_SCHEMA_VERSION = 1
@@ -709,7 +709,7 @@ class Dashboard(
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
-    resource_class = DashboardResource
+    resource_class = BaselineResource
     immutable_fields = ("is_baseline",)
     sqid_prefix = "dsh_"
     rebac_grantable = {"viewer": "share", "editor": "share"}

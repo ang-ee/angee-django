@@ -57,6 +57,7 @@ tests/test_decisions_concurrency.py
 tests/test_checklists.py
 tests/test_calendar_concurrency.py
 tests/test_brandkit_concurrency.py
+tests/test_messaging_templates_concurrency.py
 tests/test_calendar_ics.py::test_two_purges_racing_on_a_shared_credential_retire_it_exactly_once
 tests/test_calendar_google.py::test_two_racing_connects_of_one_account_make_one_source
 tests/test_calendar_google_publish.py::test_two_racing_publishes_of_one_calendar_bind_it_once
