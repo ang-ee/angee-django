@@ -16,6 +16,7 @@ from django.utils import timezone
 from hypothesis import given
 from hypothesis import strategies as st
 from rebac import PermissionDenied, system_context
+from rebac.models import PermissionAuditEvent
 
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import (
@@ -276,6 +277,24 @@ def test_an_email_reply_on_a_channel_that_cannot_send_is_refused_even_held(desk:
     manual = make_integration("compose-manual", model=Channel, backend_class="manual")
     with _refused(OutboundEmailChannelMissing, key="channel", code="OUTBOUND_EMAIL_CHANNEL_MISSING"):
         Message.objects.compose(channel=manual, to=["reader@example.test"], text="Hello.", actor=manual.owner)
+
+
+def test_a_refused_reply_writes_no_permission_audit_row(desk: Any) -> None:
+    """Who may answer is decided under the actor before anything is read elevated, so no refusal is audited."""
+
+    request = _receive(desk, "audited")
+    reader = make_user("compose-audit-reader")
+    grant(desk, "reader", reader)
+    refusals = (
+        (PermissionDenied, {"actor": make_user("compose-audit-outsider")}, True),
+        (PermissionDenied, {"actor": reader}, True),
+        (OutboundEmailNotConfigured, {"actor": desk.owner}, False),
+    )
+    for error, values, configured in refusals:
+        before = PermissionAuditEvent.objects.count()
+        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=configured), pytest.raises(error):
+            Message.objects.compose(parent=request, text="Which team?", **values)
+        assert PermissionAuditEvent.objects.count() == before, values
 
 
 def test_a_keyed_retry_returns_its_original_after_the_channel_stops_sending(desk: Any) -> None:
