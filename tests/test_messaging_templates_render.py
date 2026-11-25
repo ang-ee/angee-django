@@ -2559,6 +2559,55 @@ SAVING_WALK_QUERIES = 22
 """The queries of that saving walk: 520 before a level resolved in one query."""
 
 
+def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(plain: Any, kit: Any) -> None:
+    """A chain of 900 includes cost a query or more a level: the gather now stops at the depth a tree reaches, in the
+    tree's own words, so the saving walk, a member's console insert and the render-side judge each make queries bounded
+    by INCLUDE_DEPTH_LIMIT, whatever the chain's length."""
+
+    del plain
+    for index in range(900):
+        source = "x" if index == 899 else f'{{% include "parts/chain{index + 1}" only %}}'
+        _row("part", f"chain{index}", source=source)
+    counts: dict[str, int] = {}
+    for length in (5, 900):
+        head = _unsaved("part", f"head{length}", source=f'{{% include "parts/chain{900 - length}" only %}}')
+        with system_context(reason="tests.messaging_templates.render.chain"), CaptureQueriesContext(connection) as q:
+            with pytest.raises(ValidationError) as raised:
+                head.full_clean()
+        assert raised.value.messages == [f"parts/chain{902 - length}: includes nest over 3 deep"], raised.value
+        counts[f"saving {length}"] = len(q)
+    template = _mail('{% include "parts/chain0" only %}', key="tests.chained")
+    with system_context(reason="tests.messaging_templates.render.chain"), CaptureQueriesContext(connection) as q:
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    assert refusals == ["parts/chain2: includes nest over 3 deep"]
+    counts["judge"] = len(q)
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    inserted = {"kind": "part", "key": "inserted", "language": "en", "name": "n", "format": "markdown",
+                "source": '{% include "parts/chain0" only %}'}
+    with CaptureQueriesContext(connection) as q:
+        result = execute_schema(schema, _INSERT, {"object": inserted}, user=create_user("messaging-templates-chain"))
+    assert [(error.extensions or {}).get("code") for error in result.errors or ()] == ["VALIDATION"], result.errors
+    counts["member insert"] = len(q)
+    assert counts == CHAIN_QUERIES, counts
+
+
+CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3, "member insert": 119}
+"""The queries each walk of a chain makes; before the gather stopped at the tree's depth, a 900 chain cost 1,018 as
+system work, 499 on the render-side judge and 5,572 on a member's insert."""
+
+
+def test_a_chain_at_the_include_depth_renders(plain: Any, kit: Any) -> None:
+    """A template including a chain exactly INCLUDE_DEPTH_LIMIT deep is admitted and renders every link."""
+
+    del plain
+    for index in range(3):
+        source = "Last." if index == 2 else f'Link {index}.\n\n{{% include "parts/link{index + 1}" only %}}'
+        _row("part", f"link{index}", source=source)
+    template = _mail('{% include "parts/link0" only %}', key="tests.linked")
+    assert _refusals(template) == []
+    assert "Last." in _render(template, {}, kit).plain_text
+
+
 def test_a_walk_compiles_each_span_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The HTML checks compile an output span the first time a walk meets its text, never again in that walk."""
 

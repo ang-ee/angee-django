@@ -409,6 +409,12 @@ def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
     )
 
 
+def _nested_too_deep(name: str) -> str:
+    """The refusal of a row whose include sits past :data:`INCLUDE_DEPTH_LIMIT`, as the tree and the gather word it."""
+
+    return f"{name}: includes nest over {INCLUDE_DEPTH_LIMIT} deep"
+
+
 def _over_caps(root_name: str, form: RowPiece, nodes: int, outputs: int, text: int) -> list[str]:
     """The tree caps a form's count passes: :data:`NODE_LIMIT`, :data:`OUTPUT_LIMIT`, :data:`TEXT_LIMIT`."""
 
@@ -1289,10 +1295,15 @@ class TemplateWalker:
         Each checked row's own size (:attr:`_RowCheck.sizes`) adds to the walk's totals, and the walk stops as soon as
         a total passes a tree cap: every row reached is in the tree at least once, so no admitted walk reaches it.
         What each row's checks read (:attr:`_RowCheck.read`) adds up too, against :data:`WALK_READ_LIMIT`.
+        A row is fetched only at an include depth the tree reaches: the root and its layout stand at 0, a row they
+        include at 1, and a target past :data:`INCLUDE_DEPTH_LIMIT` is refused in the tree's own words
+        (:func:`_nested_too_deep`) before it is read, so a chain costs queries bounded by the limit, not its length.
         """
 
         checks: dict[str, _RowCheck] = {}
         totals: dict[RowPiece, tuple[int, int, int]] = {}
+        depths: dict[str, int] = {walk.root_name: 0}
+        includers: dict[str, str] = {}
         characters = read = spans = 0
         level = [walk.root_name]
         while level:
@@ -1325,9 +1336,17 @@ class TemplateWalker:
                 walk.includes |= check.includes
                 layout = row.handler.layout_name(row)
                 for target in sorted(check.includes | ({layout} if layout else set())):
-                    if target not in walk.rows and target not in wanted:
+                    if target in walk.rows:
+                        continue
+                    depth = 0 if target == layout else depths[name] + 1
+                    if depth < depths.get(target, depth + 1):
+                        depths[target], includers[target] = depth, name
+                    if target not in wanted:
                         wanted.append(target)
             if walk.refusals or not wanted:
+                return checks
+            if too_deep := sorted({includers[target] for target in wanted if depths[target] > INCLUDE_DEPTH_LIMIT}):
+                walk.refusals.extend(_nested_too_deep(name) for name in too_deep)
                 return checks
             found = reader.named_rows(wanted, language=walk.language)
             # One query a level for what a save asks of every included key, never one a target.
@@ -1654,7 +1673,7 @@ class _TreeWalker:
             self.refuse(frame, f"includes itself: {' -> '.join((*stack, target))}")
             return
         if len(stack) > INCLUDE_DEPTH_LIMIT:
-            self.refuse(frame, f"includes nest over {INCLUDE_DEPTH_LIMIT} deep")
+            self.walk.refusals.append(_nested_too_deep(frame.name))
             return
         row = self.walk.rows[target]
         arguments = row.variables if isinstance(row.variables, dict) else {}
