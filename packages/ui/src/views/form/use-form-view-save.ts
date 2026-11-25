@@ -42,6 +42,7 @@ import {
 } from "./editable-lines";
 import {
   baselineLineRows,
+  cloneFormValue,
   createPresetMemory,
   dirtyArrayValues,
   emptyDraft,
@@ -133,6 +134,28 @@ export interface FormViewAcknowledgedSource {
 
 export type FormViewForm = FieldValidationForm<FormValues>;
 
+/**
+ * What a record form's Save would hand its writer for the values the form holds now (`nextSave`). The
+ * native update sends `data` as its input. The native create sends `data`, with the lines' `payload`
+ * under the lines field as a nested insert when the lines changed. An edit whose lines changed goes
+ * through the resource save, `data` as its patch and the `payload` as its lines. The form's own submit
+ * owner receives `data` and its context's `lines`, and may map them further.
+ */
+export interface FormNextSave {
+  /**
+   * The record's input, of the fields the save can write (`pathWritable`) whose condition holds for the
+   * values (a `hidden` field, which has no control, included), with the values it writes for the fields
+   * a preset hid. On an edit, the fields that changed: a structured field the form saves as a whole goes
+   * whole, with its unchanged members, and where the form saves only some of its dotted members, only
+   * those go. On a create, the create input less what it leaves out as blank. On an edit where this holds
+   * no key and `lines` holds no change, Save still sends that empty update; what a server does with it
+   * is not the form's to know.
+   */
+  data: FormValues;
+  /** The lines diff of a form that edits its lines (`diffLines`, its `payload` the whole list); `null` where the form edits none. */
+  lines: LineDiff | null;
+}
+
 export interface UseFormViewSaveProps {
   resource: string;
   id?: string | null;
@@ -194,6 +217,31 @@ export interface FormViewSaveSurface {
   linesField: string | null;
   linesActive: boolean;
   submitForm: (event?: React.BaseSyntheticEvent) => Promise<void>;
+  /**
+   * What Save would hand its writer now (`FormNextSave`). Save and `nextSave` build it with one function,
+   * from the values, the baseline and the changed fields the form holds when it is called. Each reads its
+   * own copy of the values: Save the one the form library's submit hands it (its `cloneObject`, which
+   * keeps a class instance, and in a browser a file or a file list, as the same object), `nextSave`
+   * `cloneFormValue`'s (`structuredClone`, which copies a class instance as a plain object); a record
+   * form's values are plain data, for which the two hold the same. What it returns shares nothing with
+   * the form, and each call returns a new object: compare it by value, never by identity.
+   *
+   * Reading it validates nothing, writes nothing, marks nothing dirty and starts no request, and it
+   * promises no more than what Save would build. That save may still not happen: the form takes no edit
+   * (it is read-only or its record has not arrived: Save throws), a save is already in flight (Save
+   * returns), or the rule check, a registered validation, lines another save changed, a running "view
+   * as" preview, a revision that is not available or the server stops it.
+   *
+   * The values, the baseline and the changed fields are read when it is called; what the form saves
+   * comes from the render that made the function (the record's fields and what the record permits, the
+   * mode, the model's metadata, the create seeds, the lines and their loaded rows). So the latest
+   * surface's is always right, and one a reader keeps stays right across edits and discards, and across
+   * a save that leaves all of that as it was; once the record arrives, is replaced or permits something
+   * else, call the latest surface's. Call it in render or after a pause, never synchronously inside a
+   * form subscription callback: during a reset the state it reads is the last render's until the form
+   * renders again.
+   */
+  nextSave: () => FormNextSave;
   discardChanges: () => void;
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   patchRecord: (patch: Record<string, unknown>) => void;
@@ -744,6 +792,30 @@ export function useFormViewSave({
     },
     [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
+  // What the save writes for `value`, its resets of hidden fields and its lines diff, with the loaded
+  // rows that diff reads: the one place Save and `nextSave` build it. The baseline and the changed fields
+  // are the form's when it is called; everything else is this render's.
+  const saveFor = React.useCallback((value: FormValues) => {
+    const baseline = (form.formState.defaultValues ?? {}) as FormValues;
+    const saveOptions = { isCreate, seededFieldNames: createSeedNames, writableFields: writableFieldNames };
+    const resets = hiddenResetWrites(value, saveFields, { ...saveOptions, baseline });
+    const data = mutationData(value, saveFields, {
+      ...saveOptions,
+      dirtyFields: form.formState.dirtyFields as Record<string, unknown>,
+      fieldMetadata: modelMetadata?.fields,
+      hiddenResets: resets,
+    });
+    const lineBaseline = linesActive && linesConfig && linesField ? baselineLineRows(baseline, linesField, seedLineRows) : null;
+    const lines = lineBaseline && linesConfig && linesField
+      ? diffLines(lineBaseline, (value[linesField] as Row[] | undefined) ?? [], linesConfig)
+      : null;
+    return { data, resets, lines, lineBaseline };
+  }, [createSeedNames, form, isCreate, linesActive, linesConfig, linesField, modelMetadata, saveFields, seedLineRows, writableFieldNames]);
+  // Its own copy of the values (Save reads the submit's), so what it returns shares nothing with them.
+  const nextSave = React.useCallback((): FormNextSave => {
+    const { data, lines } = saveFor(cloneFormValue(form.getValues()));
+    return { data, lines };
+  }, [form, saveFor]);
   const submitValues = React.useCallback(
     async (value: FormValues) => {
       if (submittingRef.current || previewBlockedRef.current) return;
@@ -754,33 +826,14 @@ export function useFormViewSave({
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      const saveOptions = { isCreate, seededFieldNames: createSeedNames, writableFields: writableFieldNames };
-      const resets = hiddenResetWrites(value, saveFields, {
-        ...saveOptions,
-        baseline: (form.formState.defaultValues ?? {}) as FormValues,
-      });
-      const data = mutationData(value, saveFields, {
-        ...saveOptions,
-        dirtyFields: dirtyFields as Record<string, unknown>,
-        fieldMetadata: modelMetadata?.fields,
-        hiddenResets: resets,
-      });
-      const linesDiff =
-        linesActive && linesConfig && linesField
-          ? diffLines(
-              baselineLineRows(form.formState.defaultValues ?? {}, linesField, seedLineRows),
-              (value[linesField] as Row[] | undefined) ?? [],
-              linesConfig,
-            )
-          : null;
-      if (!isCreate && linesDiff?.hasChanges && linesConfig && linesField) {
-        const baseline = baselineLineRows(form.formState.defaultValues ?? {}, linesField, seedLineRows);
+      const { data, resets, lines: linesDiff, lineBaseline } = saveFor(value);
+      if (!isCreate && linesDiff?.hasChanges && lineBaseline && linesConfig && linesField) {
         const latest = queryClient.getQueryData<GetOneResponse<RowRecord>>(detailKey)?.data ?? record;
         // Full-list writes implicitly delete omitted IDs. Refuse a stale draft
         // instead of deleting remote additions or resubmitting newly saved rows
         // whose generated IDs cannot be matched to a concurrently edited draft.
-        if (baseline.some((row) => row[linesConfig.idField] == null)
-          || !sameObservedLines(baseline, rowsFromRecord(latest) ?? [], linesConfig)) {
+        if (lineBaseline.some((row) => row[linesConfig.idField] == null)
+          || !sameObservedLines(lineBaseline, rowsFromRecord(latest) ?? [], linesConfig)) {
           applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField });
           return;
         }
@@ -814,24 +867,18 @@ export function useFormViewSave({
     [
       clearErrors,
       dataResource,
-      saveFields,
       formReadOnly,
       isCreate,
       previewBlockedRef,
       commitSavedRecord,
-      createSeedNames,
-      linesActive,
       linesConfig,
       linesField,
-      modelMetadata,
       resource,
       runSubmit,
       readSubmitResult,
-      seedLineRows,
+      saveFor,
       t,
-      writableFieldNames,
       form,
-      dirtyFields,
       queryClient,
       detailKey,
       rowsFromRecord,
@@ -979,6 +1026,7 @@ export function useFormViewSave({
     linesField,
     linesActive,
     submitForm,
+    nextSave,
     discardChanges,
     applyPatch,
     patchRecord,

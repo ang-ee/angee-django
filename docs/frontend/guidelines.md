@@ -1325,6 +1325,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
+- What a record form's Save would write is readable before a save:
+  [nextSave](../../packages/ui/src/views/form/use-form-view-save.ts), on the
+  save surface a pane and a toolbar receive, returns the record's input and the
+  lines diff, built by Save's own function from the values, the baseline and
+  the changed fields the form holds when it is called. It validates, writes and
+  requests nothing, and each call returns a new object: a pane that previews
+  unsaved edits compares what it reads by value, and never rebuilds the mapping.
 - Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
   discriminator selection; RHF owns original and transformed values. Dialog

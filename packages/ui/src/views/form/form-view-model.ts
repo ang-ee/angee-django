@@ -837,7 +837,14 @@ function setDottedValue(target: Record<string, unknown>, path: string, value: un
   set(target, path, value);
 }
 
-function cloneFormValue(value: unknown): unknown {
+/**
+ * A record form's copy of a value it reads: a deep copy (`structuredClone`) of an object or a list, that
+ * shares nothing with `value`; anything else as it is. The save's payload and `nextSave` read through it.
+ * A record form's values are plain data: `structuredClone` copies a class instance as a plain object
+ * without its methods (a `toJSON` among them), and a function throws, as in the form's undo history
+ * (`useFormHistory`), which already copies every value this way.
+ */
+export function cloneFormValue<T>(value: T): T {
   if (value == null || typeof value !== "object") return value;
   return structuredClone(value);
 }
