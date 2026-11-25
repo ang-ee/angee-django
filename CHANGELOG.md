@@ -10,6 +10,42 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+  The default brand kit's colours dress the app at run time, on every page inside
+  it, signed in or not.
+  - `@angee/app` gains the install-one manifest key `hostAppearance`, a
+    `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
+    per render of its session frame for the theme a person who chose none wears (the
+    selected app's, else the build's, locked apps included); the `{ options, pending }`
+    it answers replaces the build's options for that theme. Two providers fail
+    composition, as two dashboard stores do. `@angee/ui`'s `HostAppearanceDefaults`
+    gains `pending`, which keeps the first paint and the boot cache until the source's
+    first read answers, fails or pauses.
+  - `angee.brandkit` is that source. When the theme accepts the shared palette
+    customisation, the kit's ten colours go over the build's options for it, else over
+    the theme's defaults; the build's font, radius, density, elevation and logo
+    treatment stay, and a person's own theme or options still win. A fixed theme, or
+    none, sends no read; no default kit or a failed read leaves the build's options.
+  - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
+    of any kit, through the new public root `default_brand_kit_colors`
+    (`BrandKitColors`), under `read_colors`, a deliberate disclosure on the kit's own
+    `is_default` column (`brandkit/brand_kit` at schema revision 2; no tuple). Console
+    reads stay signed-in.
+  - The Appearance page's customisation editor starts from the options the person
+    wears, so customising while following the app default keeps its other choices.
+  - **Upgrade:** the console root `default_brand_kit` is removed; read
+    `default_brand_kit_colors` on the public schema, or `BrandKit.objects.default()` in
+    Python. Provision applies the permission revision through `rebac sync`. Once the
+    addon is provisioned a default kit always exists, so on a host with
+    `angee.brandkit`: a project on the stock theme (the full profile's default) wears
+    the shipped Angee kit's colours; a project on another customisable theme, such as
+    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
+    states in `appearance_options` show only on a device's first visit, before the read
+    answers; and every app of a deployment with per-app themes wears the kit's palette,
+    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
+    hosts without the addon, and a theme that ships its own default kit stating its own
+    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+
 - `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
   `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
   `angee.calendar`: **Changed behaviour.**

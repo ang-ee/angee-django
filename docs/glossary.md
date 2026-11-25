@@ -590,6 +590,18 @@ activate a theme.
 
 **Appearance** — the effective presentation and the user or host settings that
 select it: a theme, a color-scheme preference and that theme's supported options.
+The host's come from the build, and its theme's options may come at run time from
+one installed **host appearance** source (`hostAppearance`), as the default brand
+kit's colours do; a person's own settings win.
+
+**Brand kit** — a deployment's brand facts in one `angee.brandkit` row: the
+brand name, the colours a customisable theme takes as inputs (named as the theme
+runtime names them, light values only), heading and body font stacks, logos for
+light and dark backgrounds, the organization and postal address a mail footer
+shows, and a voice note. Themes and mail derive their dark values from it. Once
+any kit exists, exactly one is the **default kit**; the shipped default states the
+Angee brand. A theme owns structure and applies a kit: the default kit's colours
+dress the app, signed in or not.
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.

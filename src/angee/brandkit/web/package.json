@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@angee/app": "workspace:*",
+    "@angee/refine": "workspace:*",
     "@angee/ui": "workspace:*",
     "lucide-react": "^1.21.0"
   },
@@ -25,6 +26,8 @@
   },
   "devDependencies": {
     "@angee/storybook": "workspace:*",
+    "@angee/theme-angee": "workspace:*",
+    "@angee/theme-stock": "workspace:*",
     "@tanstack/react-router": "^1.170.41",
     "@testing-library/react": "^16.1.0",
     "@types/react": "^19.2.17",

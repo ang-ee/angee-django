@@ -59,7 +59,7 @@ console and the resource loader) keep exactly one default:
 before any kit exists, as in a database before its first resource load; after a
 write that goes past `save` and `clean`, such as `bulk_create` into an empty table
 or `update(is_default=False)`; and for an actor that reads no kit. A caller keeps
-a stated behaviour for `None`. The console's `default_brand_kit` query returns it.
+a stated behaviour for `None`.
 
 The install tier ships one kit stating the Angee brand. It states no default, so
 on a fresh install it becomes the default by being the first kit saved. Its
@@ -95,9 +95,41 @@ to colour a link. The palette repairs every pair, so a warning names a seed mail
 cannot wear as stated. It covers mail only, not the app a theme dresses. It is
 advice: the kit form shows each as a warning, and a save never refuses one.
 
+## The app's colours
+
+The default kit's colours dress the app, on every page, signed in or not. The web
+fragment is the app's `hostAppearance` source: `createApp` asks it about the theme
+a person who chose none wears (the selected app's, else the build's), locked or
+not. When that theme accepts the shared palette customisation
+(`createThemeCustomizationOptions`), the fragment reads the public
+`default_brand_kit_colors` root and puts the kit's ten colours over the build's
+options for that theme, else over the theme's defaults (`brandKitOptions` in
+`web/src/appearance.ts`). The build's font, radius, density, elevation and logo
+treatment stay. The theme still derives every token from those inputs, dark
+values included, and emits a token only where an input differs from its own
+default, so a kit equal to the theme's defaults changes nothing.
+
+Nothing changes, and no read is made, for a fixed theme or no theme. With no
+default kit, a failed read, or a kit the theme's parser refuses, the app wears the
+build's options. A person's own theme or options still win, and **Reset
+appearance** returns them to the kit. The first paint holds while the read is on
+its way (`HostAppearanceDefaults.pending`), so the build's colours do not flash
+before the kit's. An administrator's save re-themes their own app at once; other
+open sessions pick the change up on reload, a device first repainting from its
+boot cache. A kit's contrast warnings are about mail: the app wears the theme's
+derivation of the kit's colours, which keeps on-brand text and links readable,
+and shows no warning.
+
+The kit's name, logos and fonts do not reach the app.
+
 ## Access
 
-Every signed-in actor reads kits; platform admins create, edit and delete them
+Every signed-in actor reads kits; platform admins create, edit and delete them.
+Everyone, signed in or not, reads the default kit's ten colours through the
+public `default_brand_kit_colors` root: `read_colors`, a deliberate disclosure on
+the kit's own `is_default` column (a filtered constant, so no tuple is written),
+which no other root reads under. It reaches nothing else of the default kit (not
+its id, name, fonts, logos, footer or voice) and nothing of any other kit
 ([permissions](permissions.zed): `brandkit/brand_kit`).
 
 ## Console

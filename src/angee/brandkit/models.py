@@ -29,7 +29,8 @@ as the theme runtime derives the app's tokens, and keeps every text pair readabl
 they are advice about mail, and a save never refuses them.
 
 **Access.** Every signed-in person reads kits; platform administrators manage
-them (``permissions.zed``).
+them; everyone, signed in or not, reads the default kit's colours, and nothing
+else of any kit, through the ``read_colors`` disclosure (``permissions.zed``).
 """
 
 from __future__ import annotations

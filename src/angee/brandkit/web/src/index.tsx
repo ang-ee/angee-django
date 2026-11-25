@@ -2,6 +2,7 @@ import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDecl
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { SwatchBook as BrandKitIcon } from "lucide-react";
 
+import { brandKitHostAppearance } from "./appearance";
 import { contrastWarningsWidget } from "./ContrastWarnings";
 import { enBrandkitMessages } from "./i18n";
 import { BRAND_KIT_MODEL, brandKitForm } from "./views/BrandKitForm";
@@ -29,10 +30,10 @@ const brandkitMenu: MenuDeclarations = {
 
 /**
  * The `@angee/brandkit` rendered addon: the Brand kits page in Settings for
- * whoever may create kits, the registered kit form, and the
+ * whoever may create kits, the registered kit form, the
  * `angee.brandkit.contrastWarnings` read widget the backend's computed
- * `contrast_warnings` field declares. Applying a kit to the app's theme is not
- * part of this manifest.
+ * `contrast_warnings` field declares, and the app's `hostAppearance`: the default
+ * kit's colours on the theme a person who chose none wears, signed in or not.
  */
 const brandkit = defineBaseAddon({
   id: BRANDKIT_ID,
@@ -42,6 +43,7 @@ const brandkit = defineBaseAddon({
   icons: { brandkit: BrandKitIcon },
   forms: { [BRAND_KIT_MODEL]: brandKitForm },
   widgets: { "angee.brandkit.contrastWarnings": contrastWarningsWidget },
+  hostAppearance: brandKitHostAppearance,
 });
 
 export default brandkit;
