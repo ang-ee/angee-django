@@ -176,9 +176,9 @@ def _recording(monkeypatch: pytest.MonkeyPatch, owner: object, name: str, record
 
     original = getattr(owner, name)
 
-    def recorded(*args: Any) -> Any:
-        record(*args)
-        return original(*args)
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        record(*args, **kwargs)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(owner, name, recorded)
 
@@ -584,6 +584,7 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.START_TAG, '<p title="a&b">y</p>', False),
     (R.START_TAG, '<p title="x"title="y">z</p>', False),
     (R.START_TAG, '<p/title="x">y</p>', False),
+    (R.START_TAG, '<td bac\u212aground="#">x</td>', False),
     *((R.SELF_CLOSING, opening, False)
       for opening in ("<style/>", "<style />", "<STYLE/>", '<style media="all"/>', "<title/>", "<p/>",
                       '<a href="https://example.test/" />')),
@@ -2108,7 +2109,8 @@ def _preview_cases() -> dict[str, Any]:
     10,000-character values and a third hidden row up to the walk's 150,000 characters, with the costliest
     subject its pass admits (50 items of six dates; the 500 list items are shared). ``review-subject``: the same
     with the review's subject over every item, which the subject's budget stops. ``refused``: a walk reaching
-    150,000 characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over.
+    150,000 characters of ``*_`` rows whose HTML forms pass the text cap only when the walk is over. ``headings``
+    and ``rules``: :data:`MULTIPLIED` rows, a template and two parts saved past their check.
     """
 
     star_lines = [("*_" * 499)[:999]] * 49
@@ -2118,6 +2120,8 @@ def _preview_cases() -> dict[str, Any]:
         _row("part", f"star{index}", source="\n".join([line[:996] for line in [*star_lines, star_lines[0]]]))
     for index in range(2):
         _row("part", f"hidden{index}", source=commented)
+        for name, multiplied in MULTIPLIED.items():
+            _row("part", f"{name}{index}", source=multiplied)
     hidden = '\n{% include "parts/hidden0" only %}{% include "parts/hidden1" only %}'
     loop = _loop(DATED + _deep_ifs(30))
     heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
@@ -2146,7 +2150,32 @@ def _preview_cases() -> dict[str, Any]:
                          key="tests.refused"),
         "dated": _mail(_dated(0, 280), {"items.*.when": "x"}, format="html", text_source=_dated(300, 280),
                        key="tests.dated", sample=DATED_VALUES),
+        **{name: _mail(source + "".join(f'\n\n{{% include "parts/{name}{index}" only %}}' for index in range(2)),
+                       key=f"tests.{name}")
+           for name, source in MULTIPLIED.items()},
     }
+
+
+MULTIPLIED = {
+    "headings": "\n".join(["# a"] * 12_400)[:49_000],
+    "rules": "\n\n".join(["---"] * 9_800)[:49_000],
+}
+"""Markdown the pass multiplies: each heading or rule gains a styled tag, so a walk reaching three such rows of
+49,000 characters cost over two seconds before any cap applied. Each form is now refused at its own spans' cap."""
+
+
+def test_a_form_over_its_caps_is_refused_before_the_html_checks_read_it(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The span and text caps meet a form straight after the Markdown pass: the HTML checks never read it."""
+
+    del plain
+    read: list[str] = []
+    _recording(monkeypatch, walker_module, "check_html", lambda form, *args, **kwargs: read.append(form))
+    for name, source in MULTIPLIED.items():
+        refusals = _refusals(_unsaved(source=source, key=f"tests.{name}"))
+        assert refusals == [f"tests.{name}: its html form holds over 2000 template spans"], refusals
+    assert read == []
 
 
 @pytest.fixture
@@ -2213,6 +2242,9 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
         149_981, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
     ),
     "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
+    # Refused at the root's own check: its form holds over 2,000 spans, so no part is reached and nothing walked.
+    "headings": (49_076, [], []),
+    "rules": (49_068, [], []),
     "dated": (
         23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
     ),
@@ -2274,7 +2306,8 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest previews and renders the caps admit take under two seconds of CPU: walk, prepare(), passes."""
+    """The costliest previews and renders the caps admit take under two seconds of CPU, and so do their walk and
+    prepare() alone; the refused cases stop as soon."""
 
     del plain
     spent: dict[str, float] = {}
@@ -2285,10 +2318,17 @@ def test_preview_time(plain: Any, kit: Any) -> None:
         spent[name] = round(time.process_time() - started, 3)
         assert (preview.rendered is not None) is (name in ADMITTED_PREVIEWS), preview.warnings
         if name in ADMITTED_PREVIEWS:
-            started = time.process_time()
             with system_context(reason="tests.messaging_templates.render.timed"):
+                started = time.process_time()
+                walk = TemplateWalker().walk(template, MessageTemplate.objects)
+                spent[f"{name} walk"] = round(time.process_time() - started, 3)
+                started = time.process_time()
+                with translation.override(walk.language):
+                    walk.prepare(template.sample)
+                spent[f"{name} prepare"] = round(time.process_time() - started, 3)
+                started = time.process_time()
                 template.render(template.sample, kit=kit)
-            spent[f"{name} render"] = round(time.process_time() - started, 3)
+                spent[f"{name} render"] = round(time.process_time() - started, 3)
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < 2.0
 

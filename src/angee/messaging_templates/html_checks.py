@@ -153,7 +153,8 @@ DOCTYPE = "doctype html"
 
 _ELEMENT_NAME = re.compile(r"[a-z][a-z0-9]*(?::[a-z][a-z0-9]*)?")
 _ATTRIBUTE_NAME = re.compile(r"[a-z_:][a-z0-9_:.-]*")
-_GAP = "[ \t\n]+"
+_GAP = " \t\n"
+"""The characters a gap between attributes is a run of: spaces, tabs and newlines."""
 _CODE_IN_TAG = re.compile(r"<[/!?]?(?:[a-zA-Z][^\t\n\r\f />\x00]*)?\x00")
 """Where a ``<`` the parser read as text names a tag that template code continues: rule 6, not rule 2."""
 _PLACEHOLDER = re.compile("\x00(\\d+)\x00")
@@ -165,14 +166,32 @@ def _written(value: str) -> str:
     return escape_html(value, quote=False).replace('"', "&quot;")
 
 
-def _start_tag(tag: str, attrs: list[tuple[str, str | None]], *, closing: bool) -> re.Pattern[str]:
-    """The canonical rebuild of a start tag as ``html.parser`` read it, the case of names and the gaps free."""
+def _canonical(written: str, tag: str, attrs: list[tuple[str, str | None]], *, closing: bool) -> bool:
+    """Whether ``written`` is the canonical rebuild of the start tag ``html.parser`` read, the case of names and the
+    gaps free: matched in one pass along what the parser read, with no pattern compiled per tag.
 
-    attributes = "".join(
-        _GAP + "(?i:" + re.escape(name) + ")" + ("" if value is None else '="' + re.escape(_written(value)) + '"')
-        for name, value in attrs
-    )
-    return re.compile("<(?i:" + re.escape(tag) + ")" + attributes + ("[ \t\n]*/>" if closing else ">"))
+    A name is matched as written in ASCII alone, so a character that only lower-cases to an ASCII letter (the
+    Kelvin sign) is no name; a value is matched as :func:`_written` writes it.
+    """
+
+    at = 1 + len(tag)
+    if not (written.startswith("<") and written[1:at].isascii() and written[1:at].lower() == tag):
+        return False
+    for name, value in attrs:
+        gap = at
+        while written[at:at + 1] and written[at] in _GAP:
+            at += 1
+        end = at + len(name)
+        if at == gap or not written[at:end].isascii() or written[at:end].lower() != name:
+            return False
+        at = end
+        if value is not None:
+            quoted = '="' + _written(value) + '"'
+            if not written.startswith(quoted, at):
+                return False
+            at += len(quoted)
+    rest = written[at:].lstrip(_GAP) if closing else written[at:]
+    return rest == ("/>" if closing else ">")
 
 
 class _HtmlChecker(HTMLParser):
@@ -257,7 +276,7 @@ class _HtmlChecker(HTMLParser):
             self.broken(SpellingRule.LESS_THAN, f"a < in the tag {written[:60]!r}")
         elif (
             not _ELEMENT_NAME.fullmatch(tag) or not all(_ATTRIBUTE_NAME.fullmatch(name) for name in names)
-            or len(set(names)) != len(names) or not _start_tag(tag, attrs, closing=closing).fullmatch(written)
+            or len(set(names)) != len(names) or not _canonical(written, tag, attrs, closing=closing)
         ):
             self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}")
         office = self.office and tag in OFFICE_ELEMENTS

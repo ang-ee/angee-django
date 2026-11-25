@@ -53,6 +53,7 @@ from django.template.base import (
     TextNode,
     TokenType,
     VariableNode,
+    tag_re,
 )
 from django.template.defaultfilters import date as date_filter
 from django.template.defaulttags import CommentNode, ForNode, IfNode, TemplateLiteral, TemplateTagNode, WithNode
@@ -112,6 +113,10 @@ OUTPUT_LIMIT = 300
 LOOP_DEPTH_LIMIT = 2
 INCLUDE_DEPTH_LIMIT = 3
 TEXT_LIMIT = 200_000
+FORM_SPAN_LIMIT = 2 * 1_000
+"""The most template spans one form of a row holds, checked straight after the Markdown pass and before the HTML
+checks read it: a walk admits at most :data:`NODE_LIMIT` nodes, and an opening tag is a node whose end tag is a
+second span."""
 DECLARED_LIMIT = 100
 VALUES_JSON_LIMIT = 50_000
 VALUE_STRING_LIMIT = 10_000
@@ -1103,7 +1108,14 @@ class TemplateWalker:
             refuse(str(refusal))
             return _RowCheck(name, refusals=tuple(refusals))
         for form_name, form in forms._asdict().items():
-            if any(sum(line.count(opener) for opener in OPENERS) > FORM_OPENERS_PER_LINE for line in form.split("\n")):
+            # Before anything else reads the form: a Markdown pass multiplies its source many times over.
+            spans = tag_re.findall(form)
+            if len(spans) > FORM_SPAN_LIMIT:
+                refuse(f"its {form_name} form holds over {FORM_SPAN_LIMIT} template spans")
+            elif len(form) - sum(map(len, spans)) > TEXT_LIMIT:
+                refuse(f"its {form_name} form writes over {TEXT_LIMIT} characters of text")
+            elif any(sum(line.count(opener) for opener in OPENERS) > FORM_OPENERS_PER_LINE
+                     for line in form.split("\n")):
                 refuse(f"a line of its {form_name} form holds over {FORM_OPENERS_PER_LINE} {{{{, {{% or {{#")
         if refusals:
             return _RowCheck(name, refusals=tuple(refusals))
