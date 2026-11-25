@@ -233,6 +233,47 @@ test("a save the server refuses shows each of its reasons in the one Save failed
   expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([refusal.set]);
 });
 
+/** The plain-text source in the record form, or null where the form does not show it. */
+function plainTextSource(form: HTMLElement): HTMLTextAreaElement | null {
+  return within(form).queryByLabelText<HTMLTextAreaElement>(word("field.textSource"));
+}
+
+test("an HTML row's plain-text source goes with Markdown, comes back as loaded with HTML, and a Markdown save empties it", async () => {
+  const calls: MessageTemplateFixtureCall[] = [];
+  const loaded = String(RECORDED.rows.find((row) => row.id === ROW.quote)!.text_source);
+  render(<MessageTemplateStory open={ROW.quote} onCall={(call) => calls.push(call)} />);
+  const form = await recordForm();
+  await within(form).findByLabelText(word("field.textSource"));
+  expect(plainTextSource(form)?.value).toBe(loaded);
+  // What the Format hint says: an unsaved edit does not survive the round trip, the loaded text comes back.
+  fireEvent.change(plainTextSource(form)!, { target: { value: "An edit nobody saved." } });
+  await choose(word("field.format"), "Markdown");
+  await waitFor(() => expect(plainTextSource(form)).toBeNull());
+  await choose(word("field.format"), "HTML");
+  await waitFor(() => expect(plainTextSource(form)?.value).toBe(loaded));
+  await choose(word("field.format"), "Markdown");
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+
+  await screen.findByText(ui("form.updateSuccess"));
+  expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set))
+    .toEqual([{ format: "markdown", text_source: "" }]);
+});
+
+test("a Markdown row switched to HTML shows an empty plain-text source and saves its format alone", async () => {
+  const calls: MessageTemplateFixtureCall[] = [];
+  render(<MessageTemplateStory open={ROW.passwordReset} onCall={(call) => calls.push(call)} />);
+  const form = await recordForm();
+  await within(form).findByLabelText(word("field.description"));
+  expect(plainTextSource(form)).toBeNull();
+  await choose(word("field.format"), "HTML");
+  await waitFor(() => expect(plainTextSource(form)?.value).toBe(""));
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+
+  // The fake saves what it is sent; the server would ask for the plain-text source (the refused save above).
+  await screen.findByText(ui("form.updateSuccess"));
+  expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([{ format: "html" }]);
+});
+
 test("choosing a brand kit sends its id as brand_kit, and the default kit sends none", async () => {
   const requests: GraphQLWireRequest[] = [];
   render(<MessageTemplateStory open={ROW.welcome} onRequest={(request) => requests.push(request)} />);
@@ -280,8 +321,11 @@ test("a template that does not render says so first, then why in the server's wo
   const title = await screen.findByText(word("preview.refused"));
   const reasons = RECORDED.previews[ROW.invoiceSent]!.warnings.map((warning) => screen.getByText(warning.detail));
   expect(reasons.length).toBeGreaterThan(0);
-  // The state and its reasons sit together at the top of the pane's body, the state first.
-  const body = title.closest(".overflow-y-auto");
+  // The state and its reasons sit together at the top of the pane's body, the state first; it scrolls from the keyboard.
+  const body = screen.getByRole("region", { name: word("preview.refusedRegion") });
+  expect(body.contains(title)).toBe(true);
+  expect(body.className).toContain("overflow-y-auto");
+  expect(body.getAttribute("tabindex")).toBe("0");
   for (const reason of reasons) {
     expect(body?.contains(reason)).toBe(true);
     expect(title.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -299,14 +343,16 @@ async function previewToolbar(): Promise<HTMLElement> {
   return toolbar;
 }
 
-test("the Preview pane's caption, brand kit and HTML or plain-text switch share its one toolbar row", async () => {
+test("the Preview pane's brand kit and HTML or plain-text switch share its one toolbar row, which carries no title", async () => {
   render(<MessageTemplateStory open={ROW.welcome} />);
   await screen.findByTitle(word("preview.frameTitle"));
   const toolbar = await previewToolbar();
 
   expect(within(toolbar).getByRole("group", { name: word("preview.format") })).toBeTruthy();
-  // The caption is the toolbar host's title, in the same row as the toolbar.
-  expect(toolbar.parentElement?.parentElement?.textContent).toContain(word("preview.saved"));
+  // The strip names the tab; the row holds the toolbar alone, and the saved-row caption is read under it, whole.
+  expect(toolbar.parentElement?.parentElement?.textContent).not.toContain(word("preview.saved"));
+  const facts = screen.getByRole("region", { name: word("preview.factsRegion") });
+  expect(within(facts).getByText(word("preview.saved"))).toBeTruthy();
 });
 
 test("the frame fills the pane's body and scrolls the mail itself; what the server says takes part of the pane at most", async () => {
@@ -316,11 +362,14 @@ test("the frame fills the pane's body and scrolls the mail itself; what the serv
   expect(box.className).toContain("flex-1");
   expect(box.className).toContain("min-h-0");
   expect(box.className).not.toContain("min-h-96");
-  // The warnings sit in a band that scrolls within its share of the pane, above the frame.
+  // The warnings sit in a band that scrolls within its share of the pane, above the frame, and from the keyboard.
   const warning = await screen.findByText(RECORDED.previews[ROW.passwordReset]!.warnings[0]!.detail);
-  const band = warning.closest<HTMLElement>(".overflow-y-auto");
-  expect(band?.className).toContain("max-h-[40%]");
-  expect(band?.contains(frame)).toBe(false);
+  const band = screen.getByRole("region", { name: word("preview.factsRegion") });
+  expect(band.contains(warning)).toBe(true);
+  expect(band.className).toContain("max-h-[40%]");
+  expect(band.className).toContain("overflow-y-auto");
+  expect(band.getAttribute("tabindex")).toBe("0");
+  expect(band.contains(frame)).toBe(false);
 });
 
 test("the frame caveat shows beside a frame only, not with the plain text", async () => {

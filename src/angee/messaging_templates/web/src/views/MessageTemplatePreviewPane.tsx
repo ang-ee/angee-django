@@ -50,9 +50,10 @@ export interface MessageTemplatePreviewPaneProps {
  *
  * The pane fills the height its record tab is given. The brand kit select and the
  * HTML or plain-text switch are its pane toolbar's (`PaneToolbar`, in the host the
- * tab renders it in); what the server says of the render takes at most part of
- * the height and scrolls within it; the body takes the rest, and the frame or the
- * plain text scrolls the whole mail within it.
+ * tab renders it in). Under it, the line saying this is the saved row and what the
+ * server says of the render take at most part of the height and scroll within it;
+ * the body takes the rest, and the frame or the plain text scrolls the whole mail
+ * within it. Each region that scrolls can be reached and scrolled from the keyboard.
  */
 export function MessageTemplatePreviewPane({
   template, active, carriesMessageFields,
@@ -102,8 +103,10 @@ export function MessageTemplatePreviewPane({
     />
   );
 
-  // What the server says of the render, above the body: never more than part of the pane, scrolling within it.
+  // That this is the saved row, then what the server says of the render, above the body: never more than
+  // part of the pane, scrolling within it.
   const facts = [
+    <p key="saved" className={textRoleVariants({ role: "meta" })}>{t("preview.saved")}</p>,
     preview.error ? <ErrorBanner key="error" description={errorMessage(preview.error, t("preview.loadError"))} /> : null,
     rendered && carriesMessageFields ? (
       <MetaGrid key="message" rows={[
@@ -129,7 +132,8 @@ export function MessageTemplatePreviewPane({
   } else if (!rendered) {
     // The state first and the server's reasons under it, both at the top of what the pane is given.
     body = (
-      <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
+      <div tabIndex={0} role="region" aria-label={t("preview.refusedRegion")}
+        className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
         <EmptyState icon="triangle-alert" title={t("preview.refused")} className="min-h-0 p-6" />
         <RecordIssues items={issues} />
       </div>
@@ -151,8 +155,9 @@ export function MessageTemplatePreviewPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-sheet" aria-busy={preview.isPlaceholderData || undefined}>
       {toolbar}
-      {facts.length ? (
-        <div className="grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-3">
+      {result || preview.error ? (
+        <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}
+          className="grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-3">
           {facts}
         </div>
       ) : null}

@@ -25,6 +25,8 @@ export const enMessagingTemplatesMessages: Record<string, string> = {
   "field.format": "Format",
   "field.source": "Source",
   "field.textSource": "Plain-text source",
+  "field.formatHint":
+    "Markdown has no plain-text source of its own: switching to it removes the stored one when you save, and switching back to HTML before saving brings back the stored one, not an unsaved edit.",
   "field.variables": "Variables",
   "field.description": "Description",
   "field.sample": "Sample",
@@ -46,6 +48,8 @@ export const enMessagingTemplatesMessages: Record<string, string> = {
     "Shown in a safe frame that blocks remote content; a mail client may space and size it slightly differently.",
   "preview.html": "HTML",
   "preview.text": "Plain text",
+  "preview.factsRegion": "About this preview",
+  "preview.refusedRegion": "Why it does not render",
   "preview.format": "Show the message body as",
   "preview.subject": "Subject",
   "preview.preheader": "Preheader",

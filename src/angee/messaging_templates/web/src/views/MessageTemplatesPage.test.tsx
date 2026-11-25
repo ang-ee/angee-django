@@ -141,9 +141,9 @@ describe("MessageTemplateForm", () => {
     expect(textSource?.showWhen?.({})).toBe(false);
     const loaded = { format: "HTML", text_source: "{{ text }}" };
     expect(format?.prefill?.("markdown", loaded, loaded)).toEqual({ text_source: "" });
-    expect(format?.prefill?.("html", { format: "html" }, loaded)).toEqual({ text_source: "{{ text }}" });
-    expect(format?.prefill?.("html", { format: "html" }, { format: "MARKDOWN", text_source: "" }))
-      .toEqual({ text_source: "" });
+    // HTML sets nothing: the form gives the field it shows again its loaded value.
+    expect(format?.prefill?.("html", { format: "html" }, loaded)).toEqual({});
+    expect(format?.description).toBe(M["field.formatHint"]);
   });
 
   test("lifts no field above the sheet as the record's body", () => {

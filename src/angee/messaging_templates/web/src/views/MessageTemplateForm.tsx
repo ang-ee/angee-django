@@ -40,11 +40,12 @@ function hasPlainTextSource(values: Row): boolean {
 }
 
 /**
- * The plain-text source a format leaves: none for Markdown, which the server requires of a Markdown
- * row and which the save then writes for the hidden field; for HTML, the one the row was loaded with.
+ * What a format sets on the plain-text source: Markdown empties it, as the server requires of a
+ * Markdown row, and the save then writes the empty text for the hidden field; HTML sets nothing, and
+ * the form gives the field it shows again the value the row was loaded with, not an unsaved edit.
  */
-function plainTextSourceFor(format: unknown, _values: Row, loaded?: Row): Record<string, unknown> {
-  return { text_source: optionToken(format) === "html" ? loaded?.text_source ?? "" : "" };
+function plainTextSourceFor(format: unknown): Record<string, unknown> {
+  return optionToken(format) === "html" ? {} : { text_source: "" };
 }
 
 /**
@@ -76,9 +77,9 @@ function MessageTemplateForm({
       label: t("tab.preview"),
       presentation: "full-bleed",
       visibleWhen: (record) => holdsPermission(record, "preview"),
-      // The pane's toolbar row is the shared pane toolbar's, as every pane's is.
+      // The pane's toolbar row is the shared pane toolbar's, as every pane's is; the strip names the tab.
       render: ({ recordId, active, form }) => (
-        <PaneToolbarHost title={t("preview.saved")}>
+        <PaneToolbarHost>
           <MessageTemplatePreviewPane template={recordId} active={active}
             carriesMessageFields={carriesMessageFields(form.displayRecord ?? {})} />
         </PaneToolbarHost>
@@ -92,7 +93,8 @@ function MessageTemplateForm({
     idArgument: "template", linkTo: MESSAGE_TEMPLATE_MODEL, invalidateModels: [MESSAGE_TEMPLATE_MODEL],
   });
   const [keep] = useRecordActionMutation<ActionFieldName>("keep_message_template_override", {
-    idArgument: "template", invalidateModels: [MESSAGE_TEMPLATE_MODEL],
+    // Settled as Override is: the shared result owner toasts the server's words, its reasons with a refusal.
+    idArgument: "template", invalidateModels: [MESSAGE_TEMPLATE_MODEL], settle: true,
   });
   return (
     <Form {...props} resource={MESSAGE_TEMPLATE_MODEL} returning={selected} recordTabs={tabs}
@@ -111,8 +113,8 @@ function MessageTemplateForm({
         <Field name="layout" label={t("field.layout")} showWhen={carriesMessageFields} />
       </Group>
       <Group label={t("form.content")} columns={1}>
-        <Field name="format" label={t("field.format")} widget="select" options={formatOptions}
-          prefill={plainTextSourceFor} />
+        <Field name="format" label={t("field.format")} description={t("field.formatHint")} widget="select"
+          options={formatOptions} prefill={plainTextSourceFor} />
         <Field name="source" label={t("field.source")} widget="textarea" body={false} />
         <Field name="text_source" label={t("field.textSource")} widget="textarea" body={false}
           showWhen={hasPlainTextSource} />
