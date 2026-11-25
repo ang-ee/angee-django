@@ -3126,7 +3126,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (:meth:`ThreadedModelMixin.require_post`), and read on every attachment.
         Its arguments are checked next (:meth:`_validate_outgoing`), and
         :meth:`_write_outgoing` claims, replays, reads what present state decides,
-        admits, writes and hands off: no refusal follows a write. ``admit()``
+        admits, writes and hands off. Every refusal comes before any write, with
+        one ordered exception: a keyed call refused on present state (the
+        answer's envelope, the channel's sender) has inserted its claim first,
+        and the refusal rolls the claim back with everything else. ``admit()``
         checks domain eligibility once, on insertion, after replay. ``queued``
         hands the message to delivery when the outermost transaction commits,
         ``scheduled_at`` holds a draft until then, neither holds it for approval,
