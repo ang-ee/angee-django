@@ -422,6 +422,42 @@ class ClarifyTests(IntakeAccessCase):
         self.assertIn("to", refused.exception.error_dict)
         self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
 
+    def reviewer_reading_the_channel(self, need, channel):
+        """The task's assignee, made its editor, who reads the channel but holds no ``reply`` on it."""
+
+        with system_context(reason="tests.intake.review.reviewer"):
+            self.Task._base_manager.get(pk=need.task_id).grant_record_access("editor", self.writer)
+        channel.with_actor(self.owner).grant_record_access("reader", self.writer)
+        return self.writer
+
+    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    def test_a_reviewer_who_may_not_reply_on_the_channel_is_refused_as_the_one_who_may_not_send(self):
+        channel = self.channel()
+        need = self.Need._base_manager.get(source_message=email(channel, "no-reply-seat@example.test"))
+        reviewer = self.reviewer_reading_the_channel(need, channel)
+        before = self.task(need).revision
+        with self.assertRaises(PermissionDenied):
+            self.clarify(need, user=reviewer)
+        task = self.task(need)
+        self.assertEqual((task.revision, task.snoozed_at), (before, None))
+        self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
+
+    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    def test_a_requester_who_may_post_is_asked_on_chatter_when_the_reviewer_may_not_send_the_email(self):
+        channel = self.channel()
+        with system_context(reason="tests.intake.review.requester_account"):
+            requester = self.User.objects.create_user(username="chatter-requester", email=REQUESTER)
+        need = self.Need._base_manager.get(source_message=email(channel, "chatter-only@example.test"))
+        reviewer = self.reviewer_reading_the_channel(need, channel)
+        with system_context(reason="tests.intake.review.requester_post"):
+            self.Task._base_manager.get(pk=need.task_id).grant_record_access("editor", requester)
+        task = self.clarify(need, user=reviewer)
+        self.assertEqual(task.snoozed_awaiting_id, requester.pk)
+        (question,) = self.comments(task)
+        notified = apps.get_model("messaging", "ThreadNotification")._base_manager.filter(message=question)
+        self.assertIn(requester.pk, set(notified.values_list("user_id", flat=True)))
+        self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
+
     @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
     def test_the_email_route_asks_what_compose_enforces_for_a_reviewer_who_does_not_own_the_channel(self):
         message_model = apps.get_model("messaging", "Message")
@@ -443,7 +479,9 @@ class ClarifyTests(IntakeAccessCase):
                 with self.subTest(row=name, user=user.username), override_settings(
                     ANGEE_EMAIL_DELIVERY_CONFIGURED=configured,
                 ), actor_context(user):
-                    route = self.Task._email_reply_route([SimpleNamespace(source_message=source)], actor=user)
+                    route, _refused = self.Task._email_reply_route(
+                        [SimpleNamespace(source_message=source)], actor=user,
+                    )
                     try:
                         message_model.objects.compose(parent=source, text="Which dates?", actor=user)
                     except (PermissionDenied, ValidationError):

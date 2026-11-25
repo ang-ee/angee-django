@@ -32,7 +32,8 @@ with a sender, on a channel with an outbound sender. A `Reply-To` that names no
 address is never answered at the sender, which may be a relay. Messaging's
 `compose` addresses, titles and threads the reply and queues its delivery. A
 requester reachable neither way is refused, not awaited: approve their access
-first.
+first. When the email is the only way and the reviewer alone may not send it,
+the reviewer is refused with their own permission refusal instead.
 
 One rule decides which message wakes the hold, and work owns it
 (`TaskWorkQuerySet.wake_replied`): only the awaited account's reply. On chatter

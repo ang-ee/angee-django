@@ -1141,8 +1141,11 @@ class TaskIntake(Composable, extends="projects.Task"):
         assert account is not None
         posts = type(self)._base_manager.get(pk=self.pk).with_actor(account).has_access(self.thread_post_access)
         admitted = any(need.admitted_user_id is not None for need in requests)
-        source = None if admitted else self._email_reply_route(requests, actor=actor)
+        source, refused = (None, None) if admitted else self._email_reply_route(requests, actor=actor)
         if source is None and not posts:
+            if refused is not None:
+                # The requester can be reached by email; it is the reviewer who may not send it.
+                raise refused
             raise ValidationError(
                 {"to": "The requester can neither reply on this task nor be reached by email; approve their access."}
             )
@@ -1192,25 +1195,32 @@ class TaskIntake(Composable, extends="projects.Task"):
         return None
 
     @staticmethod
-    def _email_reply_route(requests: list[Need], *, actor: Any) -> Message | None:
+    def _email_reply_route(
+        requests: list[Need], *, actor: Any,
+    ) -> tuple[Message | None, PermissionDenied | None]:
         """Return the first emailed request's source message ``actor`` may answer and messaging can.
 
         Asked as ``compose`` decides it, under the actor: who may answer
         (``Message.require_reply``) and whether it can be answered
-        (``Message.reply_error``).
+        (``Message.reply_error``). With no such message, the second value is the
+        reviewer's own refusal when it alone kept a request from being asked by
+        email: messaging could answer it, or the reviewer may not even read it.
         """
 
+        refused = None
         for need in requests:
             source = need.source_message
             if source is None or source.message_type != type(source).MessageKind.EMAIL:
                 continue
             try:
                 channel = source.require_reply(actor)
-            except PermissionDenied:
+            except PermissionDenied as error:
+                if refused is None and (not source.has_access("read") or source.reply_error(actor=actor) is None):
+                    refused = error
                 continue
             if source.reply_error(actor=actor, channel=channel) is None:
-                return source
-        return None
+                return source, None
+        return None, refused
 
 
 class ProjectIntakeSetup(Composable, extends="projects.Project"):
