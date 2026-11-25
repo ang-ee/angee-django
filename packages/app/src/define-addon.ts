@@ -53,6 +53,7 @@ import {
 import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "@angee/ui/dashboard/kinds";
 import {
   assertThemeDefinition,
+  type HostAppearanceDefaults,
   type ThemeDefinition,
   type ThemeOptionsEnvelope,
 } from "@angee/ui/theme";
@@ -160,28 +161,19 @@ export interface ShellSettings {
   app?: string;
 }
 
-/** What a host appearance source read: the options to wear, and whether its read is still on its way. */
-export interface HostAppearanceRead {
-  /** The options the theme wears in place of the build's; undefined keeps the build's. */
-  options?: ThemeOptionsEnvelope;
-  /**
-   * The source's first read has not answered: the app keeps its first paint and boot
-   * cache until it does. A source clears it when its read settles, fails or pauses.
-   */
-  pending: boolean;
-}
+/** What a host appearance source answers: the host theme's options, undefined keeping the build's, and `HostAppearanceDefaults.pending`. */
+export type HostAppearanceRead = Pick<HostAppearanceDefaults, "options"> & { pending: boolean };
 
 /**
- * The deployment's appearance at run time: the options the theme a person who chose
- * none wears takes in place of the build's. Like `dashboardStore`, a set of hooks at
- * most one installed addon provides; a person's own theme or options still win.
+ * The deployment's appearance at run time: an install-one set of hooks, like
+ * `dashboardStore`. Where its options rank is docs/frontend/appearance.md, "Host and
+ * user precedence".
  */
 export interface HostAppearanceSource {
   /**
    * A React hook `createApp` calls once per render of its session frame, above every
-   * layout, the same way on every render. `theme` is the theme a person who chose none
-   * wears (the selected app's, else the build's; locked or not), or null; `build` is
-   * the build's options for it, or undefined.
+   * layout, the same way on every render. `theme` is the host theme `createApp` asks
+   * about, or null; `build` is the build's options for that theme, or undefined.
    */
   useOptions(theme: ThemeDefinition<unknown> | null, build: ThemeOptionsEnvelope | undefined): HostAppearanceRead;
 }

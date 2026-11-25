@@ -193,11 +193,11 @@ export interface CreateAppInput {
   /** Native router history; workshops and embedded hosts can isolate navigation. */
   history?: AnyRouter["history"];
   /**
-   * The build's appearance: the theme a person who chose none wears, its color scheme
-   * and its options. An installed `hostAppearance` source may supply that theme's options
-   * at run time (`AddonManifest.hostAppearance`); a signed-in person's own choice wins.
+   * The build's appearance: its theme, color scheme and options. It takes no `pending`:
+   * the session frame alone sets that, from an installed `hostAppearance` source. How it
+   * ranks is docs/frontend/appearance.md, "Host and user precedence".
    */
-  appearance?: HostAppearanceDefaults;
+  appearance?: Omit<HostAppearanceDefaults, "pending">;
 }
 
 export type AngeeAppSchemaConfig =
@@ -360,8 +360,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
   const themeLocked = selection.themeLocked === true;
-  // The theme the host appearance source dresses: the one a person who chose none wears,
-  // the selected app's else the build's, locked or not.
+  // The host theme the host appearance source is asked about (docs/frontend/appearance.md, "Host and user precedence").
   const sourceTheme = appearance?.themeId ? themeDefinitions.get(appearance.themeId) ?? null : null;
   // Fixed per app, so the session frame calls the same hooks on every render.
   const useHostAppearance = composed.hostAppearance?.useOptions ?? useBuildAppearance;
@@ -670,7 +669,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     );
   }
 
-  /** The session frame, wearing the host appearance source's options over the build's while a person follows the app default. */
+  /** The session frame: the only writer of the host appearance source's answer into the provider's host. */
   function HostAppearanceFrame({ children }: { children: ReactNode }): ReactNode {
     const read = useHostAppearance(sourceTheme, appearance?.options);
     const host = useMemo(() => read.options || read.pending

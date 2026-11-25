@@ -277,6 +277,15 @@ test("a re-render that changes nothing neither applies the appearance again nor 
   expect(cleared).not.toHaveBeenCalled();
 });
 
+test("a re-render that changes nothing keeps the host options the appearance value carries", () => {
+  // A host theme with options: a new object on each render would hand every reader a new value.
+  const { result, rerender } = renderAppearance({ defaults: { themeId: paper.definition.id, colorScheme: "light" } });
+  const first = result.current.hostOptions;
+  expect(first).toEqual({ version: 1, value: { brand: "#112233", rail: "#223344" } });
+  rerender();
+  expect(result.current.hostOptions).toBe(first);
+});
+
 test("a pending host keeps the first paint and the boot cache until its options arrive", () => {
   const root = document.documentElement;
   // The first paint, as the head bootstrap left it.

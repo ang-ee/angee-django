@@ -36,33 +36,18 @@ before the application entry loads. Vite bundles the React-free
 [`bootstrapAppearance`](../../packages/ui/src/theme/runtime.mjs) owner; bootstrap
 and React share its token validation, cache protocol and root application.
 
-One installed addon may supply the host theme's options at run time: the
-`hostAppearance` manifest key ([`@angee/app`](../../packages/app/README.md)).
-`createApp` asks it about the theme a person who chose none wears (the selected
-app's, else the build's, locked or not) and wears the options it answers in
-place of the build's. While its read is on its way the provider keeps the first
-paint and the boot cache, so the build's options do not flash first.
-
-[`angee.brandkit`](../../src/angee/brandkit/README.md) is that source: when the
-theme accepts the shared customization, the default brand kit's ten colours go
-over the build's options for it, else over the theme's defaults. The build's
-font, radius, density, elevation and logo treatment stay; its colours show only
-on a device's first visit before the read answers and wherever no kit is the
-default, which once the addon is provisioned is never. So, on a host with the
-addon:
-
-- the stock theme takes the shipped kit's colours, Angee's;
-- another customizable theme, such as Fyltr or Ledger, takes the kit's palette
-  in place of its authored one;
-- colours the build states give way to the kit's;
-- every app of a deployment with per-app themes wears the kit's palette on its
-  own theme, locked apps too.
-
-Unchanged: the Angee theme under the shipped kit, a fixed theme, a host without
-the addon, and a theme that ships its own default kit stating its own colours. A
-deployment that wants other colours edits its default kit. Pages inside the app
-wear the kit signed in or out, sign-in included; a standalone web form page
-(`/forms/*`) keeps the build's look. An edited kit reaches another open session
+One installed addon may supply the host theme's options at run time, through the
+install-one `hostAppearance` manifest key
+([`HostAppearanceSource`](../../packages/app/src/define-addon.ts)). `createApp` asks
+it about the host theme: the selected app's, else the build's, locked or not. The
+options it answers replace the build's options for that theme; when it answers
+none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
+is that source, and answers none for a fixed theme or no theme, with no default
+kit, after a failed read, and for a kit the theme's parser refuses. While the
+source's first read is on its way, the provider keeps the first paint and the boot
+cache; a failure or a pause releases them onto the build's options. Every page
+inside the app wears the answer, signed in or out; a standalone web form page
+(`/forms/*`) keeps the build's look. A changed answer reaches another open session
 on its next load, which first repaints from the device's boot cache.
 
 A signed-in user's `iam.User.preferences.appearance` fields override the host,

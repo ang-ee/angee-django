@@ -13,7 +13,7 @@ import {
   type ThemeOptionsEnvelope,
 } from "@angee/ui/theme";
 import type { BaseMenuItem } from "@angee/ui/chrome/menu-tree";
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { createApp, PassthroughChrome, type CreateAppInput } from "./create-app";
 import type { HostAppearanceRead, HostAppearanceSource, ShellSettings } from "./define-addon";
@@ -252,6 +252,28 @@ describe("the host appearance source", () => {
       expect(root().style.getPropertyValue("--brand")).toBe("#010203");
       controlled.answer({ pending: false });
       await waitFor(() => expect(root().style.getPropertyValue("--brand")).toBe(tokenOf(paper, BUILD, "--brand")));
+    });
+  });
+
+  test("a build's appearance takes no pending: only the session frame holds the first paint", () => {
+    // @ts-expect-error The typecheck refuses a build that would hold the first paint for the whole session.
+    const build: CreateAppInput["appearance"] = { themeId: paper.definition.id, pending: true };
+    expect(build).toBeDefined();
+  });
+
+  test("a source answer that changes nothing re-renders the frame without applying the appearance again", async () => {
+    const options = optionsOf(paper, { brand: SOURCE_BRAND });
+    const controlled = controlledSource({ options, pending: false });
+    const appearance = { themeId: paper.definition.id, colorScheme: "light" as const, options: BUILD };
+    await mounted(hostApp({ source: controlled.source, appearance }), async () => {
+      await waitFor(() => expect(root().style.getPropertyValue("--brand")).toBe(SOURCE_BRAND));
+      const applied = vi.spyOn(root().style, "setProperty");
+      const asked = controlled.asked.length;
+      // A new answer object holding the same options: the frame renders again, the host it passes stays the same.
+      controlled.answer({ options, pending: false });
+      await waitFor(() => expect(controlled.asked.length).toBeGreaterThan(asked));
+      expect(applied).not.toHaveBeenCalled();
+      applied.mockRestore();
     });
   });
 });

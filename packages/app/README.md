@@ -29,8 +29,8 @@ with the theme it is declared beside, and boot refuses a lock with no theme. `cr
 command palette and Refine's resources, keeping the personal Settings roots.
 Pages outside the rail stay reachable and sit in the selection's home root; no
 route is guarded. The runtime's `brand` and `rail`, and the appearance's default
-theme, come from the selection; an installed `hostAppearance` source may supply
-that theme's options at run time; the person's own theme still wins. Every root,
+theme, come from the selection; the person's own theme still wins
+([host and user precedence](../../docs/frontend/appearance.md#host-and-user-precedence)). Every root,
 app and host is checked at boot, selected or not, and an unknown `?app=` warns
 in development and falls back. Only the deployment layer declares `shell`.
 Addons cannot claim the `ui` translation namespace, which belongs to the
@@ -286,14 +286,8 @@ login page's are `LOGIN_CONTAINERS`. See the
 
 Two manifest keys are install-one sets of hooks: at most one installed addon
 provides each, and a second provider fails composition. Saved dashboards persist
-through `dashboardStore`. `hostAppearance` is the deployment's appearance at run
-time: `createApp` calls its `useOptions(theme, build)` once per render of the
-session frame, above every layout, for the theme a person who chose none wears
-(the selected app's, else the build's, locked or not) with the build's options
-for it. The `{ options, pending }` it returns replace the build's options for that
-theme while set, and hold the first paint and the boot cache while `pending`
-(`HostAppearanceDefaults.pending`); a source ends `pending` when its read settles,
-fails or pauses.
+through `dashboardStore`; `hostAppearance` supplies the deployment's appearance at
+run time ([`HostAppearanceSource`](src/define-addon.ts)).
 
 Resource mutation argument names and GraphQL types are projected from generated metadata at
 [`resourceMutationsForSchema`](src/resource-projection.ts) into the metadata-free
