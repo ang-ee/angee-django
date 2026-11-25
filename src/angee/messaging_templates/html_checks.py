@@ -135,8 +135,12 @@ MAIL_ATTRIBUTES = frozenset({
 """The attributes a mail is written with; every other one, ``on*`` and ``http-equiv`` among them, is refused by
 name."""
 
-LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite"})
-"""The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link: one ``url`` output, or a static link."""
+LINK_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "href": frozenset({"a"}), "src": frozenset({"img"}), "background": frozenset({"body", "table", "td", "th"}),
+    "cite": frozenset({"blockquote"}),
+}
+"""The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link, each with the elements a mail links with
+through it; on one of those, one ``url`` output or a static link, on any other element none."""
 
 STATIC_LINK = re.compile(r"(?:#|cid:|sms:|webcal:)[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*")
 """What a static link an author writes may be besides a link ``url`` leaves unchanged: a fragment of the mail, a
@@ -338,7 +342,9 @@ class _HtmlChecker(HTMLParser):
                 continue
             ids = self.span_ids(value)
             self.check_conditions(name, ids)
-            if name in LINK_ATTRIBUTES:
+            if name in LINK_ATTRIBUTES and tag not in LINK_ATTRIBUTES[name]:
+                self.refuse(f"the {name} attribute links on <{'>, <'.join(sorted(LINK_ATTRIBUTES[name]))}> alone")
+            elif name in LINK_ATTRIBUTES:
                 self.check_link(tag, name, value, ids)
             elif name == "style":
                 self.check_spans(

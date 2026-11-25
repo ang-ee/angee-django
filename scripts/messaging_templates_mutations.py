@@ -67,13 +67,44 @@ MUTATIONS: dict[str, tuple[bool, list[Edit]]] = {
     "M12 drop the attribute list": (False, [("html_checks.py", "if name not in MAIL_ATTRIBUTES:", "if False:")]),
     "M13 any scheme in a link": (True, [
         ("engine.py", "if not colon or scheme not in LINK_SCHEMES:", "if not colon:"),
-        ("engine.py", 'if scheme in ("https", "http") and not (rest.startswith("//") and rest[2:3] not in '
-         '("", "/", "?", "#")):', "if False:"),
     ]),
     "M14 any character set": (False, [(
         "html_checks.py", "if name == \"charset\" and value.lower() != MAIL_CHARSET:", "if False:")]),
     "M15 keep a value's control characters": (False, [
-        ("walker.py", 'return _CONTROLS.sub("", value)', "return value"),
+        ("walker.py", 'return UNPRINTED.sub("", value)', "return value"),
+    ]),
+    "M17 a title takes conditions": (False, [(
+        "html_checks.py", 'self.span_ids(data), None, conditions=False, comments=True)',
+        'self.span_ids(data), None, conditions=True, comments=True)')]),
+    "M18 dir and lang take any output": (True, [(
+        "html_checks.py",
+        "outputs = None if name in OUTPUT_ATTRIBUTES else ENGINE_OUTPUT_ATTRIBUTES.get(name, frozenset())",
+        "outputs = None if name in OUTPUT_ATTRIBUTES or name in ENGINE_OUTPUT_ATTRIBUTES else frozenset()")]),
+    "M19 a link's host is its first character": (False, [(
+        "engine.py", 'LINK_HOST.fullmatch(re.split(r"[/?#]", rest[2:], maxsplit=1)[0])',
+        'rest[2:3] not in ("", "/", "?", "#")')]),
+    "M20 an end tag names any element": (False, [(
+        "html_checks.py", "elif tag not in MAIL_ELEMENTS and not (self.office and tag in OFFICE_ELEMENTS)",
+        "elif False and not (self.office and tag in OFFICE_ELEMENTS)")]),
+    "M21 a value keeps bidirectional overrides": (False, [(
+        "walker.py", 'return UNPRINTED.sub("", value)', 'return re.sub(f"[{CONTROL_CHARACTERS}]", "", value)')]),
+    "M22 a link attribute on any element": (False, [(
+        "html_checks.py", "if name in LINK_ATTRIBUTES and tag not in LINK_ATTRIBUTES[name]:", "if False:")]),
+    "M23 the walk gathers past the caps": (False, [(
+        "walker.py", "if over := _over_caps(walk.root_name, piece, *total):", "if False:")]),
+    "F2 the markup filter runs with autoescape off": (True, [(
+        "engine.py", "        result = function(value, *args, **kwargs)",
+        '        result = function(value, *args, **({**kwargs, "autoescape": False} if writes_markup else kwargs))')]),
+    "E link is a mail element": (True, [("html_checks.py", '    "img",\n})', '    "img", "link",\n})')]),
+    "L a link attribute takes any one output": (True, [(
+        "html_checks.py", 'if value != f"\\x00{ids[0]}\\x00" or not filters or filters[-1] != "url":',
+        'if value != f"\\x00{ids[0]}\\x00":')]),
+    "C any character set, and values keep their controls": (True, [
+        ("html_checks.py", 'if name == "charset" and value.lower() != MAIL_CHARSET:', "if False:"),
+        ("walker.py", 'return UNPRINTED.sub("", value)', "return value"),
+    ]),
+    "S rule 2 off in text": (True, [
+        ("html_checks.py", '        if "<" in data:', '        if "<" in data and self.cdata_elem:'),
     ]),
 }
 """Each mutation: whether what it admits is a real break of promise 1 (a value becomes markup, an attribute, a link
