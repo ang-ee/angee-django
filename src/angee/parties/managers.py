@@ -422,12 +422,36 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             ),
         )
 
+    def clean_identity(self, *, platform: str, value: str, external_id: str = "") -> str:
+        """Validate an identity as :meth:`upsert` lands it, without a write; return its comparison key.
+
+        Runs the platform, value, comparison-key and external-id field validators
+        and raises the ``ValidationError`` keyed by the failing field that
+        ``upsert`` raises, so a caller refuses an address before it writes anything.
+        """
+
+        normalized_value = self.model.normalize_value(platform, value)
+        for name, identifier in {
+            "platform": platform,
+            "value": value,
+            "normalized_value": normalized_value,
+            "external_id": external_id,
+        }.items():
+            try:
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                field.run_validators(identifier)
+            except ValidationError as error:
+                raise ValidationError({name: error}) from error
+        return normalized_value
+
     def upsert(
         self,
         *,
         platform: str,
         value: str,
         created_by_id: Any = None,
+        fill_only: Collection[str] = (),
         **fields: Any,
     ) -> Any:
         """Get-or-create a handle on the identity it actually has, refreshing display fields.
@@ -451,8 +475,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         The holder is refused too: it is the projection of the winning statement, so a
         source states the link (``Party.objects.assert_handle``) and resolution writes it.
         ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
-        on every hit; blank values never clobber. Source display text is truncated
-        to its field limit; identifiers are validated without changing their meaning.
+        on every hit; blank values never clobber, and a field named in ``fill_only``
+        is written only while the handle's own value is blank, so a name a person
+        typed fills a handle that has none and never renames a shared one. Source
+        display text is truncated to its field limit; identifiers are validated
+        (:meth:`clean_identity`) without changing their meaning.
         """
 
         if "controller" in fields or "controller_id" in fields:
@@ -461,20 +488,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             raise TypeError("Handle.party is resolved from statements: state it with Party.objects.assert_handle().")
         if {"normalized_value", "normalized_version"}.intersection(fields):
             raise TypeError("Handle.normalized_value and its version are maintained by Handle.save().")
-        normalized_value = self.model.normalize_value(platform, value)
         external_id = str(fields.get("external_id") or "")
-        for name, identifier in {
-            "platform": platform,
-            "value": value,
-            "normalized_value": normalized_value,
-            "external_id": external_id,
-        }.items():
-            try:
-                field = self.model._meta.get_field(name)
-                assert isinstance(field, models.Field)
-                field.run_validators(identifier)
-            except ValidationError as error:
-                raise ValidationError({name: error}) from error
+        normalized_value = self.clean_identity(platform=platform, value=value, external_id=external_id)
         for name in ("display_name", "label"):
             if fields.get(name):
                 field = self.model._meta.get_field(name)
@@ -498,11 +513,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 if handle is None:
                     raise
         if external_id and handle.external_id == external_id:
-            self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
+            self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields}, fill_only=fill_only)
         else:
             # The value matched, not the external id: never rewrite it here.
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
-            self._refresh(handle, {"normalized_value": normalized_value, **refresh})
+            self._refresh(handle, {"normalized_value": normalized_value, **refresh}, fill_only=fill_only)
         return handle
 
     def reidentify(
@@ -604,11 +619,12 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         }
 
     @staticmethod
-    def _refresh(handle: Any, fields: dict[str, Any]) -> None:
+    def _refresh(handle: Any, fields: dict[str, Any], *, fill_only: Collection[str] = ()) -> None:
         """Apply the non-blank ``fields`` that differ; one save, only when dirty.
 
-        Adapter-owned metadata merges key-wise so refreshing one identifier does
-        not erase another adapter's retained identifiers. Assertion provenance
+        A field named in ``fill_only`` is applied only while the handle's value is
+        blank. Adapter-owned metadata merges key-wise so refreshing one identifier
+        does not erase another adapter's retained identifiers. Assertion provenance
         belongs to statements, independently of this transport metadata.
         """
 
@@ -616,7 +632,10 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if isinstance(merged, dict):
             current = handle.metadata if isinstance(handle.metadata, dict) else {}
             fields = {**fields, "metadata": {**current, **merged}}
-        dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
+        dirty = [
+            name for name, new in fields.items()
+            if new and getattr(handle, name, None) != new and not (name in fill_only and getattr(handle, name, None))
+        ]
         if dirty:
             for name in dirty:
                 setattr(handle, name, fields[name])
@@ -4433,7 +4452,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 if through is not None and platform == through.platform and normalized == through.normalized_value:
                     value = through.value
                 claim = (platform, normalized) in claims
-                shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
+                shown: dict[str, Any] = (
+                    {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
+                )
                 handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
                 mapped = {} if claim else {"label": label, "is_preferred": preferred}
                 dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]

@@ -78,7 +78,6 @@ def _message(
 def _address(message: Any, handle: Any, role: str = "to") -> Any:
     return Recipient._base_manager.create(
         message=message,
-        thread=message.thread,
         handle=handle,
         role=role,
     )
