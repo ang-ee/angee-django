@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import environ
 from django.apps import AppConfig
+from django.core.exceptions import ImproperlyConfigured
 from django_compose.components import enabled_apps
 from django_compose.conf import apply_app_settings
 
@@ -121,6 +123,14 @@ _TEST_DB_FILE = str(_TEST_DB_DIR / "angee_pytest.sqlite3")
 if database_url := os.environ.get("DATABASE_URL"):
     DATABASES = {"default": environ.Env.db_url_config(database_url)}
 else:
+    # One clear refusal instead of dozens of failing tests (docs/checks.md#sqlite-version).
+    if not (3, 53) <= sqlite3.sqlite_version_info < (3, 54):
+        raise ImproperlyConfigured(
+            f"SQLite {sqlite3.sqlite_version} cannot run the SQLite suite, which needs SQLite 3.53: "
+            "older releases reject an ORDER BY naming an outer query's column, and 3.54 refuses "
+            "django-zed-rebac's permission reads (VIEWs and/or subqueries nested too deep). "
+            "Run it on uv's managed CPython 3.14.9: --managed-python --python 3.14.9."
+        )
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
