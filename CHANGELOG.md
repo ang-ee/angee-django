@@ -62,6 +62,48 @@ live in code docstrings.
     (`INSTALLED_APPS` in `settings.yaml`), writes its migration with
     `makemigrations brandkit`, and provisions, which migrates, synchronizes the
     permission schema and loads the install tier with the Angee kit.
+- `angee.webforms_messaging`: a form's channel is never blank and is stored
+  without the spaces around its id. A whitespace-only channel is refused under
+  `target_config.channel`, for an acting user before anyone asks whether they may
+  write on it (it was a permission refusal) and for system work (it was stored);
+  a padded id is stored stripped, so a second form on the same channel and slug is
+  refused even when its id was given with spaces. The configuration's JSON
+  schema is unchanged. Upgrade: no migration; a form stored with a blank channel
+  is refused at delivery as `config_invalid` (it was `channel_missing`) until its
+  channel is set.
+- `angee.webforms`: a form stores its target's configuration as the target's
+  `config_model` validates it. `Form` composes `ImplDefaultsMixin` with
+  `target_config` as its configuration column: every save normalizes it, system
+  work and a declared form's resource row included, so a configuration the model
+  refuses is not stored, and `Form.clean` leaves the validated value on the form
+  before it compares it with the stored one or the target's own `clean` reads it.
+  A refusal is reported under the member it is about (`target_config.slug`), from
+  `clean`, `save` and a resource load alike, where `clean` used to put every
+  message under `target_config`. A form made with no configuration for a target
+  whose `config_model` has defaults now stores those defaults, where it stored
+  `{}`. A response whose form's stored configuration no longer validates (its
+  target's `config_model` tightened since the form was saved) is refused as
+  `config_invalid`, for every target: kept by its code alone and not tried
+  again; staff correct the form's target configuration, then deliver it again.
+  Upgrade: no migration. A form whose stored configuration its target's model
+  refuses is refused at delivery as `config_invalid`, and an edit that saves its
+  configuration must correct it; a save of other fields with `update_fields`
+  leaves it alone. From the release that carries the declared form (the entry
+  "An addon declares a web form as one resource row" below): a consumer whose
+  resource files already declare a `webforms.Form` row, with its versions and
+  aliases in files of their own, moves the served version's content into the
+  row's `version`, its aliases into `aliases`, lists `retention_days` under the
+  entry's `create_only`, and deletes the other files; until then the load
+  refuses the form's file. The row keeps its xref and path, so the form is not
+  made again: when the declared content equals what the form serves, no new
+  version is made, and a published form stays published.
+- `angee.base`: a model composing `ImplDefaultsMixin` names its configuration
+  column in `impl_config_field` (default `config`). Every save stores the
+  selected implementation's validated configuration in that column, system work
+  included; a refusal is reported under the column's name, with the same path
+  below it (`settings.retries` for a column named `settings`); the configuration
+  defaults seed that column; the model check (`angee.E046`) looks for it. Models
+  that name none keep `config` and behave as before. Upgrade: nothing.
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
   those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three

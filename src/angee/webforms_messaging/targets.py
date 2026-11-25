@@ -12,11 +12,11 @@ response.
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from angee.base.permissions import instance_actor
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
@@ -31,8 +31,7 @@ class MessageTargetConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    channel: str = Field(
-        min_length=1,
+    channel: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] = Field(
         description="A channel with the Public Webform backend.",
         json_schema_extra={"relation": {"resource": "messaging.Channel"}},
     )
