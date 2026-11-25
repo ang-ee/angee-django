@@ -758,6 +758,20 @@ def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
     assert check_html(office.replace("xml>", "xmp>"), expression, document=True) != []
 
 
+def test_dir_and_lang_take_the_engines_own_outputs_alone() -> None:
+    """A value may not set the direction or the language of an author's element: dir, lang and xml:lang take
+    {{ dir }} and {{ lang }}, a static value or a condition choosing one."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for admitted in ('<p dir="{{ dir }}" lang="{{ lang }}" xml:lang="{{ lang }}">x</p>', '<p dir="rtl">x</p>',
+                     '<td dir="{% if dir == \'rtl\' %}rtl{% else %}ltr{% endif %}">x</td>'):
+        assert check_html(admitted, expression) == [], admitted
+    for name in ("dir", "lang", "xml:lang"):
+        refusals = check_html(f'<p {name}="{{{{ v }}}}">x</p>', expression)
+        assert refusals == [f"{{{{ v }}}} in the {name} attribute of <p>"], refusals
+    assert check_html('<p dir="{{ lang }}">x</p>', expression) == ["{{ lang }} in the dir attribute of <p>"]
+
+
 def test_a_title_holds_outputs_and_comments_only() -> None:
     """An if in a title let a value's truthiness leave out </title>, so the rest of the mail, the layout's footer and
     its stop link among it, became window-title text: refused; outputs and notes stay."""

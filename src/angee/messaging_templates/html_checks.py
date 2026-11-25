@@ -144,8 +144,14 @@ the mail carries."""
 
 STATIC_LINKS = f"an absolute {', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]} link, a #fragment or a cid: image"
 
-OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
-"""The text attributes an output may write."""
+OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label"})
+"""The text attributes any output may write."""
+
+ENGINE_OUTPUT_ATTRIBUTES: dict[str, frozenset[tuple[str, ...]]] = {
+    "dir": frozenset({("dir",)}), "lang": frozenset({("lang",)}), "xml:lang": frozenset({("lang",)}),
+}
+"""The attributes the engine's own ``dir`` and ``lang`` outputs alone may write: a value never sets the direction or
+the language of an author's element."""
 
 CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
 
@@ -332,10 +338,8 @@ class _HtmlChecker(HTMLParser):
                     f"the style attribute of <{tag}>", ids, STYLE_OUTPUTS, conditions=True, comments=True,
                 )
             else:
-                self.check_spans(
-                    f"the {name} attribute of <{tag}>", ids, None if name in OUTPUT_ATTRIBUTES else frozenset(),
-                    conditions=True, comments=True,
-                )
+                outputs = None if name in OUTPUT_ATTRIBUTES else ENGINE_OUTPUT_ATTRIBUTES.get(name, frozenset())
+                self.check_spans(f"the {name} attribute of <{tag}>", ids, outputs, conditions=True, comments=True)
         return None
 
     def handle_endtag(self, tag: str) -> None:
@@ -521,7 +525,8 @@ def check_html(
     ``html.parser`` decodes it or a :data:`STATIC_ANCHOR`; in ``style`` an output but :data:`STYLE_OUTPUTS`;
     in a ``<style>`` element a span but :data:`STYLE_ELEMENT_OUTPUTS`; in a
     ``<title>`` element or any other attribute an output outside
-    :data:`OUTPUT_ATTRIBUTES` (``<title>``: any) or a tag other than an ``if``
+    :data:`OUTPUT_ATTRIBUTES` (``<title>``: any; ``dir`` and ``lang``:
+    :data:`ENGINE_OUTPUT_ATTRIBUTES`) or a tag other than an ``if``
     family one. ``document`` (a layout) admits the opening ``<!doctype html>`` and
     Outlook's ``<!--[if mso]>…<![endif]-->`` and
     ``<!--[if !mso]><!-->…<!--<![endif]-->``, balanced, static, the markup of the
