@@ -20,29 +20,51 @@ live in code docstrings.
     A new message takes `to`, `cc` and `bcc` addresses, a one-line `subject`,
     `text`, `html` and readable `attachments`, and starts a thread of its own
     through the new `ThreadManager.open_thread`, which `resolve` now shares.
-    `Message.reply_error(*, actor=None)` says, without side effects, whether
-    `compose` can answer a message. `HandleManager.clean_identity` validates a
-    handle identity without writing, and `HandleManager.upsert(fill_only=...)`
-    names display fields it only fills while blank.
+    `Message.require_reply(actor)` decides who may answer a message and returns
+    its channel; `Message.reply_envelope(*, actor=None, channel=None)` returns
+    whom an answer goes to (a `ReplyEnvelope`) or refuses, and
+    `Message.reply_error` is that refusal, without side effects.
+    `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
+    which `compose` shares. `HandleManager.clean_identity` validates a handle
+    identity without writing, `HandleManager.upsert(fill_only=...)` names display
+    fields it only fills while blank, and `Handle.email_value` is the one form an
+    email address is stored in on a handle. `PartManager.attach_files` attaches
+    several files under one message lock.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
-  - **Changed.** An email reply is sent from its channel's default sender, so a
-    held or queued email reply on a channel whose delivery is not configured,
-    that is not connected, or whose default sender is invalid is refused.
-    Idempotency keys claimed through `compose_reply` (scope `messaging.reply:`)
-    do not replay through `compose` (scope `messaging.compose:`). A reply's
+  - **Superseded.** An outgoing message written by hand (its row, recipients and
+    parts, then `deliver()`) is superseded by `compose`, which is now its one
+    writer.
+  - **Changed.** `compose` runs as its actor: an elevated call is refused
+    (`RuntimeError`), as a workflow step body refuses one. An email reply is
+    sent from its channel's default sender, so a held or queued email reply on a
+    channel whose delivery is not configured, that is not connected, or whose
+    default sender is invalid is refused; a keyed retry still returns its
+    original. A reply to a message whose `Reply-To` names no address the handle
+    owner accepts is refused (`reply_to`) rather than sent to the sender, which
+    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    `messaging.reply:`) do not replay through `compose` (scope
+    `messaging.compose:`): a posts workflow reply retried across the upgrade
+    does not replay, and if its original was trashed or failed, which the
+    comment's answered check does not count, a second reply is written. A reply's
     preview is 280 characters, like every message's, and chatter posts and edits
     preview through the same rule as ingest. An HTML-only email is sent without a
     text part; it was made by stripping the HTML's tags. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
-    `Handle.is_email_address` accepts. A name typed with a recipient address
-    fills only a handle that has none. Intake asks a requester by email when
-    their request has only a `Reply-To`. Creating a message part
-    (`messaging/part#create`) requires `write` on its message or the
-    administrators (schema revision 28); every framework writer of parts runs as
-    system work.
+    `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
+    channel's default sender lands on the handle its lower-cased address names.
+    A name typed with a recipient address fills only a handle that has none.
+    Inbound mail joins a thread by its subject only when the thread was grouped
+    by subject: a conversation a person composed is joined through its threading
+    headers alone. Intake asks a requester by email when their request has only
+    a `Reply-To`, and only when the reviewer may reply on the channel. Creating a
+    message part (`messaging/part#create`) requires `write` on its message or
+    the administrators (schema revision 28), and creating a message
+    (`messaging/message#create`) requires `write` on its channel or the
+    administrators (schema revision 29); every framework and consumer writer of
+    both runs as system work.
   - **Upgrade:** `rebac sync` (provision runs it). No migration.
 - `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
   `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,

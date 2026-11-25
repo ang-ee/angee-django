@@ -25,12 +25,14 @@ awaits the asker.
 
 The question is a comment on the task's chatter, addressed to the requester when
 their account may reply there, as an admitted requester may. A requester without
-an admitted account also gets it by email when their request came as an email
-messaging can answer (`Message.reply_error`): one with a sender or a `Reply-To`,
-on a channel with an outbound sender. Messaging's `compose` addresses, titles
-and threads the reply and queues its delivery, and the reviewer needs the
-channel's `reply` permission. A requester reachable neither way is refused, not
-awaited: approve their access first.
+an admitted account also gets it by email when the reviewer may answer their
+request (`Message.require_reply`: `reply` on its channel) and messaging can
+(`Message.reply_error`): an email with a `Reply-To` naming an address, else
+with a sender, on a channel with an outbound sender. A `Reply-To` that names no
+address is never answered at the sender, which may be a relay. Messaging's
+`compose` addresses, titles and threads the reply and queues its delivery. A
+requester reachable neither way is refused, not awaited: approve their access
+first.
 
 One rule decides which message wakes the hold, and work owns it
 (`TaskWorkQuerySet.wake_replied`): only the awaited account's reply. On chatter

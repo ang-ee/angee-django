@@ -1765,9 +1765,7 @@ class Message(
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.
 
-        ``MessageManager.compose`` calls it for a queued message it wrote, and the
-        send-held, release, retry and recovery owners for the rows they free. The
-        transport always runs through ``angee.jobs``, never in the request.
+        The transport always runs through ``angee.jobs``, never in the request.
         """
 
         return queue_message_delivery(self)

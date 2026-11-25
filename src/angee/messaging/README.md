@@ -48,41 +48,24 @@ with envelope ingestion; absent the exact precondition, changing an explicit
 source thread remains refused. Historical ingestion suppresses live message
 events while retaining native content history and counter updates.
 
-`Message.objects.compose(*, actor, ...)` is the one writer of an outgoing message:
-its row, parts, recipients, sender, thread, idempotency and delivery hand-off.
-Callers pass intent and never write its rows. `parent=` answers that message on
-its thread and channel; otherwise `channel=` sends a new email, on `record=`'s
-chatter when given, else on a thread of its own (`ThreadManager.open_thread`,
-the create step `resolve` shares), so mails that only share a subject never fuse.
-It decides everything under the actor before anything is claimed or written:
-reading the parent and `reply` on its channel, or `reply` on the channel and
-posting on the record as its chatter admits a post, and reading every
-attachment. It then validates the whole envelope, so no refusal follows a write.
-Whether a message can be answered at all is `Message.reply_error`, side-effect
-free, which intake asks too. An email is sent from its channel's default sender
-(`Channel.outbound_sender`), so a channel that cannot send refuses even a held
-draft. Recipients are `to`, `cc` and `bcc` addresses for a new message; every
-address must be one `Handle.is_email_address` accepts and the handle owner can
-land, and a typed name fills only a handle that has none, never renaming a
-shared contact. An email has `text`, `html` or both, and its text part is only
-its own text, never made from the HTML. `queued` hands the message to delivery
-when the outermost transaction commits, `scheduled_at` holds a draft until then,
-neither holds it for approval, and both are refused. `idempotency_key` replays
-the same intent for the same actor, before `admit()` checks domain eligibility.
+An outgoing message is written by
+[`MessageManager.compose`](managers.py) alone: its row, parts, recipients,
+sender, thread and delivery hand-off. Callers pass intent and never write its
+rows; hand-written outgoing rows are superseded. It runs as its actor and
+decides before it claims or writes: who may answer a message is
+`Message.require_reply`, whom and from where it is answered is
+`Message.reply_envelope` (its refusal is `Message.reply_error`, which intake's
+email route asks too), and posting on a record is the chatter's own gate,
+`ThreadedModelMixin.require_post`. An email is sent from its channel's default
+sender, and its text part is only its own text, never made from its HTML. The
+docstrings own the exact refusals and hold rules.
 
-An email reply is a complete envelope: `to` recipients naming the parent's
-`Reply-To` addresses when it carries any (`Message.reply_addresses`, the one
-reader of that header), else the handle it was sent from (RFC 5322 §3.6.2); the
-subject `Re: <thread title>` (the title is the normalized subject, so prefixes
-never stack); and a Message-ID minted as Django mints one, stored bare as its
-external id like a received email's. The email transport renders that id as
-`Message-ID` and the parent's as `In-Reply-To` and `References`, so an answer
-arriving on the channel the message was sent from threads back onto the
-conversation through `In-Reply-To`, through `References` when a provider
-rewrote the Message-ID, or through its subject; a retained header part never
-renders a second copy of these. A reply of any other kind is plain text from an
-explicit sender on the parent's platform, keeps a client token for its
-transport's provider id and writes no envelope.
+An email answer carries a Message-ID minted as Django mints one and renders
+the parent's as `In-Reply-To` and `References`, so an answer arriving on the
+channel it was sent from threads back onto its conversation. A message a person
+starts opens a thread of its own; inbound mail joins it only through those
+threading headers, never by its subject, which groups inbound mail with inbound
+mail alone ([`ThreadManager.resolve`](managers.py)).
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
