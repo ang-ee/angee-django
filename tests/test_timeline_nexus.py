@@ -35,7 +35,6 @@ def correspondence(db):  # noqa: ANN001, ANN201 - fixture namespace
         party_model = apps.get_model("parties", "Party")
         handle_model = apps.get_model("parties", "Handle")
         message_model = apps.get_model("messaging", "Message")
-        participant_model = apps.get_model("messaging", "Participant")
         circle_model = apps.get_model("parties", "Circle")
         user = create_platform_admin("correspondence")
         party = party_model._base_manager.create(display_name="Ada")
@@ -49,14 +48,13 @@ def correspondence(db):  # noqa: ANN001, ANN201 - fixture namespace
         )
         title = apps.get_model("messaging", "Fragment").objects.upsert(text="Greeting")
         apps.get_model("messaging", "Part")._base_manager.create(message=message, role="title", fragment=title)
-        participant = participant_model._base_manager.create(message=message, thread=thread, handle=handle, role="from")
         parent = circle_model._base_manager.create(owner=user, name="People")
         circle = circle_model._base_manager.create(owner=user, name="Friends", parent=parent)
         member = apps.get_model("parties", "CircleMember")._base_manager.create(
             party=party, circle=circle, is_confirmed=True,
         )
         yield SimpleNamespace(
-            party=party, other=other, handle=handle, thread=thread, message=message, participant=participant,
+            party=party, other=other, handle=handle, thread=thread, message=message,
             parent=parent, circle=circle, member=member, actor=user,
         )
 
@@ -102,6 +100,41 @@ def test_nexus_uses_the_timeline_identity_contract(correspondence) -> None:  # n
     assert event.target_id == public_id_of(data.message)
 
 
+@pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
+def test_nexus_reads_sent_messages_from_their_sender(correspondence, from_row) -> None:  # noqa: ANN001
+    """A message concerns its sender's records, through a merged alias too.
+
+    ``records`` compares as a set and the timeline selects ``pk IN``, so a repeat cannot
+    show twice by construction; the ``from``-row case proves only that a row repeating
+    the sender changes nothing.
+    """
+    data = correspondence
+    with system_context(reason="test nexus sender reads"):
+        alias = apps.get_model("parties", "Handle")._base_manager.create(platform="email", value="ada@old.example.com")
+        sent = type(data.message)._base_manager.create(
+            sender=alias, thread=data.thread, platform="email", direction="outbound", sent_at=AT, preview="Sent",
+        )
+        # The fold re-resolves the survivor's party, so the link is a statement.
+        apps.get_model("parties", "Party").objects.assert_handle(data.party, data.handle, asserted_by=data.actor)
+        data.handle.fold([alias])
+        alias.refresh_from_db()
+        rows = []
+        if from_row:
+            rows = [
+                apps.get_model("messaging", "Participant")._base_manager.create(
+                    message=message, thread=data.thread, handle=message.sender, role="from",
+                )
+                for message in (data.message, sent)
+            ]
+        concerned = {(type(record), record.pk) for record in (data.party, data.circle, data.parent)}
+        for row in (data.message, sent, alias, *rows):
+            assert set(CorrespondenceKind().records(row)) == concerned
+    for record in (data.party, data.circle, data.parent):
+        assert sorted(event.target_id for event in timeline_entries(record, data.actor)) == sorted(
+            public_id_of(message) for message in (data.message, sent)
+        )
+
+
 @override_settings(ANGEE_TIMELINE_KINDS=["angee.nexus.timeline.timeline_kinds"])
 def test_nexus_correspondence_keeps_the_message_read_gate(db) -> None:  # noqa: ANN001
     with system_context(reason="test nexus target visibility"):
@@ -110,10 +143,7 @@ def test_nexus_correspondence_keeps_the_message_read_gate(db) -> None:  # noqa: 
         party = apps.get_model("parties", "Party")._base_manager.create(display_name="Shared", created_by=reader)
         handle = apps.get_model("parties", "Handle")._base_manager.create(party=party, value="shared@example.com")
         thread = apps.get_model("messaging", "Thread")._base_manager.create(owner=owner)
-        message = apps.get_model("messaging", "Message")._base_manager.create(
-            sender=handle, thread=thread, preview="Private",
-        )
-        apps.get_model("messaging", "Participant")._base_manager.create(message=message, handle=handle, role="from")
+        apps.get_model("messaging", "Message")._base_manager.create(sender=handle, thread=thread, preview="Private")
         assert len(timeline_entries(party, owner)) == 1
     with actor_context(reader):
         assert timeline_entries(party, reader) == []
@@ -137,9 +167,19 @@ def test_nexus_dependency_removals_are_immediately_visible(correspondence) -> No
     data.handle.party = data.other
     data.handle.save(update_fields=["party"])
     assert len(timeline_entries(data.other, data.actor)) == 1
-    data.participant.delete()
+    data.message.sender = None
+    data.message.save(update_fields=["sender"])
     assert all(timeline_entries(record, data.actor) == []
                for record in (data.party, data.other, data.circle, data.parent))
+    grace = apps.get_model("parties", "Handle")._base_manager.create(
+        party=data.other, platform="email", value="grace@example.com",
+    )
+    recipient = apps.get_model("messaging", "Participant")._base_manager.create(
+        message=data.message, thread=data.thread, handle=grace, role="to",
+    )
+    assert len(timeline_entries(data.other, data.actor)) == 1
+    recipient.delete()
+    assert timeline_entries(data.other, data.actor) == []
 
 
 def test_nexus_correspondence_excludes_record_chatter(correspondence) -> None:  # noqa: ANN001
@@ -238,10 +278,7 @@ def test_thread_invalidation_does_not_walk_every_message(correspondence):
         publish_change(data.thread, action="update", update_fields=["merged_into"])
     with mute_changes():
         for index in range(20):
-            message = type(data.message)._base_manager.create(
-                thread=data.thread, sender=data.handle, preview=str(index),
-            )
-            type(data.participant)._base_manager.create(message=message, handle=data.handle, role="from")
+            type(data.message)._base_manager.create(thread=data.thread, sender=data.handle, preview=str(index))
     with CaptureQueriesContext(connection) as grown:
         publish_change(data.thread, action="update", update_fields=["merged_into"])
     assert len(grown) <= len(baseline) + 1

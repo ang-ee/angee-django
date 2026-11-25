@@ -213,12 +213,23 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
     def redirect_groups(self, survivors: Any) -> Self:
         """Return every survivor in ``survivors`` and the one-hop redirects flattened into it.
 
-        ``survivors`` holds canonical primary keys, as values or a subquery. A
-        reader of rows a merge kept on retired records selects them through the
-        groups of the survivors it reads, on the same indexes as :meth:`redirect_group`.
+        ``survivors`` holds canonical primary keys: values, or an uncorrelated
+        queryset or ``Subquery`` selecting them. A reader of rows a merge kept on
+        retired records selects them through the groups of the survivors it reads.
+        Values probe the primary key and redirect indexes, as :meth:`redirect_group`
+        does. A subquery selects ``pk IN`` the id union of the two indexed arms
+        instead: PostgreSQL cannot estimate ``IN (subquery) OR IN (subquery)`` and
+        plans it as a scan of most of the table. A correlated input (an ``OuterRef``)
+        is not supported: it sits one query deeper there, so its reference would
+        name another query.
         """
 
-        return self.filter(models.Q(pk__in=survivors) | models.Q(merged_into_id__in=survivors))
+        if not hasattr(survivors, "resolve_expression"):
+            return self.filter(models.Q(pk__in=survivors) | models.Q(merged_into_id__in=survivors))
+        rows = self.model._base_manager.order_by()
+        return self.filter(pk__in=rows.filter(pk__in=survivors).values("pk").union(
+            rows.filter(merged_into_id__in=survivors).values("pk"), all=True,
+        ))
 
     def survivor_ids(self) -> models.QuerySet[Any]:
         """Return each row's :meth:`survivor_id` as ``survivor``.

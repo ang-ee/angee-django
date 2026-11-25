@@ -24,7 +24,7 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.email import AnymailEmailChannelBackend
-from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part
+from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part, Participant
 from angee.messaging_integrate_imap.parser import parse_message
 from tests.conftest import Vendor, make_integration
 
@@ -126,8 +126,14 @@ def test_source_header_values_require_message_read_for_metadata_and_parts(header
             message.source_header_values("From", actor=outsider)
 
 
-def test_outbound_email_envelope_uses_canonical_source_header_fallback(header_message):
+@pytest.mark.parametrize("from_row", [False, True], ids=["no-from-row", "from-row"])
+def test_outbound_email_envelope_uses_canonical_source_header_fallback(header_message, from_row):
     owner, _outsider, message = header_message
+    if from_row:
+        # The sender is ``Message.sender`` alone: a ``from`` row never names the envelope sender.
+        with system_context(reason="legacy from row fixture"):
+            handle = Handle.objects.create(platform="email", value="legacy@example.test")
+            Participant.objects.create(message=message, handle=handle, role="from")
     transport = AnymailEmailChannelBackend(message.channel)
     with actor_context(owner):
         rendered = transport.email_message(message)
@@ -143,7 +149,7 @@ def test_outbound_email_keeps_native_sender_over_source_fallback(header_message)
         message.sender = handle
     transport = AnymailEmailChannelBackend(message.channel)
     with actor_context(owner):
-        assert transport._sender(message, []) == "live@example.test"
+        assert transport._sender(message) == "live@example.test"
 
 
 def test_source_header_fallback_preserves_an_explicit_system_reader(header_message):
@@ -167,7 +173,7 @@ def test_default_sender_is_one_validated_identity(config: object, expected: tupl
     backend = AnymailEmailChannelBackend(SimpleNamespace(config=config))
     assert backend.outbound_sender() == expected
     unaddressed = SimpleNamespace(sender_id=None, source_header_values=lambda _name: ())
-    assert backend._sender(unaddressed, []) == f"{expected[0]} <{expected[1]}>"
+    assert backend._sender(unaddressed) == f"{expected[0]} <{expected[1]}>"
 
 
 @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
