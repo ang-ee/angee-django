@@ -28,6 +28,9 @@ live in code docstrings.
   participants=...)`, the ids of the messages given parties sent or received, built
   on `MessageQuerySet.ids_involving_handles` (the same for given handles), or test
   `.exists()` on it with the eligibility inside `messages`.
+  `MessageQuerySet.involving_parties_filter(parties, handles=..., participants=...)`
+  is removed too; filter with `pk__in=MessageQuerySet.ids_involving_parties(parties,
+  handles=..., messages=..., participants=...)` instead.
   `MessageQuerySet.involved_handle_ids` is the reverse, the handles that sent or
   received given messages. Read a message's sender from `Message.sender`, never
   from its `participants`.
