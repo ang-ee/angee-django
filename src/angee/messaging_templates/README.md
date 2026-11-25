@@ -275,9 +275,11 @@ reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
 
 The addon's web fragment, `@angee/messaging-templates`, puts **Message templates**
 in Settings for whoever holds `messaging_templates.MessageTemplate#preview`
-(`MessageTemplatesPage`). The library is one list, grouped by kind, with the open
-row's form beside it; its presets list the overrides whose shipped default
-changed and the rows that render. **New** opens the form with the name, kind, key
+(`MessageTemplatesPage`). The library is one list, grouped by kind; its presets
+list the overrides whose shipped default changed and the effective rows. A row
+opens its form in place of the list. The intended shape is the list beside the
+record, one placement away, once the list's split placement gives the record a
+scrolling container. **New** opens the form with the name, kind, key
 and language alone, the four fields the insert takes; the server seeds the rest
 and the new row opens. A shipped default is read-only: **Override** starts the
 deployment's override and opens it. An override whose shipped default changed
