@@ -108,7 +108,7 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
           {
             name: "until",
             label: t("triage.action.until"),
-            kind: "datetime" as const,
+            widget: "datetime",
           },
         ],
         submit: async (values, context, options) => {

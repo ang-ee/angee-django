@@ -21,7 +21,9 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true });
 });
 
-describe("group operation codegen", () => {
+// Each test runs the codegen CLI in a child process, so it gets the 30 s the other
+// CLI-spawning suites give theirs; on a loaded runner one run can exceed 5 s.
+describe("group operation codegen", { timeout: 30_000 }, () => {
   test("derives an ActionResult mutation with one required scalar argument", () => {
     const generated = generateActions(METADATA);
 

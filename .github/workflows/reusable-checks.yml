@@ -252,7 +252,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres -d angee"
           --health-interval 10s
@@ -271,6 +271,10 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
+          # Docker published the service on a free host port, so jobs sharing one Docker
+          # host never collide; the restart can move it, so the URL is read after it.
+          port=$(docker inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' ${{ job.services.postgres.id }})
+          echo "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:$port/angee" >> "$GITHUB_ENV"
       - name: Enable pgvector for test databases
         # --nomigrations and composed hosts create tables without the pre_migrate
         # extension receiver; each native test database inherits template1.
@@ -288,7 +292,6 @@ jobs:
         # planner-memory gate budgets what every permission change adds to the
         # console's reads.
         env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           TESTS: ${{ needs.select.outputs.postgres-tests }}
         run: |
           # read splits without globbing, so a parametrized node id stays one argument.
@@ -383,7 +386,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_USER: postgres
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres -d angee"
           --health-interval 10s
@@ -429,8 +432,13 @@ jobs:
               subprocess.run(["git", "-C", str(target), "fetch", "--depth=1", "origin", ref], check=True)
               subprocess.run(["git", "-C", str(target), "checkout", "--detach", "FETCH_HEAD"], check=True)
           PY
+      # Into the job's own directory: no root, and nothing outlives the job on a reused
+      # self-hosted runner.
       - name: Install the angee CLI (the public install path)
-        run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} ANGEE_INSTALL_DIR="$RUNNER_TEMP/bin" sh
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # uv runs from the stack root, above the framework checkout, where it would not
       # find the framework's .python-version.
       - name: Use the framework's Python
@@ -626,11 +634,14 @@ jobs:
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
+          # Docker published the service on a free host port, so jobs sharing one Docker
+          # host never collide; the restart can move it, so the URL is read after it.
+          port=$(docker inspect --format '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort }}' ${{ job.services.postgres.id }})
+          echo "DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:$port/angee" >> "$GITHUB_ENV"
       - name: Run the consumer's PostgreSQL test shard
         if: ${{ inputs.consumer-path != '' && matrix.group != 1 }}
         working-directory: stack
         env:
-          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
           DJANGO_SETTINGS_MODULE: settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}

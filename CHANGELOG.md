@@ -44,6 +44,44 @@ live in code docstrings.
     hosts without the addon, and a theme that ships its own default kit stating its own
     colours. To keep other colours, edit the default kit in Settings > Brand kits.
 
+- `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
+  a value held as text: `FieldDescriptor.format`, one of `"date"`,
+  `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
+  value's type, never its presentation, which stays the widget's. The
+  backend's form spec (`config_form_spec`) keeps a `date` or `date-time`
+  member's `format` beside the widget that presents it, the date widget it
+  selects or the one its author declared (an authored `json` widget renders
+  raw JSON, with no `format`); what it does with every other format is
+  unchanged (refused, or under `json_fields` the untyped JSON member, with no
+  `format`). Nothing asserts the `format` on that projected spec, which no
+  validator is handed: a record form and a `MutationDialog` check a
+  descriptor's own rules, and typed parsing validates the value and may accept
+  a date and time with no offset, which the format's grammar refuses. A schema
+  that is itself handed to a validator (a workflow's input, at admission and
+  in its schema dialog) has its formats asserted as before. The form spec's
+  parser carries the three formats on a `string` and no other, and an action
+  argument carries it.
+  `emptyValueForField` reads it first: a field that declares a format holds
+  `null` when it holds nothing, whatever its kind and widget, and an explicit
+  `string` kind without one still holds `""`. That removes the step back of
+  the entry below for a date that declares its format. For a member as the
+  backend emits it: "Set value" no longer writes `""` on a nullable one, and
+  "Add item" on a list of them keeps a `MutationDialog`'s submit disabled with
+  "This field is required." under the item, while a schema dialog treats the
+  list as it treats a list of integers. For a member a hand-written or raw
+  schema declares without the backend's presence marks: a record form's edit
+  that changed a sibling member sends `null`, and a create draft holds `null`
+  for a nullable one with no default and leaves out one that is neither
+  required nor nullable (the backend's members are unchanged there: a nullable
+  one already seeded its `null` default, and one the record lacks is neither
+  seeded nor sent). A `string`
+  with only a date or time widget and no declared format keeps `""`, and a
+  date drawn as a text input (a raw schema's with no authored widget, or one
+  under an authored `text` widget) still writes `""` when cleared. No declared
+  form has such a member, and no composed
+  artifact changes. **Upgrade:** a hand-written descriptor that
+  carries a date, a date and time or a time as text declares its `format`; a
+  test that pins a projected date member whole finds `format` beside `widget`.
 - `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
   `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
   `angee.calendar`: **Changed behaviour.**
@@ -149,7 +187,8 @@ live in code docstrings.
   record form's draft and seeds, `ActionFormDialog`'s arguments,
   `MutationDialog`'s and a schema dialog's seeds and the presence control; the
   record form's own rule is deleted. A lines editor's new cell keeps its own
-  rule (`emptyCellValue`). First match wins: an explicit `string` kind holds
+  rule (`emptyCellValue`). First match wins, after a declared `format` (the
+  entry above): an explicit `string` kind holds
   `""` whatever its widget; the `integer` and `float` widgets and the date and
   time widgets hold `null`; the list widgets and a relation list `[]`; the
   `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
@@ -175,12 +214,11 @@ live in code docstrings.
   policies otherwise keep their differences. Of the declared forms measured,
   one payload changes: an action that passes an untouched optional date on as
   it is sends `null`, which a date parameter accepts, where it sent `""`. A
-  step back, recorded as expected failures until the descriptor carries a
-  declared format: a date, a time or a date and time carried as text (a
+  date, a time or a date and time carried as text with no declared `format` (a
   `string` kind with only its widget to tell it from text) seeds `""`, so a
   record form's edit that changed a sibling member sends `""` for it where it
-  sent `null`, and "Set value" on a nullable one writes `""`; no form declares
-  such a member today. Not changed, and known: the other boolean widgets
+  sent `null`; one that declares its format holds `null` (the entry above),
+  and no form declares such a member today. Not changed, and known: the other boolean widgets
   (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
   `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
   `submit` or a `parseValues` that tested an untouched date, time or number

@@ -1336,17 +1336,21 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   that breaks a rule shows its message while the gate disables submission.
   What a form field holds when it holds nothing has one owner,
   [emptyValueForField](../../packages/ui/src/views/form/field-values.ts), which
-  the record form's draft, every dialog's seeds and the presence control read: an
-  explicit `string` kind holds `""` whatever its widget, the `integer` and
-  `float` widgets and the date and time widgets `null`; a lines editor's new
-  cell has its own rule. In a schema dialog, a `MutationDialog` and a record
-  form's create draft, a member that may be left out is not seeded with a value
-  its own declared type refuses
+  the record form's draft, every dialog's seeds and the presence control read: a
+  descriptor with a declared `format` (a date, a date and time or a time carried
+  as text) holds `null`, then an explicit `string` kind holds `""` whatever its
+  widget, the `integer` and `float` widgets and the date and time widgets
+  `null`; a lines editor's new cell has its own rule. A form spec's parser
+  carries the `format` from the schema
+  ([deserializeFormSpec](../../packages/ui/src/views/form/form-spec.ts)), and
+  the backend's form spec keeps it beside the date control it selects; a
+  hand-written descriptor that carries a date as text declares it. In a schema
+  dialog, a `MutationDialog` and a record form's create draft, a member that
+  may be left out is not seeded with a value its own declared type refuses
   ([refusesSeed](../../packages/ui/src/views/form/field-values.ts)); it stays
   absent. A field whose empty value is `null` has no "present but empty"
-  state: holding `null`, it shows its own control. A descriptor carries no
-  declared format, so a date carried as text seeds `""`, and the metadata layer
-  projects only a widget ([fieldsWithMetadataDefaults](../../packages/ui/src/views/resource/model-metadata-defaults.ts)),
+  state: holding `null`, it shows its own control. The metadata layer projects
+  only a widget ([fieldsWithMetadataDefaults](../../packages/ui/src/views/resource/model-metadata-defaults.ts)),
   so a descriptor without a kind takes its widget's empty value.
   Record forms and dialogs find a field's failed rules through one owner,
   [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
