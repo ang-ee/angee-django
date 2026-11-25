@@ -74,10 +74,19 @@ class InboxRelated:
 
         return self.inbox.handles.filter(party=self.party, party_link_confirmed=True)
 
-    def participants(self) -> Any:
-        """Known source roles, including unavailable handles without leaking their identity."""
+    def recipients(self) -> Any:
+        """The message's recipient rows, including unavailable handles without leaking their identity.
 
-        return self.inbox.participants.filter(message=self.message)
+        The Participants pane lists the sender first, from ``Message.sender``; a
+        ``from`` row repeats it and is never listed.
+        """
+
+        return self.inbox.participants.filter(message=self.message, role__in=("to", "cc", "bcc"))
+
+    def participant_count(self) -> int:
+        """The pane's participants: the sender, when the message has one, and its recipients."""
+
+        return int(cast(Any, self.message).sender_id is not None) + self.recipients().count()
 
     def relations(self, text: str = "") -> Any:
         """Union produced edges with reply pointers before ordering and server paging."""
@@ -153,7 +162,7 @@ class InboxRelated:
             return InboxRelatedTarget(
                 self.target, self.kind, party.display_name, self.handles().count(), "handles", self.source
             )
-        count = self.participants().count() if self.kind == "participants" else self.relations().count()
+        count = self.participant_count() if self.kind == "participants" else self.relations().count()
         return InboxRelatedTarget(
             self.target,
             self.kind,
@@ -244,28 +253,36 @@ class InboxRelated:
                 self.handles().count(),
                 self.inbox.messages.none(),
             )
-        participants = self.participants()
+        message = cast(Any, self.message)
+        recipients = self.recipients()
         handles = self.inbox.handles
+        sender_id = message.sender_id
         if text.strip():
             found = handles.filter(Q(_sender_name__icontains=text.strip()) | Q(value__icontains=text.strip()))
-            participants = participants.filter(handle_id__in=Subquery(found.values("pk")))
-        selected = list(participants.order_by("created_at" if oldest else "-created_at", "pk")[window])
-        readable = {
-            handle.pk: handle for handle in handles.filter(pk__in=[participant.handle_id for participant in selected])
-        }
+            recipients = recipients.filter(handle_id__in=Subquery(found.values("pk")))
+            if sender_id is not None and not found.filter(pk=sender_id).exists():
+                sender_id = None
+        # The sender leads the recipients in either order; the recipients' window shifts past it.
+        lead = int(sender_id is not None)
+        ordered = recipients.order_by("created_at" if oldest else "-created_at", "pk")
+        selected = [
+            *([(f"sender:{message.sqid}", sender_id, recipients.model.ParticipantRole.FROM.value)]
+              if lead and window.start == 0 else []),
+            *((str(row.sqid), row.handle_id, row.role)
+              for row in ordered[max(window.start - lead, 0):window.stop - lead]),
+        ]
+        readable = {handle.pk: handle for handle in handles.filter(pk__in=[handle_id for _, handle_id, _ in selected])}
         return InboxPage(
             [
                 InboxConnection(
-                    str(participant.sqid),
-                    readable[participant.handle_id]._sender_name
-                    if participant.handle_id in readable
-                    else "Unavailable identity",
-                    role=participant.role,
-                    handle=readable.get(participant.handle_id),
+                    key,
+                    readable[handle_id]._sender_name if handle_id in readable else "Unavailable identity",
+                    role=role,
+                    handle=readable.get(handle_id),
                 )
-                for participant in selected
+                for key, handle_id, role in selected
             ],
-            participants.count(),
-            self.participants().count(),
+            lead + recipients.count(),
+            self.participant_count(),
             self.inbox.messages.none(),
         )

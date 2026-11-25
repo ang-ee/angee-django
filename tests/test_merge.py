@@ -13,9 +13,12 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db.models import DO_NOTHING
+from django.db import transaction
+from django.db.models import DO_NOTHING, Q, Subquery
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from rebac import PermissionDenied, RelationshipTuple, actor_context, system_context, to_object_ref, write_relationships
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
@@ -709,3 +712,44 @@ def test_metadata_marks_a_mergeable_resource() -> None:
     assert resources["tags.Tag"].mergeable
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["tags.Tag"]["mergeable"] is True
+
+
+def test_redirect_groups_reads_a_subquery_through_one_union_of_its_indexed_arms() -> None:
+    """A subquery of survivors compiles to ``pk IN (… UNION ALL …)``, never ``IN (…) OR IN (…)``.
+
+    PostgreSQL cannot estimate a disjunction of two ``IN`` sublinks and plans it as a
+    scan of most of the table. Values keep the disjunction, which the indexes serve.
+    """
+
+    survivors = Handle._base_manager.filter(platform="email").values("pk")
+    for shape in (survivors, Subquery(survivors)):
+        sql, _ = Handle._base_manager.redirect_groups(shape).query.sql_with_params()
+        assert "UNION ALL" in sql and " OR " not in sql
+    sql, _ = Handle._base_manager.redirect_groups([1, 2]).query.sql_with_params()
+    assert " OR " in sql and "UNION" not in sql
+
+
+@settings(deadline=None, max_examples=25, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(survivors=st.integers(min_value=1, max_value=4), data=st.data())
+def test_redirect_groups_selects_what_the_disjunction_selects(survivors: int, data: st.DataObject) -> None:
+    """Over random one-hop merge graphs, every input shape selects the rows of ``pk IN … OR merged_into IN …``.
+
+    Unselected survivors and their redirects are the unrelated rows; examples roll back.
+    """
+
+    targets = data.draw(st.lists(st.integers(min_value=0, max_value=survivors - 1), max_size=6), label="redirects")
+    with transaction.atomic(), system_context(reason="test redirect groups merge graph"):
+        create = Handle._base_manager.create
+        rows = [create(platform="email", value=f"s{index}@example.test") for index in range(survivors)]
+        rows += [
+            create(platform="email", value=f"r{index}@example.test", merged_into=rows[target])
+            for index, target in enumerate(targets)
+        ]
+        ids = sorted(data.draw(st.sets(st.sampled_from([row.pk for row in rows])), label="survivors"))
+        expected = set(
+            Handle._base_manager.filter(Q(pk__in=ids) | Q(merged_into_id__in=ids)).values_list("pk", flat=True)
+        )
+        subquery = Handle._base_manager.filter(pk__in=ids).values("pk")
+        for shape in (ids, subquery, Subquery(subquery)):
+            assert set(Handle._base_manager.redirect_groups(shape).values_list("pk", flat=True)) == expected
+        transaction.set_rollback(True)

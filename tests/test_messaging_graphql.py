@@ -487,7 +487,7 @@ def test_message_sender_and_participant_expose_resolved_party(db: None) -> None:
             thread=thread,
             message=message,
             handle=handle,
-            role=messaging_models.Participant.ParticipantRole.FROM,
+            role=messaging_models.Participant.ParticipantRole.TO,
             created_by_id=admin.pk,
         )
 
