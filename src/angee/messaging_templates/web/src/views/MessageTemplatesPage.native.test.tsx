@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useMemo } from "react";
 import { expect, test } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
@@ -71,17 +71,15 @@ function argsOf(calls: readonly MessageTemplateFixtureCall[], field: string): re
 
 const IDENTITY = ["form.identity", "field.kind", "field.key", "field.language"];
 const MESSAGE = ["form.message", "field.subject", "field.preheader", "field.layout"];
-const TEMPLATE_OUTLINE = [
-  ...IDENTITY,
-  ...MESSAGE,
-  "form.content", "field.format", "field.source", "field.textSource",
-  "form.variables", "field.variables",
-  "form.details", "field.description",
-];
+const AFTER_CONTENT = ["form.variables", "field.variables", "form.details", "field.description"];
 
 test.each([
-  ["a template override", ROW.passwordReset, TEMPLATE_OUTLINE],
-  ["a block", ROW.notice, TEMPLATE_OUTLINE.filter((key) => !MESSAGE.includes(key))],
+  // A Markdown template: its plain text is rendered from its Markdown, so it has no plain-text source.
+  ["a Markdown template override", ROW.passwordReset,
+    [...IDENTITY, ...MESSAGE, "form.content", "field.format", "field.source", ...AFTER_CONTENT]],
+  // An HTML block: no Message section, and its plain-text source beside its HTML.
+  ["an HTML block", ROW.notice,
+    [...IDENTITY, "form.content", "field.format", "field.source", "field.textSource", ...AFTER_CONTENT]],
 ])("%s shows its identity first, then each section in its place, and no empty section", async (_case, open, outline) => {
   render(<MessageTemplateStory open={open} />);
   await screen.findByLabelText(word("field.description"));
@@ -190,13 +188,20 @@ test("a current override offers no Keep override, and says Delete returns to the
   expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
 });
 
-test("a refused Keep override says why, in the server's words, and the warning stays", async () => {
+test("a refused Keep override says why, in the server's words for this row, and the warning stays", async () => {
   render(<MessageTemplateStory open={ROW.recordCard} refuseKeep />);
   await screen.findByText(word("notice.defaultUpdated"));
   fireEvent.click(await screen.findByRole("button", { name: word("action.keepOverride") }));
 
   // The toast is also announced in a live region, so the words are on the page more than once.
   expect((await screen.findAllByText(KEEP_REFUSAL.message, { exact: false })).length).toBeGreaterThan(0);
+  // Its reason names this row, which another session deleted since it opened; nothing says it overrides no default.
+  const reasons = Object.values(KEEP_REFUSAL.validation_errors ?? {}).flat().map(String);
+  expect(reasons.length).toBeGreaterThan(0);
+  for (const reason of reasons) {
+    expect(reason).toContain(ROW.recordCard);
+    expect((await screen.findAllByText(reason, { exact: false })).length).toBeGreaterThan(0);
+  }
   expect(screen.getByText(word("notice.defaultUpdated"))).toBeTruthy();
 });
 
@@ -270,13 +275,84 @@ test("a template whose preview warns lists each warning in the server's words", 
   }
 });
 
-test("a template that does not render shows why, in the server's words, and no frame", async () => {
+test("a template that does not render says so first, then why in the server's words, with no frame and no frame caveat", async () => {
   render(<MessageTemplateStory open={ROW.invoiceSent} />);
-  await screen.findByText(word("preview.refused"));
-  for (const warning of RECORDED.previews[ROW.invoiceSent]!.warnings) {
-    expect(screen.getByText(warning.detail)).toBeTruthy();
+  const title = await screen.findByText(word("preview.refused"));
+  const reasons = RECORDED.previews[ROW.invoiceSent]!.warnings.map((warning) => screen.getByText(warning.detail));
+  expect(reasons.length).toBeGreaterThan(0);
+  // The state and its reasons sit together at the top of the pane's body, the state first.
+  const body = title.closest(".overflow-y-auto");
+  for (const reason of reasons) {
+    expect(body?.contains(reason)).toBe(true);
+    expect(title.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
   expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+  expect(screen.queryByText(word("preview.fidelity"))).toBeNull();
+  expect(screen.queryByRole("group", { name: word("preview.format") })).toBeNull();
+});
+
+/** The Preview pane's toolbar: the shared pane toolbar holding the brand kit select. */
+async function previewToolbar(): Promise<HTMLElement> {
+  const kit = await screen.findByRole("combobox", { name: word("preview.kit") });
+  const toolbar = kit.closest<HTMLElement>("[role=toolbar]");
+  if (!toolbar) throw new Error("The brand kit select is in no toolbar.");
+  return toolbar;
+}
+
+test("the Preview pane's caption, brand kit and HTML or plain-text switch share its one toolbar row", async () => {
+  render(<MessageTemplateStory open={ROW.welcome} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  const toolbar = await previewToolbar();
+
+  expect(within(toolbar).getByRole("group", { name: word("preview.format") })).toBeTruthy();
+  // The caption is the toolbar host's title, in the same row as the toolbar.
+  expect(toolbar.parentElement?.parentElement?.textContent).toContain(word("preview.saved"));
+});
+
+test("the frame fills the pane's body and scrolls the mail itself; what the server says takes part of the pane at most", async () => {
+  render(<MessageTemplateStory open={ROW.passwordReset} />);
+  const frame = await screen.findByTitle(word("preview.frameTitle"));
+  const box = frame.parentElement!;
+  expect(box.className).toContain("flex-1");
+  expect(box.className).toContain("min-h-0");
+  expect(box.className).not.toContain("min-h-96");
+  // The warnings sit in a band that scrolls within its share of the pane, above the frame.
+  const warning = await screen.findByText(RECORDED.previews[ROW.passwordReset]!.warnings[0]!.detail);
+  const band = warning.closest<HTMLElement>(".overflow-y-auto");
+  expect(band?.className).toContain("max-h-[40%]");
+  expect(band?.contains(frame)).toBe(false);
+});
+
+test("the frame caveat shows beside a frame only, not with the plain text", async () => {
+  render(<MessageTemplateStory open={ROW.welcome} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  expect(screen.getByText(word("preview.fidelity"))).toBeTruthy();
+  fireEvent.click(within(await previewToolbar()).getByRole("button", { name: word("preview.text") }));
+
+  expect(await screen.findByRole("region", { name: word("preview.text") })).toBeTruthy();
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+  expect(screen.queryByText(word("preview.fidelity"))).toBeNull();
+});
+
+/** The Preview pane itself: the frame's box sits in it, beneath what the server says of the render. */
+async function previewPane(): Promise<HTMLElement> {
+  return (await screen.findByTitle(word("preview.frameTitle"))).parentElement!.parentElement!;
+}
+
+test("a mail's Preview shows its subject and preheader; a block's has neither row", async () => {
+  render(<MessageTemplateStory open={ROW.welcome} />);
+  const rendered = RECORDED.previews[ROW.welcome]!.rendered!;
+  const mail = await previewPane();
+  expect(within(mail).getByText(word("preview.subject"))).toBeTruthy();
+  expect(within(mail).getByText(rendered.subject)).toBeTruthy();
+  expect(within(mail).getByText(word("preview.preheader"))).toBeTruthy();
+  expect(within(mail).getByText(rendered.preheader)).toBeTruthy();
+  cleanup();
+
+  render(<MessageTemplateStory open={ROW.quote} />);
+  const block = await previewPane();
+  expect(within(block).queryByText(word("preview.subject"))).toBeNull();
+  expect(within(block).queryByText(word("preview.preheader"))).toBeNull();
 });
 
 test("after a save, the preview reads the row again", async () => {

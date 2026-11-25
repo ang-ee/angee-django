@@ -76,6 +76,15 @@ describe("MessageTemplatesPage", () => {
       ["is_effective", M["col.effective"]], ["has_updated_default", M["col.defaultUpdated"]],
     ]);
   });
+
+  test("shows the three flags with one widget, whichever the metadata gives each", () => {
+    const { list } = pageDeclaration();
+    const flags = parsePageColumns(list.children).filter((column) => column.field !== "name" && column.field !== "language");
+
+    expect(flags.map((column) => column.field)).toEqual(["is_baseline", "is_effective", "has_updated_default"]);
+    expect(new Set(flags.map((column) => column.widget)).size).toBe(1);
+    expect(flags[0]?.widget).toBe("boolean");
+  });
 });
 
 describe("MessageTemplateForm", () => {
@@ -108,15 +117,33 @@ describe("MessageTemplateForm", () => {
 
   test("shows the subject, preheader and layout only for a kind the server says carries them", () => {
     const fields = parsePageFields(children(formDeclaration()));
-    const conditional = fields.filter((field) => field.showWhen);
+    const conditional = fields.filter((field) => field.showWhen && field.name !== "text_source");
 
-    expect(conditional.map((field) => field.name)).toEqual(["subject", "preheader", "layout"]);
+    expect(fields.filter((field) => field.showWhen).map((field) => field.name))
+      .toEqual(["subject", "preheader", "layout", "text_source"]);
     for (const field of conditional) {
       expect(field.showWhen?.({ carries_message_fields: true })).toBe(true);
       expect(field.showWhen?.({ carries_message_fields: false })).toBe(false);
       expect(field.showWhen?.({})).toBe(false);
     }
     expect(fields.find((field) => field.name === "carries_message_fields")).toMatchObject({ hidden: true, readOnly: true });
+  });
+
+  test("shows the plain-text source for an HTML row only, and leaving HTML empties it as the server requires", () => {
+    const fields = parsePageFields(children(formDeclaration()));
+    const textSource = fields.find((field) => field.name === "text_source");
+    const format = fields.find((field) => field.name === "format");
+
+    // The form holds the enum as read (HTML) or as its option chose it (html).
+    expect(textSource?.showWhen?.({ format: "HTML" })).toBe(true);
+    expect(textSource?.showWhen?.({ format: "html" })).toBe(true);
+    expect(textSource?.showWhen?.({ format: "MARKDOWN" })).toBe(false);
+    expect(textSource?.showWhen?.({})).toBe(false);
+    const loaded = { format: "HTML", text_source: "{{ text }}" };
+    expect(format?.prefill?.("markdown", loaded, loaded)).toEqual({ text_source: "" });
+    expect(format?.prefill?.("html", { format: "html" }, loaded)).toEqual({ text_source: "{{ text }}" });
+    expect(format?.prefill?.("html", { format: "html" }, { format: "MARKDOWN", text_source: "" }))
+      .toEqual({ text_source: "" });
   });
 
   test("lifts no field above the sheet as the record's body", () => {

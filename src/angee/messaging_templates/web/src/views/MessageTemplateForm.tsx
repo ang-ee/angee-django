@@ -6,6 +6,8 @@ import {
   Field,
   Form,
   Group,
+  PaneToolbarHost,
+  optionToken,
   registerForm,
   useEnumOptions,
   useRecordActionMutation,
@@ -32,14 +34,27 @@ function carriesMessageFields(values: Row): boolean {
   return values.carries_message_fields === true;
 }
 
+/** Only an HTML row has a plain-text source; a Markdown row's plain text is rendered from its Markdown. */
+function hasPlainTextSource(values: Row): boolean {
+  return optionToken(values.format) === "html";
+}
+
+/**
+ * The plain-text source a format leaves: none for Markdown, which the server requires of a Markdown
+ * row and which the save then writes for the hidden field; for HTML, the one the row was loaded with.
+ */
+function plainTextSourceFor(format: unknown, _values: Row, loaded?: Row): Record<string, unknown> {
+  return { text_source: optionToken(format) === "html" ? loaded?.text_source ?? "" : "" };
+}
+
 /**
  * A message template as an administrator reads and edits it: its name as the
  * title; what it is (kind, key and language), entered when it is created and
  * fixed after; for a template, its subject, preheader and layout; its format, its
- * source and plain-text source; the values it reads; and its description. The
- * insert takes only the name and the identity and the server seeds the rest, so
- * a create form shows nothing else. The values it is previewed with are a pane of
- * their own, beside the saved row's Preview.
+ * source and, for HTML, its plain-text source; the values it reads; and its
+ * description. The insert takes only the name and the identity and the server
+ * seeds the rest, so a create form shows nothing else. The values it is previewed
+ * with are a pane of their own, beside the saved row's Preview.
  *
  * A shipped default is read-only (it projects no `write`); Override starts the
  * deployment's override of it and opens it. An override whose shipped default
@@ -61,7 +76,13 @@ function MessageTemplateForm({
       label: t("tab.preview"),
       presentation: "full-bleed",
       visibleWhen: (record) => holdsPermission(record, "preview"),
-      render: ({ recordId, active }) => <MessageTemplatePreviewPane template={recordId} active={active} />,
+      // The pane's toolbar row is the shared pane toolbar's, as every pane's is.
+      render: ({ recordId, active, form }) => (
+        <PaneToolbarHost title={t("preview.saved")}>
+          <MessageTemplatePreviewPane template={recordId} active={active}
+            carriesMessageFields={carriesMessageFields(form.displayRecord ?? {})} />
+        </PaneToolbarHost>
+      ),
     },
     ...(recordTabs ?? []),
   ], [recordTabs, t]);
@@ -90,9 +111,11 @@ function MessageTemplateForm({
         <Field name="layout" label={t("field.layout")} showWhen={carriesMessageFields} />
       </Group>
       <Group label={t("form.content")} columns={1}>
-        <Field name="format" label={t("field.format")} widget="select" options={formatOptions} />
+        <Field name="format" label={t("field.format")} widget="select" options={formatOptions}
+          prefill={plainTextSourceFor} />
         <Field name="source" label={t("field.source")} widget="textarea" body={false} />
-        <Field name="text_source" label={t("field.textSource")} widget="textarea" body={false} />
+        <Field name="text_source" label={t("field.textSource")} widget="textarea" body={false}
+          showWhen={hasPlainTextSource} />
       </Group>
       <Group label={t("form.variables")} columns={1}>
         <Field name="variables" label={t("field.variables")} widget="json" />

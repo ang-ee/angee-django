@@ -6,6 +6,7 @@ import {
   LoadingPanel,
   MessageHtmlFrame,
   MetaGrid,
+  PaneToolbar,
   RecordIssues,
   SegmentedControl,
   Select,
@@ -31,20 +32,31 @@ export interface MessageTemplatePreviewPaneProps {
   template: string;
   /** The pane is the selected one: an unselected pane reads nothing. */
   active: boolean;
+  /** The row's kind carries a subject and a preheader, as the form decides for its Message section. */
+  carriesMessageFields: boolean;
 }
 
 /**
  * The saved row as a recipient receives it: rendered by the server with its
  * sample, in the brand kit chosen here or, unset, the deployment's default kit;
- * its subject and preheader, its HTML body or its plain-text body, and what the
- * server warns about. A row that does not render shows each reason as the server
- * words it. The HTML is only ever in the framework's sandboxed message frame,
- * which runs no script, has no same origin and loads remote images only when
- * asked; the frame's own body styles sit under the mail, so a mail client may
- * space and size it slightly differently. While another kit's preview loads, the
- * previous one stays on screen and the pane says it is busy.
+ * for a mail its subject and preheader; its HTML body or its plain-text body; and
+ * what the server warns about. A row that does not render says so and shows each
+ * reason as the server words it. The HTML is only ever in the framework's
+ * sandboxed message frame, which runs no script, has no same origin and loads
+ * remote images only when asked; the frame's own body styles sit under the mail,
+ * so a mail client may space and size it slightly differently, which the pane
+ * says beside a frame. While another kit's preview loads, the previous one stays
+ * on screen and the pane says it is busy.
+ *
+ * The pane fills the height its record tab is given. The brand kit select and the
+ * HTML or plain-text switch are its pane toolbar's (`PaneToolbar`, in the host the
+ * tab renders it in); what the server says of the render takes at most part of
+ * the height and scrolls within it; the body takes the rest, and the frame or the
+ * plain text scrolls the whole mail within it.
  */
-export function MessageTemplatePreviewPane({ template, active }: MessageTemplatePreviewPaneProps): React.ReactElement {
+export function MessageTemplatePreviewPane({
+  template, active, carriesMessageFields,
+}: MessageTemplatePreviewPaneProps): React.ReactElement {
   const t = useMessagingTemplatesT();
   const [kit, setKit] = React.useState("");
   const [format, setFormat] = React.useState<PreviewFormat>("html");
@@ -79,12 +91,49 @@ export function MessageTemplatePreviewPane({ template, active }: MessageTemplate
     tone: rendered ? "warning" as const : "danger" as const,
     message: warning.detail,
   }));
+  const framed = rendered !== null && format === "html";
+
+  const toolbar = (
+    <PaneToolbar
+      selector={<Select aria-label={t("preview.kit")} size="sm" className="w-auto min-w-36" value={kit}
+        onValueChange={setKit} options={kitOptions} loading={kits.list.fetching && kits.rows.length === 0} />}
+      actions={rendered ? <SegmentedControl aria-label={t("preview.format")} options={formatOptions} value={format}
+        onValueChange={setFormat} /> : null}
+    />
+  );
+
+  // What the server says of the render, above the body: never more than part of the pane, scrolling within it.
+  const facts = [
+    preview.error ? <ErrorBanner key="error" description={errorMessage(preview.error, t("preview.loadError"))} /> : null,
+    rendered && carriesMessageFields ? (
+      <MetaGrid key="message" rows={[
+        {
+          id: "subject",
+          label: t("preview.subject"),
+          value: <span lang={rendered.language} dir="auto">{rendered.subject}</span>,
+        },
+        {
+          id: "preheader",
+          label: t("preview.preheader"),
+          value: <span lang={rendered.language} dir="auto">{rendered.preheader}</span>,
+        },
+      ]} />
+    ) : null,
+    rendered ? <RecordIssues key="warnings" items={issues} /> : null,
+    framed ? <p key="fidelity" className={textRoleVariants({ role: "caption" })}>{t("preview.fidelity")}</p> : null,
+  ].filter((node) => node !== null);
 
   let body: React.ReactNode;
   if (!result) {
     body = preview.error ? null : <LoadingPanel density="inline" />;
   } else if (!rendered) {
-    body = <EmptyState icon="triangle-alert" title={t("preview.refused")} fill />;
+    // The state first and the server's reasons under it, both at the top of what the pane is given.
+    body = (
+      <div className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
+        <EmptyState icon="triangle-alert" title={t("preview.refused")} className="min-h-0 p-6" />
+        <RecordIssues items={issues} />
+      </div>
+    );
   } else if (format === "text") {
     body = (
       <div lang={rendered.language} dir="auto" tabIndex={0} role="region" aria-label={t("preview.text")}
@@ -95,40 +144,18 @@ export function MessageTemplatePreviewPane({ template, active }: MessageTemplate
   } else {
     body = (
       <MessageHtmlFrame html={rendered.html} title={t("preview.frameTitle")} lang={rendered.language}
-        className="h-auto min-h-96 flex-1 rounded-none border-0" />
+        className="h-auto min-h-0 flex-1 rounded-none border-0" />
     );
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-sheet" aria-busy={preview.isPlaceholderData || undefined}>
-      <div className="grid gap-3 border-b border-border-subtle px-4 py-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <p className={textRoleVariants({ role: "meta", className: "min-w-0 flex-1" })}>{t("preview.saved")}</p>
-          <Select aria-label={t("preview.kit")} size="sm" value={kit} onValueChange={setKit} options={kitOptions}
-            loading={kits.list.fetching && kits.rows.length === 0} />
-          {rendered ? (
-            <SegmentedControl aria-label={t("preview.format")} options={formatOptions} value={format}
-              onValueChange={setFormat} />
-          ) : null}
+      {toolbar}
+      {facts.length ? (
+        <div className="grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-3">
+          {facts}
         </div>
-        {preview.error ? <ErrorBanner description={errorMessage(preview.error, t("preview.loadError"))} /> : null}
-        {rendered ? (
-          <MetaGrid rows={[
-            {
-              id: "subject",
-              label: t("preview.subject"),
-              value: <span lang={rendered.language} dir="auto">{rendered.subject}</span>,
-            },
-            {
-              id: "preheader",
-              label: t("preview.preheader"),
-              value: <span lang={rendered.language} dir="auto">{rendered.preheader}</span>,
-            },
-          ]} />
-        ) : null}
-        <RecordIssues items={issues} />
-        <p className={textRoleVariants({ role: "caption" })}>{t("preview.fidelity")}</p>
-      </div>
+      ) : null}
       {body}
     </div>
   );

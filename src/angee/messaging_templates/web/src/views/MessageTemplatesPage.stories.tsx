@@ -37,15 +37,15 @@ export const RefusedSave = { render: (_args: unknown, { globals }: StoryContext)
  * key under Key.
  */
 export const NewMessageTemplate = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
-/** A template whose preview warns: an empty preheader and a value nothing reads. */
+/** A template whose preview warns: an empty preheader and a value nothing reads, above the frame, which keeps most of the pane and scrolls the mail. */
 export const PreviewWarnings = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
-/** A template whose sample no longer renders: each reason as the server words it, and no frame. */
+/** A template whose sample no longer renders: that it does not render, then each reason as the server words it; no frame. */
 export const PreviewRenderError = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.invoiceSent} /> };
-/** The deployment's own Arabic template: the frame's document reads right to left, and so does its plain text. */
+/** The deployment's own Arabic template: the frame's document reads right to left. */
 export const RightToLeft = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcomeArabic} /> };
 /** The deployment's own block an override includes: Delete in the record's menu shows the server's refusal. */
 export const DeleteRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.notice} /> };
-/** Keep override is refused, as for a row that overrides no shipped default: a toast with the server's words. */
+/** Keep override on an override another session deleted since it opened: the toast gives the server's words, and the warning stays. */
 export const KeepRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.recordCard} refuseKeep /> };
 /** A member on a shipped default: the fact alone in the notice, no verb, no Preview, the sample as a restriction, no Backlinks. */
 export const MemberView = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcome} viewer="member" /> };
