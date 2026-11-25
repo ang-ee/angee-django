@@ -1078,7 +1078,7 @@ class DeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.status, expected)
                 self.assertNotIn("mail.example.test", row.local_metadata["delivery_error"])
 
-    def test_admission_and_creation_replay_run_under_the_actor_outside_elevation(self):
+    def test_admission_and_creation_replay_run_under_the_actor(self):
         comment = self.comment()
         seen = []
 
@@ -1087,22 +1087,22 @@ class DeliveryContracts(DeliveryFixtures):
             self.assertTrue(comment.has_access("read"))
             seen.append(comment.pk)
 
-        with system_context(reason="trusted caller with explicit reply actor"):
-            first = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
-                                            idempotency_key="admitted", admit=admit)
-            replay = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
-                                             idempotency_key="admitted", admit=admit)
+        first = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
+                                        idempotency_key="admitted", admit=admit)
+        replay = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
+                                         idempotency_key="admitted", admit=admit)
         self.assertEqual(first.pk, replay.pk)
         self.assertEqual(seen, [comment.pk])
 
-    def test_elevated_reply_caller_cannot_bypass_the_explicit_actors_permissions(self):
+    def test_an_elevated_caller_is_refused_whatever_actor_it_names(self):
         comment = self.comment()
         with system_context(reason="unprivileged reply actor"):
             stranger = get_user_model().objects.create_user(username="unprivileged-replier")
-            with self.assertRaises(PermissionDenied):
-                Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=stranger,
-                                        idempotency_key="denied")
-            self.assertFalse(changeset_model()._base_manager.filter(key="denied").exists())
+        for actor in (stranger, self.agent):
+            with system_context(reason="elevated reply caller"), self.assertRaises(RuntimeError):
+                Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=actor,
+                                        idempotency_key="elevated")
+        self.assertFalse(changeset_model()._base_manager.filter(key="elevated").exists())
 
     def test_failed_discovery_receiver_is_repaired_before_classifying_the_next_record(self):
         seen = []

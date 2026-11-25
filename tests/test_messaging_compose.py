@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -26,9 +28,10 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
-from angee.messaging.managers import _preview
+from angee.messaging.managers import MessageManager, _preview
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
-from angee.provenance.context import changeset_model
+from angee.provenance import context as provenance_context
+from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File, create_platform_admin, make_integration
@@ -83,6 +86,35 @@ def _file(owner: Any, content: bytes, name: str = "invoice.txt") -> Any:
 
 def _rows() -> tuple[int, int, int]:
     return Message._base_manager.count(), Part._base_manager.count(), Recipient._base_manager.count()
+
+
+@contextmanager
+def _refused(
+    expected: type[Exception] = ValidationError, *, key: str | None = None, code: str | None = None,
+) -> Iterator[pytest.ExceptionInfo[Any]]:
+    """Expect the call inside to be refused having written nothing, judged by what it executed.
+
+    A write the refusal's rollback undoes leaves no row behind, so the statements
+    the call ran are read instead: none may insert, update or delete anything but
+    a permission audit row, and none may touch a changeset. ``key`` and ``code``
+    name the refusal of a ``ValidationError``.
+    """
+
+    audit, changesets = "rebac_permissionauditevent", changeset_model()._meta.db_table
+    with CaptureQueriesContext(connection) as queries:
+        with pytest.raises(expected) as refused:
+            yield refused
+    writes = [
+        query["sql"] for query in queries
+        if changesets in query["sql"]
+        or (query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) and audit not in query["sql"])
+    ]
+    assert writes == []
+    if key is not None:
+        assert isinstance(refused.value, ValidationError)
+        assert key in refused.value.error_dict, refused.value
+        if code is not None:
+            assert refused.value.error_dict[key][0].code == code
 
 
 def _wire(channel: Any, message: Any) -> Any:
@@ -178,31 +210,44 @@ def test_the_text_part_comes_from_the_text_and_never_from_the_html(desk: Any) ->
 
 
 @pytest.mark.parametrize(
-    ("values", "key"),
+    ("values", "key", "code"),
     [
-        ({"local": {"delivery_attempts": 3}}, "local"),
-        ({"queued": True, "scheduled_at": timezone.now() + timedelta(hours=1)}, "scheduled_at"),
-        ({"subject": "One\nTwo"}, "subject"),
-        ({"text": "  ", "html": ""}, "text"),
-        ({"to": ["not an address"]}, "to"),
-        ({"to": [], "cc": ["Reader <reader@example>"]}, "cc"),
-        ({"to": [], "bcc": ["x" * 320 + "@example.test"]}, "bcc"),
-        ({"to": []}, "to"),
-        ({"sender": "desk"}, "sender"),
+        ({"local": {"delivery_attempts": 3}}, "local", "reserved"),
+        ({"queued": True, "scheduled_at": timezone.now() + timedelta(hours=1)}, "scheduled_at", "queued"),
+        ({"subject": "One\nTwo"}, "subject", "invalid"),
+        ({"text": "  ", "html": ""}, "text", "required"),
+        ({"to": ["not an address"]}, "to", "invalid"),
+        ({"to": [], "cc": ["Reader <reader@example>"]}, "cc", "invalid"),
+        ({"to": [], "bcc": ["x" * 320 + "@example.test"]}, "bcc", "invalid"),
+        ({"to": []}, "to", "required"),
+        ({"sender": "desk"}, "sender", "channel_sender"),
     ],
 )
-def test_a_new_message_is_refused_before_anything_is_written(desk: Any, values: dict[str, Any], key: str) -> None:
+def test_a_new_message_is_refused_before_anything_is_written(
+    desk: Any, values: dict[str, Any], key: str, code: str,
+) -> None:
     with system_context(reason="tests.messaging.compose.sender"):
         handle = Handle.objects.upsert(platform="email", value="desk@example.test")
     values = {"text": "Hello.", "to": ["reader@example.test"], **values}
     if values.get("sender") == "desk":
         values["sender"] = handle
-    before, handles = _rows(), Handle._base_manager.count()
-    with pytest.raises(ValidationError) as refused:
+    with _refused(key=key, code=code):
         Message.objects.compose(channel=desk, actor=desk.owner, idempotency_key=f"refused-{key}", **values)
-    assert key in refused.value.error_dict
-    assert (_rows(), Handle._base_manager.count()) == (before, handles)
-    assert not changeset_model()._base_manager.filter(key=f"refused-{key}").exists()
+
+
+def test_a_refusal_that_followed_a_write_is_seen_in_what_the_call_executed(
+    desk: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal check reads the statements: a late refusal is caught though its rollback leaves no row."""
+
+    def refuse_late(*args: Any, **kwargs: Any) -> None:
+        raise ValidationError({"to": ValidationError("Refused after the writes.", code="invalid")})
+
+    monkeypatch.setattr(MessageManager, "_write_recipients", refuse_late)
+    before = _rows()
+    with pytest.raises(AssertionError), _refused(key="to", code="invalid"):
+        Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hi.", actor=desk.owner)
+    assert _rows() == before
 
 
 def test_an_anchor_is_refused_with_what_it_cannot_take(desk: Any) -> None:
@@ -210,32 +255,46 @@ def test_an_anchor_is_refused_with_what_it_cannot_take(desk: Any) -> None:
     with system_context(reason="tests.messaging.compose.anchor"):
         doc = ChatterDoc.objects.create(title="Anchor")
         handle = Handle.objects.upsert(platform="email", value="desk@example.test")
-    before = _rows()
-    for values, key in (
-        ({"parent": request, "channel": desk}, "channel"),
-        ({"parent": request, "record": doc}, "record"),
-        ({"record": doc, "to": ["reader@example.test"]}, "channel"),
-        ({"parent": request, "subject": "Other"}, "subject"),
-        ({"parent": request, "to": ["other@example.test"]}, "to"),
-        ({"parent": request, "sender": handle}, "sender"),
+    for values, key, code in (
+        ({"parent": request, "channel": desk}, "channel", "reply_anchored"),
+        ({"parent": request, "record": doc}, "record", "reply_anchored"),
+        ({"record": doc, "to": ["reader@example.test"]}, "channel", "required"),
+        ({"parent": request, "subject": "Other"}, "subject", "reply_titled"),
+        ({"parent": request, "to": ["other@example.test"]}, "to", "reply_addressed"),
+        ({"parent": request, "sender": handle}, "sender", "channel_sender"),
     ):
-        with pytest.raises(ValidationError) as refused:
+        with _refused(key=key, code=code):
             Message.objects.compose(text="Hello.", actor=desk.owner, **values)
-        assert key in refused.value.error_dict, values
-    assert _rows() == before
 
 
 def test_an_email_reply_on_a_channel_that_cannot_send_is_refused_even_held(desk: Any) -> None:
     request = _receive(desk, "unsendable")
-    before = _rows()
-    with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False), pytest.raises(OutboundEmailNotConfigured) as refused:
+    with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False), _refused(
+        OutboundEmailNotConfigured, key="channel", code="OUTBOUND_EMAIL_NOT_CONFIGURED",
+    ):
         Message.objects.compose(parent=request, text="Which team?", actor=desk.owner)
-    assert refused.value.error_dict["channel"][0].code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
-    assert _rows() == before
     manual = make_integration("compose-manual", model=Channel, backend_class="manual")
-    with pytest.raises(OutboundEmailChannelMissing):
+    with _refused(OutboundEmailChannelMissing, key="channel", code="OUTBOUND_EMAIL_CHANNEL_MISSING"):
         Message.objects.compose(channel=manual, to=["reader@example.test"], text="Hello.", actor=manual.owner)
-    assert _rows() == before
+
+
+def test_a_keyed_retry_returns_its_original_after_the_channel_stops_sending(desk: Any) -> None:
+    """Present state is read after the replay: a retry finds its message, a first call is refused unwritten."""
+
+    owner = desk.owner
+    request = _receive(desk, "retried")
+    reply = Message.objects.compose(parent=request, text="Which team?", actor=owner, idempotency_key="retry-reply")
+    new = Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hello.", actor=owner,
+                                  idempotency_key="retry-new")
+    rows = _rows()
+    with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False):
+        again = Message.objects.compose(parent=request, text="Which team?", actor=owner, idempotency_key="retry-reply")
+        repeated = Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hello.", actor=owner,
+                                           idempotency_key="retry-new")
+        with pytest.raises(OutboundEmailNotConfigured):
+            Message.objects.compose(parent=request, text="Which team?", actor=owner, idempotency_key="first")
+    assert (again.pk, repeated.pk, _rows()) == (reply.pk, new.pk, rows)
+    assert not changeset_model()._base_manager.filter(key="first").exists()
 
 
 def test_a_chat_reply_is_plain_text_from_an_explicit_sender_on_its_platform(desk: Any) -> None:
@@ -244,14 +303,14 @@ def test_a_chat_reply_is_plain_text_from_an_explicit_sender_on_its_platform(desk
     with system_context(reason="tests.messaging.compose.chat"):
         slack, email = (Handle.objects.upsert(platform=platform, value=value)
                         for platform, value in (("slack", "U-desk"), ("email", "desk@example.test")))
-    for values, key in (
-        ({}, "sender"), ({"sender": email}, "sender"),
-        ({"sender": slack, "html": "<p>Yes.</p>"}, "html"),
-        ({"sender": slack, "attachments": [_file(chat.owner, b"chat attachment")]}, "attachments"),
+    attachment = _file(chat.owner, b"chat attachment")
+    for values, key, code in (
+        ({}, "sender", "invalid"), ({"sender": email}, "sender", "invalid"),
+        ({"sender": slack, "html": "<p>Yes.</p>"}, "html", "plain_text"),
+        ({"sender": slack, "attachments": [attachment]}, "attachments", "plain_text"),
     ):
-        with pytest.raises(ValidationError) as refused:
+        with _refused(key=key, code=code):
             Message.objects.compose(parent=question, text="Yes.", actor=chat.owner, **values)
-        assert key in refused.value.error_dict
     reply = Message.objects.compose(parent=question, text="Yes.", sender=slack, actor=chat.owner)
     assert (reply.message_type, reply.sender_id, reply.title()) == ("chat", slack.pk, "")
     assert not Recipient._base_manager.filter(message=reply).exists()
@@ -293,11 +352,8 @@ def test_a_typed_name_never_renames_a_known_handle_and_an_invalid_address_writes
     assert names == {"known@example.test": "Known", "new@example.test": "New", "blank@example.test": "Typed"}
     assert Handle._base_manager.get(pk=known.pk).display_name == "Known"
     assert Handle._base_manager.get(pk=blank.pk).display_name == "Typed"
-    handles = Handle._base_manager.count()
-    with pytest.raises(ValidationError) as refused:
+    with _refused(key="to", code="invalid"):
         Message.objects.compose(channel=desk, to=["fresh@example.test", "broken@"], text="Hello.", actor=desk.owner)
-    assert "to" in refused.value.error_dict
-    assert Handle._base_manager.count() == handles
 
 
 def test_a_keyed_compose_replays_its_message_and_refuses_changed_or_discarded_intent(desk: Any) -> None:
@@ -316,11 +372,31 @@ def test_a_keyed_compose_replays_its_message_and_refuses_changed_or_discarded_in
         Message._base_manager.filter(pk=first.pk).update(is_trashed=True)
     with pytest.raises(ValidationError) as refused:
         Message.objects.compose(**values, idempotency_key="once")
-    assert "idempotency_key" in refused.value.error_dict
-    outsider = make_user("compose-elevated-outsider")
-    with system_context(reason="tests.messaging.compose.elevated"), pytest.raises(PermissionDenied):
-        Message.objects.compose(**{**values, "actor": outsider}, idempotency_key="elevated")
-    assert not changeset_model()._base_manager.filter(key="elevated").exists()
+    assert refused.value.error_dict["idempotency_key"][0].code == "discarded"
+    assert _rows() == rows
+
+
+def test_compose_refuses_an_elevated_call_and_runs_as_its_actor_without_a_process_changeset(
+    desk: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No elevation is carried into compose; a request's changeset, with none process-wide, holds its rows."""
+
+    owner = desk.owner
+    for actor in (owner, make_user("compose-elevated-outsider")):
+        with system_context(reason="tests.messaging.compose.elevated"), _refused(RuntimeError):
+            Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hi.", actor=actor,
+                                    idempotency_key="elevated")
+    # A request or a task opens its own changeset and publishes none process-wide.
+    monkeypatch.setattr(provenance_context, "_process_boundary", None)
+    with changeset(fresh=True, change_reason="request"):
+        plain = Message.objects.compose(channel=desk, to=["fresh-a@example.test"], text="Hi.", actor=owner)
+        keyed = Message.objects.compose(channel=desk, to=["fresh-b@example.test"], text="Hi.", actor=owner,
+                                        idempotency_key="request-keyed")
+    assert plain.pk != keyed.pk
+    with system_context(reason="tests.messaging.compose.history"):
+        recorded = Thread.history.filter(id=plain.thread_id).values_list("changeset_id", flat=True).first()
+        reason = changeset_model()._base_manager.filter(pk=recorded).values_list("change_reason", flat=True).first()
+    assert reason == "request"
 
 
 def test_a_queued_message_is_handed_to_delivery_once_on_commit_and_a_held_one_waits(
@@ -388,15 +464,13 @@ def test_the_channels_reply_and_the_records_post_decide_who_composes(desk: Any, 
         "record": {"channel": desk, "record": doc, "to": ["reader@example.test"]},
     }[anchor]
     allowed = SEATS[seat][("reply", "channel", "record").index(anchor)]
-    before, key = _rows(), f"seat-{seat}-{anchor}"
+    key = f"seat-{seat}-{anchor}"
     if allowed:
         message = Message.objects.compose(**values, text="Hello.", actor=actor, idempotency_key=key)
         assert message.direction == "outbound"
         return
-    with pytest.raises(PermissionDenied):
+    with _refused(PermissionDenied):
         Message.objects.compose(**values, text="Hello.", actor=actor, idempotency_key=key)
-    assert _rows() == before
-    assert not changeset_model()._base_manager.filter(key=key).exists()
 
 
 def test_an_attachment_the_actor_cannot_read_is_refused(desk: Any) -> None:
@@ -405,12 +479,10 @@ def test_an_attachment_the_actor_cannot_read_is_refused(desk: Any) -> None:
     with system_context(reason="tests.messaging.compose.hidden_file"):
         # The composer owns the drive, which lends its readers every inherited file.
         File._base_manager.filter(pk=hidden.pk).update(visibility="record")
-    before = _rows()
-    with pytest.raises(PermissionDenied):
+    with _refused(PermissionDenied):
         Message.objects.compose(
             channel=desk, to=["reader@example.test"], text="Hello.", attachments=[hidden], actor=desk.owner,
         )
-    assert _rows() == before
 
 
 def test_compose_writes_each_recipient_on_its_messages_thread(desk: Any) -> None:
@@ -430,22 +502,17 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     for index, reply_to in enumerate(rejected):
         relayed = _receive(desk, f"relayed-{index}", sender="noreply@forms.example.test", reply_to=reply_to)
         assert relayed.reply_error(actor=owner).error_dict["reply_to"][0].code == "reply_to_invalid"
-        before = _rows()
-        with pytest.raises(ValidationError) as refused:
+        with _refused(key="reply_to", code="reply_to_invalid"):
             Message.objects.compose(parent=relayed, text="Thanks.", actor=owner)
-        assert refused.value.error_dict["reply_to"][0].code == "reply_to_invalid"
-        assert _rows() == before
     answered = {
         "reply-to": _receive(desk, "relayed-ok", sender="relay@example.test", reply_to="Ann <Ann@Example.test>"),
         "sender": _receive(desk, "direct", sender="requester@example.test"),
     }
+    replies = {name: Message.objects.compose(parent=parent, text="Thanks.", actor=owner)
+               for name, parent in answered.items()}
     with system_context(reason="tests.messaging.compose.reply_to.read"):
-        to = {
-            name: list(Recipient._base_manager.filter(
-                message=Message.objects.compose(parent=parent, text="Thanks.", actor=owner),
-            ).values_list("handle__value", flat=True))
-            for name, parent in answered.items()
-        }
+        to = {name: list(Recipient._base_manager.filter(message=reply).values_list("handle__value", flat=True))
+              for name, reply in replies.items()}
     assert to == {"reply-to": ["ann@example.test"], "sender": ["requester@example.test"]}
     unaddressed = _receive(desk, "unaddressed", sender=None)
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
@@ -478,7 +545,7 @@ def test_a_recipient_row_is_inserted_on_its_messages_thread(db: None) -> None:
         assert len([query for query in by_id if loaded in query["sql"]]) == 1
         same = Recipient._base_manager.create(message=message, thread=thread, handle=handle, role="bcc")
         assert same.thread_id == thread.pk
-        with pytest.raises(ValueError, match="message's thread"):
+        with pytest.raises(ValueError):
             Recipient._base_manager.create(message=message, thread=other, handle=elsewhere, role="to")
     assert Recipient._base_manager.filter(message=message).count() == 3
 
