@@ -161,7 +161,8 @@ a draft with no release instant requires operator approval indefinitely.
 `ActionResult` outcomes. They authorize one bounded selection through channel
 `write`, check every revision, and use `many_actions` for per-row refusals. The
 channel's grantable `replier` relation grants `reply` (answering on the channel and
-composing a new message there) together with comment read.
+composing a new message there) together with comment read; `Channel.reply_permission`
+is that permission's one name, which `Message.require_reply` and `compose` decide.
 All untrashed messages count in their thread, including drafts, queues and failures.
 Inserts use `F()` deltas; loss/restoration and settlement use a thread-scoped
 aggregate with the same model predicate. Queueing never changes the count.

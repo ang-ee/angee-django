@@ -147,6 +147,11 @@ class Channel(Bridge, inherits="integrate.Integration"):
     """
 
     rebac_grantable = {"reader": "write", "replier": "write", "annotator": "write"}
+    reply_permission: ClassVar[str] = "reply"
+    """The channel permission that admits sending on it.
+
+    An answer (``Message.require_reply``) and a new message (``MessageManager.compose``) both decide it.
+    """
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field: ClassVar[str | None] = "backend_class"
 
@@ -1366,7 +1371,7 @@ class Message(
         if self.pk is None or self.channel_id is None or not self.with_actor(actor).has_access("read"):
             raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
         channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=self.channel_id).first()
-        if channel is None or not channel.has_access("reply"):
+        if channel is None or not channel.has_access(channel.reply_permission):
             raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
         return cast(Channel, channel)
 

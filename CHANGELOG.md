@@ -32,7 +32,9 @@ live in code docstrings.
     whom an answer goes to (a `ReplyEnvelope`) or refuses, and
     `Message.reply_error` is that refusal, without side effects.
     `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
-    which `compose` shares. `HandleManager.clean_identity` validates a handle
+    which `compose` shares. `Channel.reply_permission` (`"reply"`) is the one
+    name of the channel permission to send, which `require_reply` and `compose`
+    decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
     fields it only fills while blank, and `Handle.email_value` is the one form an
     email address is stored in on a handle. `PartManager.attach_files` attaches

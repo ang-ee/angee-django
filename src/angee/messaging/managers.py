@@ -3193,7 +3193,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             else:
                 assert channel is not None
                 channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=channel.pk).first()
-                if channel is None or not channel.has_access("reply"):
+                if channel is None or not channel.has_access(channel.reply_permission):
                     raise PermissionDenied("Sending a message requires reply on its channel.")
                 if record is not None:
                     record.require_post(actor=actor)

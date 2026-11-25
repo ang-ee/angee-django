@@ -358,6 +358,22 @@ def test_an_email_reply_on_a_channel_that_cannot_send_is_refused_even_held(desk:
         Message.objects.compose(channel=manual, to=["reader@example.test"], text="Hello.", actor=manual.owner)
 
 
+def test_the_permission_to_send_is_the_channels_one_named_permission(
+    desk: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The answer gate and the new-message gate both decide ``Channel.reply_permission``, so renaming it moves both."""
+
+    request = _receive(desk, "named-permission")
+    reader = make_user("compose-named-permission-reader")
+    grant(desk, "reader", reader)
+    with pytest.raises(PermissionDenied):
+        Message.objects.compose(channel=desk, to=["named@example.test"], text="Hi.", actor=reader)
+    monkeypatch.setattr(Channel, "reply_permission", "read")
+    answer = Message.objects.compose(parent=request, text="Which team?", actor=reader)
+    new = Message.objects.compose(channel=desk, to=["named@example.test"], text="Hi.", actor=reader)
+    assert (answer.parent_id, new.channel_id) == (request.pk, desk.pk)
+
+
 def test_a_refused_reply_writes_no_permission_audit_row(desk: Any) -> None:
     """Who may answer is decided under the actor before anything is read elevated, so no refusal is audited."""
 
