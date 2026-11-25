@@ -128,14 +128,6 @@ describe("MessageTemplateForm", () => {
     expect(fields.filter((field) => field.widget === "textarea").every((field) => field.body === false)).toBe(true);
   });
 
-  test("leaves the values and the sample off the create form, where the server seeds them", () => {
-    const groups = parsePageGroups(children(formDeclaration()));
-
-    expect(groups.filter((group) => group.savedOnly).map((group) => group.label)).toEqual([
-      M["form.variables"], M["form.sample"],
-    ]);
-  });
-
   test("offers Override and Keep override where the server admits the reader, on a row in the state each changes", () => {
     const actions = parsePageActions(children(formDeclaration()));
     const override = actions.find((action) => action.id === "override");

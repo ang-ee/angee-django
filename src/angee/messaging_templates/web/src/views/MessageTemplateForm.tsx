@@ -94,15 +94,13 @@ function MessageTemplateForm({
         <Field name="source" label={t("field.source")} widget="textarea" body={false} />
         <Field name="text_source" label={t("field.textSource")} widget="textarea" body={false} />
       </Group>
-      {/* The server seeds both. A json field holds `{}` on a create form, which the form's create display
-          (`form-view-model.ts`) still counts as a value to show; drop `savedOnly` once it does not. */}
-      <Group label={t("form.variables")} columns={1} savedOnly>
+      <Group label={t("form.variables")} columns={1}>
         <Field name="variables" label={t("field.variables")} widget="json" />
       </Group>
       <Group label={t("form.details")} columns={1}>
         <Field name="description" label={t("field.description")} widget="textarea" body={false} />
       </Group>
-      <Group label={t("form.sample")} pane="sample" savedOnly>
+      <Group label={t("form.sample")} pane="sample">
         <Field name="sample" label={t("field.sample")} widget="json" />
       </Group>
       <Action id="override" label={t("action.override")} visibleWhen={offersOverride} run={override} />
