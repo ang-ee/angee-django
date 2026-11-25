@@ -27,9 +27,9 @@ from angee.messaging.testing.models import (
     Handle,
     Message,
     MessageEdge,
-    Participant,
     Party,
     Person,
+    Recipient,
     Relationship,
     RelationshipKind,
     Thread,
@@ -76,7 +76,7 @@ def _message(
 
 
 def _address(message: Any, handle: Any, role: str = "to") -> Any:
-    return Participant._base_manager.create(
+    return Recipient._base_manager.create(
         message=message,
         thread=message.thread,
         handle=handle,
@@ -91,7 +91,7 @@ def _messages_involving(*parties: Any) -> list[Any]:
         parties,
         handles=Handle._base_manager.all(),
         messages=Message._base_manager.all(),
-        participants=Participant._base_manager.all(),
+        recipients=Recipient._base_manager.all(),
     )).values_list("pk", flat=True))
 
 
@@ -280,18 +280,16 @@ def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to
     with actor_context(owner):
         new.with_actor(owner).merge(records=[old.public_id])
     with system_context(reason="test nexus handle merge readers"):
-        assert Participant._base_manager.get(pk=recipient.pk).handle_id == old.pk
+        assert Recipient._base_manager.get(pk=recipient.pk).handle_id == old.pk
         assert _messages_involving(alice) == [message.pk]
         assert Tie.objects.recompute(now=_T0 + timedelta(days=1)) == 1
         assert list(Tie._base_manager.values_list("party_a_id", "party_b_id")) == [tuple(sorted((alice.pk, bob.pk)))]
 
 
-@pytest.mark.parametrize("from_row", [False, True], ids=["sender", "sender-and-from-row"])
-def test_involving_parties_reads_sent_messages_from_their_sender(db: None, from_row: bool) -> None:
+def test_involving_parties_reads_sent_messages_from_their_sender(db: None) -> None:
     """A party's messages include those its handles sent, through a merged alias too.
 
-    Membership is ``pk IN``, so no message can repeat by construction; the ``from``-row
-    case proves only that a row repeating the sender changes nothing.
+    Membership is ``pk IN``, so a message sent to oneself cannot repeat by construction.
     """
 
     del db
@@ -308,9 +306,6 @@ def test_involving_parties_reads_sent_messages_from_their_sender(db: None, from_
         to_self = _message(sender=alice_handle, thread=sent.thread, sent_at=_T0, external_id="alice-to-alice")
         _address(to_self, alice_handle)
         alice_handle.fold([alias])
-        if from_row:
-            for message in (sent, to_self):
-                _address(message, message.sender, "from")
 
         assert _messages_involving(alice) == sorted([sent.pk, to_self.pk])
         assert _messages_involving(bob) == [sent.pk]
@@ -384,22 +379,6 @@ def test_recompute_counts_to_and_cc_but_not_bcc_or_unresolved_handles(db: None) 
             tuple(sorted((alice.pk, bob.pk))),
             tuple(sorted((alice.pk, carol.pk))),
         }
-
-
-def test_thread_roster_only_group_with_ten_participants_produces_no_ties(db: None) -> None:
-    """Thread roster co-membership never expands one group message into pair edges."""
-
-    del db
-    with system_context(reason="test nexus roster guard"):
-        parties = [_party(f"Person {index}") for index in range(10)]
-        handles = [_handle(party, f"person{index}@example.com") for index, party in enumerate(parties)]
-        thread = Thread._base_manager.create(platform="whatsapp", modality=Thread.Modality.GROUP)
-        _message(sender=handles[0], thread=thread, sent_at=_T0, external_id="group", platform="whatsapp")
-        for handle in handles:
-            Participant._base_manager.create(thread=thread, handle=handle, role="to")
-
-        assert Tie.objects.recompute(now=_T0) == 0
-        assert Tie._base_manager.count() == 0
 
 
 def test_recompute_excludes_record_chatter_and_public_threads(db: None) -> None:

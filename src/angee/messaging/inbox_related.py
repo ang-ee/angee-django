@@ -32,7 +32,10 @@ class InboxRelatedTarget:
 class InboxConnection:
     """One distinct use, participant, confirmed handle or readable relation endpoint pair.
 
-    Message endpoints are public IDs of messages the page carries.
+    Message endpoints are public IDs of messages the page carries. ``role`` is a
+    Participants row's: a recipient's envelope role, or the pane token ``sender``
+    for the message's sender. Every other row carries none; a handle's platform is
+    the handle's own.
     """
 
     id: str
@@ -77,11 +80,10 @@ class InboxRelated:
     def recipients(self) -> Any:
         """The message's recipient rows, including unavailable handles without leaking their identity.
 
-        The Participants pane lists the sender first, from ``Message.sender``; a
-        ``from`` row repeats it and is never listed.
+        The Participants pane lists the sender first, from ``Message.sender``.
         """
 
-        return self.inbox.participants.filter(message=self.message, role__in=("to", "cc", "bcc"))
+        return self.inbox.recipients.filter(message=self.message)
 
     def participant_count(self) -> int:
         """The pane's participants: the sender, when the message has one, and its recipients."""
@@ -246,7 +248,7 @@ class InboxRelated:
                 handles = handles.filter(Q(_sender_name__icontains=text.strip()) | Q(value__icontains=text.strip()))
             return InboxPage(
                 [
-                    InboxConnection(str(handle.sqid), handle._sender_name, role=handle.platform, handle=handle)
+                    InboxConnection(str(handle.sqid), handle._sender_name, handle=handle)
                     for handle in handles.order_by("created_at" if oldest else "-created_at", "pk")[window]
                 ],
                 handles.count(),
@@ -263,11 +265,12 @@ class InboxRelated:
             if sender_id is not None and not found.filter(pk=sender_id).exists():
                 sender_id = None
         # The sender leads the recipients in either order; the recipients' window shifts past it.
+        # Its row carries the pane token ``sender``, not a recipient role: a sender has no
+        # envelope role, and the pane labels the token through its own copy.
         lead = int(sender_id is not None)
         ordered = recipients.order_by("created_at" if oldest else "-created_at", "pk")
         selected = [
-            *([(f"sender:{message.sqid}", sender_id, recipients.model.ParticipantRole.FROM.value)]
-              if lead and window.start == 0 else []),
+            *([(f"sender:{message.sqid}", sender_id, "sender")] if lead and window.start == 0 else []),
             *((str(row.sqid), row.handle_id, row.role)
               for row in ordered[max(window.start - lead, 0):window.stop - lead]),
         ]

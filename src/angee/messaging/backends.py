@@ -235,7 +235,7 @@ class ParsedMessage:
     def sync_hash(self, *, channel_id: Any, metadata: dict[str, Any], received_at: datetime | None = None) -> str:
         """Return a stable digest of everything an ingest of this message into ``channel_id`` would write.
 
-        Covers the message columns, its part tree and its participants, so an
+        Covers the message columns, its part tree and its recipients, so an
         identical re-sync hashes equal and ingest can skip the rewrite. The thread is
         excluded: a re-thread must still reconcile counters even when nothing else
         changed, so ingest compares it separately. ``metadata`` is the envelope

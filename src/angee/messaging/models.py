@@ -1,7 +1,7 @@
 """Source models for the messaging addon.
 
 Messaging is threads and messages built on the parties contacts foundation: a
-message's sender and participants are :class:`~angee.parties.models.Handle` rows,
+message's sender and recipients are :class:`~angee.parties.models.Handle` rows,
 so the dependency points one way (messaging → parties). A :class:`Channel` is an
 ``integrate.Integration`` child (a bridge) that ingests messages from an external
 source; the email/social mapping lands in ``messaging_integrate_*`` backends.
@@ -950,7 +950,7 @@ class Message(
     cross-message relations live on :class:`MessageEdge`. The body — including a
     sparse ``TITLE`` part for the subject and ``HEADER`` parts for retained
     envelope headers — is the :class:`Part` tree; raw envelope recipients are kept
-    in ``metadata`` as the lossless source behind :class:`Participant`.
+    in ``metadata`` as the lossless source behind :class:`Recipient`.
 
     Edits are data, not shadow rows: ``edit_history`` appends newest-first
     ``{edited_at, edited_by_id, prev_fragment_hashes}`` entries while the replaced
@@ -1673,7 +1673,7 @@ class Message(
         """Queue this outbound message through messaging's fenced delivery owner.
 
         This is the consumer seam: callers compose and persist the message,
-        envelope participants, and parts, then call ``message.deliver()``. The
+        envelope recipients, and parts, then call ``message.deliver()``. The
         transport always runs through ``angee.jobs``, never in the request.
         """
 
@@ -2043,73 +2043,62 @@ class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.src_id} -{self.kind}-> {self.dst_id}"
 
 
-class Participant(AuditMixin, AngeeDataModel, concrete=True):
-    """A Handle-keyed membership of a thread/message — the queryable recipient row.
+class Recipient(AuditMixin, AngeeDataModel, concrete=True):
+    """A handle a message is addressed to, in one envelope role: the queryable recipient row.
 
-    The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
-    its queryable projection, so the inbox can group/filter by participant.
-    One row states one fact: a handle's role on a message, or, without a message,
-    in a thread. A handle merge keeps the row on the handle it names; readers
-    resolve ``handle`` through the handle's merge redirect.
+    The raw To/Cc/Bcc stays in ``Message.metadata`` as the lossless source; this is
+    its queryable projection, so the inbox can group and filter by recipient. The
+    sender is ``Message.sender``, never a row here. ``thread`` repeats
+    ``message.thread``. A handle merge keeps the row on the handle it names;
+    readers resolve ``handle`` through the handle's merge redirect.
     """
 
     merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
 
-    class ParticipantRole(models.TextChoices):
-        """The RFC-5322 envelope role of a participant."""
+    class RecipientRole(models.TextChoices):
+        """The RFC-5322 envelope role of a recipient."""
 
-        FROM = "from", "From"
         TO = "to", "To"
         CC = "cc", "Cc"
         BCC = "bcc", "Bcc"
 
-    sqid_prefix = "ptp_"
+    sqid_prefix = "rcp_"
     thread = models.ForeignKey(
         "messaging.Thread",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
-        related_name="participants",
+        related_name="recipients",
     )
     message = models.ForeignKey(
         "messaging.Message",
-        null=True,
-        blank=True,
         on_delete=models.CASCADE,
-        related_name="participants",
+        related_name="recipients",
     )
     handle = models.ForeignKey(
         "parties.Handle",
         on_delete=models.CASCADE,
-        related_name="participations",
+        related_name="recipient_rows",
     )
-    role = StateField(choices_enum=ParticipantRole, default=ParticipantRole.TO)
-    joined_at = models.DateTimeField(null=True, blank=True)
-    left_at = models.DateTimeField(null=True, blank=True)
+    role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
 
     class Meta:
-        """Django model options for the participant source model."""
+        """Django model options for the recipient source model."""
 
         abstract = True
         ordering = ("role", "sqid")
-        rebac_resource_type = "messaging/participant"
+        rebac_resource_type = "messaging/recipient"
         constraints = (
             # One row per envelope fact; the write path dedupes a repeated
             # address, the constraint keeps a concurrent rebuild honest.
             models.UniqueConstraint(
                 fields=("message", "handle", "role"),
-                condition=models.Q(message__isnull=False),
-                name="uq_participant_message_handle_role",
-            ),
-            models.UniqueConstraint(
-                fields=("thread", "handle", "role"),
-                condition=models.Q(message__isnull=True),
-                name="uq_participant_thread_handle_role",
+                name="uq_recipient_message_handle_role",
             ),
         )
 
     def __str__(self) -> str:
-        """Return a readable participant label for Django displays."""
+        """Return a readable recipient label for Django displays."""
 
         return f"{self.handle_id} ({self.role})"
 

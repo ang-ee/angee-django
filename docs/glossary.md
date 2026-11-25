@@ -370,6 +370,16 @@ messages, outside every record's chatter, read under `read_inbox`
 search, groups and pages. Distinct from the decisions **Inbox**. See
 [the inbox owner](../src/angee/messaging/inbox.py).
 
+**Sender** — the one handle a message is from, `Message.sender`, the only place
+a sender is read; the message's source keeps its `From` header. See
+[the message model](../src/angee/messaging/models.py).
+
+**Recipient** — whom a message is addressed to: one concept at two levels. As
+addresses, the message's `Recipient` rows, one per handle and envelope role
+(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`recipient_user_ids`, `suggested_recipients`). See
+[messaging's contracts](../src/angee/messaging/README.md).
+
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
 
