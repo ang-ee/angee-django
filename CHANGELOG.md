@@ -61,8 +61,11 @@ live in code docstrings.
     a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
     digits, `None` where the column is not null; and a template with no layout,
     under `layout`. A walk also stops once what its rows' checks read passes
-    600,000 characters of forms or 4,000 spans, comments included, and a saving
-    walk resolves a level's include targets in one query. A layout alone
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, and on a save resolves a level's
+    include targets in one query. A Markdown row's link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
     writes the doctype and Outlook's conditional comments, static and balanced,
     their markup checked. A Markdown link takes its label and its target from
     values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row

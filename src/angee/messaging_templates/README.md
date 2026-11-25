@@ -123,7 +123,7 @@ the table as a whole.
 | Numbers and dates | a number a float holds where `floatformat` or `pluralize` reads it; a date, or an aware datetime where a time is printed, where `date` reads it | `TemplateWalk.prepare` | `test_cheap_filters_spend_a_constant_and_a_raw_number_is_text`, `test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date` |
 | Conditions | at most `CONDITION_OPERATOR_LIMIT` (10) operators, each a node; a test reads a declared value, its length or a name the mail supplies; `in` takes a literal | walker | `test_a_condition_holds_at_most_ten_operators_each_a_node`, `test_condition_filters_refused` |
 | Work | not a list but caps, each bounding the work where it applies: see the next table | walker, engine | the timed and counted cases named there |
-| Markdown | raw HTML off; template spans whole; a link's target one output through `url` | `MarkdownFormatHandler` | `test_markdown_spans_reach_the_engine_whole`, `test_a_markdown_link_whose_label_and_target_are_values_is_admitted` |
+| Markdown | raw HTML off; template spans whole; a link's target one output through `url`; what its `[` make the pass scan, `MARKDOWN_LABEL_SCAN_LIMIT` | `MarkdownFormatHandler` | `test_markdown_spans_reach_the_engine_whole`, `test_a_markdown_link_whose_label_and_target_are_values_is_admitted` |
 | Subject and preheader | one line; the control characters and the bidirectional overrides dropped; every encoded-word opener broken to `= ?` (`ENCODED_WORD_OPENER`: `=?`, a charset, `?`, `b` or `q`, `?`, in either case, terminated or not, inside a word too); at most 1,000 characters | walker `_one_line` | `test_subject_and_preheader_drop_control_and_bidirectional_characters`, `test_a_subject_never_holds_an_encoded_word`, `test_a_subject_never_becomes_an_encoded_word` (the standard library's header machinery the judge) |
 | Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute. A value reaches it as the brand's outputs (above), or by the author's own choice: CSS reads an output's attribute (`content: attr(title)`, `[title^=…]` selectors) | — | — |
 
@@ -140,13 +140,32 @@ the same process, so a busy machine slows the case and the bound alike.
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|
-| One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`; then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`: the costliest row checks |
+| One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, no opener that opens no template code, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`, `MARKDOWN_LABEL_SCAN_LIMIT` (50,000 characters of label scans, from the block pass alone); then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`, `images`: refused before the Markdown pass; the construct table below |
 | One form, straight after the Markdown pass | `FORM_SPAN_LIMIT` (2,000 spans), `TEXT_LIMIT` characters of text, `FORM_OPENERS_PER_LINE` | `headings`, `rules`, refused before the HTML checks read them |
-| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; `review`, the worst admitted walk; `test_a_saving_walk_resolves_a_level_in_one_query` (22 queries) |
+| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; no row fetched past `INCLUDE_DEPTH_LIMIT` includes below its tree's root; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; a chain of 900 includes: 24 queries on the saving walk, 3 on the render-side judge (`test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it`); `test_a_saving_walk_resolves_a_level_in_one_query` (22 queries) |
 | Each tree a pass renders | `NODE_LIMIT`, `OUTPUT_LIMIT`, `TEXT_LIMIT`, `LOOP_DEPTH_LIMIT`, `INCLUDE_DEPTH_LIMIT` | `review` |
 | Each pass | `RenderBudget`: 500 loop or include renders, 200,000 characters of loop output, 500,000 of filter input; a tenth for the subject and preheader | `q11b-combined`, `review`'s render, `review-subject` |
 | The values | `prepare()` costs a constant per declared path per value; `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` | `dated` |
 | The call stack | the caps above keep the deepest admitted row (16 nested tags in each of four rows, three includes, two loops, a ten-operator condition) 254 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
+
+The Markdown pass and the row checks scan per opener in these constructs, and nowhere else. Each row's worst cost
+is measured on one row of 49 lines of 999 characters, the most the source caps admit, at load 49 to 52 on the machine
+class above, beside the review case's heaviest row (its commented emphasis runs, 0.28 s):
+
+| Construct | What scans per opener | Cap | Worst row |
+|---|---|---|---|
+| `[`, `![` (link and image labels) | markdown-it's `parseLinkLabel`, token by token to its `]` or the end of its paragraph, list item or heading | 30 a line; `MARKDOWN_LABEL_SCAN_LIMIT` a row | one `![` before a 49,000-character paragraph of emphasis runs: 0.34 s, admitted; thirty a line: refused before the pass |
+| `[…]({{ … }})` (a link to an output) | the addon's `_template_link`, a `str.find` to the end of the line | 30 `[` a line | within the line above |
+| `{{`, `{%`, `{#` (template spans) | the addon's `_template_span`, Django's `tag_re` to the end of the line | `OPENERS_PER_LINE` (30); none left unclosed | an unclosed one in a comment: refused before the pass |
+| `` ` `` (code spans) | markdown-it's backticks rule, its closers cached | the source caps | 0.13 s |
+| `<` (autolinks) | to the next `<` or `>` | the source caps | 0.18 s |
+| `&` (entities), `\` (escapes) | a bounded pattern; one character | the source caps | 0.20 s; 0.18 s |
+| `*`, `_` (emphasis runs) | markdown-it's `balance_pairs`, its openers bounded by run | the source caps | 0.28 s (the review row); `***` runs 0.23 s |
+| link reference definitions | none: the rule is off | — | — |
+
+The costliest admitted template found is `onebracket`: the review case's loop beside three commented parts of
+emphasis runs, each opening on one `![`. It previews at 1.09 to 1.10 times the review case measured back to back
+(2.03 to 2.06 s against 1.85 to 1.89 s at load 55 to 57); `test_preview_time` holds it under 1.3 times.
 
 ## Rendering
 
