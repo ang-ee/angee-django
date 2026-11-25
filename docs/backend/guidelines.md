@@ -389,6 +389,14 @@ Use these owners instead of maintaining another contract in an addon:
   - *Only behaviour differs, closed framework-known set* → a `StateField` + an
     **enum-owned handler mapping** (`integrate.credentials.CredentialKind.handler`).
     The row stores the enum value; the kind projects as a GraphQL enum.
+  - *Kinds share every owner (identity, lifecycle, permissions, the reads that
+    select a row) and differ in stored shape only by columns one kind fills* →
+    **one model with a write-once `StateField` kind**. A check constraint keeps
+    each such column empty for the other kinds; a per-kind rule on a shared
+    column is a declarative constraint naming the kind, and per-kind behaviour
+    is an enum-owned handler as above
+    ([`MessageTemplate`](../../src/angee/messaging_templates/models.py)). A kind
+    that needs a relation of its own is a child model.
 - **Enum-backed fields use `StateField`, never `CharField(choices=…)`.**
   `StateField` wraps django-choices-field's `TextChoicesField`, so strawberry-django
   renders a native GraphQL enum straight from the `choices_enum`. A plain
@@ -400,12 +408,8 @@ Use these owners instead of maintaining another contract in an addon:
   concrete child *is* the kind, so a `Party`→`Person`/`Organization` split has no
   `kind` column. Reach for a child model, not a `StateField`, when the kinds carry
   their own fields (e.g. a `Person` linking to an `iam.User` that an `Organization`
-  never has).
-  Kinds that share identity, override, language resolution and permissions, and
-  differ only in scalar columns that a single kind fills and the others leave
-  empty, stay one model with a write-once `StateField` kind: a check constraint
-  holds each kind-only column, and the kind's behaviour is an enum-owned handler
-  ([`MessageTemplate`](../../src/angee/messaging_templates/models.py)).
+  never has), unless the one-model branch of "Choosing how a row selects
+  per-variant behaviour" above admits them.
   Optional states declare `null=True, blank=True`; absence is `None` in Python
   and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
   Do not add blank-string sentinels or per-field GraphQL coercion;
