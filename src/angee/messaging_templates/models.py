@@ -39,9 +39,10 @@ every row, and nobody but a resource load writes a baseline (``permissions.zed``
 
 from __future__ import annotations
 
+import json
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
@@ -93,6 +94,28 @@ TEXT_COLUMNS = ("subject", "preheader", "source", "text_source")
 
 _KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\Z")
 """Anchored, since ``RegexValidator`` searches; ``\\Z`` refuses the trailing newline ``$`` admits."""
+
+validate_key = RegexValidator(_KEY, "Use lower-case names of letters, digits and underscores, joined by dots.")
+"""A row's ``key``, and a template's ``layout``, which names a layout's key."""
+
+STORED_COLUMNS = (
+    "kind", "key", "language", "name", "description", "format", "subject", "preheader", "source", "text_source",
+    "layout", "variables", "sample",
+)
+"""The columns :meth:`MessageTemplate.clean_fields` holds to what JSON writes and UTF-8 encodes, before anything else
+reads them."""
+
+
+def _unstorable(value: Any) -> str | None:
+    """Why no column can store, hash or render ``value``, or ``None``: a lone surrogate, or what JSON cannot write."""
+
+    try:
+        json.dumps(value, allow_nan=False, ensure_ascii=False).encode()
+    except UnicodeEncodeError:
+        return "Remove the lone surrogate: no database or mail can encode it."
+    except (TypeError, ValueError):
+        return "Write text, true, false, null and finite numbers of at most 4,300 digits: JSON holds nothing else."
+    return None
 
 NOT_A_BASELINE_MESSAGE = "Only a shipped default can be overridden."
 NO_BASELINE_MESSAGE = "This message template overrides no shipped default."
@@ -538,7 +561,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     """What the row is (:class:`MessageTemplateKind`), written once."""
     key = models.CharField(
         max_length=120,
-        validators=[RegexValidator(_KEY, "Use lower-case names of letters, digits and underscores, joined by dots.")],
+        validators=[validate_key],
     )
     """The name rows and senders use; a shipped template's is ``<owning addon label>.<name>`` by convention."""
     language = LanguageCodeField()
@@ -672,8 +695,41 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             for field in self._meta.concrete_fields if field.name in self.edited_fields
         }
 
+    def clean_fields(self, exclude: Collection[str] | None = None) -> None:
+        """Refuse what no column can store or hash before the columns' own validators read it, then run them.
+
+        A lone surrogate in any of :data:`STORED_COLUMNS`, what JSON cannot write
+        (NaN, an infinity, a number over 4,300 digits) in ``variables`` or
+        ``sample``, and ``None`` in a column that is not null, are a
+        ``ValidationError`` here: the content hash, the database and a render each
+        encode what they read. A template's ``layout`` is a key
+        (:data:`validate_key`).
+        """
+
+        skipped = set(exclude or ())
+        errors: dict[str, Any] = {}
+        for column in sorted(set(STORED_COLUMNS) - skipped):
+            value, field = getattr(self, column), cast("models.Field[Any, Any]", self._meta.get_field(column))
+            # Django skips a blank column's own checks for None, which the database then refuses.
+            message = field.error_messages["null"] if value is None and not field.null else _unstorable(value)
+            if message is not None:
+                errors[column] = [message]
+        if self.layout and not {"layout"} & (skipped | set(errors)):
+            try:
+                validate_key(self.layout)
+            except ValidationError as error:
+                errors["layout"] = error.messages
+        try:
+            super().clean_fields(exclude=skipped | set(errors))
+        except ValidationError as error:
+            errors = error.update_error_dict(errors)
+        if errors:
+            raise ValidationError(errors)
+
     def clean(self) -> None:
         """Refuse what the columns' own validators and the constraints cannot see.
+
+        Nothing here reads a row :meth:`clean_fields` refuses as unstorable.
 
         First the text columns' line endings become newlines, so text pasted with
         carriage returns has the content hash of the same text written with newlines.
@@ -689,6 +745,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         nothing.
         """
 
+        if not self._readable():
+            return
         super().clean()
         for column in TEXT_COLUMNS:
             text = getattr(self, column)
@@ -711,6 +769,18 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             raise ValidationError(errors)
         if self._walkable() and stored_hash != self.compute_content_hash():
             self.validate_source()
+
+    def _readable(self) -> bool:
+        """Whether every column holds what :meth:`clean_fields` admits: text in a text column, what JSON writes in
+        the rest. A column's own validator that refuses a value leaves it on the row as it came, a ``dict`` in
+        ``key`` or ``None`` in ``source``, so :meth:`clean` reads nothing of a row that is not."""
+
+        return all(
+            _unstorable(value := getattr(self, field.name)) is None
+            and (value is None and field.null or not isinstance(field, models.CharField | models.TextField)
+                 or isinstance(value, str))
+            for field in self._meta.concrete_fields if field.name in STORED_COLUMNS
+        )
 
     def _walkable(self) -> bool:
         """Whether the columns a walk reads hold what their own validators admit; when not, those refuse the row.

@@ -28,6 +28,7 @@ import yaml
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.template import Engine, TemplateSyntaxError
 from django.template.base import DebugLexer, Node, Parser, tag_re
 from django.template.defaulttags import TemplateLiteral
@@ -2680,6 +2681,70 @@ def test_clean_refuses_a_number_in_variables_and_raises_nothing_else(plain: Any)
         result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": {"variables": {"a": math.nan}}},
                                 user=user)
         assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], result.errors
+
+
+_JSON_TEXT = st.lists(st.one_of(st.characters(), st.integers(0xD800, 0xDFFF).map(chr)), max_size=8).map("".join)
+_JSON_VALUE = st.recursive(
+    st.one_of(st.none(), st.booleans(), st.integers(), st.integers(4_301, 5_000).map(lambda digits: 10 ** digits),
+              st.floats(), _JSON_TEXT),
+    lambda children: st.one_of(st.lists(children, max_size=3), st.dictionaries(_JSON_TEXT, children, max_size=3)),
+    max_leaves=6,
+)
+"""What a JSON document decodes to in Python: lone surrogates, NaN, infinities and long integers among it."""
+CLEANED_COLUMNS = (
+    "kind", "key", "language", "name", "description", "format", "subject", "preheader", "source", "text_source",
+    "layout", "variables", "sample",
+)
+
+
+@settings(deadline=None, max_examples=300, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(column=st.sampled_from(CLEANED_COLUMNS), value=_JSON_VALUE)
+def test_clean_raises_only_validation_error_and_what_it_admits_saves(
+    plain: Any, caplog: pytest.LogCaptureFixture, column: str, value: Any,
+) -> None:
+    """Any value a JSON document decodes to, in any column: full_clean() refuses it with a ValidationError, or admits
+    it and the row saves; no unexpected failure is met, and so none is logged, on the way."""
+
+    del plain
+    row = _unsaved("part", "stored")
+    setattr(row, column, value)
+    logged = len(caplog.records)
+    with system_context(reason="tests.messaging_templates.render.stored"):
+        try:
+            row.full_clean()
+        except ValidationError:
+            event("refused")
+            assert [record.getMessage() for record in caplog.records[logged:] if record.levelno >= logging.ERROR] == []
+            return
+        event("admitted")
+        with transaction.atomic():
+            row.save()
+            transaction.set_rollback(True)
+
+
+def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
+    """A surrogate in any text, NaN or an infinity in sample: a VALIDATION answer for whoever may write, never
+    INTERNAL; a member is refused the write first."""
+
+    del plain
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    own = _row("part", "own", source="x")
+    admin = create_platform_admin("messaging-templates-storer")
+    member = create_user("messaging-templates-non-storer")
+    for written in ({"source": "a\ud800"}, {"name": "a\udfff"}, {"layout": "\ud800"}, {"sample": {"a": math.nan}},
+                    {"sample": {"a": -math.inf}}, {"variables": {"a": math.nan}}):
+        for user, code in ((admin, "VALIDATION"), (member, "PERMISSION_DENIED")):
+            result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": written}, user=user)
+            assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], (written, user)
+    inserted = {
+        "kind": "part", "key": "stored", "language": "en", "name": "n", "format": "markdown", "source": "a\ud800",
+    }
+    for user in (admin, member, AnonymousUser()):
+        result = execute_schema(schema, _INSERT, {"object": inserted}, user=user)
+        assert [(error.extensions or {}).get("code") for error in result.errors or ()] == ["VALIDATION"], user
+
+
+_INSERT = "mutation($object: message_templates_insert_input!) { insert_message_templates_one(object: $object) { id } }"
 
 
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(
