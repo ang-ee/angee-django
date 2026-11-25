@@ -1003,7 +1003,9 @@ class Message(
         Every value has a live producer: ``COMMENT`` is a chatter note *or* a
         public post (disambiguated structurally — ``direction``/thread shape, see
         :meth:`Message.content_edit_error`), ``EMAIL``/``CHAT`` are set by the
-        ingest producers, ``NOTIFICATION`` by the retained system log. Add a value only together with its producer.
+        ingest producers and by ``MessageManager.compose`` (an outgoing message
+        keeps its parent's kind, and a new one is an email), ``NOTIFICATION`` by
+        the retained system log. Add a value only together with its producer.
         """
 
         COMMENT = "comment", "Comment"
@@ -1320,16 +1322,41 @@ class Message(
 
         The header is read through :meth:`source_header_values` with the caller's
         access, in header order; a repeated address keeps its first display name and
-        an entry without ``@`` is no address. Without a ``Reply-To`` the mapping is
-        empty: whether a reply then goes to the sender is the caller's decision.
+        an entry the handle owner's predicate (``Handle.is_email_address``) rejects is
+        no address. Without a ``Reply-To`` the mapping is empty: whether a reply then
+        goes to the sender is the caller's decision.
         """
 
         addresses: dict[str, str] = {}
         for name, address in getaddresses(self.source_header_values("reply-to", actor=actor)):
             address = address.strip().lower()
-            if "@" in address:
+            if Handle.is_email_address(address):
                 addresses.setdefault(address, name.strip())
         return addresses
+
+    def reply_error(self, *, actor: Any = None) -> ValidationError | None:
+        """Why ``MessageManager.compose`` cannot answer this message, or ``None`` when it can.
+
+        Side-effect free; it decides nothing about who may answer. A reply needs a
+        saved message with a thread and a channel. An email is answered from its
+        channel's default sender (``Channel.outbound_sender``, whose refusal is
+        returned as raised) and to its ``Reply-To`` (:meth:`reply_addresses`, read
+        with ``actor``'s access), else to its sender. A message of another kind is
+        answered by its transport's own sender and needs nothing more here.
+        """
+
+        if self.pk is None or self.thread_id is None or self.channel_id is None:
+            return ValidationError("A reply requires a saved parent, thread, and channel.")
+        if self.message_type != self.MessageKind.EMAIL:
+            return None
+        channel = cast(Channel, self.transport_channel(reason="messaging.reply_error"))
+        try:
+            channel.outbound_sender()
+        except ValidationError as error:
+            return error
+        if self.sender_id is None and not self.reply_addresses(actor=actor):
+            return ValidationError("An email reply requires a parent Reply-To or sender to address.")
+        return None
 
     def webform_submission(self) -> WebformSubmission | None:
         """Read the ``webform`` envelope a form submission's message carries in its metadata.
@@ -1672,8 +1699,8 @@ class Message(
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.
 
-        This is the consumer seam: callers compose and persist the message,
-        envelope recipients, and parts, then call ``message.deliver()``. The
+        ``MessageManager.compose`` calls it for a queued message it wrote, and the
+        send-held, release, retry and recovery owners for the rows they free. The
         transport always runs through ``angee.jobs``, never in the request.
         """
 

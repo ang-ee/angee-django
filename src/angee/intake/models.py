@@ -774,7 +774,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
 
         A relayed request (a web form, a mailing list) names its requester here;
         messaging's email reply goes to these addresses before the sender
-        (``MessageManager.compose_reply``), so the requester answers from one of them.
+        (``MessageManager.compose``), so the requester answers from one of them.
         """
 
         source = self.source_message
@@ -1120,8 +1120,8 @@ class TaskIntake(Composable, extends="projects.Task"):
         After the hold, the question is a comment on the task's chatter, addressed
         to the requester when their account may reply there. A requester without
         an admitted account also gets it by email when their request came as an
-        email with a sender, on a channel with an outbound sender: messaging's
-        ``compose_reply`` addresses, titles and threads that reply and queues its
+        email messaging can answer (``Message.reply_error``): messaging's
+        ``compose`` addresses, titles and threads that reply and queues its
         delivery, so the answer returns onto the request's conversation. A
         requester reachable neither way is refused rather than held for an
         answer that cannot come.
@@ -1141,17 +1141,16 @@ class TaskIntake(Composable, extends="projects.Task"):
         assert account is not None
         posts = type(self)._base_manager.get(pk=self.pk).with_actor(account).has_access(self.thread_post_access)
         admitted = any(need.admitted_user_id is not None for need in requests)
-        route = None if admitted else self._email_reply_route(requests)
-        if route is None and not posts:
+        source = None if admitted else self._email_reply_route(requests)
+        if source is None and not posts:
             raise ValidationError(
                 {"to": "The requester can neither reply on this task nor be reached by email; approve their access."}
             )
         cast("TaskWork", self).snooze(reply_by, awaiting=account, expected_revision=expected_revision)
         self.message_post(question, recipient_user_ids=(account.pk,) if posts else ())
-        if route is not None:
-            source, sender = route
+        if source is not None:
             message_model = apps.get_model("messaging", "Message")
-            message_model.objects.compose_reply(source, body=question, sender=sender, actor=actor, queued=True)
+            message_model.objects.compose(parent=source, text=question, actor=actor, queued=True)
         return self
 
     def _requests_to_ask(self, to: Need | None) -> list[Need]:
@@ -1193,29 +1192,16 @@ class TaskIntake(Composable, extends="projects.Task"):
         return None
 
     @staticmethod
-    def _email_reply_route(requests: list[Need]) -> tuple[Message, Any] | None:
-        """Return the first emailed request's source message and its channel's outbound sender handle.
+    def _email_reply_route(requests: list[Need]) -> Message | None:
+        """Return the first emailed request's source message that messaging can answer (``Message.reply_error``)."""
 
-        A request qualifies when ``compose_reply`` can address its reply: an email
-        with a sender, on a channel whose outbound sender is configured and connected.
-        """
-
-        handle_model = apps.get_model("parties", "Handle")
-        email = handle_model.Platform.EMAIL
         for need in requests:
             source = need.source_message
-            if source is None or source.sender_id is None or source.message_type != type(source).MessageKind.EMAIL:
+            if source is None or source.message_type != type(source).MessageKind.EMAIL:
                 continue
-            channel = source.transport_channel(reason="intake.clarify.channel")
-            if channel is None:
-                continue
-            try:
-                name, address = channel.outbound_sender()
-            except ValidationError:
-                continue
-            with system_context(reason="intake.clarify.sender"):
-                sender = handle_model.objects.upsert(platform=email, value=address, display_name=name)
-            return source, sender
+            with system_context(reason="intake.clarify.route"):
+                if source.reply_error() is None:
+                    return source
         return None
 
 

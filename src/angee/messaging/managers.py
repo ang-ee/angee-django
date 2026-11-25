@@ -29,11 +29,13 @@ import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from contextvars import Context
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from email.utils import getaddresses
 from functools import partial, reduce
 from itertools import batched
 from operator import or_
-from typing import TYPE_CHECKING, Any, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -3032,129 +3034,362 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
 
 
+class _Addressee(NamedTuple):
+    """One validated recipient of an outgoing message: an address landed by value, or a known handle."""
+
+    role: str
+    address: str = ""
+    name: str = ""
+    handle_id: Any = None
+
+
+@dataclass(frozen=True)
+class _Outgoing:
+    """An outgoing message as decided and validated (``MessageManager._envelope``), ready to write.
+
+    ``parent`` places a reply on its parent's thread and ``record`` a new message
+    on the record's chatter; with neither, the message starts its own thread.
+    ``sender`` is a saved handle (a reply of a non-email kind) and
+    ``sender_address`` the channel's default ``(name, address)`` for an email.
+    ``fingerprint`` is the intent an idempotency key claims.
+    """
+
+    channel: Any
+    kind: str
+    platform: str
+    body: ParsedPart
+    metadata: Mapping[str, Any]
+    created_by_id: Any
+    fingerprint: Mapping[str, Any]
+    parent: Any = None
+    record: Any = None
+    sender: Any = None
+    sender_address: tuple[str, str] | None = None
+    recipients: tuple[_Addressee, ...] = ()
+    subject: str = ""
+    attachments: tuple[Any, ...] = ()
+    queued: bool = False
+    scheduled_at: datetime | None = None
+
+
 _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 
 
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
-    """Owns idempotent ingest, insert deltas and state-change thread recounts."""
+    """Owns idempotent ingest, outgoing messages (:meth:`compose`), insert deltas and state-change recounts."""
 
-    def compose_reply(
-        self, parent: Any, *, body: str, sender: Any, actor: Any,
-        local: Mapping[str, Any] | None = None, idempotency_key: str | None = None,
-        scheduled_at: datetime | None = None, queued: bool = False,
-        admit: Callable[[Any], None] | None = None,
-    ) -> Any:
-        """Create an exact-once outbound reply under the channel's narrow reply grant.
+    def compose(
+        self,
+        *,
+        actor: Any,
+        parent: Message | None = None,
+        channel: Channel | None = None,
+        record: ThreadedModelMixin | None = None,
+        sender: Handle | None = None,
+        to: Sequence[str] = (),
+        cc: Sequence[str] = (),
+        bcc: Sequence[str] = (),
+        subject: str = "",
+        text: str = "",
+        html: str = "",
+        attachments: Sequence[Any] = (),
+        local: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        queued: bool = False,
+        scheduled_at: datetime | None = None,
+        admit: Callable[[], None] | None = None,
+    ) -> MessageT:
+        """Write one outgoing message, returned bound to ``actor``: the one writer of its rows.
 
-        Hold facts are final at insert. Every retained reply advances its thread
-        counter once; queueing does not change the count. Callers may contribute provenance, but not
-        messaging's delivery state. ``admit(parent)`` checks domain eligibility
-        only on insertion, after idempotency replay and fingerprint validation.
-        Admission and replay run under actor even for an elevated caller.
+        ``parent`` answers that message on its thread and channel. Otherwise
+        ``channel`` sends a new email, on ``record``'s chatter when given and else
+        on a thread of its own (:meth:`ThreadManager.open_thread`): mails that only
+        share a subject never fuse, and an answer finds the thread through
+        ``In-Reply-To`` when it arrives on the channel the message was sent from.
 
-        An email reply (the parent's kind is ``EMAIL``) is a complete envelope: it is
-        addressed to the parent's ``Reply-To`` when present, else its sender (RFC 5322
-        §3.6.2), titled ``Re: <thread title>`` and identified by a Message-ID minted as
-        Django mints one, so an answer to it threads back onto this conversation; its
-        ``parent`` renders as ``In-Reply-To``. A reply of any other kind keeps a client
-        token for the transport's provider id.
+        Everything is decided under ``actor`` before anything is claimed or
+        written: reading ``parent`` and ``reply`` on its channel, or ``reply`` on
+        ``channel`` and posting on ``record`` as its chatter admits a post; and
+        reading every attachment. An elevated caller is re-entered without its
+        elevation, so the decision, replay and ``admit`` are the actor's (and the
+        rows leave the caller's changeset). The envelope is then validated
+        (:meth:`_envelope`), and :meth:`_write_outgoing` claims, admits, writes and
+        hands off. ``admit()`` checks domain eligibility once, on insertion, after
+        replay. Hold facts are final at insert: ``queued`` hands the message to
+        delivery on commit, ``scheduled_at`` holds a draft until then, neither holds
+        it for approval, and both are refused. ``local`` is the caller's
+        provenance, never messaging's delivery facts. ``idempotency_key`` replays
+        the same intent (the hold aside) for the same actor.
         """
 
         if is_sudo():
-            return Context().run(
-                self.compose_reply, parent, body=body, sender=sender, actor=actor,
-                local=local, idempotency_key=idempotency_key,
-                scheduled_at=scheduled_at, queued=queued, admit=admit,
-            )
-        parent = parent.with_actor(actor)
-        body = strip_null_bytes(body).strip()
-        if not body:
-            raise ValidationError({"body": "Reply text is required."})
-        if parent.pk is None or parent.thread_id is None or parent.channel_id is None:
-            raise ValidationError("A reply requires a saved parent, thread, and channel.")
-        channel = parent.transport_channel(reason="messaging.reply.channel").with_actor(actor)
-        if actor is None or not parent.has_access("read") or not channel.has_access("reply"):
-            raise PermissionDenied("Comment read and channel reply access are required.")
-        if sender is None or sender.pk is None or sender.platform != parent.platform:
-            raise ValidationError({"sender": "The reply sender must use the comment's platform."})
-        email = parent.message_type == self.model.MessageKind.EMAIL
-        reply_to = parent.reply_addresses(actor=actor) if email else {}
-        if email and not reply_to and parent.sender_id is None:
-            raise ValidationError("An email reply requires a parent Reply-To or sender to address.")
+            return Context().run(partial(
+                self.compose, actor=actor, parent=parent, channel=channel, record=record, sender=sender,
+                to=to, cc=cc, bcc=bcc, subject=subject, text=text, html=html, attachments=attachments,
+                local=local, idempotency_key=idempotency_key, queued=queued, scheduled_at=scheduled_at,
+                admit=admit,
+            ))
+        if actor is None:
+            raise PermissionDenied("Composing a message requires an actor.")
+        if parent is not None and (channel is not None or record is not None):
+            raise ValidationError({"channel" if channel is not None else "record": (
+                "A reply is sent on its parent's channel and thread."
+            )})
+        if parent is None and channel is None:
+            raise ValidationError({"channel": "Choose the channel to send the message from."})
         values = dict(local or {})
-        if any(key.startswith("delivery_") for key in values):
-            raise ValidationError({"local": "Delivery facts are owned by messaging."})
-        claim_values = (
-            {"parent": parent, "body": body, "sender": sender, "local": values}
-            if idempotency_key is not None else None
-        )
+        intent = {
+            "channel": channel, "parent": parent, "record": record, "sender": sender,
+            "to": list(to), "cc": list(cc), "bcc": list(bcc), "subject": subject, "text": text, "html": html,
+            "attachments": list(attachments), "local": values,
+        }
         actor_ref = to_subject_ref(actor)
-        created_by_id = actor_user_id(actor_ref)
-        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
-        with actor_context(actor), claim_boundary, transaction.atomic():
-            if idempotency_key is not None:
-                reply = changeset_model().objects.claim_created(
-                    f"messaging.reply:{actor_ref}",
-                    idempotency_key,
-                    values=claim_values,
-                    model=self.model,
-                    unavailable=ValidationError(
-                        {"idempotency_key": "The claimed reply is unavailable."},
-                    ),
-                )
-                if reply is not None:
-                    if reply.is_trashed:
-                        raise ValidationError("This idempotency key belongs to a discarded reply.")
-                    return reply.with_actor(actor)
-            if admit is not None:
-                admit(parent)
-            with system_context(reason="messaging.reply.compose"):
-                reply = self.create(
-                    parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
-                    platform=parent.platform, direction=self.model.Direction.OUTBOUND,
-                    status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
-                    scheduled_at=scheduled_at, message_type=parent.message_type,
-                    external_id=make_msgid(domain=DNS_NAME).strip("<>") if email else str(uuid4()),
-                    preview=body[: self.model.preview.field.max_length],
-                    metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
-                )
-                position = (
-                    self._write_email_reply_envelope(reply, parent, reply_to=reply_to, created_by_id=created_by_id)
-                    if email
-                    else 0
-                )
-                self._build_parts(
-                    reply, ParsedPart(text=body), parent=None, position=position, created_by_id=created_by_id,
-                )
-                self.advance_thread(reply)
-                if queued:
-                    reply.deliver()
-            if idempotency_key is not None:
-                require_changeset().record_created(reply)
-        return reply.with_actor(actor)
+        with actor_context(actor):
+            if parent is not None:
+                parent = parent.with_actor(actor)
+                channel = parent.transport_channel(reason="messaging.compose.channel")
+                reads = parent.has_access("read")
+                if channel is None or not reads or not channel.with_actor(actor).has_access("reply"):
+                    raise PermissionDenied("Answering a message requires reading it and reply on its channel.")
+            else:
+                assert channel is not None
+                channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=channel.pk).first()
+                if channel is None or not channel.has_access("reply"):
+                    raise PermissionDenied("Sending a message requires reply on its channel.")
+                if record is not None:
+                    record = record.with_actor(actor) if isinstance(record, RebacMixin) else record
+                    attachment = record.message_thread_attachment(create=False)
+                    target = attachment.require_threaded_target() if attachment is not None else record
+                    if not target.can_post():
+                        raise PermissionDenied(
+                            f"Posting on {target._meta.label} requires {target.thread_post_access!r} access."
+                        )
+            files = tuple(attachments)
+            readable = set(
+                apps.get_model("storage", "File").objects.with_actor(actor)
+                .filter(pk__in=[file.pk for file in files]).values_list("pk", flat=True)
+            ) if files else set()
+            if any(file.pk not in readable for file in files):
+                raise PermissionDenied("Sending an attachment requires reading its file.")
+            outgoing = self._envelope(
+                channel=channel, parent=parent, record=record, sender=sender, to=to, cc=cc, bcc=bcc,
+                subject=subject, text=text, html=html, attachments=files, local=values, queued=queued,
+                scheduled_at=scheduled_at, actor=actor, created_by_id=actor_user_id(actor_ref), fingerprint=intent,
+            )
+            return self._write_outgoing(
+                outgoing, claim_scope=f"messaging.compose:{actor_ref}", idempotency_key=idempotency_key,
+                admit=admit, reason="messaging.compose", actor=actor,
+            )
 
-    def _write_email_reply_envelope(
-        self, reply: Any, parent: Any, *, reply_to: Mapping[str, str], created_by_id: Any
-    ) -> int:
-        """Address an email reply as ``Re: <thread title>``; return the body position.
+    def _envelope(
+        self,
+        *,
+        channel: Any,
+        parent: Any,
+        record: Any,
+        sender: Any,
+        to: Sequence[str],
+        cc: Sequence[str],
+        bcc: Sequence[str],
+        subject: str,
+        text: str,
+        html: str,
+        attachments: tuple[Any, ...],
+        local: Mapping[str, Any],
+        queued: bool,
+        scheduled_at: datetime | None,
+        actor: Any,
+        created_by_id: Any,
+        fingerprint: Mapping[str, Any],
+    ) -> _Outgoing:
+        """Validate a decided outgoing message into what :meth:`_write_outgoing` writes, writing nothing.
 
-        ``reply_to`` maps each of the parent's Reply-To addresses to its display name;
-        without one the reply goes to the handle the parent was sent from. The thread
-        title is the normalized subject, so prefixes never stack. The reply's ``parent``
-        is its In-Reply-To, which the email transport renders.
+        A reply needs :meth:`Message.reply_error` to be ``None`` and takes its
+        parent's kind and platform; it names no subject or address. An email
+        reply goes to the parent's ``Reply-To``, else its sender (RFC 5322
+        §3.6.2), titled ``Re: <thread title>``; a reply of another kind is plain
+        text from an explicit, saved ``sender`` on the parent's platform. A new
+        message is an email to at least one address, with an optional one-line
+        subject. An email is sent from its channel's default sender
+        (``Channel.outbound_sender``), never a passed one, and has ``text``,
+        ``html`` or both. Every address must be one (``Handle.is_email_address``)
+        that the handle owner can land (``HandleManager.clean_identity``). Each
+        refusal is a ``ValidationError`` keyed by its argument.
         """
 
         handle_model = apps.get_model("parties", "Handle")
-        handle_ids = [
-            handle_model.objects.upsert(
-                platform=reply.platform, value=address, display_name=name, created_by_id=created_by_id
-            ).pk
-            for address, name in reply_to.items()
-        ] or [parent.sender_id]
-        to = apps.get_model("messaging", "Recipient").RecipientRole.TO
-        self._write_recipients(reply, ((handle_id, to) for handle_id in handle_ids), created_by_id=created_by_id)
-        title = normalize_subject(parent.thread.display_title)
-        return self._write_envelope_parts(reply, subject=f"Re: {title}" if title else "", created_by_id=created_by_id)
+        email_kind = self.model.MessageKind.EMAIL
+        if any(key.startswith("delivery_") for key in local):
+            raise ValidationError({"local": "Delivery facts are owned by messaging."})
+        metadata = _bounded_message_metadata({"local": dict(local)})
+        if queued and scheduled_at is not None:
+            raise ValidationError({"scheduled_at": "A queued message is sent now; schedule a held one instead."})
+        text, html, subject = (strip_null_bytes(value or "").strip() for value in (text, html, subject))
+        if not text and not html:
+            raise ValidationError({"text": "Write the message."})
+        if "\r" in subject or "\n" in subject:
+            raise ValidationError({"subject": "A subject is one line."})
+        recipients: tuple[_Addressee, ...] = ()
+        if parent is not None:
+            if subject:
+                raise ValidationError({"subject": "A reply is titled after its conversation."})
+            if to or cc or bcc:
+                role = "to" if to else "cc" if cc else "bcc"
+                raise ValidationError({role: "A reply goes to the message it answers."})
+            if (error := parent.reply_error(actor=actor)) is not None:
+                raise error
+            kind, platform = parent.message_type, parent.platform
+            if kind == email_kind:
+                recipients = tuple(
+                    _Addressee("to", address, name) for address, name in parent.reply_addresses(actor=actor).items()
+                ) or (_Addressee("to", handle_id=parent.sender_id),)
+                title = normalize_subject(parent.thread.display_title)
+                subject = f"Re: {title}" if title else ""
+            elif sender is None or sender.pk is None or sender.platform != platform:
+                raise ValidationError({"sender": "The reply sender must use the platform of the message it answers."})
+            elif html or attachments:
+                raise ValidationError({"html" if html else "attachments": "A reply of this kind is plain text."})
+        else:
+            kind, platform = email_kind, handle_model.Platform.EMAIL
+            recipients = tuple(
+                _Addressee(role, address.strip().lower(), name.strip())
+                for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
+                for name, address in getaddresses([str(entry) for entry in entries])
+            )
+            if not recipients:
+                raise ValidationError({"to": "Address the message to at least one recipient."})
+        sender_address = None
+        landed: list[tuple[str, str]] = []
+        if kind == email_kind:
+            if sender is not None:
+                raise ValidationError({"sender": "An email is sent from its channel's sender."})
+            sender_address = channel.outbound_sender()
+            landed.append(("channel", sender_address[1]))
+        for addressee in recipients:
+            if addressee.handle_id is None:
+                if not handle_model.is_email_address(addressee.address):
+                    entry = addressee.address or "An entry"
+                    raise ValidationError({addressee.role: f"{entry} is not an email address."})
+                landed.append((addressee.role, addressee.address))
+        for key, address in landed:
+            try:
+                handle_model.objects.clean_identity(platform=handle_model.Platform.EMAIL, value=address)
+            except ValidationError as error:
+                raise ValidationError({key: [item for items in error.error_dict.values() for item in items]}) from error
+        return _Outgoing(
+            channel=channel,
+            kind=kind,
+            platform=platform,
+            body=(
+                ParsedPart(type="multipart/alternative", children=(
+                    ParsedPart(text=text), ParsedPart(type="text/html", text=html),
+                ))
+                if text and html
+                else ParsedPart(type="text/html", text=html) if html else ParsedPart(text=text)
+            ),
+            created_by_id=created_by_id,
+            parent=parent,
+            record=record,
+            sender=sender if kind != email_kind else None,
+            sender_address=sender_address,
+            recipients=recipients,
+            subject=subject,
+            attachments=attachments,
+            metadata=metadata,
+            queued=queued,
+            scheduled_at=scheduled_at,
+            fingerprint=fingerprint,
+        )
+
+    def _write_outgoing(
+        self,
+        outgoing: _Outgoing,
+        *,
+        claim_scope: str,
+        idempotency_key: str | None,
+        admit: Callable[[], None] | None,
+        reason: str,
+        actor: Any,
+    ) -> MessageT:
+        """Claim, admit, write and hand off a validated outgoing message; it consults no grant.
+
+        One transaction, in a fresh changeset when keyed. A keyed replay returns
+        the original before ``admit()`` runs; a trashed original is refused and
+        changed content raises ``CreationKeyConflict``. The rows are written under
+        ``system_context(reason=reason)``: the thread, the sender handle, the row
+        with its Message-ID (minted as Django mints one for an email, a client
+        token otherwise) and preview, its title, body and attachment parts, its
+        recipients, the thread's counter, and a queued message's hand-off
+        (:meth:`Message.deliver`, published when the outermost transaction commits).
+        """
+
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                original = changeset_model().objects.claim_created(
+                    claim_scope,
+                    idempotency_key,
+                    values=outgoing.fingerprint,
+                    model=self.model,
+                    unavailable=ValidationError({"idempotency_key": "The claimed message is unavailable."}),
+                )
+                if original is not None:
+                    if original.is_trashed:
+                        raise ValidationError({"idempotency_key": "This key belongs to a discarded message."})
+                    return original.with_actor(actor)
+            if admit is not None:
+                admit()
+            with system_context(reason=reason):
+                handle_model = apps.get_model("parties", "Handle")
+                created_by_id = outgoing.created_by_id
+                email = outgoing.kind == self.model.MessageKind.EMAIL
+                external_id = make_msgid(domain=DNS_NAME).strip("<>") if email else str(uuid4())
+                if outgoing.parent is not None:
+                    thread_id = outgoing.parent.thread_id
+                elif outgoing.record is not None:
+                    thread_id = outgoing.record.message_thread().pk
+                else:
+                    thread_id = apps.get_model("messaging", "Thread").objects.open_thread(
+                        platform=outgoing.platform, channel=outgoing.channel, message_external_id=external_id,
+                        subject=outgoing.subject, group_by_subject=False, created_by_id=created_by_id,
+                    ).pk
+                sender = outgoing.sender
+                if outgoing.sender_address is not None:
+                    # The channel's configured name is the operator's, so it refreshes the handle.
+                    name, address = outgoing.sender_address
+                    sender = handle_model.objects.upsert(
+                        platform=handle_model.Platform.EMAIL, value=address, display_name=name,
+                    )
+                message = self.create(
+                    parent=outgoing.parent, thread_id=thread_id, channel_id=outgoing.channel.pk, sender=sender,
+                    platform=outgoing.platform, direction=self.model.Direction.OUTBOUND,
+                    status=self.model.MessageStatus.QUEUED if outgoing.queued else self.model.MessageStatus.DRAFT,
+                    scheduled_at=outgoing.scheduled_at, message_type=outgoing.kind, external_id=external_id,
+                    preview=_preview(outgoing.body), metadata=outgoing.metadata, created_by_id=created_by_id,
+                )
+                position = self._write_envelope_parts(message, subject=outgoing.subject, created_by_id=created_by_id)
+                self._build_parts(message, outgoing.body, parent=None, position=position, created_by_id=created_by_id)
+                part_model = apps.get_model("messaging", "Part")
+                for offset, file in enumerate(outgoing.attachments, start=position + 1):
+                    part_model.objects.attach_file(message, file, position=offset, created_by_id=created_by_id)
+                # A typed name fills a handle that has none; it never renames a shared one.
+                rows = [
+                    (
+                        addressee.handle_id if addressee.handle_id is not None else handle_model.objects.upsert(
+                            platform=handle_model.Platform.EMAIL, value=addressee.address,
+                            display_name=addressee.name, fill_only=("display_name",), created_by_id=created_by_id,
+                        ).pk,
+                        addressee.role,
+                    )
+                    for addressee in outgoing.recipients
+                ]
+                self._write_recipients(message, rows, created_by_id=created_by_id)
+                self.advance_thread(message)
+                if outgoing.queued:
+                    message.deliver()
+            if idempotency_key is not None:
+                require_changeset().record_created(message)
+        return message.with_actor(actor)
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""

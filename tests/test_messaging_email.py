@@ -286,11 +286,14 @@ def _receive(channel: Any, raw: bytes, *, uid: int) -> Any:
 
 
 @pytest.fixture
-def mail_desk(db: None) -> tuple[Any, Any, Any]:
-    """An email channel, the desk address that answers on it and one request it received."""
+def mail_desk(db: None, settings: Any) -> tuple[Any, Any]:
+    """An email channel whose default sender is the desk, with delivery configured, and one request it received."""
 
     del db
-    channel = make_integration("reply-desk", model=Channel, backend_class="email")
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    channel = make_integration(
+        "reply-desk", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
+    )
     request = _receive(
         channel,
         _mail(
@@ -301,14 +304,12 @@ def mail_desk(db: None) -> tuple[Any, Any, Any]:
         ),
         uid=1,
     )
-    with system_context(reason="tests.messaging.email_reply.desk"):
-        desk = Handle.objects.upsert(platform="email", value="desk@example.test", display_name="Desk")
-    return channel, request, desk
+    return channel, request
 
 
 def test_an_email_reply_is_addressed_titled_and_threaded_so_the_answer_lands_on_its_conversation(mail_desk):
-    channel, request, desk = mail_desk
-    reply = Message.objects.compose_reply(request, body="Which team are you on?", sender=desk, actor=channel.owner)
+    channel, request = mail_desk
+    reply = Message.objects.compose(parent=request, text="Which team are you on?", actor=channel.owner)
     assert "@" in reply.external_id and "<" not in reply.external_id
     with system_context(reason="tests.messaging.email_reply.render"):
         assert list(reply.recipients.values_list("handle_id", "role")) == [(request.sender_id, "to")]
@@ -354,7 +355,7 @@ def test_an_email_reply_is_addressed_titled_and_threaded_so_the_answer_lands_on_
 
 
 def test_an_email_reply_requires_a_parent_reply_to_or_sender_to_address(mail_desk):
-    channel, _request, desk = mail_desk
+    channel, _request = mail_desk
     unsigned = _receive(
         channel,
         _mail(
@@ -366,12 +367,12 @@ def test_an_email_reply_requires_a_parent_reply_to_or_sender_to_address(mail_des
         uid=4,
     )
     with pytest.raises(ValidationError, match="Reply-To or sender"):
-        Message.objects.compose_reply(unsigned, body="Who are you?", sender=desk, actor=channel.owner)
+        Message.objects.compose(parent=unsigned, text="Who are you?", actor=channel.owner)
     assert not Message._base_manager.filter(parent=unsigned).exists()
 
 
 def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
-    channel, _request, desk = mail_desk
+    channel, _request = mail_desk
     relayed = _receive(
         channel,
         _mail(
@@ -383,7 +384,7 @@ def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
         ),
         uid=5,
     )
-    reply = Message.objects.compose_reply(relayed, body="Thanks, which start date?", sender=desk, actor=channel.owner)
+    reply = Message.objects.compose(parent=relayed, text="Thanks, which start date?", actor=channel.owner)
     with system_context(reason="tests.messaging.email_reply.reply_to"):
         (addressee,) = Handle.objects.filter(recipient_rows__message=reply, recipient_rows__role="to")
         wire = channel.backend.email_message(reply).message()
@@ -394,7 +395,7 @@ def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
 
 
 def test_reply_addresses_parse_the_reply_to_in_order_lower_cased_with_display_names(mail_desk):
-    channel, request, _desk = mail_desk
+    channel, request = mail_desk
     listed = _receive(
         channel,
         _mail(
@@ -418,8 +419,8 @@ def test_reply_addresses_parse_the_reply_to_in_order_lower_cased_with_display_na
 
 
 def test_retained_identity_and_threading_header_parts_never_render_beside_the_owned_ones(mail_desk):
-    channel, request, desk = mail_desk
-    reply = Message.objects.compose_reply(request, body="Which team?", sender=desk, actor=channel.owner)
+    channel, request = mail_desk
+    reply = Message.objects.compose(parent=request, text="Which team?", actor=channel.owner)
     with system_context(reason="tests.messaging.email_reply.headers"):
         for position, name in enumerate(("message-id", "in-reply-to", "references"), start=10):
             Part.objects.create(
@@ -453,7 +454,7 @@ def test_a_reply_of_another_kind_keeps_its_client_token_and_writes_no_envelope(d
         )
         desk = Handle.objects.upsert(platform="slack", value="U-desk")
     assert question.message_type == Message.MessageKind.CHAT
-    reply = Message.objects.compose_reply(question, body="Yes.", sender=desk, actor=channel.owner)
+    reply = Message.objects.compose(parent=question, text="Yes.", sender=desk, actor=channel.owner)
     UUID(reply.external_id)
     with system_context(reason="tests.messaging.chat_reply.read"):
         assert not reply.recipients.exists()

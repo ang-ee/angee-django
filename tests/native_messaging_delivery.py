@@ -1082,16 +1082,16 @@ class DeliveryContracts(DeliveryFixtures):
         comment = self.comment()
         seen = []
 
-        def admit(parent):
+        def admit():
             self.assertFalse(is_sudo())
-            self.assertTrue(parent.has_access("read"))
-            seen.append(parent.pk)
+            self.assertTrue(comment.has_access("read"))
+            seen.append(comment.pk)
 
         with system_context(reason="trusted caller with explicit reply actor"):
-            first = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                   idempotency_key="admitted", admit=admit)
-            replay = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                    idempotency_key="admitted", admit=admit)
+            first = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
+                                            idempotency_key="admitted", admit=admit)
+            replay = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
+                                             idempotency_key="admitted", admit=admit)
         self.assertEqual(first.pk, replay.pk)
         self.assertEqual(seen, [comment.pk])
 
@@ -1100,8 +1100,8 @@ class DeliveryContracts(DeliveryFixtures):
         with system_context(reason="unprivileged reply actor"):
             stranger = get_user_model().objects.create_user(username="unprivileged-replier")
             with self.assertRaises(PermissionDenied):
-                Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=stranger,
-                                              idempotency_key="denied")
+                Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=stranger,
+                                        idempotency_key="denied")
             self.assertFalse(changeset_model()._base_manager.filter(key="denied").exists())
 
     def test_failed_discovery_receiver_is_repaired_before_classifying_the_next_record(self):
@@ -1679,13 +1679,13 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.run_delivery(row)
         for index in range(35):
             with actor_context(self.operator):
-                Message.objects.compose_reply(parent=row.parent, body=f"Other {index}",
-                                              sender=self.feed.handle, actor=self.operator)
+                Message.objects.compose(parent=row.parent, text=f"Other {index}",
+                                        sender=self.feed.handle, actor=self.operator)
         with system_context(reason="unrelated broken chain"):
             broken = Message.objects.create(channel_id=self.feed.pk, thread_id=row.thread_id,
                                             external_id="unrooted", direction="inbound", platform="youtube")
         with actor_context(self.operator):
-            Message.objects.compose_reply(parent=broken, body="Thanks!", sender=self.feed.handle, actor=self.operator)
+            Message.objects.compose(parent=broken, text="Thanks!", sender=self.feed.handle, actor=self.operator)
         since = timezone.now() - timedelta(days=3)
         with CaptureQueriesContext(connection) as queries:
             self.assertFalse(row.has_ambiguous_delivery_reply(since=since))
@@ -1699,8 +1699,8 @@ class FeedDeliveryContracts(DeliveryFixtures):
     def test_sql_plain_body_matches_the_tree_reader_and_detects_multipart_ambiguity(self):
         row = self.queued_reply()
         with actor_context(self.operator):
-            other = Message.objects.compose_reply(parent=row.parent, body="Other",
-                                                  sender=self.feed.handle, actor=self.operator)
+            other = Message.objects.compose(parent=row.parent, text="Other",
+                                            sender=self.feed.handle, actor=self.operator)
         with system_context(reason="nested plain-body projection"):
             Part = apps.get_model("messaging", "Part")
             for message in (row, other):
@@ -1720,8 +1720,8 @@ class FeedDeliveryContracts(DeliveryFixtures):
     def test_sql_ambiguity_window_includes_the_exact_creation_or_claim_boundary(self):
         row = self.queued_reply()
         with actor_context(self.operator):
-            other = Message.objects.compose_reply(parent=row.parent, body="Thanks!",
-                                                  sender=self.feed.handle, actor=self.operator)
+            other = Message.objects.compose(parent=row.parent, text="Thanks!",
+                                            sender=self.feed.handle, actor=self.operator)
         since = timezone.now() - timedelta(minutes=1)
         with system_context(reason="native datetime preparation for the SQL window"):
             Message.objects.filter(pk=other.pk).update(created_at=since)
