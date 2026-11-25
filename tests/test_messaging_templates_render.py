@@ -2869,6 +2869,19 @@ def test_clean_raises_only_validation_error_and_what_it_admits_saves(
             transaction.set_rollback(True)
 
 
+def test_a_template_names_its_layout(plain: Any) -> None:
+    """An empty layout is refused under layout in words a person can act on, before the walk would reach for a
+    layout named layouts/."""
+
+    del plain
+    row = _unsaved(format="html", source="<p>Hi</p>", text_source="Hi", layout="")
+    with system_context(reason="tests.messaging_templates.render.layout"), pytest.raises(ValidationError) as raised:
+        row.full_clean()
+    assert raised.value.message_dict == {"layout": [
+        "Name the layout this template sits in: a mail renders inside its layout, which gives it its document, its "
+        "brand and its stop link."]}
+
+
 def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
     """A surrogate in any text, NaN or an infinity in sample: a VALIDATION answer for whoever may write, never
     INTERNAL; a member is refused the write first."""

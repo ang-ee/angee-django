@@ -733,7 +733,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         First the text columns' line endings become newlines, so text pasted with
         carriage returns has the content hash of the same text written with newlines.
-        A template's layout that does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
+        A template's layout that is empty or does not resolve (:meth:`MessageTemplateQuerySet.resolves`),
         judged through the acting reader's scope and only when the layout is new
         or changed, so a later change of the default language never refuses an
         edit of the rest of the row; ``variables`` or ``sample`` that is not an
@@ -757,8 +757,13 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
             or (None, None)
         )
-        if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields and self.layout:
-            if stored_layout != self.layout and not type(self).objects.resolves(
+        if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields:
+            if not self.layout:
+                errors["layout"] = (
+                    "Name the layout this template sits in: a mail renders inside its layout, which gives it its "
+                    "document, its brand and its stop link."
+                )
+            elif stored_layout != self.layout and not type(self).objects.resolves(
                 MessageTemplateKind.LAYOUT, self.layout,
             ):
                 errors["layout"] = "No layout with this key exists in the default language or as a shipped default."
