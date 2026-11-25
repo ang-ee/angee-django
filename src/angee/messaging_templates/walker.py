@@ -1390,16 +1390,21 @@ class TemplateWalker:
         Raise ``ValidationError`` listing every refusal.
         """
 
-        handler = root.handler
-        root_name = handler.template_name(root.key)
+        walk = self.judge(root, rows)
+        if walk.refusals:
+            raise ValidationError(list(dict.fromkeys(walk.refusals)), code="message_template_refused")
+        return walk
+
+    def judge(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
+        """Walk ``root`` as :meth:`walk` does, and return the walk with its refusals and the rows it reached."""
+
+        root_name = root.handler.template_name(root.key)
         walk = TemplateWalk(root=root, root_name=root_name, language=str(root.language), rows={root_name: root})
         checks = self._gather(walk, rows)
         if not walk.refusals:
             self._declare(walk)
         if not walk.refusals:
             self._walk_trees(walk, checks)
-        if walk.refusals:
-            raise ValidationError(list(dict.fromkeys(walk.refusals)), code="message_template_refused")
         return walk
 
     def _gather(self, walk: TemplateWalk, reader: RowReader) -> dict[str, _RowCheck]:
@@ -1490,6 +1495,29 @@ def _date_format(expression: FilterExpression) -> str:
         return "DATE_FORMAT"
     lookup, argument = arguments[0]
     return str(argument.literal if lookup else argument)
+
+
+INCLUDED_MEMO_LIMIT = 1_024
+"""How many rows' include targets :func:`included_names` remembers before it starts again."""
+
+_INCLUDED: dict[tuple[str, str], frozenset[str]] = {}
+
+
+def included_names(row: WalkedRow) -> frozenset[str]:
+    """The template names ``row``'s compiled forms include, remembered by its name and content hash.
+
+    What a row includes depends on its content alone, so the delete preview and
+    the ``pre_delete`` receiver of one confirmed delete, which each judge the
+    rows naming a key, share the check; a changed row has another hash.
+    """
+
+    key = (row.handler.template_name(row.key), row.compute_content_hash())
+    names = _INCLUDED.get(key)
+    if names is None:
+        if len(_INCLUDED) >= INCLUDED_MEMO_LIMIT:
+            _INCLUDED.clear()
+        names = _INCLUDED[key] = TemplateWalker().includes(row)
+    return names
 
 
 def _frame(name: str, row: WalkedRow, form: RowPiece, *, top: bool, scope: Mapping[str, _Binding] | None = None,

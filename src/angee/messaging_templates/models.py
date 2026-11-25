@@ -39,6 +39,7 @@ every row, and nobody but a resource load writes a baseline (``permissions.zed``
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
@@ -69,6 +70,7 @@ from angee.messaging_templates.walker import (
     TemplateWarning,
     TemplateWarningCode,
     in_layout,
+    included_names,
 )
 from angee.parties.fields import LanguageCodeField, normalize_language_code
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -78,6 +80,8 @@ from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
     from angee.parties.models import Person
+
+logger = logging.getLogger(__name__)
 
 FALLBACK_LANGUAGE = "en"
 """The language a key falls back to first when no requested language has a row: the one shipped rows are written in."""
@@ -218,14 +222,14 @@ class IncludedHandler(MessageTemplateKindHandler):
         """Return the rows among ``rows`` whose compiled forms include this kind's row named ``key``.
 
         Found at delete time: the rows whose source or plain-text form holds the
-        name, then each confirmed by compiling it. A row that does not compile
-        names nothing.
+        name, then each confirmed by compiling it, remembered by content
+        (:func:`~angee.messaging_templates.walker.included_names`). A row that
+        does not compile names nothing.
         """
 
         name = self.template_name(key)
-        walker = TemplateWalker()
         candidates = rows.filter(models.Q(source__contains=name) | models.Q(text_source__contains=name))
-        return rows.filter(pk__in=[row.pk for row in candidates if name in walker.includes(row)])
+        return rows.filter(pk__in=[row.pk for row in candidates if name in included_names(row)])
 
 
 class BlockHandler(IncludedHandler):
@@ -724,12 +728,14 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         The walk (:meth:`~angee.messaging_templates.walker.TemplateWalker.walk`)
         refuses what may not render: this row's own source, subject, preheader
         and plain-text form, and what it reaches, its layout and every row it
-        includes, each of which must resolve for every recipient. A layout, block or
-        part saved walks what it reaches; templates including it are judged when
-        they render.
+        includes, each of which must resolve for every recipient. A baseline,
+        which only a resource load writes, reaches only shipped rows, so a
+        deployment's row never refuses a load. A layout, block or part saved walks
+        what it reaches; templates including it are judged when they render.
         """
 
-        TemplateWalker(saving=True).walk(self, type(self).objects)
+        rows = type(self).objects
+        TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
 
     def render(self, values: Mapping[str, Any], *, kit: BrandKit | None = None) -> RenderedMessage:
         """Render this row with ``values``, in ``kit``'s name and colours (the default kit when ``None``).
@@ -778,12 +784,32 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
     @classmethod
     def after_resource_load(cls, instances: Iterable[Self], *, tier: str, source: str) -> None:
-        """Walk every loaded row, unchanged ones included, as a save walks it (:meth:`validate_source`)."""
+        """Walk every loaded row, unchanged ones included; a shipped defect fails the load, a deployment's is reported.
+
+        Each loaded baseline is walked among the shipped rows alone, as
+        :meth:`validate_source` walks it, and a refusal fails the load. It is then
+        walked among the rows that render; a refusal reached only through a
+        deployment's row (an override or its own row that the shipped row includes
+        or is laid out by) is logged as a warning naming both rows and the
+        refusal, the load completes, and the shipped row refuses at render until
+        the deployment fixes its row.
+        """
 
         loaded = tuple(instances)
         walker = TemplateWalker(saving=True)
+        rows = cls.objects
         for instance in loaded:
-            walker.walk(instance, cls.objects)
+            walker.walk(instance, rows.filter(is_baseline=True))
+            walk = walker.judge(instance, rows)
+            if walk.refusals:
+                logger.warning(
+                    "The shipped message template %s (%s) refuses through the deployment's %s, and refuses at "
+                    "render until that row is fixed: %s",
+                    walk.root_name, instance.language,
+                    ", ".join(f"{name} ({row.language})" for name, row in walk.rows.items()
+                              if not cast(MessageTemplate, row).is_baseline),
+                    "; ".join(dict.fromkeys(walk.refusals)),
+                )
         super().after_resource_load(loaded, tier=tier, source=source)
 
     def delete_blocker(self, *, cascaded: bool = False) -> str | None:

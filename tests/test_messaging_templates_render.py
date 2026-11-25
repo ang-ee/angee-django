@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import inspect
+import logging
 import re
 import threading
 import time
@@ -1513,6 +1514,56 @@ def test_deleting_an_included_block_or_part_is_refused_while_its_key_would_stop_
             part.delete()
         MessageTemplate.objects.get(key="unused").delete()
         MessageTemplate.objects.get(key="used", language="es").delete()
+
+
+def test_a_delete_checks_each_row_naming_its_key_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fix 6: the delete preview and the pre_delete receiver share each candidate's include check."""
+
+    del plain
+    part = _row("part", "shared", source="Shared.")
+    for index in range(3):
+        _mail('{% include "parts/shared" only %}' + f"\n\nNaming {index}.", key=f"tests.naming{index}")
+    checked: list[str] = []
+    check = TemplateWalker._check
+    monkeypatch.setattr(TemplateWalker, "_check", lambda walker, row, name: checked.append(name) or check(
+        walker, row, name))
+    with system_context(reason="tests.messaging_templates.render.delete"):
+        first = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
+        held = len(checked)
+        second = MessageTemplate.objects.get(pk=part.pk).delete_blocker()
+    assert first is not None and first == second
+    assert held <= 3 and len(checked) == held
+
+
+def test_a_load_reports_what_a_deployment_row_breaks_and_completes(
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D1: a refusal reached only through a deployment's row is logged, not raised; a shipped defect fails the load."""
+
+    del plain
+    _row("layout", "shipped", is_baseline=True)
+    shipped = _row("part", "named", source="{{ who|default:'' }}", variables={"who": "x"}, is_baseline=True)
+    template = _row("template", "tests.loaded", source='{% include "parts/named" with who=name only %}',
+                    variables={"name": "x"}, layout="shipped", is_baseline=True)
+    with system_context(reason="tests.messaging_templates.render.load"):
+        override = MessageTemplate.objects.override(shipped)
+        override.source, override.variables = "{{ who }} {{ extra }}", {"who": "x", "extra": "x"}
+        override.save()  # past clean: the override asks for an argument the shipped template never passes
+        with caplog.at_level(logging.WARNING, logger="angee.messaging_templates.models"):
+            MessageTemplate.after_resource_load([template], tier="install", source="tests")
+        template.source += "\n\nMore."
+        template.full_clean()  # a baseline is judged among the shipped rows alone
+    (record,) = [record for record in caplog.records if record.name == "angee.messaging_templates.models"]
+    assert "tests.loaded (en)" in record.getMessage() and "parts/named (en)" in record.getMessage()
+    assert "which it was not passed" in record.getMessage()
+    with pytest.raises(ValidationError, match="which it was not passed"):
+        _render(template, {"name": "Ana"}, kit)
+    _row("part", "needy", source="{{ needed }}", variables={"needed": "x"}, is_baseline=True)
+    broken = _row("template", "tests.broken", source='{% include "parts/needy" only %}', layout="shipped",
+                  is_baseline=True)
+    with system_context(reason="tests.messaging_templates.render.load"), pytest.raises(
+            ValidationError, match="which it was not passed"):
+        MessageTemplate.after_resource_load([broken], tier="install", source="tests")
 
 
 _PREVIEW = """
