@@ -37,27 +37,29 @@ live in code docstrings.
   without `FROM`; and `ThreadType.participants` is removed. The inbox
   Participants pane keeps its name and lists the sender, labelled From, then the
   recipients, each labelled by its role.
-  **Upgrade:** first copy
+  **Upgrade:** copy the migration template
   `src/angee/messaging/compose_migrations/messaging/participants_to_recipients.py`
-  into the project's `runtime/messaging/migrations/` under its next migration name,
-  with the project's messaging leaf as its dependency, then run `makemigrations
-  messaging` until it reports no changes, then migrate. The template renames the
-  model and its table with their rows, gives a message without a sender the handle
-  of its `from` row, logs how many `from` rows named someone other than their
-  message's sender (each message's source keeps its `From` header), deletes the
-  `from` rows, and refuses, with the statement that deletes them, while a row
-  without a message exists. Run it with the services stopped, as provision does:
-  it locks the recipient table for its whole run and the message table for its
-  last moments, and the previous release reads the old table; it takes about eight
-  seconds per million messages, most of it one rewrite of the recipient table. A
-  migration `makemigrations` writes without the template deletes `Participant` and
-  creates `Recipient`: the drop guard refuses that where the participant table
-  holds rows, but one generated on an empty database drops the recipient rows
-  when it is applied elsewhere, and those rows are a projection of each message's
-  stored envelope. Provision prunes the
+  into `runtime/messaging/migrations/` as its docstring says, run `makemigrations
+  messaging` until it reports no changes, then migrate with the services stopped,
+  as provision does: the migration locks the recipient table for its whole run and
+  the message table for its last moments, and the previous release reads the old
+  table. Allow on the order of ten seconds per million messages, most of it one
+  rewrite of the recipient table. The template first refuses, changing nothing,
+  while a row without a message exists, and names the statement that deletes those
+  rows; then it renames the model with its table and rows, gives a message without
+  a sender the handle of its `from` row, logs how many `from` rows named someone
+  other than their message's sender (each message's source keeps its `From`
+  header) and deletes the `from` rows. A migration `makemigrations` writes without
+  the template deletes `Participant` and creates `Recipient`: the drop guard
+  refuses that where the participant table holds rows, but one generated on an
+  empty database drops the recipient rows when it is applied elsewhere, and those
+  rows are a projection of each message's stored envelope. Provision prunes the
   retired REBAC type `messaging/participant`; grants written directly on its
   `editor` or `reader` relations, which no framework surface wrote, are not
-  carried over.
+  carried over. Upgrade cutoff: the template ships through the 3.x releases and is
+  removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id` stays
+  while retained migrations import it; a host upgrading from an earlier release
+  applies the template through a 3.x release first.
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
     kind for one key and one language: a message template of the kind `template`

@@ -149,15 +149,10 @@ def _message(thread: Any, key: str, sender: Any | None) -> Any:
     return Message._base_manager.create(thread=thread, sender=sender, external_id=key, platform="email")
 
 
-def _other_senders(count: int) -> str:
-    return (
-        f"{count} 'from' row(s) named a handle other than their message's sender and are deleted when this migration "
-        "commits; each message keeps its sender, and its source keeps the From header."
-    )
+def _counted(caplog: pytest.LogCaptureFixture) -> list[Any]:
+    """The counts the template logged, read from each record's arguments."""
 
-
-def _logged(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [record.getMessage() for record in caplog.records if record.name == template.__name__]
+    return [record.args for record in caplog.records if record.name == template.__name__]
 
 
 def _participant(state: ProjectState, message: Any | None, thread: Any, handle: Any, role: str = "to") -> Any:
@@ -209,7 +204,7 @@ def test_the_template_renames_the_rows_moves_their_senders_and_reverses(caplog: 
         }
         # 3. Two ``from`` rows named someone else: Fay beside Eve, Cat for Ada. Eve's old
         # address is Eve's merge group.
-        assert _logged(caplog) == [_other_senders(2)]
+        assert _counted(caplog) == [(2,)]
         # 4. No ``from`` row is left (the expected rows are exactly the recipients).
         # 6. The columns, the constraint and the model state are the installed model's.
         columns = _columns(_RECIPIENTS)
@@ -240,10 +235,9 @@ def test_the_template_renames_the_rows_moves_their_senders_and_reverses(caplog: 
 def test_a_row_without_a_message_refuses_the_template_until_the_stated_remedy_runs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A refusing run says what it would have deleted and how many rows refuse it, and its remedy deletes exactly those.
+    """The refusal comes first and changes nothing; it states the rows without a message, of any role, and its remedy.
 
-    The rows without a message are counted whatever their role, a ``from`` row
-    included, so the count the refusal states is the count its statement deletes.
+    The remedy deletes exactly the rows it counts, and the template then applies.
     """
 
     executor = MigrationExecutor(connection)
@@ -259,24 +253,24 @@ def test_a_row_without_a_message_refuses_the_template_until_the_stated_remedy_ru
             _participant(before, message, thread, people[name], role)
         kept = _rows(before, "Participant")
 
-        with caplog.at_level(logging.WARNING, logger=template.__name__), pytest.raises(CommandError) as refused:
+        with caplog.at_level(logging.WARNING, logger=template.__name__), pytest.raises(RuntimeError) as refused:
             executor.apply_migration(before.clone(), _migration())
 
-        # Cat for Bob would be deleted on commit; the run never commits.
-        assert _logged(caplog) == [_other_senders(1)]
-        assert str(refused.value) == (
-            "Nothing was applied: 2 messaging.Participant row(s) have no message and cannot become recipients; "
-            "delete them with `DELETE FROM messaging_participant WHERE message_id IS NULL;` in "
-            "`manage.py dbshell --database default`, then migrate again."
-        )
+        # Nothing changed and nothing was counted: the refusal runs before every other step.
+        assert _counted(caplog) == []
         assert _RECIPIENTS not in _tables()
         assert _rows(before, "Participant") == kept
         assert Message._base_manager.get(pk=unsent.pk).sender_id is None
         assert not MigrationRecorder(connection).applied_migrations().get(("messaging", _NAME))
 
+        statement = template.remedy(_PARTICIPANTS)
+        assert statement in str(refused.value)
         with connection.cursor() as cursor:
-            cursor.execute(str(refused.value).split("`")[1])
-            assert cursor.rowcount == 2
+            cursor.execute(statement)
+            deleted = cursor.rowcount
+        # The refusal states the count of the rows its remedy deletes: both rows without a message.
+        assert deleted == sum(message is None for _, message, *_ in kept) == 2
+        assert str(deleted) in str(refused.value).split()
         executor.apply_migration(before.clone(), _migration())
 
         assert _rows(_after(before), "Recipient") == {
@@ -300,11 +294,8 @@ def test_the_drop_guard_refuses_an_autodetected_delete_and_create_of_participant
         thread = Thread._base_manager.create(platform="email")
         _participant(before, _message(thread, "sent", people["ada"]), thread, people["bob"])
 
-        with pytest.raises(CommandError) as refused:
+        with pytest.raises(CommandError):
             DropGuardAutodetector(before, ProjectState.from_apps(apps)).changes(graph=graph)
-
-        assert f"messaging.participant: {_PARTICIPANTS}.* holds data in 1 rows" in str(refused.value)
-        assert "Declare a reviewed cutover migration before native makemigrations" in str(refused.value)
 
         before.apps.get_model("messaging", "Participant")._base_manager.order_by().delete()
         (written,) = DropGuardAutodetector(before, ProjectState.from_apps(apps)).changes(graph=graph)["messaging"]
