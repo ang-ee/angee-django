@@ -58,6 +58,12 @@ export interface HostAppearanceDefaults {
   colorScheme?: ColorSchemePreference;
   options?: ThemeOptionsEnvelope;
   fingerprint?: string;
+  /**
+   * The host's own options are still being read: keep the first paint and the boot
+   * cache until they arrive, as while identity resolves. Their source clears it when
+   * its read settles, fails or pauses.
+   */
+  pending?: boolean;
 }
 
 export interface AppearanceState {
@@ -175,13 +181,15 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   }
 
   const resolvingIdentity = auth.status === "resolving";
+  // The first paint and the boot cache wait for identity and for the host's own options.
+  const holding = resolvingIdentity || host.pending === true;
   useEffect(() => {
-    if (resolvingIdentity) return;
+    if (holding) return;
     applyAppearanceRoot({ themeId: effectiveThemeId, colorScheme, tokens: effectiveTokens });
-  }, [colorScheme, effectiveThemeId, effectiveTokens, resolvingIdentity]);
+  }, [colorScheme, effectiveThemeId, effectiveTokens, holding]);
 
   useEffect(() => {
-    if (resolvingIdentity) return;
+    if (holding) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
@@ -190,7 +198,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
       colorSchemePreference: ownAppearance.colorSchemePreference,
       tokenLayers: ownAppearance.tokenLayers,
     });
-  }, [auth.user?.id, ownAppearance, host.fingerprint, resolvingIdentity]);
+  }, [auth.user?.id, ownAppearance, host.fingerprint, holding]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,

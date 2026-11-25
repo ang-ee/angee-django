@@ -82,7 +82,7 @@ import {
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import { validateResourceCard, validateSearchShortcut } from "@angee/ui/views/resource-view-types";
-import { composeAddons, type ShellSettings } from "./define-addon";
+import { composeAddons, type HostAppearanceRead, type ShellSettings } from "./define-addon";
 import {
   ModalsHost,
   ToastProvider,
@@ -192,7 +192,11 @@ export interface CreateAppInput {
   location?: { search?: string; hostname?: string };
   /** Native router history; workshops and embedded hosts can isolate navigation. */
   history?: AnyRouter["history"];
-  /** Build-owned defaults used until an authenticated user overrides them. */
+  /**
+   * The build's appearance: the theme a person who chose none wears, its color scheme
+   * and its options. An installed `hostAppearance` source may supply that theme's options
+   * at run time (`AddonManifest.hostAppearance`); a signed-in person's own choice wins.
+   */
   appearance?: HostAppearanceDefaults;
 }
 
@@ -339,15 +343,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
         : [])),
   });
   const unavailable = projection.unavailable;
+  const themeDefinitions = new Map(composed.themes.map((theme) => {
+    const definition = "definition" in theme ? theme.definition : theme;
+    return [definition.id, definition] as const;
+  }));
   validateSelections(shell, menuTree.roots, {
     routes: routesByName,
     rootFor: (route) => projection.rootFor(route),
     unavailable,
     icons: composed.icons,
-    themes: new Set(composed.themes.map((theme) => {
-      const definition = "definition" in theme ? theme.definition : theme;
-      return definition.id;
-    })),
+    themes: themeDefinitions,
   });
   // The selected app's theme is the default until the person picks their own; the build's
   // theme options belong to the build's theme. Only the selection can lock it.
@@ -355,6 +360,11 @@ export function createApp(input: CreateAppInput): AngeeApp {
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
   const themeLocked = selection.themeLocked === true;
+  // The theme the host appearance source dresses: the one a person who chose none wears,
+  // the selected app's else the build's, locked or not.
+  const sourceTheme = appearance?.themeId ? themeDefinitions.get(appearance.themeId) ?? null : null;
+  // Fixed per app, so the session frame calls the same hooks on every render.
+  const useHostAppearance = composed.hostAppearance?.useOptions ?? useBuildAppearance;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
@@ -653,16 +663,23 @@ export function createApp(input: CreateAppInput): AngeeApp {
           disableTelemetry: true,
         }}
       >
-        <AppFrame
-          viewAs={viewAs}
-          authSchema={authSchema}
-          loginPath={loginPath}
-          appearance={appearance}
-          themeLocked={themeLocked}
-        >
+        <HostAppearanceFrame>
           <Outlet />
-        </AppFrame>
+        </HostAppearanceFrame>
       </Refine>
+    );
+  }
+
+  /** The session frame, wearing the host appearance source's options over the build's while a person follows the app default. */
+  function HostAppearanceFrame({ children }: { children: ReactNode }): ReactNode {
+    const read = useHostAppearance(sourceTheme, appearance?.options);
+    const host = useMemo(() => read.options || read.pending
+      ? { ...appearance, ...(read.options ? { options: read.options } : {}), ...(read.pending ? { pending: true } : {}) }
+      : appearance, [read.options, read.pending]);
+    return (
+      <AppFrame viewAs={viewAs} authSchema={authSchema} loginPath={loginPath} appearance={host} themeLocked={themeLocked}>
+        {children}
+      </AppFrame>
     );
   }
 
@@ -997,6 +1014,13 @@ function RuntimeSessionProvider({
   );
 }
 
+const BUILD_APPEARANCE: HostAppearanceRead = { pending: false };
+
+/** No installed host appearance source: the build's appearance stands. */
+function useBuildAppearance(): HostAppearanceRead {
+  return BUILD_APPEARANCE;
+}
+
 /** Public and other layouts retain an exit path when leaving console chrome. */
 function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
@@ -1057,7 +1081,7 @@ function validateSelections(
     rootFor: (route: BaseAddonRoute) => string | undefined;
     unavailable: ReadonlyMap<string, string>;
     icons: Readonly<Record<string, unknown>>;
-    themes: ReadonlySet<string>;
+    themes: ReadonlyMap<string, unknown>;
   },
 ): void {
   const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string; themeLocked?: boolean }): void => {

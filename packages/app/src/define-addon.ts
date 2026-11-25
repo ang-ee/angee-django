@@ -9,6 +9,9 @@
 // - Menus and containers are layered: an addon declares in its own namespace
 //   and alters what the addons it depends on declared; unrelated layers setting
 //   one field collide (`menus.ts`, `containers.ts`).
+// - Install-one contributions (the dashboard store, the host appearance) are sets
+//   of hooks at most one installed addon provides: a second provider is a
+//   composition-time error.
 //
 // The ordered lists sort by sequence and contribution key, never by addon order.
 
@@ -51,6 +54,7 @@ import { BUILTIN_DASHBOARD_WIDGET_KINDS } from "@angee/ui/dashboard/kinds";
 import {
   assertThemeDefinition,
   type ThemeDefinition,
+  type ThemeOptionsEnvelope,
 } from "@angee/ui/theme";
 
 export type {
@@ -156,6 +160,32 @@ export interface ShellSettings {
   app?: string;
 }
 
+/** What a host appearance source read: the options to wear, and whether its read is still on its way. */
+export interface HostAppearanceRead {
+  /** The options the theme wears in place of the build's; undefined keeps the build's. */
+  options?: ThemeOptionsEnvelope;
+  /**
+   * The source's first read has not answered: the app keeps its first paint and boot
+   * cache until it does. A source clears it when its read settles, fails or pauses.
+   */
+  pending: boolean;
+}
+
+/**
+ * The deployment's appearance at run time: the options the theme a person who chose
+ * none wears takes in place of the build's. Like `dashboardStore`, a set of hooks at
+ * most one installed addon provides; a person's own theme or options still win.
+ */
+export interface HostAppearanceSource {
+  /**
+   * A React hook `createApp` calls once per render of its session frame, above every
+   * layout, the same way on every render. `theme` is the theme a person who chose none
+   * wears (the selected app's, else the build's; locked or not), or null; `build` is
+   * the build's options for it, or undefined.
+   */
+  useOptions(theme: ThemeDefinition<unknown> | null, build: ThemeOptionsEnvelope | undefined): HostAppearanceRead;
+}
+
 /** One addon's self-describing manifest. */
 export interface AddonManifest {
   id: string;
@@ -208,6 +238,8 @@ export interface AddonManifest {
   dashboardWidgetKinds?: readonly DashboardWidgetKind[];
   /** The persistence behind saved dashboards; at most one installed addon provides it. */
   dashboardStore?: DashboardStore;
+  /** The deployment's appearance at run time; at most one installed addon provides it. */
+  hostAppearance?: HostAppearanceSource;
   /** Installed visual implementations. Theme ids are globally unique. */
   themes?: readonly ThemeManifestContribution[];
 }
@@ -243,6 +275,8 @@ export interface ComposedAddons {
   dataProviders: Readonly<Record<string, unknown>>;
   layoutProviders: readonly LayoutProviderContribution[];
   dashboards: DashboardRegistry;
+  /** The one installed host appearance source, or null: the build's appearance stands. */
+  hostAppearance: HostAppearanceSource | null;
   themes: readonly ThemeManifestContribution[];
 }
 
@@ -464,6 +498,7 @@ export function composeAddons(
     previews,
     recordSearchKeys: Object.keys(recordSearchKeys).sort(),
     dashboards: composeDashboardRegistry(addons, canonicalizeModel),
+    hostAppearance: soleProvider(addons, "hostAppearance", "host appearance"),
     themes: themes.sort((left, right) => {
       const leftId = "definition" in left ? left.definition.id : left.id;
       const rightId = "definition" in right ? right.definition.id : right.id;
@@ -525,11 +560,20 @@ function composeDashboardRegistry(
   }
   for (const [id, replacement] of replacements) widgetKinds[id] = replacement;
 
-  const providers = addons.filter((addon) => addon.dashboardStore);
+  return { definitions, resourceDefaults, widgetKinds, store: soleProvider(addons, "dashboardStore", "dashboard store") };
+}
+
+/** The contribution of the one addon that provides an install-one key, or null; a second provider fails composition. */
+function soleProvider<K extends "dashboardStore" | "hostAppearance">(
+  addons: readonly AddonManifest[],
+  key: K,
+  label: string,
+): NonNullable<AddonManifest[K]> | null {
+  const providers = addons.filter((addon) => addon[key]);
   if (providers.length > 1) {
-    throw new Error(`Addons ${providers.map((addon) => `"${addon.id}"`).join(", ")} each provide the dashboard store; install one.`);
+    throw new Error(`Addons ${providers.map((addon) => `"${addon.id}"`).join(", ")} each provide the ${label}; install one.`);
   }
-  return { definitions, resourceDefaults, widgetKinds, store: providers[0]?.dashboardStore ?? null };
+  return providers[0]?.[key] ?? null;
 }
 
 function isRuntimeFormRegistration(value: unknown): value is RuntimeFormRegistration {

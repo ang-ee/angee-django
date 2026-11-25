@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { useState, type ReactNode } from "react";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Storage as TestStorage } from "happy-dom";
 import * as v from "valibot";
@@ -275,6 +275,32 @@ test("a re-render that changes nothing neither applies the appearance again nor 
   expect(writes).not.toHaveBeenCalled();
   expect(applied).not.toHaveBeenCalled();
   expect(cleared).not.toHaveBeenCalled();
+});
+
+test("a pending host keeps the first paint and the boot cache until its options arrive", () => {
+  const root = document.documentElement;
+  // The first paint, as the head bootstrap left it.
+  root.dataset.themeId = paper.definition.id;
+  root.style.setProperty("--brand", "#010203");
+  const runtime = {
+    themes: THEMES,
+    auth: { status: "authenticated" as const, user: { id: "actor-1", name: "Example" }, hasRole: () => false },
+    userPreferences: { available: true, preferences: {}, patchPreferences: vi.fn(async () => undefined) },
+  };
+  const tree = (host: HostAppearanceDefaults) => (
+    <AppRuntimeProvider runtime={runtime}><AppearanceProvider host={host}>{null}</AppearanceProvider></AppRuntimeProvider>
+  );
+  const pending: HostAppearanceDefaults = { themeId: paper.definition.id, colorScheme: "light", fingerprint: "test-host", pending: true };
+  const { rerender } = render(tree(pending));
+  expect(root.style.getPropertyValue("--brand")).toBe("#010203");
+  expect(window.localStorage.getItem(APPEARANCE_CACHE_KEY)).toBeNull();
+
+  rerender(tree({ ...pending, pending: false, options: { version: 1, value: { brand: "#abcdef", rail: "#223344" } } }));
+  expect(root.dataset).toMatchObject({ themeId: paper.definition.id, colorScheme: "light" });
+  expect(root.style.getPropertyValue("--brand")).toBe("#abcdef");
+  expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!)).toMatchObject({
+    themeId: paper.definition.id, tokenLayers: { shared: { "--brand": "#abcdef" } },
+  });
 });
 
 test("drafting says whether a draft is open, and a caller's callbacks keep their identity across a discard", () => {
