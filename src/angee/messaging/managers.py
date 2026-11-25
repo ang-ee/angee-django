@@ -26,7 +26,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from contextvars import Context
 from datetime import datetime, time, timedelta
@@ -3144,7 +3144,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         is its In-Reply-To, which the email transport renders.
         """
 
-        recipient_model = apps.get_model("messaging", "Recipient")
         handle_model = apps.get_model("parties", "Handle")
         handle_ids = [
             handle_model.objects.upsert(
@@ -3152,14 +3151,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             ).pk
             for address, name in reply_to.items()
         ] or [parent.sender_id]
-        for handle_id in dict.fromkeys(handle_ids):
-            recipient_model.objects.create(
-                message_id=reply.pk,
-                thread_id=reply.thread_id,
-                handle_id=handle_id,
-                role=recipient_model.RecipientRole.TO,
-                created_by_id=created_by_id,
-            )
+        to = apps.get_model("messaging", "Recipient").RecipientRole.TO
+        self._write_recipients(reply, ((handle_id, to) for handle_id in handle_ids), created_by_id=created_by_id)
         title = normalize_subject(parent.thread.display_title)
         return self._write_envelope_parts(reply, subject=f"Re: {title}" if title else "", created_by_id=created_by_id)
 
@@ -4342,9 +4335,28 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                         *(message.edit_history or []),
                     ]
                     message.save(update_fields=("edit_history", "updated_at"))
-        handles = (
-            () if retain_authored_parts else self._write_recipients(message, thread, parsed, sender, created_by_id)
-        )
+        handles: list[Any] = []
+        if not retain_authored_parts:
+            # A re-sync rewrites the envelope's rows; the handles go back to the caller, the sender first.
+            apps.get_model("messaging", "Recipient").objects.filter(message=message).delete()
+            recipients = [
+                (
+                    handle_model.objects.upsert(
+                        platform=recipient.handle.platform,
+                        value=recipient.handle.value,
+                        created_by_id=created_by_id,
+                        display_name=recipient.handle.display_name,
+                        external_id=recipient.handle.external_id,
+                        metadata=recipient.handle.metadata,
+                    ),
+                    recipient.role,
+                )
+                for recipient in parsed.recipients
+            ]
+            self._write_recipients(
+                message, ((handle.pk, role) for handle, role in recipients), created_by_id=created_by_id,
+            )
+            handles = [*([] if sender is None else [sender]), *(handle for handle, _role in recipients)]
         if expected_thread is not None:
             message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
                                                  thread=explicit_thread)
@@ -4544,45 +4556,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         )
         return file
 
-    def _write_recipients(
-        self,
-        message: Any,
-        thread: Any,
-        parsed: ParsedMessage,
-        sender: Any,
-        created_by_id: Any,
-    ) -> list[Any]:
-        """Rewrite the message's recipient rows; return the envelope's handles, the sender first."""
+    def _write_recipients(self, message: Any, rows: Iterable[tuple[Any, str]], *, created_by_id: Any) -> None:
+        """Create ``message``'s recipient rows from ``(handle id, role)`` pairs, once per pair.
+
+        The write path owns envelope dedup (the unique constraint is the
+        backstop): any producer may repeat an address within one role. Each row
+        takes its thread from ``message`` (``Recipient.save``).
+        """
 
         recipient_model = apps.get_model("messaging", "Recipient")
-        handle_model = apps.get_model("parties", "Handle")
-        recipient_model.objects.filter(message=message).delete()
-        seen: set[tuple[Any, str]] = set()
-        handles: list[Any] = [] if sender is None else [sender]
-        for recipient in parsed.recipients:
-            handle = handle_model.objects.upsert(
-                platform=recipient.handle.platform,
-                value=recipient.handle.value,
-                created_by_id=created_by_id,
-                display_name=recipient.handle.display_name,
-                external_id=recipient.handle.external_id,
-                metadata=recipient.handle.metadata,
-            )
-            # The write path owns envelope dedup (the unique constraint is the
-            # backstop): any producer may repeat an address within one role.
-            key = (handle.pk, str(recipient.role))
-            if key in seen:
-                continue
-            seen.add(key)
-            recipient_model.objects.create(
-                message_id=message.pk,
-                thread_id=thread.pk,
-                handle_id=handle.pk,
-                role=recipient.role,
-                created_by_id=created_by_id,
-            )
-            handles.append(handle)
-        return handles
+        for handle_id, role in dict.fromkeys((handle_id, str(role)) for handle_id, role in rows):
+            recipient_model.objects.create(message=message, handle_id=handle_id, role=role, created_by_id=created_by_id)
 
 
 class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):

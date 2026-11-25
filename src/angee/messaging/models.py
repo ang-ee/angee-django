@@ -2048,9 +2048,10 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
 
     The raw To/Cc/Bcc stays in ``Message.metadata`` as the lossless source; this is
     its queryable projection, so the inbox can group and filter by recipient. The
-    sender is ``Message.sender``, never a row here. ``thread`` repeats
-    ``message.thread``. A handle merge keeps the row on the handle it names;
-    readers resolve ``handle`` through the handle's merge redirect.
+    sender is ``Message.sender``, never a row here. ``thread`` is its message's
+    thread, set by :meth:`save` on insert and moved with the message by
+    ``MessageManager.correct_source_thread``. A handle merge keeps the row on the
+    handle it names; readers resolve ``handle`` through the handle's merge redirect.
     """
 
     merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
@@ -2101,6 +2102,19 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         """Return a readable recipient label for Django displays."""
 
         return f"{self.handle_id} ({self.role})"
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Insert the row on its message's thread; a different ``thread`` raises ``ValueError``.
+
+        Pass ``message=`` (the instance) so the message is not read again.
+        """
+
+        if self._state.adding:
+            thread_id = self.message.thread_id
+            if self.thread_id is not None and self.thread_id != thread_id:
+                raise ValueError("A recipient row is on its message's thread.")
+            self.thread_id = thread_id
+        super().save(*args, **kwargs)
 
 
 class Reaction(AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
