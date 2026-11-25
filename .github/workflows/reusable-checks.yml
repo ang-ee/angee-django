@@ -352,7 +352,10 @@ jobs:
           node-version: "26"
           # GitHub's cache only on GitHub-hosted runners; a self-hosted runner keeps its own
           # pnpm store, and the path setup-node reads there is not the one install fills.
+          # package-manager-cache turns off the caching v5 otherwise starts on its own
+          # from package.json's packageManager.
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+          package-manager-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --filter './packages/**' typecheck
