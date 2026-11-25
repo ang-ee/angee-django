@@ -326,8 +326,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field errors). A channel vendor contributes such a verb through its
   `defineChannel*BridgeAddon` `recordActions`, scoped to its own rows.
 - **`ActionResult` verbs settle through `useActionResultRun`** (`@angee/ui`) —
-  it fires the verb, toasts the outcome (danger with the in-band non-field
-  reasons; success with the message), and deep-links to a created record via
+  it fires the verb, toasts the outcome (danger with the in-band reasons,
+  under any key; success with the message), and deep-links to a created record via
   `linkTo` + the routed resource page when the outcome carries an `id`. It
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)

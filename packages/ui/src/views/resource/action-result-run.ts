@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import type { ActionOutcome } from "@angee/refine";
+import { actionOutcomeReasons, type ActionOutcome } from "@angee/refine";
 
 import { errorMessage, useToast } from "../../feedback";
 import { useInAppNavigator } from "../../lib/in-app-link";
@@ -73,7 +73,7 @@ export function useActionResultRun(
         return undefined;
       }
       if (!outcome.ok) {
-        const reasons = [...new Set(Object.values(outcome.validationErrors ?? {}).flat())].join("; ");
+        const reasons = actionOutcomeReasons(outcome);
         toast.danger({
           title: outcome.message,
           ...(reasons && reasons !== outcome.message ? { description: reasons } : {}),

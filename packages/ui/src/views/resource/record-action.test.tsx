@@ -289,7 +289,15 @@ describe("record action helpers", () => {
     // A domain failure (ok=false) throws so the action bar surfaces the danger toast.
     dataMocks.mutate.mockResolvedValueOnce({ ok: false, message: "Sync refused." });
     await expect(result.current[0](actionContext("src_1"))).rejects.toThrow(
-      "Sync refused.",
+      new Error("Sync refused."),
+    );
+
+    // A refused target's message is only the verb's summary; its reason arrives in-band and is what is thrown.
+    dataMocks.mutate.mockResolvedValueOnce({
+      ok: false, message: "Sync failed.", validationErrors: { id: ["You are not allowed to sync this source."] },
+    } as never);
+    await expect(result.current[0](actionContext("src_1"))).rejects.toThrow(
+      new Error("You are not allowed to sync this source."),
     );
   });
 });

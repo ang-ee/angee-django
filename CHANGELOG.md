@@ -10,6 +10,21 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/refine`, `@angee/ui`: A record action the server refuses tells the
+  person why. For a target refused before the verb runs (not found, not
+  allowed) the server's message is only the verb's summary and the reason
+  arrives in-band; `runActionResult` threw only the message, so the action
+  bar's toast read "Confirm / Confirm failed." and the reason was lost. It now
+  throws the reasons, and the message when there are none. Every record
+  action projected through `runActionResult` shows the reason without an edit;
+  no toast title changes. Other refusals (a transition not allowed, a missing
+  object) still read the verb's summary: the server sends no reason for them.
+  `@angee/refine` exports `actionOutcomeReasons` (a
+  refusal's in-band reasons, each once, as one line), which
+  `useActionResultRun` composes instead of its own copy, as does a refused row
+  of a bulk trash or restore (it showed only the first). **Upgrade:** code
+  that matched the thrown error's text against the outcome's `message` finds
+  the reasons there when the refusal carries any.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
