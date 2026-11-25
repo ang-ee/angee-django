@@ -3165,13 +3165,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 if channel is None or not channel.has_access("reply"):
                     raise PermissionDenied("Sending a message requires reply on its channel.")
                 if record is not None:
-                    record = record.with_actor(actor) if isinstance(record, RebacMixin) else record
-                    attachment = record.message_thread_attachment(create=False)
-                    target = attachment.require_threaded_target() if attachment is not None else record
-                    if not target.can_post():
-                        raise PermissionDenied(
-                            f"Posting on {target._meta.label} requires {target.thread_post_access!r} access."
-                        )
+                    record.require_post(actor=actor)
             files = tuple(attachments)
             readable = set(
                 apps.get_model("storage", "File").objects.with_actor(actor)
