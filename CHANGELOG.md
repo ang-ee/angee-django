@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A record form's create no longer displays a field its save
+  cannot write that holds an empty object. What a record form displays reads
+  its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a
+  text of blanks, an empty list or an empty object), where it read the rule
+  check's `isEmptyFieldValue`, for which an empty object is a value. The
+  read-only `{}` rows of a feed, a Notion connection, a version-control bridge
+  and a box office create are no longer shown, and a group left with nothing
+  to show is left out; an edit displays every field, and what the form checks
+  and what a create sends are unchanged.
 - `@angee/ui`: **Changed behaviour.** What a form field holds when it holds
   nothing has one owner, `emptyValueForField` (`field-values.ts`), read by the
   record form's draft and seeds, `ActionFormDialog`'s arguments,

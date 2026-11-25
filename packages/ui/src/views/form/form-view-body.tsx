@@ -169,7 +169,7 @@ export function FormViewRecordHeader({
     ? resolveField(statusField, headerValues)
     : undefined;
   const statusValue = useWatch({ control: form.control, name: statusField?.name ?? "", disabled: !statusField });
-  // The status the form displays (`displaysField`): a create leaves it out where it holds no value.
+  // The status the form displays (`displaysField`): a create leaves it out where it holds nothing to display.
   const currentStatusField = resolvedStatusField && !resolvedStatusField.hidden
     && displaysField(resolvedStatusField, statusValue, { status: true })
     && (!resolvedStatusField.showWhen || resolvedStatusField.showWhen(headerValues))
@@ -431,7 +431,7 @@ export function FormViewSheet({
   const resolvedBodyField = bodyField
     ? resolveField(bodyField, bodyValues)
     : undefined;
-  // The body the form displays (`displaysField`): a create leaves it out where it holds no value.
+  // The body the form displays (`displaysField`): a create leaves it out where it holds nothing to display.
   const currentBodyField = resolvedBodyField && displaysField(resolvedBodyField, get(bodyValues, resolvedBodyField.name))
     ? resolvedBodyField : undefined;
   const bodyRestricted = Boolean(currentBodyField && fieldIsRedacted(surface.displayRecord, currentBodyField.name));

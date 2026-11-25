@@ -1373,8 +1373,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   save cannot write, a page-rendered one included, is read-only unless, on a
   saved record, its widget writes its own value (below); a page that renders its
   own control declares the field, hidden if need be. On a create, a field the
-  save cannot write that holds no value is not displayed at all, nor is an empty
-  read-only status
+  save cannot write that holds nothing to display (no value, a text of blanks,
+  an empty list or an empty object:
+  [holdsNothingToDisplay](../../packages/ui/src/views/form/form-view-model.ts),
+  the display's own fact, not the rule check's) is not displayed at all, nor is
+  an empty read-only status
   ([formDisplaysField](../../packages/ui/src/views/form/form-view-model.ts));
   a field holding a value is displayed read-only, and a section or pane left
   with nothing to show is left out.

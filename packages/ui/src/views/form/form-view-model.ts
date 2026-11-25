@@ -26,7 +26,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { DATE_TIME_WIDGETS, NUMBER_WIDGETS, emptyValueForField, fieldRuleErrors, isEmptyFieldValue, refusesSeed, textValue } from "./field-values";
+import { DATE_TIME_WIDGETS, NUMBER_WIDGETS, emptyValueForField, fieldRuleErrors, refusesSeed, textValue } from "./field-values";
 import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
@@ -722,19 +722,32 @@ export function fieldControlReadOnly(
  * The record form's decision whether it displays a field, as `formDisplaysGroup` is its decision on a
  * group; on a create that decision reads the `value` the field holds. Whether a field is visible (its
  * `showWhen`, its `hidden`; `isFieldControlVisible`) is another fact, which this does not decide.
- * On a create, a field that holds no value (`isEmptyFieldValue`) is not displayed where its save
- * cannot write it (`writable`, `pathWritable`), nor where it is the form's status and its control is
- * read-only (`readOnlyStatus`): a status nobody sets on a create holds nothing to display until the
- * server gives it one. A field that holds a value (a seed, a default, a preset's write) is
- * displayed, read-only where it is, and an edit displays every field. The sheet's sections, its
- * panes and the form's status and body read it; a control a page renders itself is the page's to
- * display.
+ * On a create, a field that holds nothing to display (`holdsNothingToDisplay`, an empty object
+ * included) is not displayed where its save cannot write it (`writable`, `pathWritable`), nor where it
+ * is the form's status and its control is read-only (`readOnlyStatus`): a status nobody sets on a
+ * create holds nothing to display until the server gives it one. A field that holds a value (a seed,
+ * a default, a preset's write) is displayed, read-only where it is, and an edit displays every
+ * field. The sheet's sections, its panes and the form's status and body read it; a control a page
+ * renders itself is the page's to display.
  */
 export function formDisplaysField(
   value: unknown,
   { writable, isCreate, readOnlyStatus = false }: { writable: boolean; isCreate: boolean; readOnlyStatus?: boolean },
 ): boolean {
-  return !isCreate || !isEmptyFieldValue(value) || (writable && !readOnlyStatus);
+  return !isCreate || !holdsNothingToDisplay(value) || (writable && !readOnlyStatus);
+}
+
+/**
+ * Whether `value` gives a record form nothing to display: `null` or `undefined`, a text of blanks
+ * only, an empty list, an empty object. It is the display's own fact: what the rule check counts as
+ * missing (`isEmptyFieldValue`, for which an empty object is a value) and what a create leaves out of
+ * its payload (`isBlankCreateValue`) are others.
+ */
+export function holdsNothingToDisplay(value: unknown): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0;
 }
 
 export function mutationData(

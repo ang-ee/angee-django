@@ -3498,6 +3498,36 @@ describe("FormView", () => {
     expect(screen.queryByText("This field is required.")).toBeNull();
   });
 
+  test.each([
+    ["holding an empty object, is not displayed", undefined, false],
+    ["holding an object with a member, is displayed read-only", { config: { region: "eu" } }, true],
+  ] as const)("on a create, a field the save cannot write, %s", async (_case, seed, displayed) => {
+    renderWithProviders(<FormView resource="notes.Note" defaultValues={seed}
+      fields={[labelField, { name: "config", label: "Config", widget: "json" }]} />, fixedFieldsMetadata(["config"]));
+    await screen.findByLabelText("Label");
+    expect(screen.queryByText("Config") !== null).toBe(displayed);
+  });
+
+  test("guard: on an edit, a field the save cannot write holding an empty object is displayed", async () => {
+    sdkMocks.record = { id: "note-1", label: "First", config: {} };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      fields={[labelField, { name: "config", label: "Config", widget: "json" }]} />, fixedFieldsMetadata(["config"]));
+    await waitFor(() => expect((screen.getByLabelText("Label") as HTMLInputElement).value).toBe("First"));
+    expect(screen.getByText("Config")).toBeTruthy();
+  });
+
+  test("guard: a create sends the empty object a required field it writes holds, with no message: the check and the payload are unchanged", async () => {
+    renderWithProviders(<FormView resource="notes.Note"
+      fields={[labelField, { name: "config", label: "Config", widget: "json", required: true }]} />, fixedFieldsMetadata(["code"], ["config"]));
+    const label = await screen.findByLabelText("Label");
+    expect(screen.getByText("Config")).toBeTruthy();
+    fireEvent.change(label, { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second", config: {} });
+    expect(screen.queryByText("This field is required.")).toBeNull();
+  });
+
   test.each([["an edit", "note-1", "Save"], ["a create", null, "Create"]] as const)("guard: on %s, a payload that touches only fields the save writes is what it was", async (_mode, id, verb) => {
     sdkMocks.record = { id: "note-1", label: "First", note: "Kept", code: "" };
     renderWithProviders(<FormView resource="notes.Note" id={id}
@@ -3772,7 +3802,7 @@ describe("FormView", () => {
     if (displayed) expect(within(header).getByText("Draft")).toBeTruthy();
   });
 
-  test("on a create, a status the save cannot write, holding only blanks, holds no value by the form's one test of it and is not displayed", async () => {
+  test("on a create, a status the save cannot write, holding only blanks, holds nothing to display and is not displayed", async () => {
     renderWithProviders(<FormView resource="notes.Note" fields={[{ name: "title", label: "Title", title: true }, { ...draftStatus, defaultValue: "  " }]} />,
       createWritesMetadata(["title"]));
     const header = (await screen.findByRole("textbox", { name: "Title" })).closest("header")!;
