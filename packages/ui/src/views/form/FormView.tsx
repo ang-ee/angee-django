@@ -310,15 +310,17 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       ? <RecordChromeProvider value={recordChromeContext}>{content}</RecordChromeProvider>
       : content;
   };
-  // Tabbed, each pane is a tab panel; a lone one is the plain region beneath the sheet.
+  // Every pane is a panel of the form's one Tabs root, keyed by its id, however many panes there are:
+  // a pane coming or going never rebuilds another. Tabbed, a panel is labelled by its tab; a lone pane
+  // has no tab, so its panel renders the plain region beneath the sheet, under the pane's heading.
   const paneRegions = panes.map((pane) => {
     const paneClass = fullBleed(pane) ? "flex min-h-0 flex-1 flex-col overflow-hidden pt-0" : cn(FORM_VIEW_COLUMN_CLASS, "pt-3 pb-12");
-    const content = <ControlBandProvider host={undefined}>{renderPane(pane)}</ControlBandProvider>;
     // The lines pane stays mounted so its draft rows and their errors survive switching panes.
     const keepMounted = pane.id === EDITABLE_LINES_SECTION || recordTabById.get(pane.id)?.keepMounted;
-    return tabbed
-      ? <Tabs.Panel key={pane.id} value={pane.id} keepMounted={keepMounted} className={paneClass}>{content}</Tabs.Panel>
-      : <div key={pane.id} className={paneClass}>{content}</div>;
+    return <Tabs.Panel key={pane.id} value={pane.id} keepMounted={keepMounted} className={paneClass}
+      render={tabbed ? undefined : ({ ref, children }) => <div ref={ref} className={paneClass}>{children}</div>}>
+      <ControlBandProvider host={undefined}>{renderPane(pane)}</ControlBandProvider>
+    </Tabs.Panel>;
   });
   const formTitle = awaitingRecord ? undefined : typeof title === "function" ? title(recordToolbarContext) : title;
   const formEyebrow = awaitingRecord ? undefined : typeof eyebrow === "function" ? eyebrow(recordToolbarContext) : eyebrow;
