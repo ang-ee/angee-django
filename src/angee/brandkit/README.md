@@ -106,14 +106,17 @@ root and answers the theme's options with the default kit's ten colours over the
 build's options for that theme, else over the theme's defaults: the build's
 font, radius, density, elevation and logo treatment stay (`brandKitOptions` in
 `web/src/appearance.ts`). It sends no read for a fixed theme or no theme, and
-answers nothing with no default kit, after a failed read, or for a kit the
-theme's parser refuses. The theme derives every token from those inputs, dark
+answers nothing with no default kit, after a failed read, for a kit the theme's
+parser refuses, or for build options of another version or that the parser
+refuses. The theme derives every token from those inputs, dark
 values included, and emits a token only where an input differs from its own
 default, so a kit equal to the theme's defaults changes nothing. A kit's contrast
 warnings are about mail; the app shows none. The kit's name, logos and fonts do
 not reach the app.
 
 An administrator's save refetches the read, so their own app re-themes at once.
+The kit has no live root, so a changed kit reaches another open session on its
+next load, which first repaints from the device's boot cache.
 
 ## Access
 
