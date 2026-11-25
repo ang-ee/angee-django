@@ -22,7 +22,9 @@ from rebac import (
 )
 
 from angee.base.models.locks import StaleRevisionError
+from angee.base.permissions import require_save_allowed
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.knowledge import models as knowledge_models
 from angee.knowledge import schema as knowledge_schema
 from angee.knowledge.models import (
     SectionNotFoundError,
@@ -553,3 +555,24 @@ def test_write_body_refuses_a_reader_before_the_title_is_validated(db: None, mon
     spy.assert_not_called()
     stored = MarkdownPage._base_manager.get(pk=page.pk)
     assert (stored.title, stored.body) == ("Draft", "Original")
+
+
+def test_write_body_decides_the_title_save_on_the_fields_it_writes(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The decision is asked for the partial save ``write_body`` makes, the body and the title, not a full one."""
+
+    alice = create_user("alice")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Draft")
+    decided: list[Any] = []
+
+    def recording(instance: Any, *, update_fields: Any = None) -> None:
+        decided.append(update_fields)
+        require_save_allowed(instance, update_fields=update_fields)
+
+    monkeypatch.setattr(knowledge_models, "require_save_allowed", recording)
+
+    with actor_context(alice):
+        MarkdownPage.objects.write_body(page, "Body", title="Titled")
+
+    assert decided == [{"body", "title"}]

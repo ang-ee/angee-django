@@ -11,7 +11,15 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.test.utils import isolate_apps
 from graphql import GraphQLInputObjectType, get_named_type
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    PermissionDenied,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 from strawberry import auto
 from strawberry.types import get_object_definition
 from strawberry_django.optimizer import DjangoOptimizerExtension
@@ -400,3 +408,71 @@ def test_native_django_model_without_persistence_contract_still_updates(db):
     result = AngeeHasuraWriteBackend(RecordRefPlainTarget).update(None, record.sqid, {"name": "After"})
     record.refresh_from_db()
     assert result.name == record.name == "After"
+
+
+class _FactoryDocBackend(AngeeHasuraWriteBackend):
+    """A factory backend: its factory decides as it writes, so it asks the claim first."""
+
+    def __init__(self, made: list[str]) -> None:
+        super().__init__(SharedDoc)
+        self.made = made
+
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: Any = None) -> Any:
+        if claim is not None and (replay := claim(self._decode_public_id_fields(data))) is not None:
+            return replay
+        self.made.append(data["title"])
+        return SharedDoc.objects.create(title=data["title"], is_shared=True)
+
+
+class _DefaultingDocBackend(AngeeHasuraWriteBackend):
+    """Fills an omitted value, then inserts as the base decides: the calendar event backend's shape."""
+
+    def insert(self, info: strawberry.Info, data: dict[str, Any], *, claim: Any = None) -> Any:
+        return super().insert(info, {"is_shared": False, **data}, claim=claim)
+
+
+def _claimed_schema(backend: AngeeHasuraWriteBackend, name: str) -> Any:
+    resource = hasura_model_resource(
+        WriteContractDocType, model=SharedDoc, name=name,
+        filterable=["id", "title"], sortable=["title"], aggregatable=["id"],
+        insertable=["title", "is_shared"], update=False, delete=False, write_backend=backend,
+    )
+    return GraphQLSchemas([make_addon(schemas={"public": {
+        "query": [resource.query], "mutation": [resource.mutation],
+        "types": [WriteContractDocType, *resource.types],
+    }})]).build("public")
+
+
+def test_a_keyed_insert_into_a_factory_backend_runs_its_factory_once(db: None) -> None:
+    """A key reaches a factory backend's own hook: its factory makes the row, and a retry replays it."""
+
+    made: list[str] = []
+    schema = _claimed_schema(_FactoryDocBackend(made), "factory_claimed_docs")
+    author = create_user("factory-claim-author")
+    query = """mutation {
+      insert_factory_claimed_docs_one(object:{title:"Made"}, idempotency_key:"factory-request") {id title}
+    }"""
+
+    first = result_data(execute_schema(schema, query, {}, user=author))
+
+    assert result_data(execute_schema(schema, query, {}, user=author)) == first
+    assert made == ["Made"]
+
+
+def test_a_defaulting_insert_is_decided_before_its_key_is_claimed(db: None) -> None:
+    """An insert that only fills defaults before the base's keeps the base's order: decide, then claim.
+
+    The key is longer than a claim admits, so a claim made first would answer
+    with the key's validation error instead of the refusal.
+    """
+
+    schema = _claimed_schema(_DefaultingDocBackend(SharedDoc), "defaulted_claimed_docs")
+    query = """mutation($key: String!) {
+      insert_defaulted_claimed_docs_one(object:{title:"Refused"}, idempotency_key:$key) {id}
+    }"""
+
+    refused = execute_schema(schema, query, {"key": "k" * 129}, user=create_user("defaulted-claim-author"))
+
+    assert refused.errors is not None
+    assert isinstance(refused.errors[0].original_error, PermissionDenied), refused.errors[0].original_error
+    assert not SharedDoc._base_manager.exists()

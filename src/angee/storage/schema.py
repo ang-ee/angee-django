@@ -24,7 +24,12 @@ from angee.base.models.identity import instance_from_public_id
 from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    CreationClaim,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
@@ -330,10 +335,12 @@ _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 class FolderWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Create a real folder through ``Folder.objects.create_in_drive``."""
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Create a real folder through ``Folder.objects.create_in_drive``, claimed before it decides."""
 
         del info
+        if claim is not None and (replay := claim(self._decode_public_id_fields(data))) is not None:
+            return replay
         try:
             return Folder.objects.create_in_drive(
                 drive_id=str(data["drive"]),

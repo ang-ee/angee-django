@@ -968,9 +968,10 @@ data through REBAC, never a queryset bypass.
   reads only the candidate's own fields, and
   [`require_save_allowed`](../../src/angee/base/permissions.py) (REBAC's
   `check_save` rehearsal) when it reads what `save()` sets (an owner, a scope,
-  a user). The rehearsal's limit: validation a model's own `save()` performs
-  runs inside it, before the decision; REBAC deciding a save before
-  validating and writing it closes that.
+  a user). The rule's limit: validation a model performs in its own `save()`,
+  before the save gate, runs before the decision; a model that needs the
+  guarantee moves that validation to `clean()`. REBAC deciding a save before
+  validating and writing it will close the limit.
 - Model universal-admin reach as a const-backed relation
   (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
   membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
@@ -1771,9 +1772,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
   `expected_revision: Int`; a stale value fails with `STALE_REVISION`.
   With the [provenance write adapter](../../src/angee/provenance/graphql.py) installed,
   `insert_<resource>_one` also accepts `idempotency_key: String`; replaying the same
-  actor/resource-scoped key and content returns the readable original, and
-  changed content fails with
-  `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
+  actor/resource-scoped key and content returns the readable original, looked up
+  before the create is decided again, and changed content fails with
+  `CREATION_KEY_CONFLICT`. A first attempt is decided before its key is claimed;
+  a backend that decides inside its own factory claims before that factory runs. Neither token belongs in `_set` or `object`.
   The [Hasura adapter](../../src/angee/graphql/data/hasura.py) composes native
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
@@ -1853,12 +1855,11 @@ open fresh evaluator scopes for authorization and change-feed reads.
   prepare its instance again and `full_clean` it before persistence. A caller
   who may not create the row gets the save's refusal, and none of the row's
   field validators, `clean()`, uniqueness or constraint checks runs for them.
-  The limit: validation a model's own `save()` performs runs inside the
-  rehearsal, before the decision, and answers that caller; today the
-  implementation config check (`ImplDefaultsMixin`), the workflow trigger's
-  recurrence rule, and arp's venue, event type, registration and bank rows.
-  REBAC deciding a save before validating and writing it closes the limit and
-  retires the rehearsal. For a caller who may create, a `ValidationError` a
+  The rule's limit: validation a model performs in its own `save()`, before
+  the save gate, runs before the decision and answers that caller; a model that
+  needs the guarantee moves that validation to `clean()`. REBAC deciding a save
+  before validating and writing it will close the limit and retire the
+  rehearsal. For a caller who may create, a `ValidationError` a
   model's `save()` raises comes before the field errors `full_clean` reports,
   and an admitted insert rehearses its save once more. A default the create
   permission reads is set by `save()`, which the decision sees, not only by

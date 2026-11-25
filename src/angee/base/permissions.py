@@ -453,9 +453,10 @@ def require_save_allowed(instance: models.Model, *, update_fields: Iterable[str]
     refuse runs none of the row's field validators, ``clean()``, uniqueness or
     constraint checks.
 
-    The limit: validation a model's own ``save()`` performs runs inside the
-    rehearsal, before the gates, and its ``ValidationError`` answers the caller
-    as it would from the save. An unscoped instance (sudo, a system context)
+    The rule's limit: validation a model performs in its own ``save()``,
+    before the save gate, runs before the decision and answers the caller as
+    it would from the save; a model that needs the guarantee moves that
+    validation to ``clean()``. An unscoped instance (sudo, a system context)
     has no gate to ask, and a model without REBAC write gates no save to refuse.
 
     The raising form is REBAC's to own: it moves there with REBAC deciding a

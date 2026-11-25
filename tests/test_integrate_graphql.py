@@ -23,7 +23,7 @@ import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection
 from django.db.models.signals import post_save
 from django.test import TestCase, override_settings
@@ -2393,6 +2393,33 @@ def test_an_unknown_implementation_key_is_refused_on_its_field() -> None:
     with system_context(reason="test.integration_insert.direct"), pytest.raises(ValidationError) as written:
         NotionConnection(display_name="Direct", backend_class="no-such-backend", vendor=vendor).save()
 
-    assert "backend_class" in validated.value.message_dict
-    assert list(written.value.message_dict) == ["backend_class"]
+    refusal = {"backend_class": ["Value 'no-such-backend' is not a valid choice."]}
+    assert validated.value.message_dict == refusal
+    assert written.value.message_dict == refusal
+    assert not NotionConnection._base_manager.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("caller", ("anonymous", "member", "admin"))
+def test_a_missing_seeded_default_answers_only_once_the_create_is_decided(caller: str) -> None:
+    """Without the seeded vendor a refused caller gets the refusal; only an admitted one gets the load guidance."""
+
+    user = {
+        "anonymous": lambda: AnonymousUser(),
+        "member": lambda: User.objects.create_user(username="seedless-member"),
+        "admin": lambda: _platform_admin("seedless-admin"),
+    }[caller]()
+    backend = integrate_schema.IntegrationWriteBackend(NotionConnection, public_id_fields=("credential", "owner"))
+
+    with actor_context(user):
+        if caller == "admin":
+            with pytest.raises(ImproperlyConfigured, match="resources load"):
+                backend.create(SimpleNamespace(), {"display_name": "Seedless", "backend_class": "notion"})
+        else:
+            with pytest.raises(PermissionDenied) as known:
+                backend.create(SimpleNamespace(), {"display_name": "Seedless", "backend_class": "notion"})
+            with pytest.raises(PermissionDenied) as unknown:
+                backend.create(SimpleNamespace(), {"display_name": "Seedless", "backend_class": "no-such-backend"})
+            assert str(known.value) == str(unknown.value)
+
     assert not NotionConnection._base_manager.exists()

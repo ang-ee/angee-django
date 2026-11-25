@@ -201,18 +201,7 @@ class _MutationResultExtension(FieldExtension):
 
 
 CreationClaim = Callable[[dict[str, Any]], Any]
-"""An idempotency adapter's claim: given a creation's decoded values, the row it replays, or ``None``."""
-
-
-def _overrides_below(cls: type, base: type, names: Iterable[str]) -> bool:
-    """Whether a class above ``base`` in ``cls``'s MRO defines one of ``names``."""
-
-    for klass in cls.__mro__:
-        if klass is base:
-            return False
-        if any(name in vars(klass) for name in names):
-            return True
-    return False
+"""An idempotency adapter's claim: given decoded creation values, the row it replays, or ``None``."""
 
 
 class _DeletePreviewBackend(WriteBackend, Protocol):
@@ -286,50 +275,42 @@ class AngeeHasuraWriteBackend:
         return instance
 
     def create(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
-        """Create one row through this backend's native insertion contract.
-
-        ``claim`` is an idempotency adapter's: it is asked with the row's decoded
-        creation values (``object``, ``lines``) before anything is written, and a
-        row it returns is replayed instead of created. This backend asks it once
-        the row's create is decided, with public ids decoded once and the lines
-        only after the decision. A subclass whose own ``insert`` or
-        ``_create_row`` decides as it writes is claimed first, before that
-        decision, as the claim cannot reach inside it.
-        """
+        """Create one row through this backend's native insertion contract; ``claim`` as :meth:`insert` takes it."""
 
         if claim is None:
             return self.insert(info, data)
-        if _overrides_below(type(self), AngeeHasuraWriteBackend, ("insert", "_create_row")):
-            with transaction.atomic():
-                replay = claim(self._creation_values(data))
-                return replay if replay is not None else self.insert(info, data)
-        return self._insert(info, data, claim)
+        return self.insert(info, data, claim=claim)
 
-    def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def insert(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Insert one row, its declared nested child lines and input extensions atomically.
 
-        The row's create is decided first (:meth:`_create_row`); its lines are decoded only then.
+        The row's create is decided first (:meth:`_create_row`); its lines are
+        decoded only then. ``claim`` is an idempotency adapter's: it is asked
+        with the creation's decoded values (``object``, ``lines``) at the row's
+        decision point, before anything is written, and a row it returns is the
+        earlier creation, replayed as it is. A subclass whose ``insert`` decides
+        by itself asks ``claim`` at its own decision point.
         """
-
-        return self._insert(info, data, None)
-
-    def _insert(self, info: strawberry.Info, data: dict[str, Any], claim: CreationClaim | None) -> Any:
-        """Decide, then claim when an adapter asks, then validate and persist the row with its lines."""
 
         data, extensions = self._split_input(data)
         line_rows = self._pop_line_rows(data) if self.lines is not None else None
+        lines: list[tuple[str | None, dict[str, Any]]] | None = None
+        replayed = False
+
+        def claim_row(values: dict[str, Any]) -> Any:
+            nonlocal lines, replayed
+            assert claim is not None
+            lines = self._prepare_line_rows(line_rows) if line_rows is not None else None
+            replay = claim({"object": {**values, **extensions}, "lines": lines})
+            replayed = replay is not None
+            return replay
+
         with transaction.atomic():
-            if claim is None:
-                instance = self._create_row(info, data)
-                lines = self._prepare_line_rows(line_rows) if line_rows is not None else None
-            else:
-                values = self._decode_public_id_fields(data)
-                self._require_create(info, values)
-                lines = self._prepare_line_rows(line_rows) if line_rows is not None else None
-                replay = claim({"object": {**values, **extensions}, "lines": lines})
-                if replay is not None:
-                    return replay
-                instance = self._create_decided(info, values)
+            instance = self._create_row(info, data, claim=None if claim is None else claim_row)
+            if replayed:
+                return instance
+            if lines is None and line_rows is not None:
+                lines = self._prepare_line_rows(line_rows)
             if self.lines is not None and lines is not None:
                 # The caller's creation admitted this row and the lines created with it, even when
                 # the caller may not write the row afterwards: name that admission explicitly.
@@ -344,7 +325,7 @@ class AngeeHasuraWriteBackend:
                 instance.apply_input_extensions(**extensions)
         return instance
 
-    def _creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
+    def creation_values(self, data: dict[str, Any]) -> dict[str, Any]:
         """Decode raw write input into the creation values a claim fingerprints, lines included."""
 
         data, extensions = self._split_input(data)
@@ -401,14 +382,19 @@ class AngeeHasuraWriteBackend:
                 instance.apply_input_extensions(**extensions)
             return instance
 
-    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Create one row from its write input: decode its public ids once, decide its create, then write it.
 
-        A factory backend overrides this hook; its factory decides as it writes.
+        ``claim`` is asked with the decoded row values once the create is
+        decided, before the row is validated or written; a row it returns is
+        returned instead. A factory backend overrides this hook: its factory
+        decides as it writes, so it asks ``claim`` first, before calling it.
         """
 
         values = self._decode_public_id_fields(data)
         self._require_create(info, values)
+        if claim is not None and (replay := claim(values)) is not None:
+            return replay
         return self._create_decided(info, values)
 
     def _require_create(self, info: strawberry.Info, values: dict[str, Any]) -> None:
@@ -423,8 +409,9 @@ class AngeeHasuraWriteBackend:
         (:func:`~angee.base.permissions.require_save_allowed`), which sees what
         the save sets (an owner, a scope, a user it defaults). A caller the gate
         refuses gets the save's refusal before any field validator,
-        ``clean()``, uniqueness or constraint check runs; validation the model's
-        own ``save()`` performs is that rule's limit.
+        ``clean()``, uniqueness or constraint check runs. The rule's limit:
+        validation a model performs in its own ``save()``, before the save
+        gate, runs before the decision.
         """
 
         _prepared, prepared, _m2m = mutation_resolvers.prepare_create_update(

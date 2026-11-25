@@ -2394,24 +2394,29 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         if credential.pk != target.credential_id or target.lifecycle == IntegrationLifecycle.DISCONNECTED:
             target.attach_credential(credential)
 
-    def build(self, **fields: Any) -> IntegrationT:
+    def build(self, *, impl_defaults: bool = True, **fields: Any) -> IntegrationT:
         """Return an unsaved capability row of ``fields``, as a saved one would answer before anything is created.
 
         It carries the effective actor when there is one, its implementation's
         defaults (its vendor among them, ``ImplDefaultsMixin.prepare_impl_defaults``;
         an unknown implementation key prepares nothing, and its field refuses it
-        when the row is validated or written) and the account of
+        when the row is validated or inserted) and the account of
         its credential, unless ``fields`` name one. A connect verb or a connect
         query builds one to ask what the capability reads with
         (:meth:`Integration.connectable_credentials`) or connects through
         (:meth:`Integration.ready_oauth_client`); :meth:`create_capability` saves one.
+        ``impl_defaults=False`` leaves the implementation's defaults out, and
+        out of the row's save too.
         """
 
         instance = self.model(**fields)
         actor, _sudo = self.effective_actor()
         if actor is not None:
             instance.with_actor(actor)
-        instance.prepare_impl_defaults()
+        if impl_defaults:
+            instance.prepare_impl_defaults()
+        else:
+            instance.mark_impl_provided_fields(field.name for field in instance._meta.concrete_fields)
         credential = instance.credential
         if "account" not in fields and "account_id" not in fields and credential is not None:
             instance.account = credential.external_account
@@ -2424,11 +2429,19 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         (:func:`~angee.base.permissions.require_save_allowed`), as the insert's
         actor, which :meth:`build` carries, so a caller the create gate refuses
         runs none of the row's field validators and learns nothing of the
-        implementation key; config validation in ``save()`` is that rule's limit.
+        implementation key or a missing seeded default: when :meth:`build`
+        cannot seed a default, the row is decided without its implementation's
+        defaults before that configuration error answers. The rule's limit:
+        validation a model performs in its own ``save()``, before the save gate,
+        runs before the decision, as config validation does here.
         """
 
         self.effective_actor(strict=True)
-        instance = self.build(**fields)
+        try:
+            instance = self.build(**fields)
+        except ImproperlyConfigured:
+            require_save_allowed(self.build(impl_defaults=False, **fields))
+            raise
         require_save_allowed(instance)
         instance.full_clean()
         return self.get_queryset().insert(instance)

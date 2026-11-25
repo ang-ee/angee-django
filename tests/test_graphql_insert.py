@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import Any
 from unittest.mock import Mock
 
@@ -22,6 +21,7 @@ from rebac import (
     write_relationships,
 )
 from rebac.models import active_relationship_model
+from rebac.roles import revoke as revoke_role
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
@@ -300,22 +300,6 @@ def test_hasura_create_refuses_before_any_validator_runs(caller: str, monkeypatc
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("caller", _REFUSED_CALLERS)
-def test_hasura_create_refuses_a_pathological_value_without_matching_it(caller: str) -> None:
-    """A value that backtracks catastrophically in the row's validator is refused at once."""
-
-    user = _refused_caller(caller)
-
-    started = time.perf_counter()
-    result = _insert_validated(user, title="a" * 28 + "!", code="slow")
-    elapsed = time.perf_counter() - started
-
-    assert elapsed < 2.0, f"the refused insert ran for {elapsed:.1f}s"
-    assert _refusal(result) == _save_refusal(user)
-    assert ValidatedDoc._base_manager.count() == 0
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("caller", _REFUSED_CALLERS)
 def test_hasura_create_refuses_before_uniqueness_and_constraints_answer(caller: str) -> None:
     """A stored code and a broken check constraint give a refused caller no message, only the refusal."""
 
@@ -349,3 +333,26 @@ def test_hasura_create_validates_an_admitted_row_as_before(monkeypatch: pytest.M
     spy.assert_called_once_with("b")
     created = result_data(_insert_validated(admin, title="aa", code="fresh"))["insert_validated_docs_one"]
     assert ValidatedDoc._base_manager.get(sqid=created["id"]).title == "aa"
+
+
+_VALIDATED_KEYED_INSERT = """
+mutation($title: String!, $code: String!, $key: String!) {
+  insert_validated_docs_one(object: {title: $title, code: $code}, idempotency_key: $key) { id }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_a_retry_replays_the_earlier_creation_after_the_create_right_is_lost() -> None:
+    """A key's earlier creation is looked up before any new decision and replayed while its caller can read it."""
+
+    admin = create_platform_admin("validated-retry")
+    variables = {"title": "aa", "code": "retried", "key": "retry-key"}
+    first = result_data(execute_schema(_VALIDATED_SCHEMA, _VALIDATED_KEYED_INSERT, variables, user=admin))
+    with system_context(reason="test.validated_doc.revoke"):
+        revoke_role(actor=admin, role="angee/role:admin")
+
+    retry = result_data(execute_schema(_VALIDATED_SCHEMA, _VALIDATED_KEYED_INSERT, variables, user=admin))
+
+    assert retry == first
+    assert ValidatedDoc._base_manager.count() == 1

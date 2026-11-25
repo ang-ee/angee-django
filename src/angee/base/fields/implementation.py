@@ -99,19 +99,43 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
             raise ImproperlyConfigured(f"{cls.__name__}.{accessor} collides with implementation field {name!r}.")
         setattr(cls, accessor, partialmethod(_resolve_bound_implementation, field=self))
 
-    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
-        """Refuse, as the row is written, a key no implementation is registered under.
+    refuses_unknown_keys = True
+    """Whether inserting a row refuses a key outside this field's choices.
 
-        The write runs after the save's REBAC gates, so a caller who may not save
-        the row gets its refusal; ``full_clean`` refuses the same key as an
-        invalid choice. Historical migration fields keep whatever they stored.
+    A history copy records the key its live row saved, so its owner turns this off.
+    """
+
+    def has_key(self, value: Any) -> bool:
+        """Whether ``value`` names one of this field's choices."""
+
+        return self.key_for(value) in {member.value for member in self.choices_enum}
+
+    def invalid_key(self, value: Any) -> ValidationError:
+        """The field's plain refusal of ``value``, naming the key and nothing internal."""
+
+        return ValidationError(self.error_messages["invalid_choice"], code="invalid_choice", params={"value": value})
+
+    def to_python(self, value: Any) -> Any:
+        """Convert as the enum field does, refusing a key outside the choices with the plain message."""
+
+        if value not in self.empty_values and not self.has_key(value):
+            raise self.invalid_key(value)
+        return super().to_python(value)
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
+        """Refuse, as a new row is inserted, a key outside this field's choices.
+
+        The insert runs after the save's REBAC gates, so a caller who may not
+        save the row gets that refusal. A stored row saves its key as it is,
+        and a historical migration field keeps whatever it stored.
         """
 
         value = super().pre_save(model_instance, add)
-        if self.base_class is None or value in (None, "") or self.key_for(value) in self.registered_keys():
+        if not add or not self.refuses_unknown_keys or self.base_class is None or value in self.empty_values:
             return value
-        message = self.error_messages["invalid_choice"] % {"value": value}
-        raise ValidationError({self.name: ValidationError(message, code="invalid_choice")})
+        if not self.has_key(value):
+            raise ValidationError({self.name: self.invalid_key(value)})
+        return value
 
     def resolve_class(self, key: Any, *, default: str | None = None) -> type[T]:
         """Return the impl class the configured mapping binds to ``key``."""

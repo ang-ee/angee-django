@@ -1129,9 +1129,10 @@ def test_owner_lock_rechecks_write_permission_for_lines_only_save(db, monkeypatc
 
 # The measured cost of one admitted document insert with one product line. Decoding
 # the product (and the document's ids) a second time added five statements, each
-# a repeat; a lower measure lowers these, a higher one is a regression.
+# a repeat; a keyed insert also reads, first, whether its key holds an earlier
+# creation. A lower measure lowers these, a higher one is a regression.
 STATEMENTS_KEYLESS, REPEATED_KEYLESS = 54, 12
-STATEMENTS_KEYED, REPEATED_KEYED = 83, 17
+STATEMENTS_KEYED, REPEATED_KEYED = 84, 17
 
 _INSERT_WITH_PRODUCT_LINE = """
 mutation($product: ID!, $key: String) {

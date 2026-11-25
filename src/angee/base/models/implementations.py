@@ -150,8 +150,8 @@ class ImplDefaultsMixin(models.Model):
     def prepare_impl_defaults(self) -> None:
         """Prepare unsupplied implementation defaults before validation or insertion.
 
-        A key no implementation is registered under prepares nothing: its
-        :class:`ImplClassField` refuses it when the row is validated or written,
+        A key outside the field's choices prepares nothing: its
+        :class:`ImplClassField` refuses it when the row is validated or inserted,
         so a caller who may not save the row gets that save's refusal instead.
         """
 
@@ -166,7 +166,7 @@ class ImplDefaultsMixin(models.Model):
                 continue
             key = field.key_for(key)
             setattr(self, field.attname, key)
-            if key not in field.registered_keys():
+            if not field.has_key(key):
                 continue
             try:
                 impl = field.resolve_class(key)
@@ -174,6 +174,27 @@ class ImplDefaultsMixin(models.Model):
                 raise ValidationError({field.name: str(error)}) from error
             if isinstance(impl, type) and issubclass(impl, ImplBase):
                 self.materialize_impl_defaults(impl, provided=provided)
+
+    def clean_fields(self, exclude: Collection[str] | None = None) -> None:
+        """Refuse an implementation key outside its field's choices on its own.
+
+        The fields that implementation would have defaulted are not the
+        caller's error while its key is unknown, so the key's field error
+        stands alone.
+        """
+
+        excluded = set(exclude or ())
+        unknown = {
+            field.name: field.invalid_key(key)
+            for field in self._meta.get_fields()
+            if isinstance(field, ImplClassField)
+            and field.name not in excluded
+            and (key := getattr(self, field.attname, None))
+            and not field.has_key(key)
+        }
+        if unknown:
+            raise ValidationError(unknown)
+        super().clean_fields(exclude)
 
     def validate_impl_keys(self, *, update_fields: Any = None) -> None:
         """Reject persisted implementation switches at the shared model boundary."""
@@ -239,8 +260,9 @@ class ImplDefaultsMixin(models.Model):
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
         """Validate declared config models on save, leaving untyped row config alone.
 
-        A key no implementation is registered under has no config model; its
-        field refuses the key as the row is written.
+        A new row's key outside the field's choices has no config model to
+        validate against: the field refuses that key when the row is inserted.
+        A stored row's config is written only under a key its field knows.
         """
 
         if not self._state.adding and (
@@ -254,8 +276,12 @@ class ImplDefaultsMixin(models.Model):
             if not isinstance(field, ImplClassField):
                 continue
             key = getattr(self, field.attname, None)
-            if not key or field.key_for(key) not in field.registered_keys():
+            if not key:
                 continue
+            if not field.has_key(key):
+                if self._state.adding:
+                    continue
+                raise ValidationError({field.name: field.invalid_key(key)})
             impl = field.resolve_class(key)
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
                 config_field = self._config_field()

@@ -20,21 +20,21 @@ live in code docstrings.
   it refuses gets the save's `PermissionDenied` text, and no field validator, `clean()`,
   uniqueness check or constraint check runs for them. A dashboard snapshot validates its
   widget queries only once its write is decided.
-  - The limit: validation a model's own `save()` performs runs inside that rehearsal,
-    before the decision, and still answers a refused caller. Today that is the
-    implementation config check (`ImplDefaultsMixin`), the workflow trigger's
-    recurrence rule, and arp's venue, event type, registration and bank rows. It closes
-    when REBAC decides a save before validating and writing it, which also retires the
-    rehearsal.
+  - The rule's limit: validation a model performs in its own `save()`, before the save
+    gate, runs before the decision and still answers a refused caller. A model that
+    needs the guarantee moves that validation to `clean()`. REBAC deciding a save before
+    validating and writing it will close the limit and retire the rehearsal.
   - For a caller who may save, a `ValidationError` a model's `save()` raises now comes
     before the field errors `full_clean` reports, and an admitted insert rehearses its
     save once more.
-  - An unknown implementation key is a field `ValidationError` on that key, raised when
-    the row is validated or written, instead of a configuration error.
-  - With an idempotency key, the generic insert claims the key only once the create is
-    decided; a backend whose own insert or factory decides as it writes still claims
-    first. Without a key, the provenance adapter no longer decodes the input ahead of
-    the backend.
+  - An implementation key outside its field's choices is refused when a new row is
+    validated or inserted, as a field error naming the key, and a seeded default whose
+    catalogue row is missing is reported only when the row is validated; a stored row
+    saves its key as before.
+  - An idempotency key's earlier creation is still replayed while the caller can read
+    it, looked up before the create is decided again; a first attempt is decided before
+    its key is claimed. Without a key, the provenance adapter no longer decodes the
+    input ahead of the backend.
 
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
