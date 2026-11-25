@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlunsplit
 
 from django.core.cache import cache
-from rebac import current_actor
+from rebac import current_actor, is_anonymous_actor
 
 from angee.base.cache import increment_window
 from angee.integrate.http import HttpClient, OutboundBudget, OutboundBudgetState
@@ -87,10 +87,15 @@ class AppearanceAnalysisError(Exception):
 
 
 def analyse_for_actor(url: str) -> dict[str, object]:
-    """Admit the authenticated actor's bounded analysis request, then execute it."""
+    """Admit the authenticated actor's bounded analysis request, then execute it.
+
+    An unauthenticated request carries REBAC's anonymous actor, which every
+    anonymous caller shares; it is refused like a missing actor, before the
+    rate window or any outbound request.
+    """
 
     actor = current_actor()
-    if actor is None:
+    if actor is None or is_anonymous_actor(actor):
         raise AppearanceAnalysisError("Authentication required.", code="UNAUTHENTICATED")
     try:
         count = increment_window(cache, f"appearance:analysis-rate:{actor.object}", timeout=60)

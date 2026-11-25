@@ -1,4 +1,4 @@
-"""Appearance analysis admits authenticated actors through one bounded window."""
+"""Appearance analysis admits authenticated actors, never the anonymous one, through one bounded window."""
 
 from collections.abc import Iterator
 from typing import Any
@@ -6,10 +6,12 @@ from typing import Any
 import pytest
 import strawberry
 from django.core.cache import cache
-from rebac import SubjectRef, actor_context
+from rebac import SubjectRef, actor_context, anonymous_actor
 
 from angee.appearance_integrate import analyser
 from angee.appearance_integrate.schema import AppearanceIntegrateQuery
+from angee.base.cache import increment_window
+from angee.graphql.testing.documents import execute_schema
 
 _FACTS: dict[str, object] = {
     "final_url": "https://example.com", "title": "Example", "site_name": "Example",
@@ -75,3 +77,35 @@ def test_analysis_requires_actor_before_outbound_work(analysis: list[str]) -> No
         analyser.analyse_for_actor("https://example.com")
     assert refused.value.code == "UNAUTHENTICATED"
     assert analysis == []
+
+
+def test_anonymous_caller_is_refused_before_the_rate_window_and_outbound_work(
+    analysis: list[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unauthenticated caller holds REBAC's shared anonymous actor, which is refused like no actor."""
+
+    windows: list[str] = []
+
+    def spend(window_cache: Any, key: str, *, timeout: int) -> int:
+        windows.append(key)
+        return increment_window(window_cache, key, timeout=timeout)
+
+    monkeypatch.setattr(analyser, "increment_window", spend)
+    schema = strawberry.Schema(query=AppearanceIntegrateQuery)
+    document = '{ analyseAppearance(url: "https://example.com") { title } }'
+    with actor_context(anonymous_actor()), pytest.raises(analyser.AppearanceAnalysisError) as refused:
+        analyser.analyse_for_actor("https://example.com")
+    served = execute_schema(schema, document)
+
+    assert refused.value.code == "UNAUTHENTICATED"
+    assert served.errors is not None
+    assert served.errors[0].extensions == {"code": "UNAUTHENTICATED"}
+    assert (windows, analysis) == ([], [])
+
+    actor = SubjectRef.of("test/actor", "one")
+    with actor_context(actor):
+        admitted = schema.execute_sync(document)
+    assert admitted.errors is None
+    assert admitted.data == {"analyseAppearance": {"title": "Example"}}
+    assert windows == [f"appearance:analysis-rate:{actor.object}"]
+    assert analysis == [str(actor.object)]
