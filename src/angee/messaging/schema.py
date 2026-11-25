@@ -1358,7 +1358,7 @@ class MessagingMutation:
         return True
 
     @strawberry.mutation(name="compose_message")
-    @action_guard("Message not sent.")
+    @action_guard("Message not sent.", camel_case_keys=False)
     def compose_message(
         self,
         info: strawberry.Info,
@@ -1383,7 +1383,8 @@ class MessagingMutation:
         whatever its hold; and none of compose's arguments is a message column.
         The resolver refuses a caller with no session and an answer to a parent
         the caller cannot read (``not_found``); ``compose`` decides and refuses
-        everything else. ``id`` is the message, fresh or replayed.
+        everything else, each refusal of an argument keyed by the argument's
+        name as the schema spells it. ``id`` is the message, fresh or replayed.
         """
 
         actor = session_user(info)

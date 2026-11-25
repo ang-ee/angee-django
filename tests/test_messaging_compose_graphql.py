@@ -147,16 +147,16 @@ def test_a_new_email_carries_each_argument_to_compose(console: Any, desk: Any) -
         pytest.param({"to": [], "cc": ["Reader <reader@example>"]}, "cc", id="cc"),
         pytest.param({"to": [], "bcc": ["x" * 320 + "@example.test"]}, "bcc", id="bcc"),
         pytest.param({"attachments": "over the bound"}, "attachments", id="too-many-attachments"),
-        pytest.param({"queued": True, "scheduled_at": "later"}, "scheduledAt", id="scheduled-at"),
-        pytest.param({"queued": False, "scheduled_at": "2030-01-01T10:00:00"}, "scheduledAt",
+        pytest.param({"queued": True, "scheduled_at": "later"}, "scheduled_at", id="scheduled-at"),
+        pytest.param({"queued": False, "scheduled_at": "2030-01-01T10:00:00"}, "scheduled_at",
                      id="scheduled-at-without-an-offset"),
-        pytest.param({"idempotency_key": " "}, "idempotencyKey", id="idempotency-key"),
+        pytest.param({"idempotency_key": " "}, "idempotency_key", id="idempotency-key"),
     ],
 )
 def test_compose_refuses_an_argument_under_its_name(
     console: Any, desk: Any, settings: Any, arguments: dict[str, Any], key: str,
 ) -> None:
-    """The mutation's arguments are compose's names, so each refusal binds to the argument it is about.
+    """Each refusal of an argument is keyed by that argument's name as the schema spells it, which a form binds.
 
     Each rule is compose's and proved there; a row here proves the key the console shows for it.
     """
@@ -173,6 +173,13 @@ def test_compose_refuses_an_argument_under_its_name(
     with pytest.raises(_Refusal) as refused:
         _compose(console, desk.owner, **{**_new(desk), "idempotency_key": f"refused-{key}", **arguments})
     assert refused.value.payload is not None and list(refused.value.payload["validation_errors"]) == [key]
+    assert key in _argument_names(console)
+
+
+def _argument_names(console: Any) -> set[str]:
+    """``compose_message``'s arguments as the console's schema spells them, which a client sends and binds."""
+
+    return set(console._schema.mutation_type.fields["compose_message"].args)
 
 
 def test_a_refusal_with_a_code_reaches_the_client_with_it(console: Any, desk: Any, settings: Any) -> None:
@@ -182,6 +189,7 @@ def test_a_refusal_with_a_code_reaches_the_client_with_it(console: Any, desk: An
         _compose(console, desk.owner, parent=request.public_id, text="Which team?", idempotency_key="unconfigured")
     payload = refused.value.payload
     assert payload is not None and list(payload["validation_errors"]) == ["channel"]
+    assert set(payload["validation_errors"]) <= _argument_names(console)
     assert payload["code"] == "OUTBOUND_EMAIL_NOT_CONFIGURED"
 
 
