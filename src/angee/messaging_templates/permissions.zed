@@ -1,0 +1,22 @@
+// Authorization schema for the messaging_templates addon.
+// @rebac_package: messaging_templates
+// @rebac_package_version: 0.1.0
+// @rebac_schema_revision: 1
+
+// A message template is deployment configuration mail is written from: every
+// signed-in actor reads it, platform admins write the deployment's own rows and
+// overrides, and only a resource load writes a shipped default (a baseline).
+definition messaging_templates/message_template {
+    relation admin: angee/role // rebac:const=admin
+    relation baseline: messaging_templates/message_template // rebac:const={"target_id":"baseline","filters":{"is_baseline":true}}
+
+    // Arrow-only through baseline, as dashboards' shared_reader: never checked directly.
+    permission baseline_marker = authenticated
+    permission read   = authenticated
+    permission create = admin->member - baseline->baseline_marker
+    permission write  = admin->member - baseline->baseline_marker
+    permission delete = admin->member - baseline->baseline_marker
+    // A sample feeds preview, an administrator's tool.
+    permission read__sample = admin->member
+    permission write__is_baseline = nil
+}

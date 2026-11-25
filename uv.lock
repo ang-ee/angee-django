@@ -44,6 +44,7 @@ members = [
     "angee-messaging",
     "angee-messaging-integrate-imap",
     "angee-messaging-integrate-slack",
+    "angee-messaging-templates",
     "angee-money",
     "angee-nexus",
     "angee-operator",
@@ -172,6 +173,7 @@ dependencies = [
     { name = "angee-messaging" },
     { name = "angee-messaging-integrate-imap" },
     { name = "angee-messaging-integrate-slack" },
+    { name = "angee-messaging-templates" },
     { name = "angee-money" },
     { name = "angee-nexus" },
     { name = "angee-operator" },
@@ -287,6 +289,7 @@ requires-dist = [
     { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-messaging-integrate-imap", editable = "src/angee/messaging_integrate_imap" },
     { name = "angee-messaging-integrate-slack", editable = "src/angee/messaging_integrate_slack" },
+    { name = "angee-messaging-templates", editable = "src/angee/messaging_templates" },
     { name = "angee-money", editable = "src/angee/money" },
     { name = "angee-nexus", editable = "src/angee/nexus" },
     { name = "angee-operator", editable = "src/angee/operator" },
@@ -1237,6 +1240,29 @@ requires-dist = [
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "slack-sdk", specifier = ">=3.43.0" },
+]
+
+[[package]]
+name = "angee-messaging-templates"
+version = "3.0.0"
+source = { editable = "src/angee/messaging_templates" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-parties" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
 ]
 
 [[package]]

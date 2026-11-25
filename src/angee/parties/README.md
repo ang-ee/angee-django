@@ -99,7 +99,9 @@ Each mapping is one part of the contacts stream's mapping: adding, removing,
 exchanging or re-versioning one replays every contact once. A mapping declares
 the person statement groups it states (`aspects`), never one the ingest states
 (`Person.contact_aspects()`, read from parties' own declarations). A person's
-`languages` (ISO 639 codes, most preferred first, `LanguageCodesField`) and
+`languages` (ISO 639 codes, most preferred first, `LanguageCodesField`; one
+language elsewhere is a `LanguageCodeField`, and `normalize_language_code` is the
+one spelling rule both use) and
 `occupation` (free text, apart from an employment's title) are parties' own
 groups, one each, that no contact carries (`Person.MAPPED_ASPECTS`): a mapping
 states them, and a person's own statement outranks it. A source field that
