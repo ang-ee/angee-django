@@ -3373,20 +3373,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 )
                 position = self._write_envelope_parts(message, subject=subject, created_by_id=created_by_id)
                 self._build_parts(message, outgoing.body, parent=None, position=position, created_by_id=created_by_id)
-                part_model = apps.get_model("messaging", "Part")
-                for offset, file in enumerate(outgoing.attachments, start=position + 1):
-                    part_model.objects.attach_file(message, file, position=offset, created_by_id=created_by_id)
-                # A typed name fills a handle that has none; it never renames a shared one.
-                rows = [
-                    (
-                        addressee.handle_id if addressee.handle_id is not None else handle_model.objects.upsert(
-                            platform=handle_model.Platform.EMAIL, value=addressee.address,
-                            display_name=addressee.name, fill_only=("display_name",), created_by_id=created_by_id,
-                        ).pk,
-                        addressee.role,
+                if outgoing.attachments:
+                    apps.get_model("messaging", "Part").objects.attach_files(
+                        message, outgoing.attachments, position=position + 1, created_by_id=created_by_id,
                     )
-                    for addressee in recipients
-                ]
+                rows = self._land_addressees(recipients, created_by_id=created_by_id)
                 self._write_recipients(message, rows, created_by_id=created_by_id)
                 self.advance_thread(message)
                 if outgoing.queued:
@@ -3394,6 +3385,35 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if idempotency_key is not None:
                 require_changeset().record_created(message)
         return message.with_actor(actor)
+
+    @staticmethod
+    def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
+        """Return each recipient's ``(handle id, role)``, its addresses resolved in one read.
+
+        Known handles resolve through the handle owner's batch lookup
+        (``HandleManager.find_identities``); an address with no handle, or with a
+        name typed beside it, goes through ``upsert``, where a typed name fills
+        only a handle that has none and never renames a shared one.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        email = handle_model.Platform.EMAIL
+        found = handle_model.objects.find_identities(
+            (email, addressee.address) for addressee in recipients if addressee.handle_id is None
+        )
+        rows: list[tuple[Any, str]] = []
+        for addressee in recipients:
+            handle_id = addressee.handle_id
+            if handle_id is None:
+                handle = found.get((email, addressee.address))
+                if handle is None or addressee.name:
+                    handle = found[(email, addressee.address)] = handle_model.objects.upsert(
+                        platform=email, value=addressee.address, display_name=addressee.name,
+                        fill_only=("display_name",), created_by_id=created_by_id,
+                    )
+                handle_id = handle.pk
+            rows.append((handle_id, addressee.role))
+        return rows
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
@@ -4929,24 +4949,50 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
 
         with transaction.atomic():
             type(message).system_queryset(lock=("self",)).get(pk=message.pk)
-            existing = self.model._base_manager.filter(message=message, file=file).first()
-            if existing is not None:
-                return existing
-            if position is None:
-                last = self.model._base_manager.filter(message=message).aggregate(value=models.Max("position"))["value"]
-                position = 1 if last is None else last + 1
-            file = type(file)._base_manager.select_related("mime_type").get(pk=file.pk)
-            mime = file.mime_type
-            return self.create(
-                message=message,
-                file=file,
-                position=position,
-                type=mime.mime_type if mime is not None else "application/octet-stream",
-                name=(file.filename or file.title or "attachment") if name is None else name,
-                disposition=self.model.Disposition.ATTACHMENT,
-                role=self.model.PartRole.BODY,
-                created_by_id=message.created_by_id if created_by_id is None else created_by_id,
-            )
+            return self._append_file(message, file, position=position, name=name, created_by_id=created_by_id)
+
+    def attach_files(
+        self, message: Message, files: Sequence[Any], *, position: int | None = None, created_by_id: Any = None,
+    ) -> list[PartT]:
+        """Return each file's attachment part on ``message``, as :meth:`attach_file` does, under one message lock.
+
+        The parts a call appends take consecutive positions from ``position``
+        (after the last part when it is not given), in the order of ``files``.
+        """
+
+        parts: list[PartT] = []
+        with transaction.atomic():
+            type(message).system_queryset(lock=("self",)).get(pk=message.pk)
+            for file in files:
+                part = self._append_file(message, file, position=position, name=None, created_by_id=created_by_id)
+                if position is not None and part.position >= position:
+                    position = part.position + 1
+                parts.append(part)
+        return parts
+
+    def _append_file(
+        self, message: Message, file: Any, *, position: int | None, name: str | None, created_by_id: Any,
+    ) -> PartT:
+        """Append ``file`` to a message whose row the caller holds locked, once."""
+
+        existing = self.model._base_manager.filter(message=message, file=file).first()
+        if existing is not None:
+            return existing
+        if position is None:
+            last = self.model._base_manager.filter(message=message).aggregate(value=models.Max("position"))["value"]
+            position = 1 if last is None else last + 1
+        file = type(file)._base_manager.select_related("mime_type").get(pk=file.pk)
+        mime = file.mime_type
+        return self.create(
+            message=message,
+            file=file,
+            position=position,
+            type=mime.mime_type if mime is not None else "application/octet-stream",
+            name=(file.filename or file.title or "attachment") if name is None else name,
+            disposition=self.model.Disposition.ATTACHMENT,
+            role=self.model.PartRole.BODY,
+            created_by_id=message.created_by_id if created_by_id is None else created_by_id,
+        )
 
     BODY_SEPARATOR = "\n\n"
 

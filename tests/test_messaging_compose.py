@@ -576,3 +576,26 @@ def test_ingest_writes_each_recipient_on_its_messages_thread(db: None) -> None:
         )
     assert Recipient._base_manager.count() == 4
     _assert_recipients_on_their_messages_threads()
+
+
+STATEMENTS = {1: 99, 20: 365}
+"""Statements one compose to 1 and to 20 known recipients executes: the measured count is the ceiling."""
+
+
+def test_a_compose_executes_a_bounded_number_of_statements_per_known_recipient(desk: Any) -> None:
+    """Known recipients resolve in one read; what each further one costs is its recipient row's own insert.
+
+    That insert runs the REBAC relation checks for its thread and message and the
+    timeline's invalidation (about fourteen statements); a new address adds the
+    handle owner's create.
+    """
+
+    known = [f"known-{index}@example.test" for index in range(20)]
+    for size in STATEMENTS:
+        Message.objects.compose(channel=desk, to=known[:size], text="Hi.", actor=desk.owner)
+    counts = {}
+    for size in STATEMENTS:
+        with CaptureQueriesContext(connection) as queries:
+            Message.objects.compose(channel=desk, to=known[:size], text="Hi.", actor=desk.owner)
+        counts[size] = len(queries)
+    assert all(counts[size] <= ceiling for size, ceiling in STATEMENTS.items()), counts
