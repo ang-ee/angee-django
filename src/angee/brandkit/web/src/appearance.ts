@@ -15,8 +15,7 @@ import { BRAND_KIT_MODEL } from "./views/BrandKitForm";
 
 /**
  * The brand kit's mapping (the brandkit README, "The app's colours"): a customisable
- * theme's options with a kit's colours. Undefined for no theme, a theme that takes no
- * palette, no kit, and a kit or build options the theme's own parser refuses.
+ * theme's options with a kit's colours, or undefined wherever the mapping answers none.
  */
 export function brandKitOptions(
   theme: ThemeDefinition<unknown> | null,
