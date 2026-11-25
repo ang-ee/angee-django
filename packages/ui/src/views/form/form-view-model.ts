@@ -26,7 +26,7 @@ import {
   type GroupDescriptor,
 } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
-import { fieldRuleErrors, isEmptyFieldValue, textValue } from "./field-values";
+import { DATE_TIME_WIDGETS, NUMBER_WIDGETS, emptyValueForField, fieldRuleErrors, isEmptyFieldValue, refusesSeed, textValue } from "./field-values";
 import { fieldErrorsFromRules } from "./validation-errors";
 
 export type FormValues = Record<string, unknown>;
@@ -521,6 +521,11 @@ export function hiddenResetWrites(
   return writes;
 }
 
+/**
+ * A create draft's seed for `field`: the page's default value, else the field's own, else nothing
+ * for an omittable or presence-required field, else its empty value (`emptyValueForField`), which a
+ * field that may be left out does not take where its declared type refuses it (`refusesSeed`).
+ */
 function initialDraftFieldValue(
   field: FieldDescriptor,
   defaultValues: Record<string, unknown> | undefined,
@@ -528,7 +533,8 @@ function initialDraftFieldValue(
   if (hasDottedValue(defaultValues, field.name)) return dottedValue(defaultValues, field.name);
   if (field.hasDefault || field.defaultValue !== undefined) return field.defaultValue;
   if (field.omittable || field.presenceRequired) return MISSING_DOTTED_VALUE;
-  return emptyValue(field);
+  const seed = emptyValueForField(field);
+  return refusesSeed(field, seed) ? MISSING_DOTTED_VALUE : seed;
 }
 
 export function recordToValues(
@@ -544,7 +550,7 @@ export function recordToValues(
     const value = isRelationIdField(field)
       ? raw ?? null
       : recordFieldValue({ ...record, [field.name]: raw }, field);
-    setDottedValue(values, field.name, value === undefined ? emptyValue(field) : value);
+    setDottedValue(values, field.name, value === undefined ? emptyValueForField(field) : value);
   }
   if (lines) values[lines.field] = lines.rows;
   return values;
@@ -841,27 +847,12 @@ function mutationFieldValue(field: FieldDescriptor, value: unknown): unknown {
   return value;
 }
 
-function emptyValue(field: FieldDescriptor): unknown {
-  if (isNumericField(field)) return null;
-  if (isNullableScalarWidget(field)) return null;
-  if (field.widget === "tagInput" || isRelationListField(field)) return [];
-  if (field.kind === "switch" || field.widget === "switch") return false;
-  // The `json` and `object` widgets get an empty object, the `list` and `rows` widgets an empty
-  // list; `object`, `list` and `rows` throw on a string.
-  const widget = fieldWidgetId(field);
-  if (widget === "json" || widget === "object") return {};
-  if (widget === "list" || widget === "rows") return [];
-  return "";
-}
-
 function isNullableScalarWidget(field: FieldDescriptor): boolean {
-  const id = fieldWidgetId(field);
-  return id === "date" || id === "datetime" || id === "time";
+  return DATE_TIME_WIDGETS.has(fieldWidgetId(field));
 }
 
 function isNumericField(field: FieldDescriptor): boolean {
-  const id = fieldWidgetId(field);
-  return id === "integer" || id === "float";
+  return NUMBER_WIDGETS.has(fieldWidgetId(field));
 }
 
 function hasOptionValue(field: FieldDescriptor): boolean {

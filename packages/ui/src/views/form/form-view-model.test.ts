@@ -7,7 +7,8 @@ import type { Row } from "@angee/metadata";
 
 import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { DescriptorField } from "./DescriptorFieldList";
-import type { FormSpecFieldDescriptor } from "./form-spec";
+import { defaultWidgets } from "../../widgets";
+import { deserializeFormSpec, formSpecInitialValues, type FormSpecFieldDescriptor } from "./form-spec";
 import {
   EDITABLE_LINES_SECTION,
   emptyDraft,
@@ -292,6 +293,23 @@ test("an empty object or json field drafts as an empty object and an empty list 
   expect(recordToValues({ id: "row-1" }, structured)).toStrictEqual(empty);
   expect(recordToValues({ id: "row-1", layout: null, steps: null, mappings: null, config: null }, structured))
     .toStrictEqual({ layout: null, steps: null, mappings: null, config: null });
+});
+
+test("a create draft leaves out a member that may be left out where its own type refuses its empty value, as a schema dialog does", () => {
+  const members = deserializeFormSpec({ type: "object", required: ["count"], properties: {
+    limit: { type: "integer" }, ratio: { type: "number" }, label: { type: "string" }, count: { type: "integer" },
+  } }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
+  expect(emptyDraft(members)).toStrictEqual({ config: { label: "", count: null } });
+});
+
+test("guard: a create draft seeds a nullable member its empty value and a templated object an empty object, not a dialog's null and template", () => {
+  const fields = deserializeFormSpec({ type: "object", properties: {
+    note: { type: "string", nullable: true },
+    size: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    retry: { type: "object", properties: { mode: { type: "string" } } },
+  } }, defaultWidgets);
+  expect(emptyDraft(fields)).toStrictEqual({ note: "", size: null, retry: {} });
+  expect(formSpecInitialValues(fields, {})).toStrictEqual({ note: null, size: null, retry: { mode: "" } });
 });
 
 test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {

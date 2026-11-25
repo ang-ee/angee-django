@@ -709,6 +709,65 @@ describe("ActionFormDialog", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  test("an optional date argument left untouched reaches the submit as null, never an empty text", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Filed." });
+    renderDialog({ id: "file", label: "File", submit, args: [
+      { name: "title", label: "Title", widget: "text", defaultValue: "A pain" },
+      { name: "due_date", label: "Due", widget: "date", optional: true },
+    ] });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "File" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ title: "A pain", due_date: null });
+  });
+
+  test("guard: a required date argument left empty, holding null, says the field is required, never that it wants another type", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "post", label: "Post", submit, args: [{ name: "date", label: "Date", widget: "date" }] });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Post" });
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message is the check's answer to this submit, which it refused; the form calls the action's
+    // submit only when the check passes, so the submit never started and a slow one cannot land later.
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: a schema dialog's required number left empty, holding null, says the field is required, never that it wants another type", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["size"], properties: { size: { type: "integer", label: "Size" } },
+    }, defaultWidgets) });
+    await screen.findByLabelText("Size");
+    fireEvent.submit(screen.getByRole("button", { name: "Resize" }).closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message is the check's answer to this submit, which it refused; the form calls the action's
+    // submit only when the check passes, so the submit never started and a slow one cannot land later.
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog leaves an optional number untouched out, as its own type refuses the empty null, and submits", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Resized." });
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["name"], properties: { name: { type: "string", label: "Name" }, size: { type: "integer", label: "Size" } },
+    }, defaultWidgets, { initialValues: { name: "Main" } }) });
+    await screen.findByLabelText("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ name: "Main" });
+  });
+
+  test.fails("defect: a schema dialog's date carried as text, a string kind with only its widget to tell it from text, holding null offers Set value, which writes an empty text", async () => {
+    renderDialog({ id: "plan", label: "Plan", submit: vi.fn(), args: jsonSchemaActionArgs({
+      type: "object", properties: { due: { anyOf: [{ type: "string", widget: "date" }, { type: "null" }], label: "Due" } },
+    }, defaultWidgets) });
+    await screen.findByText("Left empty");
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
   test("serializes datetime args with the picked local UTC offset", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Snoozed." });
     renderDialog({

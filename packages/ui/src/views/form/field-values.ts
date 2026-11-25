@@ -1,4 +1,4 @@
-import type { FieldDescriptor } from "../page";
+import { fieldWidgetId, isRelationListField, type FieldDescriptor } from "../page";
 import type { JsonSchemaRule } from "./validation-errors";
 
 /** Normalize scalar text without interpreting domain-specific objects.
@@ -9,15 +9,81 @@ export function textValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
 
-/** Return the native empty value for one descriptor field. */
-export function emptyValueForField(field: Pick<FieldDescriptor, "widget" | "kind">): unknown {
-  if (field.kind === "array" || field.widget === "tagInput") return [];
+/** The widgets that edit a number; their control holds `null` when it holds nothing. */
+export const NUMBER_WIDGETS: ReadonlySet<string> = new Set(["integer", "float"]);
+/** The widgets that pick a date, a time, or a date and time; their control holds `null` when it holds nothing. */
+export const DATE_TIME_WIDGETS: ReadonlySet<string> = new Set(["date", "datetime", "time"]);
+/** The widgets that hold a list; a relation list (`isRelationListField`) holds one too. */
+const LIST_WIDGETS: ReadonlySet<string> = new Set(["tagInput", "list", "rows"]);
+
+/**
+ * The value `field` holds when it holds nothing: the one rule the record form's draft and seeds,
+ * the action, mutation and schema dialogs and the presence control read. A lines editor's new cell
+ * has a rule of its own (`emptyCellValue`, `editable-lines.ts`), which this owner does not decide.
+ * First match wins; the widget is the one the descriptor resolves (`fieldWidgetId`: its `widget`,
+ * else its `kind`).
+ * 1. An explicit `string` kind: `""`, whatever its widget, since a controlled text input needs a text
+ *    and a widget only presents. A date or a date and time carried as text takes this row too: the
+ *    descriptor carries no declared format to tell it from text, though `""` is no valid date (the
+ *    tests record that as expected failures).
+ * 2. A number widget (`NUMBER_WIDGETS`: `integer`, `float`) or a date or time widget
+ *    (`DATE_TIME_WIDGETS`: `date`, `datetime`, `time`): `null`.
+ * 3. The `tagInput`, `list` and `rows` widgets and a relation list (`many2many`): `[]`.
+ * 4. The `switch` widget: `false`; the `object` widget: `{}`; the `json` widget: `[]` for an `array`
+ *    kind, `null` for an `any` kind (a form spec's untyped value), `{}` otherwise (a widget alone).
+ * 5. An `array` kind: `[]`; `object`: `{}`; `boolean` or `switch`: `false`; `integer`, `number` or
+ *    `any`: `""` under the `select` widget, else `null`.
+ * 6. Otherwise `""`.
+ */
+export function emptyValueForField(field: Pick<FieldDescriptor, "name" | "widget" | "kind">): unknown {
+  if (field.kind === "string") return "";
+  const widget = fieldWidgetId(field);
+  if (NUMBER_WIDGETS.has(widget) || DATE_TIME_WIDGETS.has(widget)) return null;
+  if (LIST_WIDGETS.has(widget) || isRelationListField(field)) return [];
+  if (widget === "switch") return false;
+  if (widget === "object") return {};
+  if (widget === "json") return field.kind === "array" ? [] : field.kind === "any" ? null : {};
+  if (field.kind === "array") return [];
   if (field.kind === "object") return {};
-  if (field.kind === "boolean" || field.kind === "switch" || field.widget === "switch") return false;
-  if (field.kind === "integer" || field.kind === "number" || field.kind === "any") {
-    return field.widget === "select" ? "" : null;
-  }
+  if (field.kind === "boolean" || field.kind === "switch") return false;
+  if (field.kind === "integer" || field.kind === "number" || field.kind === "any") return widget === "select" ? "" : null;
   return "";
+}
+
+/** What each typed FormSpec kind admits besides `null`; the untyped `any` admits every value. */
+const FORM_SPEC_TYPE_ADMITS: Readonly<Record<string, (value: unknown) => boolean>> = {
+  string: (value) => typeof value === "string",
+  integer: (value) => typeof value === "number" && Number.isInteger(value),
+  number: (value) => typeof value === "number" && Number.isFinite(value),
+  boolean: (value) => typeof value === "boolean",
+  object: (value) => typeof value === "object" && !Array.isArray(value),
+  array: (value) => Array.isArray(value),
+};
+
+/**
+ * Whether `value` is one the declared FormSpec type of `field` admits: `null` only where the field
+ * is `nullable`, whatever its kind; otherwise a value of its `kind`, any value for `any`. A field
+ * without a FormSpec kind admits no other value.
+ */
+export function isFormSpecValueCompatible(field: Pick<FieldDescriptor, "kind" | "nullable">, value: unknown): boolean {
+  if (value === null) return Boolean(field.nullable);
+  if (field.kind === "any") return true;
+  return field.kind !== undefined && Object.hasOwn(FORM_SPEC_TYPE_ADMITS, field.kind)
+    && FORM_SPEC_TYPE_ADMITS[field.kind]!(value);
+}
+
+/**
+ * Whether a member that may be left out stays absent rather than take `seed`: it is not `required`
+ * and its own declared type, a typed FormSpec kind, refuses the seed (`isFormSpecValueCompatible`),
+ * as `null` is refused by a number that is not `nullable`. A required member, an untyped one (`any`)
+ * and one without a FormSpec kind take their seed. The one refusal check the three seeding paths
+ * read: a schema dialog's (`formSpecInitialValues`), `MutationDialog`'s and the record form's
+ * create draft (`emptyDraft`). The record form's edit baseline (`recordToValues`) does not read it:
+ * a member the record lacks takes its empty value there.
+ */
+export function refusesSeed(field: Pick<FieldDescriptor, "kind" | "nullable" | "required">, seed: unknown): boolean {
+  return !field.required && field.kind !== undefined && Object.hasOwn(FORM_SPEC_TYPE_ADMITS, field.kind)
+    && !isFormSpecValueCompatible(field, seed);
 }
 
 /** The rule a field's value fails at one dotted form path, in the keyword and parameters `jsonSchemaErrorMessage` reads. */

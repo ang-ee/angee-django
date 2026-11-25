@@ -10,7 +10,7 @@ import {
   type WidgetOption,
 } from "../../widgets";
 import type { DescriptorField } from "./DescriptorFieldList";
-import { emptyValueForField } from "./field-values";
+import { emptyValueForField, isFormSpecValueCompatible, refusesSeed } from "./field-values";
 import type { RelationCreateConfig } from "../relation/RelationPicker";
 import { statusLabel } from "../../lib/labels";
 import { titleCase } from "../../lib/titleCase";
@@ -125,10 +125,12 @@ function fieldHasControlForPath(field: FormSpecFieldDescriptor, path: string, va
 
 /**
  * Seed each declared form-spec field from its matching payload key, followed by
- * its schema default and then the shared descriptor-kind empty value. The form
+ * its schema default and then its empty value (`initialFormSpecValue`). The form
  * spec remains the whitelist: payload keys absent from it are ignored. An
  * authored structured value retains omitted optional children instead of
- * inventing invalid empty placeholders inside that retained object.
+ * inventing invalid empty placeholders inside that retained object, and a member
+ * that may be left out is not seeded with a value its own declared type refuses
+ * (`refusesSeed`): it stays absent.
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
@@ -149,6 +151,7 @@ function formSpecInitialValuesFrom(
   for (const field of fields) {
     if (Object.hasOwn(payloadValues, field.name)) {
       const payloadValue = payloadValues[field.name];
+      // A retained value of another type than the field declares would reach a widget that cannot render it.
       if (isFormSpecValueCompatible(field, payloadValue)) {
         values[field.name] = field.objectTemplate && payloadValue && typeof payloadValue === "object" && !Array.isArray(payloadValue)
           ? formSpecInitialValuesFrom(field.objectTemplate, payloadValue, true)
@@ -166,31 +169,14 @@ function formSpecInitialValuesFrom(
     }
     if (!field.presenceRequired
         && (field.required || (!field.omittable && !preserveOptionalOmission))) {
-      values[field.name] = initialFormSpecValue(field);
+      const seed = initialFormSpecValue(field);
+      if (!refusesSeed(field, seed)) values[field.name] = seed;
     }
   }
   return values;
 }
 
-/** Keep retained payloads from passing values to widgets that cannot render them. */
-function isFormSpecValueCompatible(
-  field: FormSpecFieldDescriptor,
-  value: unknown,
-): boolean {
-  if (value === null) return Boolean(field.nullable);
-  switch (field.kind) {
-    case "string": return typeof value === "string";
-    case "integer": return typeof value === "number" && Number.isInteger(value);
-    case "number": return typeof value === "number" && Number.isFinite(value);
-    case "boolean": return typeof value === "boolean";
-    case "object": return typeof value === "object" && !Array.isArray(value);
-    case "array": return Array.isArray(value);
-    case "any": return true;
-    default: return false;
-  }
-}
-
-/** Seed one present form-spec value without conflating omission with null. */
+/** Seed one present form-spec value without conflating omission with null: its default, else `null` where it is nullable, else its template's seeds, else its empty value (`emptyValueForField`). */
 export function initialFormSpecValue(field: FormSpecFieldDescriptor): unknown {
   if (field.hasDefault) return field.defaultValue;
   if (field.nullable) return null;

@@ -28,6 +28,7 @@ import {
   type EditableLinesProps,
 } from "./EditableLines";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
+import { DATE_TIME_WIDGETS } from "./field-values";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
@@ -614,7 +615,7 @@ function RecordFactsLine({
     const control = <FieldDescriptorControl key={field.name} resource={resource} field={field}
       value={value} row={record} readOnly />;
     // A bare date or time says nothing about what it is; it carries its label ("due date Oct 15").
-    const dated = field.widget === "date" || field.widget === "datetime" || field.widget === "time";
+    const dated = DATE_TIME_WIDGETS.has(field.widget ?? "");
     return dated && field.label ? [
       <span key={field.name} className="inline-flex min-w-0 items-baseline gap-1">
         <span className="lowercase">{field.label}</span>{control}

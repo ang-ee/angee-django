@@ -62,6 +62,7 @@ import {
   type FormSubmitContext,
 } from "./FormView";
 import { useFormViewSurface, type UseFormViewSurfaceProps } from "./form-view-surface";
+import { emptyDraft } from "./form-view-model";
 import { ActionTrigger } from "../../toolbars/ActionMenu";
 import { useRecordChromeContext } from "../resource/record-chrome-context";
 import { RecordFieldMarksProvider, useRecordFieldMarks } from "./record-field-marks";
@@ -1272,6 +1273,23 @@ describe("FormView", () => {
     ]));
     expect(screen.queryByText("note-1")).toBeNull();
     expect(screen.queryByText("2026-10-01T10:11:12Z")).toBeNull();
+  });
+
+  test("guard: a date in the facts line carries its label, where an amount stands bare", async () => {
+    sdkMocks.projectToSelection = true;
+    sdkMocks.record = { id: "note-1", title: "Invoice 104", amount: "1234.50", currency: { id: "cur_usd", code: "USD" },
+      due_on: "2026-10-31", permissions: ["read"] };
+    const money = { read: ({ value }: { value?: unknown }) => <span>{String(value)}</span> };
+    renderWithProviders(
+      <FormView resource="notes.Note" id="note-1" readOnly fields={[{ name: "title", title: true }]} />,
+      factsMetadata(),
+      undefined,
+      { widgets: { ...defaultWidgets, money } },
+    );
+    const date = await screen.findByText(/Oct 31, 2026/);
+    // "due on Oct 31": the date's own span holds its label, lowercased by the facts line.
+    expect(date.closest("span.inline-flex")?.textContent).toMatch(/^due on/i);
+    expect(screen.getByText("1234.50").closest("span.inline-flex")).toBeNull();
   });
 
   test("uses a wrapping editor for a writable title", async () => {
@@ -2782,6 +2800,66 @@ describe("FormView", () => {
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ auth: { token: null, note: "n" } });
     expect(screen.queryByText("This field is required.")).toBeNull();
+  });
+
+  test("guard: a required number left empty, holding null, says the field is required, never that it wants another type, and is not saved", async () => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={deserializeFormSpec({ type: "object", required: ["count"],
+      properties: { count: { type: "integer", label: "Count" } } }, defaultWidgets)} />);
+    await screen.findByLabelText("Count");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(screen.getByText("Count").closest('[data-layout="stack"]')?.textContent).toContain("This field is required."));
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message under the field is the check's answer to this submit, which it refused; React Hook
+    // Form calls the save only when the check passes, so the save never started and a slow one cannot
+    // land after this assertion.
+    expect(sdkMocks.mutate).not.toHaveBeenCalled();
+  });
+
+  test("guard: a create leaves out an untouched date carried as text, though it holds an empty text, as it leaves out any date or time left empty", async () => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={deserializeFormSpec({ type: "object", properties: {
+      label: { type: "string", label: "Label" }, day: { type: "string", widget: "date", label: "Day" },
+    } }, defaultWidgets)} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
+  });
+
+  test("guard: a create leaves an untouched optional member out of what it saves", async () => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={deserializeFormSpec({ type: "object", properties: {
+      label: { type: "string", label: "Label" }, count: { type: "integer", label: "Count" },
+    } }, defaultWidgets)} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
+  });
+
+  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, holding null offers Set value, which writes an empty text", async () => {
+    sdkMocks.record = { id: "note-1", title: "First", due: null };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={deserializeFormSpec({ type: "object", properties: {
+      due: { anyOf: [{ type: "string", widget: "date" }, { type: "null" }], label: "Due" },
+    } }, defaultWidgets)} />);
+    await screen.findByText("Left empty");
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, seeds an empty text, so an edit that writes its object sends it as one where it sent null, and a create draft holds one", async () => {
+    const members = deserializeFormSpec({ type: "object", properties: {
+      name: { type: "string", label: "Name" }, day: { type: "string", widget: "date", label: "Day" },
+    } }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
+    sdkMocks.record = { id: "note-1", title: "First", config: { name: "a" } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={members} />);
+    const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    await waitFor(() => expect(name.value).toBe("a"));
+    fireEvent.change(name, { target: { value: "b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data.config.day).toBeNull();
+    expect(emptyDraft(members)).toStrictEqual({ config: { name: "", day: null } });
   });
 
   const labelField = { name: "label", label: "Label", required: true } satisfies FormField;

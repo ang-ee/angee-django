@@ -10,6 +10,49 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed behaviour.** What a form field holds when it holds
+  nothing has one owner, `emptyValueForField` (`field-values.ts`), read by the
+  record form's draft and seeds, `ActionFormDialog`'s arguments,
+  `MutationDialog`'s and a schema dialog's seeds and the presence control; the
+  record form's own rule is deleted. A lines editor's new cell keeps its own
+  rule (`emptyCellValue`). First match wins: an explicit `string` kind holds
+  `""` whatever its widget; the `integer` and `float` widgets and the date and
+  time widgets hold `null`; the list widgets and a relation list `[]`; the
+  `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
+  for an `array` kind, `null` for an untyped value and `{}` otherwise; then
+  the kind decides. An untouched field seeds and sends its new empty value
+  wherever that changed. On a record form (a create, or an edit that changed a
+  sibling member of the same structured field, for a member the record lacks):
+  a form-spec boolean is `false` where it was `""`; an array under `json` `[]`
+  where `{}`; an untyped value under `json` left out of a create and `null` on
+  such an edit, where `{}`; a number kind under a widget that is not a
+  number's left out of a create and `null` on such an edit, where `""`. At an
+  action dialog's `submit` and a `MutationDialog`'s `parseValues`: a date,
+  time, `integer` or `float` widget with no kind is `null`, and a `json`
+  widget `{}`, where `""`. A field whose empty value is `null` has no "present
+  but empty" state: holding `null` it shows its own control with its hint, and
+  "Set value" no longer writes a `0` nobody chose for a number; two step
+  configurations show it, the extraction steps' `thinking` and the
+  start-conversation step's `timeout`. A member that may be left out is not
+  seeded with a value its own declared type refuses (`refusesSeed`, read by a
+  schema dialog's and `MutationDialog`'s seeding and by the record form's
+  create draft, not by its edit seeding): a number that is neither required
+  nor nullable, and an optional integer choice, stay absent; the seeding
+  policies otherwise keep their differences. Of the declared forms measured,
+  one payload changes: an action that passes an untouched optional date on as
+  it is sends `null`, which a date parameter accepts, where it sent `""`. A
+  step back, recorded as expected failures until the descriptor carries a
+  declared format: a date, a time or a date and time carried as text (a
+  `string` kind with only its widget to tell it from text) seeds `""`, so a
+  record form's edit that changed a sibling member sends `""` for it where it
+  sent `null`, and "Set value" on a nullable one writes `""`; no form declares
+  such a member today. Not changed, and known: the other boolean widgets
+  (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
+  `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
+  `submit` or a `parseValues` that tested an untouched date, time or number
+  field declared by its widget alone for the empty text tests for `null`, or
+  `{}` for a `json` one; a test that pressed "Set value" on a number and
+  expected `0` finds the number's own control.
 - `@angee/ui`: A record form mounts a pane the same way whether it has one
   pane or several (`FormView`: every pane is a panel of the form's one `Tabs`
   root, keyed by its id; a lone pane's panel renders the plain region through
