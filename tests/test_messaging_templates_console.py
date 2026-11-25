@@ -625,6 +625,36 @@ def test_a_member_or_a_signed_out_caller_is_refused_before_anything_is_judged(
     assert not any(_claimed(key) for key in keys if key is not None)
 
 
+def test_an_insert_of_what_no_column_can_store_is_refused_before_any_row_is_read(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lone surrogate in any column the insert takes: an administrator is refused under that column, never with an
+    internal error, and a member and a signed-out caller are refused create first. No seat's insert reads a message
+    template row, lexes anything or writes a row. A null or a value JSON cannot write never reaches the insert: its
+    four inputs are strings the schema requires."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-unstorable")
+    member = create_user("messaging-templates-console-unstorable-member")
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    table = MessageTemplate._meta.db_table
+    for column in ("kind", "key", "language", "name"):
+        identity = {"kind": "part", "key": "fresh", "language": "en", "name": "Fresh", column: "a\ud800"}
+        for user, refusal in (
+            (admin, ("VALIDATION", [column])), (member, ("PERMISSION_DENIED", [])),
+            (AnonymousUser(), ("PERMISSION_DENIED", [])),
+        ):
+            with CaptureQueriesContext(connection) as captured:
+                (error,) = _insert(user, **identity).errors
+            assert (error.extensions["code"], sorted(error.extensions.get("validationErrors", {}))) == refusal, (
+                column, user)
+            assert not any(table in query["sql"] for query in captured.captured_queries), (column, user)
+    assert checked == []
+    with system_context(reason="tests.messaging_templates.console.read"):
+        assert not MessageTemplate.objects.exists()
+
+
 def test_an_identity_its_validators_refuse_is_refused_under_its_fields(db: None) -> None:
     del db
     admin = create_platform_admin("messaging-templates-console-misspeller")
