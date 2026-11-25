@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { act, renderHook } from "@testing-library/react";
+import type { ActionMutate } from "@angee/refine";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { ActionContext } from "../page";
@@ -15,10 +16,12 @@ import {
 } from "./record-action";
 
 const dataMocks = vi.hoisted(() => ({
-  mutate: vi.fn(async () => ({ ok: true, message: "Synced" })),
+  mutate: vi.fn<ActionMutate>(async () => ({ ok: true, message: "Synced" })),
   useActionMutation: vi.fn(),
   settle: vi.fn(),
   useActionResultRun: vi.fn(),
+  follow: vi.fn(),
+  useCreatedRecordLink: vi.fn(),
   authoredMutate: vi.fn(async () => ({ sync_calendar: { ok: true, message: "Synced" } })),
   useAuthoredResourceMutation: vi.fn(),
   chrome: {
@@ -43,6 +46,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 
 vi.mock("./action-result-run", () => ({
   useActionResultRun: dataMocks.useActionResultRun,
+  useCreatedRecordLink: dataMocks.useCreatedRecordLink,
 }));
 
 vi.mock("./authored-resource-mutation", () => ({
@@ -75,6 +79,9 @@ describe("record action helpers", () => {
     });
     dataMocks.useActionResultRun.mockReset();
     dataMocks.useActionResultRun.mockReturnValue(dataMocks.settle);
+    dataMocks.follow.mockReset();
+    dataMocks.useCreatedRecordLink.mockReset();
+    dataMocks.useCreatedRecordLink.mockReturnValue(dataMocks.follow);
     dataMocks.useActionMutation.mockReset();
     dataMocks.useActionMutation.mockReturnValue([
       dataMocks.mutate,
@@ -124,6 +131,20 @@ describe("record action helpers", () => {
     });
 
     expect(message).toBe("Done");
+  });
+
+  test("the default message stands in for an empty success message of a bound verb", async () => {
+    dataMocks.mutate.mockResolvedValueOnce({ ok: true, message: "" });
+    const { result } = renderHook(() =>
+      useRecordActionMutation("discover_oauth_endpoints", { defaultMessage: "Discovery done." }),
+    );
+
+    let message: string | void = undefined;
+    await act(async () => {
+      message = await result.current[0](actionContext("cli_1"));
+    });
+
+    expect(message).toBe("Discovery done.");
   });
 
   test("runs afterSuccess after the form refresh", async () => {
@@ -223,33 +244,48 @@ describe("record action helpers", () => {
     expect(dataMocks.settle).toHaveBeenCalledOnce();
   });
 
-  test("settles id-returning record mutations through the action-result owner", async () => {
+  test("an id-returning record action resolves its message for the bar, follows the created record, then refreshes", async () => {
     const refresh = vi.fn();
+    const created = { ok: true, message: "Converted", id: "doc_1" };
+    dataMocks.mutate.mockResolvedValueOnce(created);
     const { result } = renderHook(() =>
       useRecordActionMutation("convert_to_document", {
         linkTo: "example.Document",
       }),
     );
 
-    let message: string | void = "unexpected";
+    let message: string | void = undefined;
     await act(async () => {
       message = await result.current[0](actionContext("lead_1", { refresh }));
     });
 
-    expect(dataMocks.useActionResultRun).toHaveBeenCalledWith({
-      linkTo: "example.Document",
-    });
-    expect(dataMocks.settle).toHaveBeenCalledOnce();
     expect(dataMocks.mutate).toHaveBeenCalledWith("lead_1");
+    expect(message).toBe("Converted");
+    expect(dataMocks.useCreatedRecordLink).toHaveBeenLastCalledWith("example.Document");
+    expect(dataMocks.follow.mock.calls).toEqual([[created]]);
     expect(refresh).toHaveBeenCalledOnce();
-    expect(message).toBeUndefined();
+    expect(dataMocks.follow.mock.invocationCallOrder[0]).toBeLessThan(refresh.mock.invocationCallOrder[0]!);
+  });
+
+  test("a record action bound with the hook never calls the shared settle owner", async () => {
+    const { result } = renderHook(() =>
+      useRecordActionMutation("convert_to_document", { linkTo: "example.Document" }),
+    );
+
+    await act(async () => {
+      await result.current[0](actionContext("lead_1"));
+    });
+
+    // The awaited run above is the effect that proves the hook ran before the negative assertions.
+    expect(dataMocks.mutate).toHaveBeenCalledWith("lead_1");
+    expect(dataMocks.useActionResultRun).not.toHaveBeenCalled();
+    expect(dataMocks.settle).not.toHaveBeenCalled();
   });
 
   test("derives generated action arguments from the current record id", async () => {
     const { result } = renderHook(() =>
       useRecordActionMutation("submit_proposal", {
         actionArguments: (proposal) => ({ proposal }),
-        settle: true,
       }),
     );
 
@@ -262,18 +298,30 @@ describe("record action helpers", () => {
     });
   });
 
-  test("does not refresh a settled record action refused by the server", async () => {
+  test("a record action the server refuses neither refreshes nor follows", async () => {
     const refresh = vi.fn();
-    dataMocks.mutate.mockResolvedValueOnce({ ok: false, message: "Refused" });
+    const afterSuccess = vi.fn();
+    dataMocks.mutate.mockResolvedValueOnce({ ok: false, message: "Refused", id: "doc_1" });
     const { result } = renderHook(() =>
-      useRecordActionMutation("submit_proposal", { settle: true }),
+      useRecordActionMutation("submit_proposal", { linkTo: "example.Document", afterSuccess }),
     );
 
-    await act(async () => {
-      await result.current[0](actionContext("proposal_1", { refresh }));
-    });
-
+    await expect(result.current[0](actionContext("proposal_1", { refresh }))).rejects.toThrow(new Error("Refused"));
     expect(refresh).not.toHaveBeenCalled();
+    expect(afterSuccess).not.toHaveBeenCalled();
+    expect(dataMocks.follow).not.toHaveBeenCalled();
+  });
+
+  test("an answer that carries no outcome rejects with the shared no-result text, and does not refresh", async () => {
+    const refresh = vi.fn();
+    dataMocks.mutate.mockResolvedValueOnce(undefined);
+    const { result } = renderHook(() => useRecordActionMutation("submit_proposal"));
+
+    await expect(result.current[0](actionContext("proposal_1", { refresh }))).rejects.toThrow(
+      new Error("The action returned no result."),
+    );
+    expect(refresh).not.toHaveBeenCalled();
+    expect(dataMocks.follow).not.toHaveBeenCalled();
   });
 
   test("projects the in-band outcome to the rendered action contract", async () => {
@@ -295,7 +343,7 @@ describe("record action helpers", () => {
     // A refused target's message is only the verb's summary; its reason arrives in-band and is what is thrown.
     dataMocks.mutate.mockResolvedValueOnce({
       ok: false, message: "Sync failed.", validationErrors: { id: ["You are not allowed to sync this source."] },
-    } as never);
+    });
     await expect(result.current[0](actionContext("src_1"))).rejects.toThrow(
       new Error("You are not allowed to sync this source."),
     );
@@ -312,6 +360,9 @@ describe("useRecordChromeActionMutation", () => {
     });
     dataMocks.useActionResultRun.mockReset();
     dataMocks.useActionResultRun.mockReturnValue(dataMocks.settle);
+    dataMocks.follow.mockReset();
+    dataMocks.useCreatedRecordLink.mockReset();
+    dataMocks.useCreatedRecordLink.mockReturnValue(dataMocks.follow);
     dataMocks.useActionMutation.mockReset();
     dataMocks.useActionMutation.mockReturnValue([
       dataMocks.mutate,

@@ -21,6 +21,30 @@ export interface ActionResultRunOptions {
 }
 
 /**
+ * Follow a verb's outcome to the record it created: when the outcome carries the
+ * created record's `id` and `linkTo` resolves a routed resource page, navigate to
+ * that record's detail; otherwise do nothing. The one implementation of following,
+ * for the settle owner below and for a declared record action
+ * (`useRecordActionMutation`).
+ */
+export function useCreatedRecordLink(
+  linkTo: string | undefined,
+): (outcome: Pick<ActionOutcome, "id">) => void {
+  const navigate = useNavigate();
+  const navigateInApp = useInAppNavigator();
+  const targetRecordHref = useResourceRecordHref(linkTo ?? "");
+  return React.useCallback(
+    (outcome) => {
+      const target = outcome.id ? targetRecordHref?.(outcome.id) : undefined;
+      if (!target) return;
+      if (navigateInApp) navigateInApp(target);
+      else void navigate({ href: target });
+    },
+    [navigate, navigateInApp, targetRecordHref],
+  );
+}
+
+/**
  * Fire one `ActionResult` verb and settle its outcome. Resolves the outcome
  * (or `undefined` on a missing payload / thrown transport error) so a caller
  * can chain domain follow-ups without re-deriving the feedback.
@@ -42,6 +66,10 @@ export type ActionResultRun = (
  *   record's `id` and `linkTo` resolves a routed resource page — navigation to
  *   that record's detail.
  *
+ * A record action bound with `useRecordActionMutation` is not settled here: its bar
+ * toasts it, a failure under the verb's label. A record action whose own `run` calls
+ * this owner is toasted here, under the server's message, and its bar stays silent.
+ *
  * Serves authored verbs (extract the outcome field inside `fire`, e.g.
  * `(await generate({ order: id }))?.generate_delivery`) and derived single-id
  * verbs (`useActionMutation`'s mutate already resolves the outcome) alike.
@@ -54,9 +82,7 @@ export function useActionResultRun(
 ): ActionResultRun {
   const t = useUiT();
   const toast = useToast();
-  const navigate = useNavigate();
-  const navigateInApp = useInAppNavigator();
-  const targetRecordHref = useResourceRecordHref(options.linkTo ?? "");
+  const follow = useCreatedRecordLink(options.linkTo);
   const noResultTitle = options.noResultTitle;
   return React.useCallback<ActionResultRun>(
     async (fire) => {
@@ -81,13 +107,9 @@ export function useActionResultRun(
         return outcome;
       }
       toast.success({ title: outcome.message });
-      const target = outcome.id ? targetRecordHref?.(outcome.id) : undefined;
-      if (target) {
-        if (navigateInApp) navigateInApp(target);
-        else void navigate({ href: target });
-      }
+      follow(outcome);
       return outcome;
     },
-    [navigate, navigateInApp, noResultTitle, t, targetRecordHref, toast],
+    [follow, noResultTitle, t, toast],
   );
 }

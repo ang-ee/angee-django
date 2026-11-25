@@ -312,7 +312,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   variables are authored. The shared hook owns deriving the Hasura custom
   mutation and running it through refine `useCustomMutation`; the rendered record
   adapter owns binding it to `ActionContext` (record id, refresh,
-  missing-record handling, success hooks). Set `idArgument` to the schema
+  missing-record handling, success hooks), and the action bar toasts its
+  outcome: a success with its message, a refusal under the verb's label with
+  its reasons (`runActionResult` throws them, or the message when it carries
+  none); `linkTo` follows the record the verb created. Set `idArgument` to the schema
   argument that receives the record id when it is named differently (for example,
   `"round"`); `null` on an outcome mutation sends only its explicit arguments.
   Don't hand-author these as `graphql()` documents or page-local
@@ -332,6 +335,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A record action bound with `useRecordActionMutation` is not settled there:
+  its bar toasts it, and both follow a created record through one hook. A
+  record action whose own `run` calls `useActionResultRun`, directly or
+  through `useActionResultMutation` or `useRecordChromeActionMutation`, is
+  toasted there, under the server's message.
 - React does not own business logic, permissions, models, or persistence.
 - Dashboard widget visibility is declared separately from its data filter.
   [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
@@ -666,8 +674,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
   radio groups over the same owner), the visible-fields menu, the dashboard widget
   menu, the collapsed statusbar. Field choices inside such a menu stay native items;
-  verbs are `ActionTrigger`s. Every fire → toast flow settles through
-  `useActionResultRun`; row verbs included. Owner story:
+  verbs are `ActionTrigger`s. Each verb's outcome has one toast owner: the
+  record action bar for a record action whose run resolves a message or
+  rejects (one bound with `useRecordActionMutation` or projected through
+  `runActionResult`); `useActionResultRun` for a verb fired from a chrome, a
+  row or a pane, and for a record action whose run settles through it, whose
+  bar then stays silent; the action form for a verb with arguments; the bulk
+  owner for a selection. Owner story:
   [action menu](../../packages/storybook/src/stories/ActionMenu.stories.tsx) (story id `toolbars-actionmenu--default`).
 - **Time is absolute; relative time is a live header's.** Every list, row, facts
   line and period title formats through `date-format.ts`: `formatDate`,
