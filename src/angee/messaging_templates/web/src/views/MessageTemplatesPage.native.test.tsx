@@ -336,17 +336,64 @@ test("a left-to-right mail's subject, preheader and plain text say so, from the 
   expect((await screen.findByRole("region", { name: word("preview.text") })).getAttribute("dir")).toBe("ltr");
 });
 
+/** What each of the band's children is, in its order: by the one fact of the pane each shows. */
+function bandOutline(band: HTMLElement, warnings: readonly string[]): string[] {
+  return [...band.children].map((child) => {
+    const text = child.textContent ?? "";
+    if (warnings.length && warnings.every((detail) => text.includes(detail))) return "warnings";
+    if (text === word("preview.saved")) return "saved";
+    if (text.includes(word("preview.subject")) && text.includes(word("preview.preheader"))) return "message";
+    if (text === word("preview.fidelity")) return "caveat";
+    if (child.querySelector("[role=alert]") || child.getAttribute("role") === "alert") return "error";
+    return `unknown: ${text}`;
+  });
+}
+
 test("a template whose preview warns lists each warning in the server's words, first in the band", async () => {
   render(<MessageTemplateStory open={ROW.passwordReset} />);
   await screen.findByTitle(word("preview.frameTitle"));
   const band = screen.getByRole("region", { name: word("preview.factsRegion") });
-  const saved = within(band).getByText(word("preview.saved"));
-  const subject = within(band).getByText(word("preview.subject"));
-  for (const warning of RECORDED.previews[ROW.passwordReset]!.warnings) {
-    const shown = await within(band).findByText(warning.detail);
-    // Before the saved-row line and the subject: seen whole before the rest of the band.
-    expect(shown.compareDocumentPosition(saved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(shown.compareDocumentPosition(subject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const warnings = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
+  for (const detail of warnings) expect(await within(band).findByText(detail)).toBeTruthy();
+
+  // The whole order: the warnings, the saved-row line, the subject and preheader, the frame caveat.
+  expect(bandOutline(band, warnings)).toEqual(["warnings", "saved", "message", "caveat"]);
+});
+
+test("a preview that fails to load puts its error first in the band, before anything the server said", async () => {
+  render(<MessageTemplateStory open={ROW.passwordReset} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  // The recording holds Password reset's preview in the default kit only: the other kit's read fails.
+  const other = RECORDED.kits.find((kit) => kit.is_default !== true)!;
+  await choose(word("preview.kit"), String(other.display_name));
+  const band = screen.getByRole("region", { name: word("preview.factsRegion") });
+  await waitFor(() => expect(bandOutline(band, [])[0]).toBe("error"));
+  const warnings = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
+
+  // Whatever of the earlier answer stays on screen under the error keeps the band's own order.
+  const outline = bandOutline(band, warnings);
+  const order = ["error", "warnings", "saved", "message", "caveat"];
+  expect(outline).toEqual(order.filter((part) => outline.includes(part)));
+  expect(outline).toContain("saved");
+});
+
+test("the library's three flags read as facts, a word for each state and no checkbox", async () => {
+  render(<MessageTemplateStory />);
+  const open = (name: string) => ui("list.openRecord").replace("{label}", name);
+  await screen.findByRole("button", { name: open("Button") });
+  const headers = screen.getAllByRole("columnheader");
+  const flags = [word("col.shipped"), word("col.effective"), word("col.defaultUpdated")]
+    .map((label) => headers.findIndex((header) => header.textContent === label));
+  expect(flags.every((index) => index >= 0)).toBe(true);
+  for (const [name, states] of [
+    // A shipped block nobody overrides, and the deployment's own block.
+    ["Button", ["flag.yes", "flag.yes", "flag.no"]],
+    ["Notice", ["flag.no", "flag.yes", "flag.no"]],
+  ] as const) {
+    const row = screen.getByRole("button", { name: open(name) }).closest("tr")!;
+    const cells = within(row).getAllByRole("cell");
+    expect(flags.map((index) => cells[index]?.textContent)).toEqual(states.map(word));
+    for (const index of flags) expect(within(cells[index]!).queryByRole("checkbox")).toBeNull();
   }
 });
 

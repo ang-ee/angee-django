@@ -77,13 +77,17 @@ describe("MessageTemplatesPage", () => {
     ]);
   });
 
-  test("shows the three flags with one widget, whichever the metadata gives each", () => {
+  test("shows the three flags as one read-only badge in the addon's words, whichever widget the metadata gives each", () => {
     const { list } = pageDeclaration();
     const flags = parsePageColumns(list.children).filter((column) => column.field !== "name" && column.field !== "language");
 
     expect(flags.map((column) => column.field)).toEqual(["is_baseline", "is_effective", "has_updated_default"]);
-    expect(new Set(flags.map((column) => column.widget)).size).toBe(1);
-    expect(flags[0]?.widget).toBe("boolean");
+    for (const column of flags) {
+      expect(column.widget).toBe("booleanBadge");
+      expect(column.options?.map((option) => [option.value, option.label])).toEqual([
+        ["true", M["flag.yes"]], ["false", M["flag.no"]],
+      ]);
+    }
   });
 });
 

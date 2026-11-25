@@ -10,6 +10,8 @@ export const enMessagingTemplatesMessages: Record<string, string> = {
   "col.shipped": "Shipped",
   "col.effective": "Effective",
   "col.defaultUpdated": "Default updated",
+  "flag.yes": "Yes",
+  "flag.no": "No",
   "form.identity": "Message template",
   "form.message": "Message",
   "form.content": "Content",
