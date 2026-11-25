@@ -782,8 +782,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         return all(
             _unstorable(value := getattr(self, field.name)) is None
-            and (value is None and field.null or not isinstance(field, models.CharField | models.TextField)
-                 or isinstance(value, str))
+            and (field.null if value is None else (
+                not isinstance(field, models.CharField | models.TextField) or isinstance(value, str)))
             for field in self._meta.concrete_fields if field.name in STORED_COLUMNS
         )
 

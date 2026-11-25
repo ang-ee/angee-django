@@ -2875,6 +2875,18 @@ def test_clean_raises_only_validation_error_and_what_it_admits_saves(
             transaction.set_rollback(True)
 
 
+def test_a_null_json_column_is_refused_in_one_sentence(plain: Any) -> None:
+    """variables or sample set to null is refused by Django's own null message alone; clean() adds nothing."""
+
+    del plain
+    for column in ("variables", "sample"):
+        row = _unsaved("part", "nulled")
+        setattr(row, column, None)
+        with system_context(reason="tests.messaging_templates.render.null"), pytest.raises(ValidationError) as raised:
+            row.full_clean()
+        assert raised.value.message_dict == {column: ["This field cannot be null."]}, raised.value.message_dict
+
+
 def test_a_template_names_its_layout(plain: Any) -> None:
     """An empty layout is refused under layout in words a person can act on, before the walk would reach for a
     layout named layouts/."""
