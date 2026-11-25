@@ -5,13 +5,12 @@ on:
     inputs:
       python-version:
         description: >-
-          Python version for the uv test lane. uv's managed CPython 3.14.9 bundles SQLite 3.53.1;
-          3.14.10 bundles 3.54.1, which refuses django-zed-rebac's permission reads
-          (docs/checks.md#sqlite-version). Lift the pin once those reads fit SQLite 3.54's
-          nesting limit or a SQLite release lifts it.
+          Python version for the uv lanes. Empty, uv reads the checked-out repository's
+          .python-version, and the composed-stack lane the framework's
+          (docs/checks.md#sqlite-version).
         required: false
         type: string
-        default: "3.14.9"
+        default: ""
       pytest-extra-args:
         description: Optional arguments appended to the pytest command.
         required: false
@@ -432,6 +431,11 @@ jobs:
           PY
       - name: Install the angee CLI (the public install path)
         run: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | ANGEE_VERSION=${{ inputs.angee-version }} sh
+      # uv runs from the stack root, above the framework checkout, where it would not
+      # find the framework's .python-version.
+      - name: Use the framework's Python
+        if: ${{ inputs.python-version == '' }}
+        run: echo "UV_PYTHON=$(cat stack/workspaces/src/angee/.python-version)" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
