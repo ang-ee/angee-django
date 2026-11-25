@@ -42,10 +42,11 @@ only an undisplayed group declares is no longer one, on a create for a
 while its record loads, so a status or body declared only in a permission-gated
 section now appears when the record arrives.
 
-Limits: a control a page renders itself for a field only an undisplayed group
-declares still takes typing, and the save drops what is typed there (before, it
-was sent: a `savedOnly` group's field on a create, a permission-gated section's
-field on a create or on a record lacking the permission); and a record rail row that
+A control a page renders itself for a field only an undisplayed group declares
+is read-only, and nothing is sent for it, unless the form's own submit owner
+saves it (before, what was typed there was sent: a `savedOnly` group's field on a
+create, a permission-gated section's field on a create or on a record lacking
+the permission). Limits: a record rail row that
 shares its name with a field only an undisplayed section declares now decides its
 own visibility, where that section's declaration decided it.
 Upgrade: check every create seed and `defaultValue` for a field that only a

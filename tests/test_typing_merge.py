@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 _DECLARING_SOURCES = {
-    "angee.messaging.models": ("Message", "Participant"),
+    "angee.messaging.models": ("Message", "Recipient"),
     "angee.nexus.models": ("Tie",),
     "angee.portfolio.models": ("Product",),
     "angee.posts.models": ("Feed",),

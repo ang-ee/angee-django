@@ -479,6 +479,7 @@ def test_a_form_spec_is_the_same_bytes_whatever_the_hash_seed():
         "schema = {'type': 'object', 'required': ['name'], 'properties': {\n"
         "    'name': {'type': 'string', 'minLength': 1, 'maxLength': 64},\n"
         "    'count': {'type': 'integer', 'minimum': 0, 'maximum': 9},\n"
+        "    'day': {'type': 'string', 'format': 'date', 'title': 'Day', 'default': '2024-01-31'},\n"
         "    'share': {'type': 'number', 'minimum': 0, 'maximum': 1}}}\n"
         "print(json.dumps(config_form_spec(schema, owner='Probe')))\n"
     )

@@ -16,9 +16,11 @@ target_config:
   slug: enquiries
 ```
 
-- `channel` is a channel with the `webform` backend. When a form whose target
-  or configuration changes is validated (`full_clean`), as the console and the
-  resource loader do, a channel that is gone or has another backend is refused
+- `channel` is a channel with the `webform` backend, by its public id: never
+  blank, and stored without the spaces around it, so one channel is always
+  stored the same way. When a form whose target or configuration changes is
+  validated (`full_clean`), as the console and the resource loader do, a
+  channel that is gone or has another backend is refused
   under `target_config` ([`MessageTarget.clean`](targets.py)): no response could
   be posted on it. For an acting user the channel is read through their own
   access, so one they cannot read is refused as a missing one; system work reads
@@ -61,7 +63,9 @@ A response is refused in three ways. Each is kept on the response as
 | `message_exists` | The channel already holds a message under this submission's id that the response did not make: one received before forms had responses, whose id was sent again. Posting would replace it | Dismiss the response; the earlier message stands |
 | `message_refused` | Messaging will not take the message as it is: its envelope is past messaging's size bound | Dismiss the response, or shorten what the form asks |
 
-Any other error is a failure, which web forms tries again.
+Web forms' own `config_invalid` (its README) applies here too: a form whose
+stored channel and slug no longer validate is refused before the channel is
+read. Any other error is a failure, which web forms tries again.
 
 ## The envelope
 
@@ -100,57 +104,6 @@ forms and a redaction verb in messaging; both are a follow-up.
 delivers nothing: the target is its one source. A channel row stores the key
 `webform`, so a host that holds such a channel composes this bridge. Without it
 the database check `angee.E052` names the rows and says to install it.
-
-## Channels that held their own form
-
-Earlier releases kept a public form on its channel row: a slug, a published flag
-and a FormSpec. A project that holds such channels copies the migration template
-[`webform_channels_to_forms`](compose_migrations/messaging/webform_channels_to_forms.py)
-into `runtime/messaging/migrations/`, replaces its two placeholder dependencies
-with its own leaves, and applies it. The order matters:
-
-1. Delete any autodetected migration that removes the channel's form columns.
-   The drop guard refuses to author one only at `makemigrations`, and only on a
-   database that holds a form.
-2. Copy the template in, pinned after the project's messaging leaf and its
-   webforms initial migration. `makemigrations messaging` then reports no
-   changes.
-3. Run `manage.py check_webform_channels`. It judges the channels as `migrate`
-   will, prints what the move would refuse and what it would leave out, and
-   changes nothing. Where the form columns are already gone, or no webform
-   channel holds a form, it says there is nothing to move and asks for no
-   template.
-4. Run `migrate`, then `rebac sync`.
-
-`migrate` refuses the wrong order by itself, also under `provision`, which skips
-system checks. The columns are messaging's, so the refusal is too, and it holds
-on a project that has not installed this bridge
-([`angee.messaging.webform_columns`](../messaging/webform_columns.py)): a run
-whose plan removes the form columns with a migration that neither is the move
-nor follows it is stopped before anything is applied, while a webform channel
-of that database holds a form. `check --database` says the same beforehand as
-`angee.E054`. That guard is interim: deleted from messaging once the framework
-pins django-compose 0.1.0.dev14, whose drop guard judges pending removals at
-migrate time. The order above stays the instruction.
-
-The bridge keeps nothing of the guard. Its template declares that it is the
-move (`moves_webform_channels = True` on its `Migration`), so a project's copy
-is known under whatever name it has, and it imports messaging's one judgment of
-which channels hold a form
-([`angee.messaging.webforms`](../messaging/webforms.py)), which the dry run
-reads too. A copy of the template taken before the mark existed lacks it and
-must be copied again; `migrate` refuses it as a removal that is not the move.
-
-Each channel becomes a form with its first version and its address, posting on
-the same channel under the same slug, and the channel's form columns are
-removed. No response is made: the submissions a channel received stay the
-messages they are. A migration writes through historical models, so no verb of
-a form runs: the template judges each version with the web forms' own rule
-(`validate_publishable` for a published form, `validate_version` otherwise)
-before it writes it, and refuses a channel that rule refuses, by name. The
-template's docstring states what carries over, what it refuses and what it
-reports. It does not reverse: going back means restoring a backup taken before
-it and running the previous code.
 
 ## Intake
 

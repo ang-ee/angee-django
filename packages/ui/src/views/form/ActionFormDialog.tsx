@@ -11,8 +11,8 @@ import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { useRuntimeViewAs } from "../../runtime";
+import { emptyValueForField } from "./field-values";
 import {
-  emptyValueForField,
   mutationDialogValueCodecs,
   dialogRuleErrors,
 } from "./MutationDialog";
@@ -289,7 +289,10 @@ export function serializeActionArgValues(
   return serialized;
 }
 
-/** Seed args from context or declared defaults; React Hook Form owns subsequent edits. */
+/**
+ * Seed args from context or declared defaults, else a scalar arg's empty value (`emptyValueForField`:
+ * `null` for a date, time or number widget); React Hook Form owns subsequent edits.
+ */
 function argDefaultValues(
   args: readonly ActionArg[],
   context: ActionFormContext,

@@ -568,7 +568,7 @@ def test_sqid_field_deconstruct_preserves_public_id_contract() -> None:
                 ("Fragment", "frg_"),
                 ("Part", "prt_"),
                 ("MessageEdge", "mge_"),
-                ("Participant", "ptp_"),
+                ("Recipient", "rcp_"),
                 ("Reaction", "rxn_"),
                 ("MessageStar", "msr_"),
             )

@@ -7,21 +7,29 @@ import type { Row } from "@angee/metadata";
 
 import type { FieldDescriptor, GroupDescriptor } from "../page";
 import type { DescriptorField } from "./DescriptorFieldList";
-import type { FormSpecFieldDescriptor } from "./form-spec";
+import { defaultWidgets } from "../../widgets";
+import { deserializeFormSpec, formSpecInitialValues, type FormSpecFieldDescriptor } from "./form-spec";
 import {
   EDITABLE_LINES_SECTION,
   emptyDraft,
   addFieldSelection,
   displayedFormFields,
+  fieldControlReadOnly,
   fieldErrorMessages,
+  fieldIsRedacted,
   flattenedFormFields,
+  formDisplaysField,
   formDisplaysGroup,
   formRuleErrors,
   formSections,
   formViewFieldLayout,
+  holdsNothingToDisplay,
+  formWritablePaths,
   isCompositeFieldDescriptor,
+  isEmptySection,
   mutationData,
   createPresetMemory,
+  pathWritable,
   recordToValues,
   relationListValue,
   resolveField,
@@ -286,6 +294,23 @@ test("an empty object or json field drafts as an empty object and an empty list 
   expect(recordToValues({ id: "row-1" }, structured)).toStrictEqual(empty);
   expect(recordToValues({ id: "row-1", layout: null, steps: null, mappings: null, config: null }, structured))
     .toStrictEqual({ layout: null, steps: null, mappings: null, config: null });
+});
+
+test("a create draft leaves out a member that may be left out where its own type refuses its empty value, as a schema dialog does", () => {
+  const members = deserializeFormSpec({ type: "object", required: ["count"], properties: {
+    limit: { type: "integer" }, ratio: { type: "number" }, label: { type: "string" }, count: { type: "integer" },
+  } }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
+  expect(emptyDraft(members)).toStrictEqual({ config: { label: "", count: null } });
+});
+
+test("guard: a create draft seeds a nullable member its empty value and a templated object an empty object, not a dialog's null and template", () => {
+  const fields = deserializeFormSpec({ type: "object", properties: {
+    note: { type: "string", nullable: true },
+    size: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    retry: { type: "object", properties: { mode: { type: "string" } } },
+  } }, defaultWidgets);
+  expect(emptyDraft(fields)).toStrictEqual({ note: "", size: null, retry: {} });
+  expect(formSpecInitialValues(fields, {})).toStrictEqual({ note: null, size: null, retry: { mode: "" } });
 });
 
 test("a required json field holding an empty object is not missing, in a record form as in a dialog", () => {
@@ -629,6 +654,110 @@ describe("formDisplaysGroup", () => {
     ["a group with an admitted child whose permission the record lacks", { permission: "admin", containerChild: "imap.settings" }, managed, false, false],
   ])("%s", (_case, group, record, isCreate, displayed) => {
     expect(formDisplaysGroup(group, record, { isCreate, admits })).toBe(displayed);
+  });
+});
+
+describe("pathWritable", () => {
+  const recordFields = [{ name: "title" }, { name: "code", readOnly: true }, { name: "config.timeout" }, { name: "secret" }];
+  // The paths the save writes, then whether it writes each of the record's fields and a path no field declares.
+  const writes = (modeWritable: ReadonlySet<string> | null, ownSubmit = false) => {
+    const writable = formWritablePaths(recordFields, modeWritable, ownSubmit);
+    return [...recordFields.map((field) => field.name), "notes"].filter((path) => pathWritable(path, writable));
+  };
+  test.each<[string, ReadonlySet<string> | null, boolean, string[]]>([
+    ["on an edit, the fields the model updates", new Set(["title", "secret"]), false, ["title", "secret"]],
+    ["on a create, the model's create fields, a dotted field by its root", new Set(["code", "config"]), false, ["code", "config.timeout"]],
+    ["with no list from the mode, every record form field, read-only as declared or not", null, false, ["title", "code", "config.timeout", "secret"]],
+    ["under a custom submit owner, every path, one no field declares included", new Set(["title"]), true, ["title", "code", "config.timeout", "secret", "notes"]],
+  ])("%s", (_case, modeWritable, ownSubmit, writable) => {
+    expect(writes(modeWritable, ownSubmit)).toEqual(writable);
+  });
+
+  test("a path no record form field declares, or one only under a declared field's own path, is not writable", () => {
+    const writable = formWritablePaths([{ name: "title" }, { name: "config.timeout" }], null, false);
+    expect(pathWritable("code", writable)).toBe(false);
+    expect(pathWritable("config.label", writable)).toBe(false);
+    expect(pathWritable("title", writable)).toBe(true);
+  });
+});
+
+describe("fieldIsRedacted", () => {
+  test("reads a dotted field's root, and a record without the ledger redacts nothing", () => {
+    expect(fieldIsRedacted({ redacted_fields: ["config"] }, "config.timeout")).toBe(true);
+    expect(fieldIsRedacted({ redacted_fields: ["config"] }, "code")).toBe(false);
+    expect(fieldIsRedacted(null, "config")).toBe(false);
+  });
+});
+
+describe("fieldControlReadOnly", () => {
+  test.each<[string, FieldDescriptor, boolean, boolean, boolean, boolean, boolean]>([
+    ["a field the save writes, on an edit", { name: "title" }, true, false, false, false, false],
+    ["a field the save writes, on a create", { name: "title" }, true, false, true, false, false],
+    ["a field read-only as declared, which the save writes", { name: "title", readOnly: true }, true, false, false, false, true],
+    ["a field read-only as declared whose widget writes its own value", { name: "code", readOnly: true }, false, false, false, true, true],
+    ["a field the save cannot write, on an edit", { name: "code" }, false, false, false, false, true],
+    ["a field the save cannot write, on a create", { name: "code" }, false, false, true, false, true],
+    ["a field the save cannot write whose widget writes its own value, on an edit", { name: "code" }, false, false, false, true, false],
+    ["a field the save cannot write whose widget writes its own value, on a create", { name: "code" }, false, false, true, true, true],
+    ["a field the record redacts, which the save writes", { name: "secret" }, true, true, false, false, true],
+    ["a field the record redacts whose widget writes its own value, which the save writes", { name: "secret" }, true, true, false, true, true],
+    ["a field the record redacts whose widget writes its own value, which the save cannot write", { name: "secret" }, false, true, false, true, true],
+  ])("%s", (_case, field, writable, redacted, isCreate, writesOwnValue, readOnly) => {
+    expect(fieldControlReadOnly(field, { writable, redacted, isCreate, writesOwnValue })).toBe(readOnly);
+  });
+});
+
+describe("formDisplaysField", () => {
+  test.each<[string, unknown, boolean, boolean, boolean, boolean]>([
+    ["on a create, a field the save cannot write that holds no value", null, false, true, false, false],
+    ["on a create, a field the save cannot write holding a blank text", "  ", false, true, false, false],
+    ["on a create, a field the save cannot write holding an empty list", [], false, true, false, false],
+    ["on a create, a field the save cannot write holding a value", "seeded", false, true, false, true],
+    ["on a create, a field the save cannot write holding false", false, false, true, false, true],
+    ["on a create, a field the save writes that holds no value", "", true, true, false, true],
+    ["on a create, a read-only status the save writes that holds no value", "", true, true, true, false],
+    ["on a create, a read-only status holding a value", "OPEN", true, true, true, true],
+    ["on an edit, a field the save cannot write that holds no value", null, false, false, false, true],
+    ["on an edit, a read-only status that holds no value", null, true, false, true, true],
+    ["on a create, a field the save cannot write holding an empty object", {}, false, true, false, false],
+    ["on a create, a field the save cannot write holding an object with a member", { region: "eu" }, false, true, false, true],
+    ["on a create, a field the save writes holding an empty object", {}, true, true, false, true],
+    ["on an edit, a field the save cannot write holding an empty object", {}, false, false, false, true],
+  ])("%s", (_case, value, writable, isCreate, readOnlyStatus, displayed) => {
+    expect(formDisplaysField(value, { writable, isCreate, readOnlyStatus })).toBe(displayed);
+  });
+});
+
+describe("what gives a record form nothing to display (holdsNothingToDisplay)", () => {
+  test.each<[string, unknown, boolean]>([
+    ["null", null, true],
+    ["undefined", undefined, true],
+    ["a text of blanks only", "  ", true],
+    ["an empty list", [], true],
+    ["an empty object", {}, true],
+    ["a text", "a", false],
+    ["false", false, false],
+    ["zero", 0, false],
+    ["a list with an item", [""], false],
+    ["an object with a member", { region: undefined }, false],
+    ["a date", new Date(0), false],
+  ])("%s", (_case, value, nothing) => {
+    expect(holdsNothingToDisplay(value)).toBe(nothing);
+  });
+
+  test("guard: the rule check still counts an empty object as a value and an empty list as missing", () => {
+    const config: FieldDescriptor = { name: "config", widget: "json", required: true };
+    const tags: FieldDescriptor = { name: "tags", widget: "tagInput", required: true };
+    expect(formRuleErrors({ config: {}, tags: [] }, [config, tags], new Set(), t)).toEqual({ tags: required });
+  });
+});
+
+describe("isEmptySection", () => {
+  test("a section has something to show where it holds a field or content of its own", () => {
+    const content = () => null;
+    expect(isEmptySection({ fields: [] })).toBe(true);
+    expect(isEmptySection({ fields: [{ name: "code" }] })).toBe(false);
+    expect(isEmptySection({ fields: [], render: content })).toBe(false);
   });
 });
 

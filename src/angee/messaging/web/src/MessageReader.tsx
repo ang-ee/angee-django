@@ -61,9 +61,9 @@ export function MessageReader({
   const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, { invalidateModels: STAR_MODELS });
   const [starError, setStarError] = React.useState<string>();
   const sender = senderDisplayName(message.sender, t("message.unknownSender"));
-  const recipients = Object.fromEntries(RECIPIENT_ROLES.map((role) => [role, message.participants
-    .filter((participant) => participant.role === role)
-    .map((participant) => senderDisplayName(participant.handle))]));
+  const recipients = Object.fromEntries(RECIPIENT_ROLES.map((role) => [role, message.recipients
+    .filter((recipient) => recipient.role === role)
+    .map((recipient) => senderDisplayName(recipient.handle))]));
   const preview = previewPartId ? message.parts.find((part) => part.id === previewPartId) : undefined;
   const previewUrl = preview?.file?.url;
   return (

@@ -25,7 +25,7 @@ class CorrespondenceKind(TimelineKind):
         "messaging.Message": ("sender", "thread", "platform", "direction", "sent_at", "created_at",
                               "preview", "created_by", "is_trashed", "merged_into"),
         "messaging.Part": ("message", "role", "fragment"),
-        "messaging.Participant": ("message", "handle"),
+        "messaging.Recipient": ("message", "handle"),
         "messaging.Thread": ("merged_into",),
         "messaging.ThreadAttachment": ("thread", "role"),
         "parties.Handle": ("party", "display_name"),
@@ -41,15 +41,22 @@ class CorrespondenceKind(TimelineKind):
         """Probe membership without the reader-dependent canonical-message collapse.
 
         A readable redirect remains visible when its survivor is unreadable, so
-        this actor-free probe deliberately includes all untrashed inbox copies.
+        this actor-free probe deliberately includes all untrashed inbox copies. The
+        eligibility sits inside each arm of the membership and the probe tests the
+        arms' existence, so a record whose mail is all trashed or record chatter
+        costs its own membership, never a scan of every message.
         """
-        return apps.get_model("messaging", "Message")._base_manager.filter(
-            self._record_filter(record), MessageQuerySet.inbox_q(), MessageQuerySet.untrashed_q(),
-        ).exists()
+        eligible = apps.get_model("messaging", "Message")._base_manager.filter(
+            MessageQuerySet.inbox_q(), MessageQuerySet.untrashed_q(),
+        )
+        return self._record_messages(record, eligible).exists()
 
     @staticmethod
-    def _record_filter(record: Any) -> models.Q:
-        """The readable message owns its envelope, including private membership edges."""
+    def _record_messages(record: Any, messages: models.QuerySet) -> models.QuerySet:
+        """The ids of ``messages`` the record's parties sent or received (``MessageQuerySet.ids_involving_parties``).
+
+        The readable message owns its envelope, including private membership edges.
+        """
         party = apps.get_model("parties", "Party")
         circle = apps.get_model("parties", "Circle")
         parties = party._base_manager.all().canonical().filter(party.objects.untrashed_q())
@@ -61,14 +68,16 @@ class CorrespondenceKind(TimelineKind):
             parties = parties.filter(pk__in=members.order_by().values("party_id"))
         else:
             parties = parties.filter(pk=record.pk)
-        return MessageQuerySet.involving_parties_filter(
+        return MessageQuerySet.ids_involving_parties(
             parties,
             handles=apps.get_model("parties", "Handle")._base_manager.all(),
-            participants=apps.get_model("messaging", "Participant")._base_manager.all(),
+            messages=messages,
+            recipients=apps.get_model("messaging", "Recipient")._base_manager.all(),
         )
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
-        rows = apps.get_model("messaging", "Message").objects.filter(self._record_filter(record))
+        message = apps.get_model("messaging", "Message")
+        rows = message.objects.filter(pk__in=self._record_messages(record, message._base_manager.all()))
         return rows.with_actor(actor).inbox().canonical().scoped().annotate(
             _order_at=rows.chronological_time(),
         ).select_related("sender", "created_by").with_title_text()
@@ -79,18 +88,29 @@ class CorrespondenceKind(TimelineKind):
         ))), message.authorship()[1]) for message in rows}
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        """Find concerned records with SQL membership, without hydrating a message fan-out."""
+        """Find concerned records with SQL membership, without hydrating a message fan-out.
+
+        A message concerns the parties of the handles that sent or received it
+        (:meth:`MessageQuerySet.involved_handle_ids`), each read through its merge
+        redirect: the handle's own party and the party of the handle it merged into.
+        Each step is an id union inside ``pk IN``, so no join multiplies rows.
+        """
         message = apps.get_model("messaging", "Message")
+        handle = apps.get_model("parties", "Handle")
         party = apps.get_model("parties", "Party")
         label = row._meta.concrete_model._meta.label
         if label == "messaging.Message":
             messages = message.objects.filter(pk=row.pk)
-        elif label in ("messaging.Participant", "messaging.Part"):
+        elif label in ("messaging.Recipient", "messaging.Part"):
             messages = message.objects.filter(pk=row.message_id)
         elif label == "parties.Handle":
             # A handle merge keeps messages on the retired handle; its survivor's group concerns them.
-            handles = apps.get_model("parties", "Handle")._base_manager.redirect_groups([row.merged_into_id or row.pk])
-            messages = message.objects.filter(models.Q(participants__handle__in=handles) | models.Q(sender__in=handles))
+            group = handle._base_manager.redirect_groups([row.merged_into_id or row.pk]).values("pk")
+            messages = message.objects.filter(pk__in=MessageQuerySet.ids_involving_handles(
+                group,
+                messages=message._base_manager.all(),
+                recipients=apps.get_model("messaging", "Recipient")._base_manager.all(),
+            ))
         elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
             messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
         else:
@@ -101,11 +121,10 @@ class CorrespondenceKind(TimelineKind):
             else:
                 parties = party.objects.filter(pk__in=(row.pk, row.canonical().pk))
             return self._records(parties)
-        involved = messages.order_by().values("pk")
+        handles = handle._base_manager.filter(pk__in=MessageQuerySet.involved_handle_ids(messages)).order_by()
         return self._records(party.objects.canonical().filter(
-            models.Q(handles__participations__message__in=involved)
-            | models.Q(handles__merged_from__participations__message__in=involved),
-        ).distinct())
+            pk__in=handles.values("party_id").union(handles.values("merged_into__party_id"), all=True),
+        ))
 
     @staticmethod
     def _records(parties: Iterable[models.Model]) -> list[RecordIdentity]:

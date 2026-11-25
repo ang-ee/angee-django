@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useWatch } from "react-hook-form";
+import { get, useWatch } from "react-hook-form";
 import { developmentMode } from "../../lib/development-mode";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
@@ -58,6 +58,7 @@ import {
   formDisplaysGroup,
   formSections,
   formViewFieldLayout,
+  isEmptySection,
   recordRepresentationValue,
   recordSubtitleParts,
   titleText,
@@ -531,9 +532,9 @@ export function useFormViewSurface({
   // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
     (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record),
-      (record ? displayedRailGroups(railGroups, record, railAdmits) : [])
+      (record ? displayedRailGroups(railGroups, record, railAdmits, modelMetadata) : [])
         .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
-    [railAdmits, railGroups, regularFormFieldsFor],
+    [modelMetadata, railAdmits, railGroups, regularFormFieldsFor],
   );
   const defaultSlugSource = React.useMemo(
     () => formFields.find((field) => field.title)?.name,
@@ -794,17 +795,26 @@ export function useFormViewSurface({
     },
     [declaredGroupSequences, displaysGroup, gridFields, gridGroups, pageGroupCount, save.displayRecord, save.linesActive],
   );
-  // The values the sheet's sections and the rail decide their conditional fields by, watched while
-  // any field is conditional (`formFields` holds the rail's, so they count) and read only by those.
-  const conditionValues = useWatch({ control: save.form.control, disabled: !hasConditionalFields });
-  const shownSections = hasConditionalFields ? visibleSections(allSections, conditionValues) : allSections;
+  // The values the sheet's sections and the rail decide their conditional fields by, and whether they
+  // display a field by (`displaysField`), watched while any field is conditional (`formFields` holds the
+  // rail's, so they count) or whether a field of the sections the record displays is displayed depends on
+  // its value (the owner, asked of the field holding none, would leave it out), and read only by those.
+  const watchesValues = hasConditionalFields || allSections.some((section) => section.fields.some((field) => !save.displaysField(field, undefined)));
+  const conditionValues = useWatch({ control: save.form.control, disabled: !watchesValues });
+  const shownSections = watchesValues
+    ? visibleSections(allSections, conditionValues, (field) => save.displaysField(field, get(conditionValues, field.name)))
+    : allSections;
   const visibleRailGroups = React.useMemo(
     () => visibleRecordRailGroups(railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields),
     [railGroups, save.displayRecord, conditionValues, modelMetadata, railAdmits, sheetFields],
   );
-  // A `pane` group fills its own pane beneath the sheet; every other section is the sheet.
+  // A `pane` group fills its own pane beneath the sheet; every other section is the sheet. A pane with
+  // nothing to show is no pane, as the sheet renders nothing for an empty section (`isEmptySection`).
   const sections = React.useMemo(() => shownSections.filter((section) => section.pane === undefined), [shownSections]);
-  const paneSections = React.useMemo(() => shownSections.filter((section) => section.pane !== undefined), [shownSections]);
+  const paneSections = React.useMemo(
+    () => shownSections.filter((section) => section.pane !== undefined && !isEmptySection(section)),
+    [shownSections],
+  );
   const subtitleParts = React.useMemo(
     () =>
       recordSubtitleParts(

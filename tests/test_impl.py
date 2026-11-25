@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import importlib.util
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Literal
+from uuid import UUID
 
 import pytest
+from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
+from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
+from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.hooks import resolve_hook, resolve_hooks
@@ -29,7 +33,7 @@ from angee.base.schemas.forms import config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import OAuthClient, VcsBridge
+from tests.conftest import OAuthClient, VcsBridge, Vendor
 from tests.tables import model_tables
 
 
@@ -403,6 +407,75 @@ def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_n
         assert stored.adapter == "typed"
 
 
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_model_naming_its_configuration_column_stores_it_validated_and_refuses_under_that_name() -> None:
+    """``impl_config_field`` names the column: every save stores the validated value there, system work included."""
+
+    class NamedConfigRecord(ImplDefaultsMixin):
+        impl_config_field = "settings"
+        adapter = ImplClassField(_BaseImpl)
+        settings = models.JSONField(default=dict)
+        label = models.CharField(max_length=50, default="")
+
+        class Meta:
+            app_label = "tests"
+
+    assert NamedConfigRecord.check() == []
+    with model_tables((NamedConfigRecord,)):
+        record = NamedConfigRecord.objects.create(adapter="typed", settings={"retries": "2"})
+        stored = NamedConfigRecord.objects.get(pk=record.pk)
+        assert stored.settings == {"endpoint": "https://example.test", "retries": 2}
+
+        record.settings = {"retries": "many"}
+        with pytest.raises(ValidationError) as refused:
+            record.save()
+        assert list(refused.value.message_dict) == ["settings.retries"]
+        assert NamedConfigRecord.objects.get(pk=record.pk).settings["retries"] == 2
+
+        untouched = NamedConfigRecord.objects.only("label").get(pk=record.pk)
+        untouched.label = "renamed"
+        untouched.save(update_fields=["label"])
+        assert "settings" not in untouched.__dict__
+
+        assert record.apply_config_patch({"retries": 5}) == {"settings"}
+        with pytest.raises(ValidationError) as patched:
+            record.apply_config_patch(["retries"])
+        assert list(patched.value.message_dict) == ["settings"]
+
+        seeded = NamedConfigRecord(adapter="typed")
+        assert seeded.materialize_impl_defaults(_TypedConfigImpl) == {"settings"}
+        assert seeded.settings == {"endpoint": "https://example.test"}
+
+
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_model_without_the_column_it_names_fails_the_typed_config_check() -> None:
+    class MissingConfigRecord(ImplDefaultsMixin):
+        impl_config_field = "settings"
+        adapter = ImplClassField(_BaseImpl)
+        config = models.JSONField(default=dict)
+
+        class Meta:
+            app_label = "tests"
+
+    (error,) = MissingConfigRecord.check()
+
+    assert (error.id, error.msg) == ("angee.E046", "MissingConfigRecord has no field named 'settings'")
+
+
+def test_the_configuration_column_stays_config_for_every_composer_that_names_none() -> None:
+    from angee.agents.testing.models import InferenceProvider
+    from angee.integrate.testing.integration import Integration
+
+    assert ImplDefaultsMixin.impl_config_field == "config"
+    for model in (Integration, OAuthClient, InferenceProvider, VcsBridge):
+        assert model.impl_config_field == "config"
+        assert [error.id for error in model.check() if error.id in {"angee.E046", "angee.E047"}] == []
+    assert VcsBridge._config_field().name == "config"
+
+
 def test_effective_defaults_merges_along_mro() -> None:
     """A refinement inherits its base's defaults and overrides only what it restates."""
 
@@ -661,20 +734,65 @@ def test_typed_config_projects_native_input_constraints() -> None:
     assert spec["properties"]["names"]["maxItems"] == 3
 
 
-def test_typed_config_projects_native_date_widgets() -> None:
-    """Pydantic date formats use the existing FormSpec date controls."""
+@pytest.mark.parametrize(("annotation", "declared"), [
+    (date, {"type": "string", "format": "date", "widget": "date"}),
+    (datetime, {"type": "string", "format": "date-time", "widget": "datetime"}),
+], ids=["date", "date-time"])
+@pytest.mark.parametrize("shape", ["plain", "nullable", "list", "nested"])
+def test_typed_config_projects_native_date_widgets(annotation: type, declared: dict[str, str], shape: str) -> None:
+    """A Pydantic date or date and time keeps its declared format beside the date control it selects, at every depth."""
 
-    class DateConfig(BaseModel):
-        day: date
-        moment: datetime
+    required = {"label": "Value", "presenceRequired": True}
+    member, expected = {
+        "plain": ((annotation, ...), {**declared, **required}),
+        "nullable": (
+            (annotation | None, None),
+            {**declared, "nullable": True, "label": "Value", "defaultValue": None, "omittable": True},
+        ),
+        "list": ((list[annotation], ...), {"type": "array", "widget": "list", "items": declared, **required}),
+        "nested": ((create_model("Inner", value=(annotation, ...)), ...), {
+            "type": "object", "widget": "object", "properties": {"value": {**declared, **required}},
+            "required": ["value"], **required,
+        }),
+    }[shape]
 
     class DateImpl(ImplBase):
-        config_model = DateConfig
+        config_model = create_model("DateConfig", value=member)
 
     spec = DateImpl.config_form_spec()
     assert spec is not None
-    assert spec["properties"]["day"]["widget"] == "date"
-    assert spec["properties"]["moment"]["widget"] == "datetime"
+    assert spec["properties"]["value"] == expected
+
+
+def test_typed_config_keeps_a_date_format_under_an_authored_widget() -> None:
+    """An authored widget replaces the control and keeps the format; an authored JSON widget carries none."""
+
+    class AuthoredConfig(BaseModel):
+        day: date = Field(json_schema_extra={"widget": "text"})
+        moment: datetime = Field(json_schema_extra={"widget": "date"})
+        raw: date = Field(json_schema_extra={"widget": "json"})
+        started: datetime = datetime(2024, 1, 31, 12, 0)
+
+    class AuthoredImpl(ImplBase):
+        config_model = AuthoredConfig
+
+    spec = AuthoredImpl.config_form_spec()
+    assert spec is not None
+    required = {"presenceRequired": True}
+    assert spec["properties"]["day"] == {
+        "type": "string", "format": "date", "widget": "text", "label": "Day", **required,
+    }
+    assert spec["properties"]["moment"] == {
+        "type": "string", "format": "date-time", "widget": "date", "label": "Moment", **required,
+    }
+    # An authored JSON widget renders the member as raw JSON: no declared type travels with it.
+    assert spec["properties"]["raw"] == {"type": "any", "widget": "json", "label": "Raw", **required}
+    # A default the typed model accepts stands beside the format even where the format's own grammar
+    # (RFC 3339 wants an offset) refuses it: nothing asserts the format on the projected spec.
+    assert spec["properties"]["started"] == {
+        "type": "string", "format": "date-time", "widget": "datetime", "label": "Started",
+        "defaultValue": "2024-01-31T12:00:00", "omittable": True,
+    }
 
 
 def test_typed_config_projects_integer_exclusive_bounds_exactly() -> None:
@@ -761,6 +879,7 @@ def test_typed_config_projects_explicit_dynamic_json_and_datetime_widgets() -> N
     }
     assert spec["properties"]["scheduled_at"] == {
         "type": "string",
+        "format": "date-time",
         "widget": "datetime",
         "label": "Scheduled At",
         "presenceRequired": True,
@@ -930,6 +1049,10 @@ def test_typed_config_omits_default_factory_without_invoking_it() -> None:
         (list[str | int], "config.payload[]", "union"),
         (dict[str, str], "config.payload", "mapping/additionalProperties"),
         (tuple[str, int], "config.payload", "keywords prefixItems"),
+        (time, "config.payload", "format 'time'"),
+        (timedelta, "config.payload", "format 'duration'"),
+        (UUID, "config.payload", "format 'uuid'"),
+        (AnyUrl, "config.payload", "format 'uri'"),
     ],
 )
 def test_typed_config_rejects_unsupported_shapes_with_exact_path(
@@ -1165,6 +1288,14 @@ def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_sha
         config_form_spec(Config.model_json_schema(by_alias=True), owner="Config")
 
 
+def test_json_fallback_renders_an_unsupported_format_as_an_untyped_member_without_its_format():
+    class Config(BaseModel):
+        at: time
+
+    fields = config_form_spec(Config.model_json_schema(by_alias=True), owner="Config", json_fields=True)["properties"]
+    assert fields["at"] == {"type": "any", "widget": "json", "label": "At", "presenceRequired": True}
+
+
 def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
     class Target(str, Enum):
         first = "first"
@@ -1254,3 +1385,43 @@ def test_optional_cross_addon_hooks_are_inactive_when_unset(settings, name):
         assert _verifier() is None
     elif name == "ANGEE_PROFILING_PERMISSION":
         assert not profiling_permitted(object())
+
+
+def _registry_without(field: ImplClassField, key: str) -> dict[str, dict[str, str]]:
+    """The field's registry setting with ``key`` taken out, as when its providing addon leaves."""
+
+    registry = getattr(settings, field.registry_setting)
+    return {field.registry_setting: {name: path for name, path in registry.items() if name != key}}
+
+
+@pytest.mark.django_db
+def test_a_stored_row_saves_its_key_after_the_registry_drops_it() -> None:
+    """Only a new row's key is refused: a stored row saves, fully or in part, as it always did."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.stale.create"):
+        row = backend_model.objects.create(slug="stale", label="Stale", backend_class="local")
+    with override_settings(**_registry_without(backend_model._meta.get_field("backend_class"), "local")):
+        with system_context(reason="test.impl.stale.save"):
+            row.label = "Renamed"
+            row.save()
+            row.save(update_fields=["label"])
+    assert backend_model._base_manager.get(pk=row.pk).label == "Renamed"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("registered", (True, False), ids=("registered", "dropped"))
+def test_a_config_only_save_is_validated_against_the_rows_implementation(registered: bool) -> None:
+    """Writing only ``config`` still validates it, whether or not the key's implementation is still registered."""
+
+    with system_context(reason="test.impl.config.create"):
+        Vendor.objects.get_or_create(slug="github", defaults={"display_name": "GitHub"})
+        row = VcsBridge.objects.create_capability(display_name="Config bridge", backend_class="github")
+    stored = VcsBridge._base_manager.get(pk=row.pk).config
+    dropped = {} if registered else _registry_without(VcsBridge._meta.get_field("backend_class"), "github")
+    with override_settings(**dropped), system_context(reason="test.impl.config.save"):
+        loaded = VcsBridge._base_manager.get(pk=row.pk)
+        loaded.config = {"not_a_github_option": 1}
+        with pytest.raises((ValidationError, ImproperlyConfigured)):
+            loaded.save(update_fields=["config"])
+    assert VcsBridge._base_manager.get(pk=row.pk).config == stored

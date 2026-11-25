@@ -36,7 +36,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.permissions import actor_user_id, instance_actor, require_save_allowed
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.intake.choices import NeedAccessAction
 from angee.intake.resources import NeedResource
@@ -215,6 +215,8 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 body=body,
                 importance=importance_value,
             )
+            # Decided as the save below will be: a refused caller runs none of the need's field validators.
+            require_save_allowed(need.with_actor(actor))
             need.full_clean(validate_unique=False, validate_constraints=False)
             if party is not None:
                 need.validate_party_assignment()

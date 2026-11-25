@@ -17,6 +17,8 @@ def test_composed_examples(tmp_path: Path, subtests: pytest.Subtests) -> None:
             "tests.native_notes_owner_campaign.NotesOwnerCampaign",
             "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
             ".test_console_reads_stay_within_their_fixed_ceilings",
+            "tests.native_graphql_document_budgets.ConsoleDocumentBudgetTests"
+            ".test_console_reads_issue_no_statement_per_row",
         ),
         postgresql=(
             "example.notes.tests.test_workflow_steps",

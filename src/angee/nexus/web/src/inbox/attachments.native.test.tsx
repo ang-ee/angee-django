@@ -54,7 +54,7 @@ const message = {
   message_type: "EMAIL", platform: "email", status: "RECEIVED", starred: false, sent_at: "2026-10-01T10:00:00Z",
   created_at: "2026-10-01T10:00:00Z", received_at: "2026-10-01T10:00:00Z", external_id: "", sender,
   thread: { id: "thread-1", title: null, modality: "EMAIL", conversation_label: "Renewals" }, channel: null,
-  participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
+  recipients: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
 function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false) {

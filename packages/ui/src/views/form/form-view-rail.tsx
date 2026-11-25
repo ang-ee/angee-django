@@ -76,28 +76,33 @@ function assertUniqueRailGroups(groups: readonly RecordRailGroupProps[]): void {
  * conditions on the record are decided. A group is held where `admits`, the form's container
  * admission, admits its row-decided child (`containerChild`) and the record holds the group's
  * `permission` and its child's (`holdsPermission`); a row, where the record also holds the row's
- * `permission`. The fields the form checks and saves read it, and so does the rail's display
- * (`visibleRecordRailGroups`), which then leaves out the rows of fields the metadata does not read
- * and those hidden for the form's values. Two alternatives the record admits together (two impl
- * children for its impl) still clash, whatever their permissions.
+ * `permission` and `metadata` reads the row's field. The fields the form checks and saves read it,
+ * and so does the rail's display (`visibleRecordRailGroups`), which then leaves out the rows hidden
+ * for the form's values. Two alternatives the record admits together (two impl children for its
+ * impl) still clash, whatever their permissions.
  */
 export function displayedRailGroups(
   groups: readonly ContributedRailGroup[],
   record: Row,
   admits: (child: string, record: Row) => boolean,
+  metadata: ModelMetadata | null,
 ): readonly ContributedRailGroup[] {
   const admitted = groups.filter((group) => group.containerChild === undefined || admits(group.containerChild, record));
   assertUniqueRailGroups(admitted);
   return admitted.flatMap((group) => {
     if (group.permission && !holdsPermission(record, group.permission)) return [];
     if (group.childPermission && !holdsPermission(record, group.childPermission)) return [];
-    return [{ ...group, fields: (group.fields ?? []).filter((row) => !row.permission || holdsPermission(record, row.permission)) }];
+    return [{ ...group, fields: (group.fields ?? []).filter((row) => {
+      const fieldMetadata = metadata?.fields[row.field.name];
+      return Boolean(fieldMetadata) && fieldMetadata?.readable !== false
+        && (!row.permission || holdsPermission(record, row.permission));
+    }) }];
   });
 }
 
 /**
  * Only the server-authorized, projected rows reach the record rail: those the record displays
- * (`displayedRailGroups`), of fields the metadata reads; of those, a field shows as the sheet's do:
+ * (`displayedRailGroups`); of those, a field shows as the sheet's do:
  * visible for the form's `values` (its `showWhen`, resolved through `resolve`) and not `hidden`.
  * Where the sheet's own declared fields (`declared`) hold one of the row's name, that declaration
  * decides whether the row is visible, through its `showWhen` and `resolve`; the row's own descriptor
@@ -114,9 +119,8 @@ export function visibleRecordRailGroups(
   declared: readonly FieldDescriptor[] = [],
 ): readonly ContributedRailGroup[] {
   if (!record) return [];
-  return displayedRailGroups(groups, record, admits).flatMap((group) => {
+  return displayedRailGroups(groups, record, admits, metadata).flatMap((group) => {
     const fields = (group.fields ?? []).flatMap((row) => {
-      if (!metadata?.fields[row.field.name] || metadata.fields[row.field.name]?.readable === false) return [];
       const field = resolveField(row.field, values);
       const owner = declared.find((candidate) => candidate.name === row.field.name);
       return isFieldVisible(owner ? resolveField(owner, values) : field, values) && !field.hidden ? [{ ...row, field }] : [];

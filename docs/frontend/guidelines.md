@@ -1199,8 +1199,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Record rails reuse form fields.** Contribute a `FormView.RailGroup` as a
   `<model>#rail` child with standard field descriptors and optional
   group/row permissions. The form selects those fields and binds them to its
-  save state; unreadable rows stay absent, and a row behind a permission the
-  record lacks, or of a child it does not admit, is neither checked nor saved.
+  save state; a row whose field the metadata does not read, behind a permission
+  the record lacks, or of a child it does not admit is neither shown, checked
+  nor saved.
   The rail sits beside the sheet and
   stacks beneath it in a narrow container.
 - **Inline visibility controls bind a server verb.** Declare a
@@ -1333,16 +1334,57 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   A dialog that checks its rules itself (a `MutationDialog`, an `ActionFormDialog`
   without a resolver) validates in RHF's `onChange` mode, so a value a person enters
   that breaks a rule shows its message while the gate disables submission.
+  What a form field holds when it holds nothing has one owner,
+  [emptyValueForField](../../packages/ui/src/views/form/field-values.ts), which
+  the record form's draft, every dialog's seeds and the presence control read: a
+  descriptor with a declared `format` (a date, a date and time or a time carried
+  as text) holds `null`, then an explicit `string` kind holds `""` whatever its
+  widget, the `integer` and `float` widgets and the date and time widgets
+  `null`; a lines editor's new cell has its own rule. A form spec's parser
+  carries the `format` from the schema
+  ([deserializeFormSpec](../../packages/ui/src/views/form/form-spec.ts)), and
+  the backend's form spec keeps it beside the date control it selects; a
+  hand-written descriptor that carries a date as text declares it. In a schema
+  dialog, a `MutationDialog` and a record form's create draft, a member that
+  may be left out is not seeded with a value its own declared type refuses
+  ([refusesSeed](../../packages/ui/src/views/form/field-values.ts)); it stays
+  absent. A field whose empty value is `null` has no "present but empty"
+  state: holding `null`, it shows its own control. The metadata layer projects
+  only a widget ([fieldsWithMetadataDefaults](../../packages/ui/src/views/resource/model-metadata-defaults.ts)),
+  so a descriptor without a kind takes its widget's empty value.
   Record forms and dialogs find a field's failed rules through one owner,
   [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
   structured field `required` means presence and the field's own bounds judge a
-  blank. A record form asks the fields its save writes whose descriptor is
-  neither hidden, nor read-only, nor excluded by its condition; those are its
-  own fields, the fields of the groups it displays for the record
-  ([formDisplaysGroup](../../packages/ui/src/views/form/form-view-model.ts)) and
-  those of the rail rows whose permissions and child the record holds and admits
-  ([displayedRailGroups](../../packages/ui/src/views/form/form-view-rail.tsx)), so
-  a field only a group it does not display declares is neither asked nor sent.
+  blank. A record form asks the fields its save can write and the record does
+  not redact, whose descriptor is neither hidden, nor read-only, nor excluded by
+  its condition, whatever their widget. Its fields are its own, the fields of
+  the groups it displays for the record
+  ([formDisplaysGroup](../../packages/ui/src/views/form/form-view-model.ts))
+  and those of the rail rows whose permissions and child the record holds and
+  admits and whose field the metadata reads
+  ([displayedRailGroups](../../packages/ui/src/views/form/form-view-rail.tsx)).
+  Two facts decide the rest, each with one owner. Writability
+  ([pathWritable](../../packages/ui/src/views/form/form-view-model.ts)): of
+  those fields, the save can write the ones its mode writes (the model's
+  updatable fields on an edit, its create fields on a create), and under the
+  form's own submit owner, which receives the whole values, every path; it
+  decides what is sent, the save's resets of hidden fields included. Readability
+  ([fieldIsRedacted](../../packages/ui/src/views/form/form-view-model.ts)): a
+  field the record redacts is not asked and shows its lock, yet the form still
+  sends one it wrote itself (a preset's write, a hidden reset), and not a flat
+  one it only loaded. So a field only a group it does not display declares and one the
+  mode cannot write are neither asked nor sent, and the control of any path the
+  save cannot write, a page-rendered one included, is read-only unless, on a
+  saved record, its widget writes its own value (below); a page that renders its
+  own control declares the field, hidden if need be. On a create, a field the
+  save cannot write that holds nothing to display (no value, a text of blanks,
+  an empty list or an empty object:
+  [holdsNothingToDisplay](../../packages/ui/src/views/form/form-view-model.ts),
+  the display's own fact, not the rule check's) is not displayed at all, nor is
+  an empty read-only status
+  ([formDisplaysField](../../packages/ui/src/views/form/form-view-model.ts));
+  a field holding a value is displayed read-only, and a section or pane left
+  with nothing to show is left out.
   No form asks a hidden or read-only member or list item: the server answers for
   what the client does not check.
 - A widget that consumes a fixed array of object fields declares
@@ -1351,6 +1393,18 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   widget that cannot accept it; compose the shared `rows` widget for fixed-size
   tables. The exported `DecisionCard` renders concerned records, proposal
   alternatives, evidence, and the chosen verdict for any question.
+- A widget that, on a saved record, commits its value through its own action
+  (a verb, a mutation, a dialog), or not at all, declares `writesOwnValue: true`
+  in its widget definition; the flag is read from the registered definition, so
+  register such a widget eagerly, not through `lazyWidget`. A record form leaves
+  such a widget its own editability where the save cannot write its field;
+  without the flag that control is read-only there
+  ([fieldControlReadOnly](../../packages/ui/src/views/form/form-view-model.ts)).
+  On a create the flag changes nothing, and a redacted field's control is locked
+  or read-only whatever it says. The rule reads registered widgets only: a component a form
+  renders directly (an extra below it, a group's content) is outside it. The
+  shared `visibility` widget, `projects.phase` and `angee.tags.recordTags`
+  declare it.
 - Graph editing composes [GraphEditor](../../packages/ui/src/views/GraphEditor.tsx);
   consumers own connection policy, selection and persisted layout.
 - Filter entry composes [FilterClauseEditor](../../packages/ui/src/toolbars/FilterClauseEditor.tsx);

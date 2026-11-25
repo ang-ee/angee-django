@@ -714,6 +714,72 @@ def test_resource_manager_loads_rows_and_resolves_xrefs(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_a_row_its_file_omits_keeps_its_ledger_row_and_record_and_its_xref_returns_to_that_record(
+    tmp_path: Path,
+) -> None:
+    """A row its file stops listing keeps its ledger row and record; listed again, its xref binds that record.
+
+    A load writes only the rows its files declare: an omitted row's ledger row and
+    record stay as they were. The xref stays the record's identity, so a file that
+    declares it again updates that same record and makes none.
+    """
+
+    class OmittedRow(AngeeModel):
+        """Row a resource file declares, then omits, then declares again."""
+
+        name = models.CharField(max_length=40)
+
+        class Meta:
+            """Django model options for the test model."""
+
+            app_label = "base"
+            rebac_resource_type = "base/omitted-row"
+
+    class OmittedLedger(Resource):
+        """Concrete resource ledger for the omitted-row test."""
+
+        class Meta(Resource.Meta):
+            """Django model options for the test ledger."""
+
+            app_label = "base"
+            abstract = False
+
+    (tmp_path / "resources").mkdir()
+    rows = tmp_path / "resources" / "010_base.omittedrow.csv"
+    owner = addon(tmp_path, manifest={"master": ({"path": "010_base.omittedrow.csv"},)})
+
+    def load(body: str) -> LoadResult:
+        rows.write_text(body, encoding="utf-8")
+        return OmittedLedger.objects.load_addons((owner,), tiers=[Resource.Tier.MASTER])
+
+    def observed() -> tuple[dict[str, dict[str, Any]], dict[Any, str]]:
+        with system_context(reason="test.resources.omitted_rows"):
+            ledger = {row["xref"]: row for row in OmittedLedger.objects.values()}
+            records = dict(OmittedRow.objects.values_list("pk", "name"))
+        return ledger, records
+
+    with model_tables((OmittedRow, OmittedLedger)):
+        assert load("_xref,name\nkept,Kept\nleft,Left\n").created == 2
+        ledger, records = observed()
+
+        omitted = load("_xref,name\nkept,Kept\n")
+
+        assert (omitted.created, omitted.updated, omitted.skipped) == (0, 0, 1)
+        # Untouched: the same ledger rows, written at the same time, and the same records.
+        assert observed() == (ledger, records)
+
+        returned = load("_xref,name\nkept,Kept\nleft,Left again\n")
+
+        assert (returned.created, returned.updated, returned.skipped) == (0, 1, 1)
+        again, now = observed()
+        assert {xref: (row["id"], row["target_id"]) for xref, row in again.items()} == {
+            xref: (row["id"], row["target_id"]) for xref, row in ledger.items()
+        }
+        left = next(pk for pk, name in records.items() if name == "Left")
+        assert now == {**records, left: "Left again"}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_resource_manager_keeps_same_path_groups_addon_scoped(
     tmp_path: Path,
 ) -> None:

@@ -128,6 +128,13 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Main record body; `document` renders continuous prose without a visible field label or box. */
   body?: boolean | "document";
   kind?: PageFieldKind;
+  /**
+   * The value's declared type as text, by its JSON Schema `format`: a date, a date and time, or a
+   * time. Never its presentation, which the widget owns. A form spec's parser sets it; a field that
+   * holds nothing holds `null` when it declares one (`emptyValueForField`), whatever its kind and
+   * widget, so declare it only on a value held as text.
+   */
+  format?: "date" | "date-time" | "time";
   description?: ReactNode;
 }
 

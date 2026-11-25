@@ -145,9 +145,7 @@ the PostgreSQL branches in `test_extraction_models.py`, the
 [resource ledger's](../tests/test_resource_ledger.py)
 concurrent upsert, a form's submission, delivery and publication
 [races](../tests/test_webforms_concurrency.py), and the composed profiles that carry PostgreSQL contracts also run by
-node. The selection also runs the
-[move of webform channels to forms](../tests/test_webforms_messaging_upgrade.py), whose one migration writes rows
-and then alters the channel table, and the [race of two forms](../tests/test_webforms_messaging_concurrency.py)
+node. The selection also runs the [race of two forms](../tests/test_webforms_messaging_concurrency.py)
 saved on one channel and slug. Every other listed file runs whole, which keeps the SQLite
 floor tests out of the PostgreSQL zero-skip gate. The six groups are assigned
 by pytest-split's `least_duration` algorithm over the
@@ -167,14 +165,23 @@ lane's executed coverage.
 
 ### SQLite Version
 
-SQLite runs need SQLite 3.53 or newer. Earlier releases (3.51.2 and older were
-checked) reject a subquery whose `ORDER BY` names an outer query's column and report
-`no such column`; messaging's redirect-aware follower reads depend on that. Python
-reports its library as `uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`.
-uv's managed CPython bundles a current SQLite, while a distribution's system Python
-links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1). CI sets
-`UV_PYTHON_PREFERENCE: only-managed` for that reason; locally, pass `--managed-python`
-or set the same variable when the system Python is older.
+SQLite runs need SQLite 3.53, and the [test settings](../tests/settings.py) refuse any
+other release. Earlier releases (3.51.2 and older were checked) reject a subquery whose
+`ORDER BY` names an outer query's column and report `no such column`; messaging's
+redirect-aware follower reads depend on that. SQLite 3.54.0 and 3.54.1 count each common
+table expression against the nesting limit, and django-zed-rebac's permission reads, one
+`WITH RECURSIVE` of many id-set expressions, exceed it and report `VIEWs and/or subqueries
+nested too deep`. Python reports its library as
+`uv run --locked python -c "import sqlite3; print(sqlite3.sqlite_version)"`. uv's managed
+CPython 3.14.9 bundles SQLite 3.53.1 and 3.14.10 bundles 3.54.1, so the repository's
+[`.python-version`](../.python-version) names 3.14.9 until those reads fit the limit or a
+SQLite release lifts it. uv reads it for every `uv run` and `uv sync` in the checkout,
+locally and in CI, and recreates a virtual environment built on another patch release; the
+[reusable checks](../.github/workflows/reusable-checks.yml) pass it to the composed-stack
+lane, which runs uv from the stack root above the checkout. A distribution's system Python
+links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1); CI sets
+`UV_PYTHON_PREFERENCE: only-managed` for that reason, and locally `--managed-python` does
+the same.
 
 ### Local PostgreSQL Prerequisites
 

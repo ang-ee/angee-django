@@ -12,6 +12,7 @@ import {
 import { testDataResource } from "@angee/metadata/testing";
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -707,6 +708,93 @@ describe("ActionFormDialog", () => {
 
     expect(await screen.findByText("Enter a valid whole number.")).toBeTruthy();
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("an optional date argument left untouched reaches the submit as null, never an empty text", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Filed." });
+    renderDialog({ id: "file", label: "File", submit, args: [
+      { name: "title", label: "Title", widget: "text", defaultValue: "A pain" },
+      { name: "due_date", label: "Due", widget: "date", optional: true },
+    ] });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "File" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ title: "A pain", due_date: null });
+  });
+
+  test("guard: a required date argument left empty, holding null, says the field is required, never that it wants another type", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "post", label: "Post", submit, args: [{ name: "date", label: "Date", widget: "date" }] });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Post" });
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message is the check's answer to this submit, which it refused; the form calls the action's
+    // submit only when the check passes, so the submit never started and a slow one cannot land later.
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: a schema dialog's required number left empty, holding null, says the field is required, never that it wants another type", async () => {
+    const submit = vi.fn();
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["size"], properties: { size: { type: "integer", label: "Size" } },
+    }, defaultWidgets) });
+    await screen.findByLabelText("Size");
+    fireEvent.submit(screen.getByRole("button", { name: "Resize" }).closest("form")!);
+    expect(await screen.findByText("This field is required.")).toBeTruthy();
+    expect(screen.queryByText(/^Enter a valid/)).toBeNull();
+    // The message is the check's answer to this submit, which it refused; the form calls the action's
+    // submit only when the check passes, so the submit never started and a slow one cannot land later.
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("a schema dialog leaves an optional number untouched out, as its own type refuses the empty null, and submits", async () => {
+    const submit = vi.fn().mockResolvedValue({ ok: true, message: "Resized." });
+    renderDialog({ id: "size", label: "Resize", submit, args: jsonSchemaActionArgs({
+      type: "object", required: ["name"], properties: { name: { type: "string", label: "Name" }, size: { type: "integer", label: "Size" } },
+    }, defaultWidgets, { initialValues: { name: "Main" } }) });
+    await screen.findByLabelText("Size");
+    fireEvent.click(screen.getByRole("button", { name: "Resize" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(submit.mock.calls[0]![0]).toStrictEqual({ name: "Main" });
+  });
+
+  test("a schema dialog's date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
+    renderDialog({ id: "plan", label: "Plan", submit: vi.fn(), args: jsonSchemaActionArgs({
+      type: "object", properties: { due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" } },
+    }, defaultWidgets) });
+    await screen.findByText("Left empty");
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  test("a schema dialog treats Add item on a list of dates carried as text as it treats a list of integers", async () => {
+    const stateAfterAddItem = async (items: Record<string, unknown>) => {
+      const submit = vi.fn().mockResolvedValue({ ok: true, message: "Planned." });
+      renderDialog({ id: "plan", label: "Plan", submit, args: jsonSchemaActionArgs({
+        type: "object", properties: { days: { type: "array", widget: "list", label: "Days", items } },
+      }, defaultWidgets) });
+      const messages = () => screen.queryAllByText(/^(This field is required\.|Enter a valid)/).map((node) => node.textContent);
+      fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+      const button = screen.getByRole("button", { name: "Plan" }) as HTMLButtonElement;
+      // The gate read the new item's rule: it disabled the submit. A dialog with a resolver shows a rule's
+      // message only on a submit attempt, so none can appear before one.
+      await waitFor(() => expect(button.disabled).toBe(true));
+      const added = { disabled: button.disabled, messages: messages() };
+      fireEvent.submit(button.closest("form")!);
+      // The message is the check's answer to this attempt, which it refused: the form calls the action's
+      // submit only when the check passes, so it never started and a slow one cannot land later.
+      await screen.findByText("This field is required.");
+      const attempted = { submitted: submit.mock.calls.length, messages: messages() };
+      cleanup();
+      return { added, attempted };
+    };
+    const dates = await stateAfterAddItem({ type: "string", format: "date", widget: "date" });
+    const integers = await stateAfterAddItem({ type: "integer" });
+    expect(integers.added).toStrictEqual({ disabled: true, messages: [] });
+    expect(integers.attempted.submitted).toBe(0);
+    expect(dates).toStrictEqual(integers);
   });
 
   test("serializes datetime args with the picked local UTC offset", async () => {

@@ -49,7 +49,12 @@ from angee.calendar.models import CalendarEventQuerySet, CalendarQuerySet, Event
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    CreationClaim,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
@@ -233,8 +238,8 @@ class CalendarEventWriteBackend(AngeeHasuraWriteBackend):
     sync supplies is kept as given (:meth:`CalendarEvent.series_defaults`).
     """
 
-    def insert(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
-        """Fill the omitted override defaults from the master the actor reads, then insert."""
+    def insert(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
+        """Fill the omitted override defaults from the master the actor reads, then insert as the base decides."""
 
         omitted = [
             name for name in ("visibility", "transparency") if data.get(name, strawberry.UNSET) is strawberry.UNSET
@@ -244,7 +249,7 @@ class CalendarEventWriteBackend(AngeeHasuraWriteBackend):
             readable = CalendarEvent.objects.with_actor(session_user(info))
             defaults = require_instance_for_id(CalendarEvent, str(series), queryset=readable).series_defaults()
             data = {**data, **{name: defaults[name] for name in omitted}}
-        return super().insert(info, data)
+        return super().insert(info, data, claim=claim)
 
 
 # ---------------------------------------------------------------------------

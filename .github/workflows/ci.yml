@@ -23,7 +23,6 @@ jobs:
     uses: ./.github/workflows/reusable-checks.yml
     secrets: inherit
     with:
-      python-version: "3.14"
       # Packages are checked hermetically; addon fragments are checked again
       # against generated GraphQL documents in the composed-stack lane.
       pnpm-enabled: true
@@ -32,7 +31,7 @@ jobs:
       framework-repository: ${{ github.repository }}
       framework-ref: ${{ github.sha }}
       # Match the bridge dependency artifacts to this framework's manifests.
-      bridges-ref: "ef4da950a3d9c08058a4f64b6c96a39e068cf09c"
+      bridges-ref: "b5bfc0aa85b95f9c7655f61c9fcdcc51ad91c349"
       # CI_RUNS_ON (a JSON runs-on value) moves every job to self-hosted runners; a
       # pull request from a fork always runs on GitHub-hosted ones.
       runs-on: ${{ (github.event.pull_request.head.repo.fork && '"ubuntu-latest"') || vars.CI_RUNS_ON || '"ubuntu-latest"' }}

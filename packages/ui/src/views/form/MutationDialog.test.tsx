@@ -12,7 +12,6 @@ import { lazyWidget } from "../../widgets/lazy-widget";
 import {
   LabeledDescriptorField,
   MutationDialog,
-  emptyValueForField,
   mutationDialogValueCodecs,
   submitMutationDialog,
 } from "./MutationDialog";
@@ -102,6 +101,87 @@ describe("MutationDialog", () => {
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
     await waitFor(() => expect(submit).toHaveBeenCalledWith({}, { errorNotification: false }));
+  });
+
+  test("an untouched optional number is not seeded with the null its own type refuses: its parse sees no value", async () => {
+    const parse = vi.fn(parseRawValues);
+    const submit = vi.fn().mockResolvedValue(ok);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Connect" fields={[
+        { name: "host", label: "Host", required: true },
+        { name: "port", label: "Port", kind: "integer" },
+      ]} initialValues={{ host: "mail.example.com" }} submitLabel="Connect" parseValues={parse} onSubmit={submit} />
+    </AppRuntimeProvider>);
+    expect((screen.getByRole("textbox", { name: "Port" }) as HTMLInputElement).value).toBe("");
+    const button = screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    // The registered control hands back `undefined`, no value, where it handed back `null`.
+    expect(parse.mock.calls[0]![0]).toEqual({ host: "mail.example.com" });
+    expect(parse.mock.calls[0]![0].port).toBeUndefined();
+  });
+
+  test("guard: an untouched required field keeps the submit disabled silently: a submit attempt shows no message and parses nothing", async () => {
+    const parse = vi.fn(parseRawValues);
+    const submit = vi.fn().mockResolvedValue(ok);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Resize" fields={[
+        { name: "size", label: "Size", kind: "integer", required: true },
+      ]} submitLabel="Resize" parseValues={parse} onSubmit={submit} />
+    </AppRuntimeProvider>);
+    const button = screen.getByRole("button", { name: "Resize" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(button.closest("form")!);
+    // What is asserted is that nothing happens, so there is no effect to wait for: while the gate is
+    // closed the dialog's submit handler returns before its check and starts nothing, so nothing can
+    // arrive after this pause, however slow a save is. The pause (a task, not a microtask) only gives a
+    // dialog that wrongly checked, or submitted, the time to show it.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByText("This field is required.")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Size" }).getAttribute("aria-invalid")).toBeNull();
+    expect(parse).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test("guard: a nullable field is seeded with null, not with its empty value", async () => {
+    const seen = vi.fn((_values: Readonly<Record<string, unknown>>) => true);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Note" fields={[{ name: "note", label: "Note", nullable: true }]}
+        submitLabel="Save" parseValues={parseRawValues} canSubmit={seen} onSubmit={vi.fn().mockResolvedValue(ok)} />
+    </AppRuntimeProvider>);
+    await waitFor(() => expect(seen).toHaveBeenCalled());
+    expect(seen.mock.calls.at(-1)![0]).toStrictEqual({ note: null });
+  });
+
+  test("a date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
+    const parse = vi.fn(parseRawValues);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={deserializeFormSpec({ type: "object", properties: {
+        due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" },
+      } }, defaultWidgets)} submitLabel="Plan" parseValues={parse} onSubmit={vi.fn().mockResolvedValue(ok)} />
+    </AppRuntimeProvider>);
+    await screen.findByText("Left empty");
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  test("Add item on a list of dates carried as text keeps submit disabled, with the message under the item", async () => {
+    const [days] = deserializeFormSpec({ type: "object", properties: {
+      days: { type: "array", widget: "list", label: "Days", items: { type: "string", format: "date", widget: "date" } },
+    } }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={[days!]}
+        submitLabel="Plan" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
+    </AppRuntimeProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    const message = await screen.findByText("This field is required.");
+    // The item's own row holds the message: the nearest row around it holds the item's control and
+    // neither the list's label nor its "Add item".
+    const row = message.closest('[data-layout="stack"]')!;
+    expect(row.contains(screen.getByRole("button", { name: /^Item/ }))).toBe(true);
+    expect(row.contains(screen.getByRole("button", { name: "Add item" }))).toBe(false);
+    expect(row.contains(screen.getByText("Days"))).toBe(false);
+    expect((screen.getByRole("button", { name: "Plan" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("a domain readiness gate blocks buttons and form submission until ready", async () => {
@@ -531,17 +611,6 @@ describe("MutationDialog", () => {
       message.id,
     );
     expect(message.closest('[data-invalid=""]')).not.toBeNull();
-  });
-
-  test("uses schema-safe empty values for descriptor field kinds", () => {
-    expect(emptyValueForField({ kind: "integer" })).toBeNull();
-    expect(emptyValueForField({ kind: "number" })).toBeNull();
-    expect(emptyValueForField({ kind: "any" })).toBeNull();
-    expect(emptyValueForField({ kind: "array" })).toEqual([]);
-    expect(emptyValueForField({ kind: "object" })).toEqual({});
-    expect(emptyValueForField({ kind: "boolean" })).toBe(false);
-    expect(emptyValueForField({ kind: "any", widget: "select" })).toBe("");
-    expect(emptyValueForField({ kind: "string" })).toBe("");
   });
 
   test("an unknown relation degrades to a disabled control and development warning", () => {

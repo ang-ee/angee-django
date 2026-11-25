@@ -4,7 +4,7 @@ A channel backend parses a source into neutral ``ParsedMessage`` rows; these
 managers turn each into a :class:`~angee.messaging.models.Message` with its thread,
 its recursive :class:`~angee.messaging.models.Part` tree (text content-addressed
 into :class:`~angee.messaging.models.Fragment`\\s, including the sparse ``TITLE``
-and ``HEADER`` parts), its participants, and its quotation edges. They encode the
+and ``HEADER`` parts), its recipients, and its quotation edges. They encode the
 invariants a high-volume email sync depends on:
 
 - ``(channel, external_id)`` keys make re-sync idempotent; every external-id lookup
@@ -672,10 +672,11 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     messages and threads — the delete removes exactly these (plus the threads and messages
     counted through their :meth:`for_channel` owner). Each predicate reaches the channel
     through the child's own delete root, so a plain ``.count()`` never materializes a row.
-    The ``OR`` predicates join two independent to-one FKs (a participant/notification FKs a
-    message *or* a thread; an edge FKs a source *or* destination message), so each matching
-    row still appears once — no fan-out to dedupe. ``ThreadAttachment`` is absent by
-    construction: an attachment makes a thread record chatter, never channel-scoped.
+    The ``OR`` predicates join two independent to-one FKs (a notification FKs a message
+    *or* a thread; an edge FKs a source *or* destination message), so each matching row
+    still appears once — no fan-out to dedupe. A recipient always FKs its message.
+    ``ThreadAttachment`` is absent by construction: an attachment makes a thread record
+    chatter, never channel-scoped.
     """
 
     by_message = models.Q(message__channel=channel)
@@ -688,7 +689,7 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
             apps.get_model("messaging", "MessageEdge"),
             models.Q(src__channel=channel) | models.Q(dst__channel=channel),
         ),
-        (apps.get_model("messaging", "Participant"), by_message | by_thread),
+        (apps.get_model("messaging", "Recipient"), by_message),
         (apps.get_model("messaging", "ThreadNotification"), by_message | by_thread),
         (apps.get_model("messaging", "ThreadFollower"), by_thread),
         (apps.get_model("messaging", "ThreadAttachment"), by_thread),
@@ -790,11 +791,13 @@ class ThreadQuerySet[ThreadT: Thread](
         Status feeds use their category, never a title inferred from authors.
         An untitled direct thread names its counterpart; an untitled group names
         up to two people and counts the rest ("Anna, Tim +4"). People are the
-        actor-readable senders of inbound messages other than the actor's own
-        identity, most active first: outbound messages are the account holder's,
-        whichever handle sent them. A thread with no known people labels as
-        ``""`` so clients apply their own translated fallback. Evaluate on a
-        bounded page of threads; each call costs a fixed number of queries.
+        ``Message.sender`` handles of the actor-readable, untrashed inbound
+        messages, other than the actor's own identity, most active first. A
+        trashed message names no one, even to a reader who may still read it, so
+        every reader sees one label; outbound messages are the account holder's,
+        whichever handle sent them. A thread with no known people labels as ``""``
+        so clients apply their own translated fallback. Evaluate on a bounded page
+        of threads; each call costs a fixed number of queries.
         """
 
         rows = list(self.order_by().select_related("title").only("pk", "modality", "title__text"))
@@ -809,22 +812,22 @@ class ThreadQuerySet[ThreadT: Thread](
                 .with_sender_name()
                 .excluding_identity_of(actor_user_id(actor))
             )
-            participant_model = apps.get_model("messaging", "Participant")
+            message_model = apps.get_model("messaging", "Message")
             activity = (
-                participant_model.objects.with_actor(actor)
+                message_model.objects.with_actor(actor)
                 .scoped_for_aggregate()
                 .filter(
+                    TrashQuerySet.untrashed_q(),
                     thread_id__in=list(untitled),
-                    role=participant_model.ParticipantRole.FROM,
-                    message__direction=apps.get_model("messaging", "Message").Direction.INBOUND,
-                    handle_id__in=models.Subquery(handles.values("pk")),
+                    direction=message_model.Direction.INBOUND,
+                    sender_id__in=models.Subquery(handles.values("pk")),
                 )
                 .order_by()
-                .values("thread_id", "handle_id")
+                .values("thread_id", "sender_id")
                 .annotate(_turns=models.Count("pk"))
-                .order_by("thread_id", "-_turns", "handle_id")
+                .order_by("thread_id", "-_turns", "sender_id")
             )
-            ranked = [(row["thread_id"], row["handle_id"]) for row in activity]
+            ranked = [(row["thread_id"], row["sender_id"]) for row in activity]
             names = dict(handles.filter(pk__in={handle for _, handle in ranked}).values_list("pk", "_sender_name"))
             for thread_id, handle_id in ranked:
                 name = str(names.get(handle_id) or "").strip()
@@ -1060,7 +1063,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         teardown never cascades into unrelated messages), which means deleting the
         channel row alone would leave its conversation rows behind pointing at nothing.
         This deletes messages first (including messages without a thread), then threads,
-        so their ``CASCADE`` subtrees (parts, reactions, participants, followers,
+        so their ``CASCADE`` subtrees (parts, reactions, recipients, followers,
         notifications, attachments) go with them. Only *this*
         channel's ``(channel, external_id)`` message rows are touched, so the same
         logical message reached through another channel — a separate row in that
@@ -2675,40 +2678,60 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         digests = [hashlib.md5(value.encode("utf-8")).hexdigest() for value in values]
         return _external_id_annotated(self).filter(_eid_digest__in=digests, external_id__in=values)
 
-    def involving_parties(self, parties: Any) -> Self:
-        """Return messages any of ``parties``' resolved handles participated in.
+    @staticmethod
+    def ids_involving_handles(
+        handle_ids: Any, *, messages: models.QuerySet, recipients: models.QuerySet,
+    ) -> models.QuerySet:
+        """The ids of the ``messages`` ``handle_ids`` sent (``Message.sender``) or received (a recipient row).
 
-        Inbox scopes and correspondence reads pass either a lazy Party
-        queryset (a circle subtree) or a concrete iterable. Participants are Handle-keyed
-        and ``Handle.party`` is the resolution-materialised owner, so one join
-        answers "every message exchanged with these parties across channels".
-        The participant subquery preserves one row per message even when several
-        handles match.
+        Two indexed arms joined by ``union(all=True)``, each read inside ``messages``:
+        the caller's authorized or structural population, carrying any eligibility the
+        caller needs, so each arm applies it. A filter selects ``pk__in`` the result;
+        an existence probe tests ``.exists()`` on it, never ``pk IN`` it over the whole
+        table with the eligibility outside, which PostgreSQL answers under ``LIMIT 1``
+        by scanning messages in order against the whole membership. Keep the arms
+        apart: a correlated recipient ``EXISTS`` inside an ``OR`` makes PostgreSQL
+        estimate almost every message as a match. Pass the population, never the
+        narrowed rows being filtered, or each arm repeats their predicates. A message
+        may come from both arms (sent to oneself); ``pk IN`` and ``exists()`` read it
+        once.
         """
 
-        handle_model = apps.get_model("parties", "Handle")
-        participant_model = apps.get_model("messaging", "Participant")
-        return self.filter(self.involving_parties_filter(
-            parties,
-            handles=handle_model.objects.all().scoped_for_aggregate(),
-            participants=participant_model.objects.all().scoped_for_aggregate(),
-        ))
+        sent = messages.filter(sender_id__in=handle_ids).order_by().values("pk")
+        received = messages.filter(
+            pk__in=recipients.filter(handle_id__in=handle_ids).order_by().values("message_id"),
+        ).order_by().values("pk")
+        return sent.union(received, all=True)
 
     @staticmethod
-    def involving_parties_filter(
-        parties: Any, *, handles: models.QuerySet, participants: models.QuerySet,
-    ) -> models.Q:
-        """Participant membership within the caller's authorized or structural populations.
+    def involved_handle_ids(messages: models.QuerySet) -> models.QuerySet:
+        """The ids of the handles that sent or received ``messages``, for an ``__in`` lookup.
 
-        A handle merge keeps participants on the retired handle, so each matching
-        handle selects its redirect group.
+        The sender is ``Message.sender``; the recipients are the messages' recipient
+        rows, read structurally, so ``messages`` is the only scope. Repeats are kept
+        (``union(all=True)``) and a message without a sender adds a null, which
+        matches nothing.
+        """
+
+        recipients = apps.get_model("messaging", "Recipient")._base_manager.filter(
+            message_id__in=messages.order_by().values("pk"),
+        )
+        return messages.order_by().values("sender_id").union(recipients.order_by().values("handle_id"), all=True)
+
+    @staticmethod
+    def ids_involving_parties(
+        parties: Any, *, handles: models.QuerySet, messages: models.QuerySet, recipients: models.QuerySet,
+    ) -> models.QuerySet:
+        """The ids of the ``messages`` ``parties``' resolved handles sent or received (:meth:`ids_involving_handles`).
+
+        ``parties`` is a lazy Party queryset (a circle subtree) or a concrete iterable;
+        ``Handle.party`` is the resolution-materialised owner. A handle merge keeps
+        senders and recipients on the retired handle, so each matching handle
+        selects its redirect group.
         """
         survivors = handles.filter(party__in=parties, merged_into__isnull=True).order_by().values("pk")
         handle_ids = handles.model._base_manager.redirect_groups(models.Subquery(survivors)).values("pk")
-        message_ids = participants.filter(
-            handle_id__in=models.Subquery(handle_ids), message_id__isnull=False,
-        ).order_by().values("message_id")
-        return models.Q(pk__in=models.Subquery(message_ids))
+        return MessageQuerySet.ids_involving_handles(handle_ids, messages=messages, recipients=recipients)
 
     def for_feed(self, search: str = "", *, all_copies: bool = False, anchor: str = "") -> Self:
         """Apply read/search scope and tuple order, retaining an explicitly addressed occurrence.
@@ -3085,7 +3108,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         is its In-Reply-To, which the email transport renders.
         """
 
-        participant_model = apps.get_model("messaging", "Participant")
+        recipient_model = apps.get_model("messaging", "Recipient")
         handle_model = apps.get_model("parties", "Handle")
         handle_ids = [
             handle_model.objects.upsert(
@@ -3094,11 +3117,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             for address, name in reply_to.items()
         ] or [parent.sender_id]
         for handle_id in dict.fromkeys(handle_ids):
-            participant_model.objects.create(
+            recipient_model.objects.create(
                 message_id=reply.pk,
                 thread_id=reply.thread_id,
                 handle_id=handle_id,
-                role=participant_model.ParticipantRole.TO,
+                role=recipient_model.RecipientRole.TO,
                 created_by_id=created_by_id,
             )
         title = normalize_subject(parent.thread.display_title)
@@ -3953,7 +3976,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if parent is not None and parent.thread_id != thread.pk:
                 message.parent = None
             message.save(update_fields=("thread", "parent", "updated_at"))
-            apps.get_model("messaging", "Participant")._base_manager.filter(message=message).update(thread=thread)
+            apps.get_model("messaging", "Recipient")._base_manager.filter(message=message).update(thread=thread)
             self._recount_thread(expected_thread)
             self._recount_thread(thread)
             return message
@@ -3972,7 +3995,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> list[Any]:
-        """Upsert each parsed message into a thread with its parts/participants/edges.
+        """Upsert each parsed message into a thread with its parts/recipients/edges.
 
         Returns the landed :class:`~angee.messaging.models.Message` rows (a caller
         wanting the count takes ``len(...)``) so an overlay — a public-feed engagement
@@ -4284,7 +4307,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     ]
                     message.save(update_fields=("edit_history", "updated_at"))
         handles = (
-            () if retain_authored_parts else self._write_participants(message, thread, parsed, sender, created_by_id)
+            () if retain_authored_parts else self._write_recipients(message, thread, parsed, sender, created_by_id)
         )
         if expected_thread is not None:
             message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
@@ -4485,7 +4508,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         )
         return file
 
-    def _write_participants(
+    def _write_recipients(
         self,
         message: Any,
         thread: Any,
@@ -4493,21 +4516,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         sender: Any,
         created_by_id: Any,
     ) -> list[Any]:
-        participant_model = apps.get_model("messaging", "Participant")
+        """Rewrite the message's recipient rows; return the envelope's handles, the sender first."""
+
+        recipient_model = apps.get_model("messaging", "Recipient")
         handle_model = apps.get_model("parties", "Handle")
-        participant_model.objects.filter(message=message).delete()
+        recipient_model.objects.filter(message=message).delete()
         seen: set[tuple[Any, str]] = set()
-        handles: list[Any] = []
-        if sender is not None:
-            seen.add((sender.pk, str(participant_model.ParticipantRole.FROM)))
-            participant_model.objects.create(
-                message_id=message.pk,
-                thread_id=thread.pk,
-                handle_id=sender.pk,
-                role=participant_model.ParticipantRole.FROM,
-                created_by_id=created_by_id,
-            )
-            handles.append(sender)
+        handles: list[Any] = [] if sender is None else [sender]
         for recipient in parsed.recipients:
             handle = handle_model.objects.upsert(
                 platform=recipient.handle.platform,
@@ -4523,7 +4538,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if key in seen:
                 continue
             seen.add(key)
-            participant_model.objects.create(
+            recipient_model.objects.create(
                 message_id=message.pk,
                 thread_id=thread.pk,
                 handle_id=handle.pk,

@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models, transaction
 from rebac import RebacMixin, app_settings, current_actor, is_anonymous_actor, to_subject_ref
 from rebac.models import active_relationship_model
@@ -220,6 +221,31 @@ class SharedDoc(AngeeDataModel):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/shared_doc"
+
+
+class ValidatedDoc(AngeeDataModel):
+    """A row only a platform admin creates, whose own validation could cost or disclose something.
+
+    ``title`` carries a validator that backtracks catastrophically on a run of
+    ``a`` ended by any other character, ``code`` is unique, and a check
+    constraint refuses a code equal to the title, so the GraphQL create tests
+    can show that none of them runs, or answers, before the create is decided.
+    """
+
+    sqid_prefix = "vdd_"
+    title = models.CharField(max_length=200, validators=[RegexValidator(r"^(a+)+$")])
+    code = models.CharField(max_length=40, unique=True)
+
+    class Meta(AngeeDataModel.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/validated_doc"
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(code=models.F("title")),
+                name="scopedemo_validated_doc_code_differs_from_title",
+            ),
+        ]
 
 
 class NativeAttachmentTarget(RebacMixin):
