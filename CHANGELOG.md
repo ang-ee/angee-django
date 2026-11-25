@@ -26,19 +26,27 @@ live in code docstrings.
     runs in the row's language, with `dir` from Django's
     `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
     include renders, 200,000 characters of loop output, 500,000 characters of
-    filter input).
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
   - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
     walks a row and every row it reaches and refuses what may not render safely:
     oversized sources and lines, literals holding `<`, `>` or `"`, costly or
     unsafe filter use, template code the Markdown pass would not keep whole, HTML
-    a mail may not carry (scripts, event attributes, comments, a link that is not
-    one `url` output or a safe static link, styles reading anything but the
-    brand's colours and fonts), reads no row declares, include cycles and the
-    walk's bounds. It runs from `clean()` when what a row renders changed
+    a mail may not carry (scripts, raw-text elements, event attributes, comments,
+    a start tag holding template code that is not written plainly, a row that
+    ends inside a tag or a `<style>`, a link that is not one `url` output or a
+    safe static link, styles reading anything but the brand's colours and fonts),
+    reads no row declares, include cycles and the walk's bounds. A layout alone
+    may carry Outlook's conditional comments, static and balanced, their markup
+    checked. It runs from `clean()` when what a row renders changed
     (`MessageTemplate.validate_source()`), after every resource load, and before
     every render. `TemplateWalk.prepare(values)` drops undeclared keys, refuses a
     required value missing or null, fills every declared path and parses ISO
-    dates read through `date`. A render raises `ValidationError`.
+    dates read through `date`; a path printed with a time takes an aware
+    `datetime`. A render raises `ValidationError` and nothing else
+    (`render_failed` for a failure nobody foresaw).
   - **Preview.** `MessageTemplate.preview(*, kit=None)` renders a row's `sample`
     (a layout around a fixed body, a block or part alone) and returns a
     `TemplatePreview` with `TemplateWarning`s: the subject or preheader length,
@@ -48,8 +56,13 @@ live in code docstrings.
     (platform admins; `messaging_templates/message_template` revision 2).
   - **Shipped rows.** The addon's install tier ships the `base` layout, the
     `header`, `footer`, `button`, `quote` and `record_card` blocks and the
-    `greeting`, `ignore_notice` and `signature` parts. A block or part other
-    rows include can no longer be deleted while its key would stop resolving.
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning, the load completes, and that shipped row refuses at
+    render until the deployment's row is fixed.
   - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
     `markdown-it-py`.
   - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the

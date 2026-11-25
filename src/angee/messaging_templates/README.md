@@ -49,11 +49,12 @@ with.
 
 ## Writing a row
 
-A row is Django template code with a restricted library: the tags `if`, `for`,
-`with`, `comment`, `include`, `templatetag` (`{% templatetag openvariable %}`
-writes a literal `{{`) and the filters `default`, `upper`, `lower`, `capfirst`,
-`title`, `truncatechars`, `truncatewords`, `linebreaksbr`, `length`, `date`,
-`floatformat`, `pluralize`, `yesno` and `url`. Anything else fails to compile.
+A row is Django template code with a restricted library, the tags and filters
+the [engine](engine.py) allows (`ALLOWED_TAGS`, `ALLOWED_FILTERS`): a row writes
+`if`, `for`, `with`, `comment`, `include` and `templatetag`
+(`{% templatetag openvariable %}` writes a literal `{{`), a layout writes `block`
+for its content, and a value goes through Django's own filters and `url`.
+Anything else fails to compile.
 
 - A template names its layout in its `layout` column and never writes
   `{% extends %}` or `{% block %}`; a layout holds one empty top-level
@@ -67,7 +68,12 @@ writes a literal `{{`) and the filters `default`, `upper`, `lower`, `capfirst`,
   direction, and a template or layout reads `subject` and `preheader`.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
   gives an empty link for anything but a safe URL; dates go through `date`
-  (`date:"DATE_FORMAT"`), money through `floatformat`.
+  (`date:"DATE_FORMAT"`), money through `floatformat`. A path printed with a
+  time (`DATETIME_FORMAT`, `H:i`) takes an aware `datetime`, never a bare date.
+- A start tag holding template code is written plainly: lower-case names, each
+  attribute once, each value double-quoted, with `&amp;`, `&lt;`, `&gt;` and
+  `&quot;` for those characters. Every row's HTML ends in text, outside any tag,
+  comment or `<style>`, since the row it is included in continues it.
 - A Markdown row is rendered by markdown-it first, with raw HTML off: template
   code stays whole, `[label]({{ link }})` is a link through `url`, a paragraph
   holding only tags writes no `<p>`, and an `include` stands alone in its
@@ -76,11 +82,15 @@ writes a literal `{{`) and the filters `default`, `upper`, `lower`, `capfirst`,
 The walker (`TemplateWalker`) refuses what would not render safely when a row is
 saved (`clean()`, when what it renders changed), after each resource load, and
 again before every render: oversized sources and lines, literals holding `<`,
-`>` or `"`, costly filter use, template code the Markdown pass would not keep
-whole, HTML a mail may not carry (scripts, event attributes, comments, a link
-that is not one `url` output or a safe static URL, styles reading anything but
-the brand's colours and fonts), reads no row declares, include cycles, and the
-walk's bounds on nodes, outputs, loops, includes, text and the rows it reaches.
+`>` or `"`, costly filter use or filter arguments Django's filters fail on,
+template code the Markdown pass would not keep whole, HTML a mail may not carry
+(scripts, raw-text elements such as `noscript` and `textarea`, event
+attributes, comments but a layout's Outlook block, a link that is not one `url`
+output or a safe static URL, a static value reaching a scheme `url` refuses,
+styles reading anything but the brand's colours and fonts), reads no row
+declares (`subject` and `preheader` are read in the HTML form alone), include
+cycles, and the walk's bounds on nodes, outputs, loops, includes, text and the
+rows it reaches.
 
 ## Rendering
 
@@ -91,18 +101,21 @@ read through `date`), and renders it on Django's template engine in the row's
 language: the subject and preheader on one line each, the HTML body escaping
 every value, and the plain-text body from the rows' text forms. A render reads
 rows and the brand kit through the caller's scope, the default kit when `kit` is
-`None`, and raises `ValidationError` when the row, the values, a row it needs,
-the kit or its work budget (500 loop or include renders, 200,000 characters of
-loop output, 500,000 characters of filter input a pass) refuses. A sender picks
-the row with `effective("template", key, person=recipient)` and renders it as
-the system actor.
+`None`. It raises `ValidationError` and nothing else: when the row, the values
+(a number no float holds, a moment the local zone cannot hold, a bare date
+printed with a time), a row it needs, the kit or a pass's work budget
+(`RenderBudget`; the subject and preheader get a tenth of a body's) refuses, and
+with the code `render_failed` for any other failure in a pass. The subject and
+preheader drop control and bidirectional override characters. A sender picks the
+row with `effective("template", key, person=recipient)` and renders it as the
+system actor.
 
 `row.preview(kit=None)` renders the row's `sample`: a template whole, a layout
 around a fixed body, subject and preheader, a block or part alone. It returns
-the rendered message, or none, and warnings: a subject over 60 characters, a
-preheader empty or over 100, a declared value nothing reads, a declared
-`unsubscribe_url` the body does not show, an empty plain-text body, HTML over
-104,448 bytes, or the render error. The console's `message_template_preview`
+the rendered message, or none, and warnings (`TemplateWarningCode`): a long
+subject, an empty or long preheader, a declared value nothing reads, a declared
+`unsubscribe_url` the body does not show, an empty plain-text body, HTML near
+Gmail's clipping size, or the render error. The console's `message_template_preview`
 read returns it to administrators (`preview` permission), in the kit it names or
 the default one.
 
@@ -116,13 +129,39 @@ fingerprints its kind and what it renders. A load saves rows in file order and a
 save walks what the row includes, so a template's layout and every block or part
 a row includes load before it (`depends_on`).
 
+A baseline is walked among the shipped rows alone, when it saves and again after
+every load, so a shipped defect fails the load. After a load each baseline is
+also judged among the rows that render: a refusal reached only through the
+deployment's own row or override, one the shipped row includes or is laid out
+by, does not fail the load. It is logged as a warning naming the shipped row,
+the deployment's row and the refusal, and the shipped row refuses at render
+until the deployment fixes its row. Saving an included row does not judge the
+rows that include it.
+
 This addon ships the `base` layout, the `header`, `footer`, `button`, `quote` and
 `record_card` blocks and the `greeting`, `ignore_notice` and `signature` parts, in
 English and, for the parts, Spanish. The layout is one 600px column with the
 header and footer blocks around the content; it writes the light colours inline
 and sets the dark ones in `<style>` from role classes (`brand-text`,
 `brand-primary`, …), and `.brand-radius` rounds the button and the record card.
-A mail's HTML holds no comment, so the layout has no Outlook-only markup.
+Classic Outlook reads its conditional comments: the DPI setting, a font override
+and a ghost table 600 wide. Only a layout may carry Outlook's comments, static
+and balanced, their markup checked as any other.
+
+Another addon ships a template as an `install` resource file targeting
+`messaging_templates.MessageTemplate`, declared after this addon's layout:
+
+```toml
+[tool.angee.resources]
+install = [
+  { path = "install/010_<addon>.messagetemplate.yaml", depends_on = "messaging_templates:install/030_messaging_templates.messagetemplate.yaml" },
+]
+```
+
+Each row states `kind: template`, a key `<addon label>.<name>`, `language`,
+`name`, `format`, `subject`, `preheader`, `layout: base`, `source` (and
+`text_source` for HTML), `variables` and a `sample`; blocks and parts are
+included with `{% include "…" with … only %}`, never `{% extends %}`.
 
 - `MessageTemplate.objects.override(baseline)` starts the deployment's
   **override**: the non-baseline row with the baseline's kind, key and language,
