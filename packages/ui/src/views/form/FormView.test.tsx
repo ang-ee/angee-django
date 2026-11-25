@@ -3828,7 +3828,7 @@ describe("FormView", () => {
     await waitFor(() => expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Extra", "More"]));
   });
 
-  test.fails("defect: typing in a pane while another pane returns or is dropped rebuilds the pane typed in, losing its field's node and focus, since one pane is mounted as a plain region and several as tabs; the field should keep its node and focus, and its pane stay selected", async () => {
+  test("typing in a pane keeps the field's node and focus, and its pane selected, while another pane returns or is dropped", async () => {
     // A create whose `More` pane holds `note`, which presets `code`; `Extra` holds only `code`, which the
     // create cannot write, so it is listed only while `code` holds a value.
     renderWithProviders(<FormView resource="notes.Note">
@@ -3851,6 +3851,194 @@ describe("FormView", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "" } });
     await waitFor(() => expect(screen.queryAllByRole("tab")).toEqual([]));
     expect(typing()).toEqual({ sameNode: true, focused: true });
+  });
+
+  // A saved note whose lone `Draft` tab holds an input of its own; `Activity` is listed while the record's
+  // words are not 3, the count the tests start from.
+  const draftThenActivity = [
+    { id: "draft", label: "Draft", render: () => <input aria-label="Draft" /> },
+    { id: "activity", label: "Activity", visibleWhen: (record: Row) => String(record.wordCount) !== "3",
+      render: () => <p>Activity panel</p> },
+  ];
+  // What stands where the person typed in `Draft`: the same node, focused, holding what they typed.
+  const draftTyping = (draft: HTMLElement) => {
+    const now = screen.getByRole("textbox", { name: "Draft" });
+    return { sameNode: now === draft, focused: document.activeElement === now, value: (now as HTMLInputElement).value };
+  };
+  const tabNames = () => screen.queryAllByRole("tab").map((tab) => tab.textContent);
+
+  test("typing in a lone pane keeps the field's node and focus while a tab the saved record shows comes and goes", async () => {
+    sdkMocks.mutate.mockImplementation(async ({ data }: { data: Row }) => (sdkMocks.record = { ...sdkMocks.record, ...data }));
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" recordTabs={draftThenActivity}
+      fields={[{ name: "title", label: "Title", title: true }, { name: "wordCount", label: "Words" }]} />);
+    const draft = await screen.findByRole("textbox", { name: "Draft" });
+    expect(tabNames()).toEqual([]);
+    draft.focus();
+    fireEvent.change(draft, { target: { value: "kept" } });
+    const save = async (words: string, tabs: string[]) => {
+      fireEvent.change(screen.getByLabelText("Words"), { target: { value: words } });
+      fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(tabNames()).toEqual(tabs));
+    };
+    await save("5", ["Draft", "Activity"]);
+    expect(draftTyping(draft)).toEqual({ sameNode: true, focused: true, value: "kept" });
+    await save("3", []);
+    expect(draftTyping(draft)).toEqual({ sameNode: true, focused: true, value: "kept" });
+  });
+
+  test("typing in a lone pane keeps the field's node and focus while the record, read again, shows a tab and hides it", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} recordTabs={draftThenActivity}
+      formExtras={({ reload }) => <button type="button" onClick={() => void reload()}>Read again</button>} />);
+    const draft = await screen.findByRole("textbox", { name: "Draft" });
+    draft.focus();
+    fireEvent.change(draft, { target: { value: "kept" } });
+    const readAgain = async (wordCount: number, tabs: string[]) => {
+      sdkMocks.record = { ...sdkMocks.record, wordCount };
+      fireEvent.click(screen.getByRole("button", { name: "Read again" }));
+      await waitFor(() => expect(tabNames()).toEqual(tabs));
+    };
+    await readAgain(5, ["Draft", "Activity"]);
+    expect(draftTyping(draft)).toEqual({ sameNode: true, focused: true, value: "kept" });
+    await readAgain(3, []);
+    expect(draftTyping(draft)).toEqual({ sameNode: true, focused: true, value: "kept" });
+  });
+
+  // An edit whose `Extra` pane is listed while the words are above 3, a value the sheet's `Words` field changes.
+  const wordsField = { name: "wordCount", label: "Words" };
+  const extraWhileWordy = <Group label="Extra" pane="extra">
+    <Field name="note" label="Note" showWhen={(values) => Number(values.wordCount) > 3} />
+  </Group>;
+  const setWords = async (words: string, tabs: string[]) => {
+    fireEvent.change(screen.getByLabelText("Words"), { target: { value: words } });
+    await waitFor(() => expect(tabNames()).toEqual(tabs));
+  };
+
+  // A saved note with one line, whose save the form's own submit owner refuses on that line's label.
+  const renderLinedNoteRefused = () => {
+    const scalar = (name: string, type: string) => ({ name, kind: "scalar" as const, scalar: type, readable: true,
+      aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false });
+    const noteFields = { title: scalar("title", "String"), wordCount: scalar("wordCount", "Int"), note: scalar("note", "String") };
+    sdkMocks.record = { ...sdkMocks.record, lines: [{ id: "line-1", label: "Alpha", position: 0 }] };
+    const submit = vi.fn<FormSubmit>(async () => ({ status: "invalid", issues: { fieldErrors: { "lines.0.label": ["Label is refused."] }, formErrors: [] } }));
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" submit={submit}>
+      <Field name="title" label="Title" title />
+      <Field {...wordsField} />
+      {extraWhileWordy}
+    </FormView>, { types: { NoteType: { resource: testDataResource("notes.Note", {
+      fields: Object.values(noteFields),
+      linesResource: { field: "lines", modelLabel: "notes.Line", positionField: "position",
+        fields: [scalar("label", "String"), scalar("position", "Int")] },
+    }), fields: noteFields } } });
+    return submit;
+  };
+  // Edits the line and saves it, which the owner refuses on the line.
+  async function saveRefusedLine(submit: ReturnType<typeof renderLinedNoteRefused>) {
+    fireEvent.change(await screen.findByDisplayValue("Alpha"), { target: { value: "Edited" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("Label is refused.")).toBeTruthy();
+  }
+
+  test("guard: a lone lines pane keeps its draft rows and their errors while a second pane comes and goes", async () => {
+    await saveRefusedLine(renderLinedNoteRefused());
+    const draftAndError = () => ({ draft: screen.queryByDisplayValue("Edited") !== null, error: screen.queryByText("Label is refused.") !== null });
+    await setWords("5", ["Lines", "Extra"]);
+    expect(draftAndError()).toEqual({ draft: true, error: true });
+    await setWords("3", []);
+    expect(draftAndError()).toEqual({ draft: true, error: true });
+  });
+
+  test("guard: after a save that failed on its lines, a chosen pane dropped and returned gives way to the lines pane, which the failure selects again", async () => {
+    sdkMocks.record = { ...sdkMocks.record, wordCount: 5 };
+    const submit = renderLinedNoteRefused();
+    const selected = () => screen.queryAllByRole("tab").map((tab) => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
+    await saveRefusedLine(submit);
+    expect(selected()).toEqual(["Lines*", "Extra"]);
+    fireEvent.click(screen.getByRole("tab", { name: "Extra" }));
+    await waitFor(() => expect(selected()).toEqual(["Lines", "Extra*"]));
+    await setWords("3", []);
+    expect(screen.getByRole("heading", { name: "Lines" })).toBeTruthy();
+    await setWords("7", ["Lines", "Extra"]);
+    await waitFor(() => expect(selected()).toEqual(["Lines*", "Extra"]));
+  });
+
+  test("a lone tab kept mounted, put behind a tab that appears ahead of it, stays mounted hidden and keeps its own state when it is lone again", async () => {
+    function Counter(): ReactElement {
+      const [clicks, setClicks] = useState(0);
+      return <button type="button" onClick={() => setClicks((count) => count + 1)}>Clicked {clicks}</button>;
+    }
+    sdkMocks.mutate.mockImplementation(async ({ data }: { data: Row }) => (sdkMocks.record = { ...sdkMocks.record, ...data }));
+    // `Activity`, listed while the record's words are not 3, comes ahead of `Editor` and is selected when it
+    // appears, since no pane was chosen: `Editor` is then an inactive pane, which `keepMounted` keeps mounted.
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[{ name: "title", label: "Title", title: true }, wordsField]}
+      recordTabs={[draftThenActivity[1]!, { id: "editor", label: "Editor", keepMounted: true, render: () => <Counter /> }]} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Clicked 0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clicked 1" }));
+    const save = async (words: string, tabs: string[]) => {
+      fireEvent.change(screen.getByLabelText("Words"), { target: { value: words } });
+      fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(tabNames()).toEqual(tabs));
+    };
+    await save("5", ["Activity", "Editor"]);
+    expect(screen.getByRole("tab", { name: "Activity" }).getAttribute("aria-selected")).toBe("true");
+    const hidden = screen.getByText(/^Clicked /);
+    expect(hidden.textContent).toBe("Clicked 2");
+    expect(hidden.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(true);
+    await save("3", []);
+    expect(screen.getByRole("button", { name: /^Clicked / }).textContent).toBe("Clicked 2");
+  });
+
+  test("guard: a lone pane is a plain region beneath its heading, and several panes are tab panels labelled by their tabs", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Field {...wordsField} />
+      <Group label="More" pane="more"><Field name="location" label="Location" /></Group>
+      {extraWhileWordy}
+    </FormView>);
+    // The pane's region: the child of the form's one Tabs root that holds the pane's field.
+    let region: Element = await screen.findByLabelText("Location");
+    while (region.parentElement && !region.parentElement.matches("[data-orientation][data-variant]")) region = region.parentElement;
+    expect(screen.getByRole("heading", { name: "More" })).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("tabpanel")).toBeNull();
+    expect(Object.fromEntries([...region.attributes].map((attribute) => [attribute.name, attribute.value])))
+      .toEqual({ class: "mx-auto w-full max-w-[1100px] px-6 sm:px-8 pt-3 pb-12" });
+    await setWords("5", ["More", "Extra"]);
+    expect(screen.getByRole("tabpanel", { name: "More" }).getAttribute("tabindex")).toBe("0");
+    fireEvent.click(screen.getByRole("tab", { name: "Extra" }));
+    expect(await screen.findByRole("tabpanel", { name: "Extra" })).toBeTruthy();
+  });
+
+  test("guard: a chosen pane dropped and returned is selected again, the first pane standing in meanwhile", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1">
+      <Field name="title" label="Title" title />
+      <Field {...wordsField} />
+      <Group label="More" pane="more"><Field name="location" label="Location" /></Group>
+      {extraWhileWordy}
+    </FormView>);
+    await screen.findByLabelText("Location");
+    const selected = () => screen.queryAllByRole("tab").map((tab) => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
+    await setWords("5", ["More", "Extra"]);
+    expect(selected()).toEqual(["More*", "Extra"]);
+    fireEvent.click(screen.getByRole("tab", { name: "Extra" }));
+    await waitFor(() => expect(selected()).toEqual(["More", "Extra*"]));
+    await setWords("3", []);
+    expect(screen.getByRole("heading", { name: "More" })).toBeTruthy();
+    expect(screen.getByLabelText("Location")).toBeTruthy();
+    await setWords("7", ["More", "Extra"]);
+    expect(selected()).toEqual(["More", "Extra*"]);
+    expect(screen.getByLabelText("Note")).toBeTruthy();
+  });
+
+  test("guard: an inactive pane not kept mounted has no content mounted, and one kept mounted is hidden", async () => {
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} recordTabs={[
+      { id: "preview", label: "Preview", render: () => <p>Preview panel</p> },
+      { id: "activity", label: "Activity", render: () => <p>Activity panel</p> },
+      { id: "editor", label: "Editor", keepMounted: true, render: () => <p>Editor panel</p> },
+    ]} />);
+    expect(await screen.findByText("Preview panel")).toBeTruthy();
+    expect(screen.queryByText("Activity panel")).toBeNull();
+    expect(screen.getByText("Editor panel").closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(true);
   });
 
   // A server refusal of `code` alone, or with a form-level error.

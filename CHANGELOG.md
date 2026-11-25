@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A record form mounts a pane the same way whether it has one
+  pane or several (`FormView`: every pane is a panel of the form's one `Tabs`
+  root, keyed by its id; a lone pane's panel renders the plain region through
+  the panel's `render`), so a pane that stays selected, or is kept mounted
+  (`keepMounted`), is no longer rebuilt when another pane comes or goes: a
+  field being typed in keeps its node and focus, and a component in the pane
+  keeps its state. Before, a lone pane was a plain `div` and several were tab
+  panels, so crossing between one and several (a value giving a pane its first
+  field or taking its last, a record tab's `visibleWhen` after a save or a
+  fresh read) mounted the remaining pane again. A lone pane keeps its markup
+  and has no tab role; several panes stay tab panels labelled by their tabs.
+  Which pane is active is unchanged: a pane that appears ahead of a lone pane
+  the person had not chosen takes the selection; a chosen pane that is dropped
+  gives way to the first pane and is selected again when it returns; a pane
+  that loses the selection and is not kept mounted is unmounted, as any
+  inactive pane is. A create that is saved still mounts its form again, as
+  before.
 - `angee.messaging`, `angee.webforms_messaging`: the move of forms out of
   messaging channels is removed: the bridge's migration template
   (`compose_migrations/messaging/webform_channels_to_forms.py`), its
@@ -242,19 +259,16 @@ live in code docstrings.
   the form's rows render; a structured field still goes whole once one of its
   members changed, so where the record redacts it and a preset writes one
   member, the untouched members go as the placeholders the form loaded, as
-  before; and where a value leaves a pane with no field, or gives it one,
-  while the form is open, and the number of panes thereby changes between one
-  and several, the remaining pane's content is rebuilt, so a control being
-  typed in there loses focus, and a pane the person had chosen is selected
-  again when it returns (a form draws one pane as a plain region and several
-  as tabs). **Upgrade:** a registered widget that writes by itself on a saved
-  record must declare `writesOwnValue: true`, or its control turns read-only
-  on an edit where the save cannot write its field; a component a form renders
-  directly is outside the rule. A control a page renders for a path no form
-  field declares is read-only unless the form's own submit owner saves it:
-  declare the field, hidden if need be. A create no longer displays the empty
-  read-only rows of fields outside the model's create input, nor a pane that
-  holds only such rows; a `defaultValue` or a create seed keeps one displayed.
+  before. A pane the person had chosen that is dropped gives way to the first
+  pane, and is selected again when it returns. **Upgrade:** a registered
+  widget that writes by itself on a saved record must declare `writesOwnValue:
+  true`, or its control turns read-only on an edit where the save cannot write
+  its field; a component a form renders directly is outside the rule. A
+  control a page renders for a path no form field declares is read-only unless
+  the form's own submit owner saves it: declare the field, hidden if need be.
+  A create no longer displays the empty read-only rows of fields outside the
+  model's create input, nor a pane that holds only such rows; a `defaultValue`
+  or a create seed keeps one displayed.
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place which of
   its declared groups it displays for a record, and its fields are its own and
   those groups' fields. `formDisplaysGroup` (`form-view-model.ts`) holds the three

@@ -37,12 +37,9 @@ write) is displayed read-only, as soon as it holds one and for as long as it
 does; it is shown, not sent, since the create input does not take it. An edit
 displays every such field read-only, empty or not. A section left with no field
 to display shows nothing, and a pane left with none is no longer listed among
-the tabs, on a create and on an edit where a condition leaves it none. Limit:
-where a value leaves a pane with no field, or gives it one, while the form is
-open, and the number of panes thereby changes between one and several, the
-remaining pane's content is rebuilt, so a control being typed in there loses
-focus, and a pane the person had chosen is selected again when it returns (a
-form draws one pane as a plain region and several as tabs). A title the create cannot write is
+the tabs, on a create and on an edit where a condition leaves it none. A pane
+the person had chosen that is dropped gives way to the first pane, and is
+selected again when it returns. A title the create cannot write is
 read-only and shows the create's own heading. An empty status that is read-only on a create although the create input
 takes it is not displayed either, as before (a proposal's state, a round's
 status, a version-control bridge's lifecycle).
