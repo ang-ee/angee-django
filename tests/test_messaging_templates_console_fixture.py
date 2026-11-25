@@ -171,7 +171,7 @@ _ROW = (
 _KIT = "id display_name name is_default"
 _PREVIEW = (
     "query($template: ID!, $brand_kit: ID) { message_template_preview(template: $template, brand_kit: $brand_kit) "
-    "{ rendered { subject preheader html plain_text language } warnings { code detail } } }"
+    "{ rendered { subject preheader html plain_text language direction } warnings { code detail } } }"
 )
 _BACKLINKS = (
     "query($id: String!) { message_templates_by_pk(id: $id) { backlinks { id display_name kind key language "

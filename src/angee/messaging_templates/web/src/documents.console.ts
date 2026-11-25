@@ -3,12 +3,13 @@ import { graphql } from "@angee/gql/console";
 /**
  * A saved row rendered with its sample, in the brand kit it names or the default
  * one, and what it warns about (`MessageTemplate.preview`). `rendered` is null
- * when the row does not render; its one warning then says why.
+ * when the row does not render; its one warning then says why. Its `direction`
+ * is the one the mail's HTML says, for the text shown outside the frame.
  */
 export const MessageTemplatePreview = graphql(`
   query MessageTemplatePreview($template: ID!, $brand_kit: ID) {
     message_template_preview(template: $template, brand_kit: $brand_kit) {
-      rendered { subject preheader html plain_text language }
+      rendered { subject preheader html plain_text language direction }
       warnings { code detail }
     }
   }
