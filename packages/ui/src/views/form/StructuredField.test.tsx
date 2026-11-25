@@ -134,7 +134,7 @@ describe("structured FormSpec widgets", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  test("an explicit nullable integer can enter value mode without reapplying null", () => {
+  test("an explicit nullable integer holding null shows its own control with the Left empty hint, never a 0, and keeps what is typed", () => {
     function Harness() {
       const [value, setValue] = React.useState<unknown>(null);
       return <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
@@ -146,10 +146,10 @@ describe("structured FormSpec widgets", () => {
       </AppRuntimeProvider>;
     }
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "Set value" }));
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+    expect(screen.getByText("Left empty")).toBeTruthy();
     const input = screen.getByRole("textbox", { name: "Limit" });
-    expect(input).toBeTruthy();
-    expect((input as HTMLInputElement).value).toBe("0");
+    expect((input as HTMLInputElement).value).toBe("");
     fireEvent.change(input, { target: { value: "42" } });
     expect((input as HTMLInputElement).value).toBe("42");
     expect(structuredFieldErrors(

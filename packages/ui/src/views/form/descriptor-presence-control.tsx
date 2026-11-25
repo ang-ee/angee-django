@@ -4,9 +4,14 @@ import type { WidgetFocusTarget } from "../../widgets";
 import { useUiT } from "../../i18n";
 import { Button } from "../../ui/button";
 import type { FieldDescriptor } from "../page";
+import { NUMBER_WIDGETS, emptyValueForField } from "./field-values";
 import { initialFormSpecValue, type FormSpecFieldDescriptor } from "./form-spec";
 
-/** Shared omission/null affordances around either form owner's native control. */
+/**
+ * Shared omission/null affordances around either form owner's native control. "Set value" writes the
+ * field's empty value, or its default with "Use default"; a field holding nothing that shows its own
+ * control (`showsOwnControl`) offers neither, so neither ever writes a value the field already holds.
+ */
 export function DescriptorPresenceControl({ field, value, readOnly, onChange, onCommit, controlRef, children }: {
   field: FieldDescriptor;
   value: unknown;
@@ -17,10 +22,9 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   children: ReactNode;
 }): ReactElement {
   const t = useUiT();
-  const compactScalar = isCompactOptionalScalar(field);
-  if (compactScalar && (value === undefined || value === null)) {
+  if (showsOwnControl(field, value)) {
     return <>{children}{!readOnly ? <div className="mt-1 flex flex-wrap items-center gap-1 text-12 text-fg-subtle">
-      <span>{value === null ? t("form.value.leftEmpty") : t("form.value.optional")}</span>
+      <span>{value === null ? t("form.value.leftEmpty") : field.omittable ? t("form.value.optional") : t("form.value.notSet")}</span>
       {field.nullable && value !== null ? <Button type="button" size="sm" variant="ghost"
         onClick={() => { onChange(null); onCommit?.(); }}>{t("form.value.leaveEmpty")}</Button> : null}
       {field.omittable && value !== undefined ? <Button type="button" size="sm" variant="ghost"
@@ -59,6 +63,19 @@ export function DescriptorPresenceControl({ field, value, readOnly, onChange, on
   </div> : null}</>;
 }
 
+/**
+ * Whether `field`, holding nothing (`undefined`) or `null`, shows its own control with a hint rather
+ * than a placeholder: a plain optional input (`isCompactOptionalScalar`), or a field whose empty value
+ * is `null` (`emptyValueForField`: a number, a date, an untyped value), which has no "present but
+ * empty" state, holding `null`, or nothing with no default to use.
+ */
+function showsOwnControl(field: FieldDescriptor, value: unknown): boolean {
+  if (value !== undefined && value !== null) return false;
+  if (isCompactOptionalScalar(field)) return true;
+  return Boolean(field.omittable || field.nullable) && emptyValueForField(field) === null
+    && (value === null || !field.hasDefault);
+}
+
 /** Plain optional inputs stay usable while retaining distinct omitted/null values. */
 function isCompactOptionalScalar(field: FieldDescriptor): boolean {
   const numericInput = isNumericInput(field);
@@ -75,10 +92,11 @@ function isCompactOptionalScalar(field: FieldDescriptor): boolean {
   );
 }
 
+/**
+ * What "Use default" writes, the field's default, or "Set value": its empty value or its template's
+ * seeds, never `null`, since a field whose empty value is `null` shows its own control instead.
+ */
 function presentValue(field: FieldDescriptor, useDefault: boolean): unknown {
-  if (!useDefault && isNumericInput(field)) {
-    return 0;
-  }
   return initialFormSpecValue({
     ...field,
     nullable: useDefault ? field.nullable : false,
@@ -86,8 +104,7 @@ function presentValue(field: FieldDescriptor, useDefault: boolean): unknown {
   } as FormSpecFieldDescriptor);
 }
 
-/** Numeric widgets also render exact Decimal strings from JSON Schema unions. */
+/** A number by its kind or by its own widget (`NUMBER_WIDGETS`); numeric widgets also render exact Decimal strings from JSON Schema unions. */
 function isNumericInput(field: FieldDescriptor): boolean {
-  return field.kind === "integer" || field.kind === "number"
-    || field.widget === "integer" || field.widget === "float";
+  return field.kind === "integer" || field.kind === "number" || NUMBER_WIDGETS.has(field.widget ?? "");
 }
