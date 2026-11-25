@@ -10,6 +10,20 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A record form confirms a save as soon as the write answers.
+  The save awaited the refresh of every dependent resource and of every
+  authored read registered on the saved model, among them the reads a record's
+  own chrome mounts on every saved form; a slow one delayed "Changes saved", a
+  failing one held it through the query's retries (about seven seconds under
+  the app's defaults), and one that never answered held it for ever while Save
+  sent no further write. The save (`use-form-view-save.ts`) now starts those
+  refreshes and does not wait for them: the form shows its own record, which
+  the write's answer carries, and a failing read reports through its own
+  query. A list of a dependent model, or an authored read of the saved model,
+  may therefore show the saved state a moment after the confirmation where it
+  showed it just before; the saved model's own lists already did. A save that
+  writes lines still waits for its own model's lists, and a record action or
+  a dialog still waits for its refreshes (`useAuthoredMutation`).
 - `@angee/ui`: A record form tells what its Save would write before a save.
   The save surface a pane (`RecordPanelContext.form`) and a toolbar
   (`RecordToolbarContext.form`) receive has `nextSave(): FormNextSave`,

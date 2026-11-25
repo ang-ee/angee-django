@@ -8,6 +8,7 @@ import type { ComponentProps } from "react";
 import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
+import { useList } from "@refinedev/core";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, containersFromChildren, type ComposedContainers } from "../../runtime";
@@ -1348,4 +1349,27 @@ test("an own submit owner receives what nextSave reads of an edited, removed and
   expect(f.submit).toHaveBeenCalledOnce();
   expect(f.submit.mock.calls[0]![0]).toEqual(next.data);
   expect(f.submit.mock.calls[0]![1].lines).toEqual(next.lines);
+});
+
+/** The saved model's own native list, mounted beside the form as a list beside an open record is. */
+function OwnModelList() {
+  useList({ resource: renderedResource.roots.list!, dataProviderName: renderedResource.schemaName });
+  return null;
+}
+
+test("guard: a save that writes lines confirms only after its own model's lists have refreshed", async () => {
+  const f = await fixture({ publicView: true, recordExtras: () => <OwnModelList /> });
+  await waitFor(() => expect(f.provider.getList).toHaveBeenCalledTimes(1));
+  let answer!: () => void;
+  f.provider.getList.mockImplementationOnce(() => new Promise((resolve) => { answer = () => resolve({ data: [], total: 0 }); }));
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The write answered and the list was asked again: the save is at its wait.
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  await waitFor(() => expect(f.provider.getList).toHaveBeenCalledTimes(2));
+  // This test holds the list's answer, so a save that waits for it cannot have confirmed, however slow the
+  // run; a save that stopped waiting confirms in the turn of the write's answer, before the lines above return.
+  expect(screen.queryByText("Changes saved")).toBeNull();
+  await act(async () => { answer(); });
+  expect(await screen.findByText("Changes saved")).toBeTruthy();
 });

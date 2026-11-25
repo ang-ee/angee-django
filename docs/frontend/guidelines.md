@@ -2415,7 +2415,12 @@ Native form saves refresh their resource queries and authored reads of that
 model; custom commands retain their mutation owner's invalidation. Declare
 other affected models through `invalidateModels`; the
 [shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
+resolves their resource and authored-query invalidation. The save confirms as
+soon as the write answers: it starts those refreshes and does not wait for
+them, so a list of a dependent model or a read in the record's chrome may show
+the saved state a moment after the confirmation, and a read that fails or
+never answers cannot hold a save. Only a save that writes lines waits, for its
+own model's lists. A dependency between
 read models is not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no

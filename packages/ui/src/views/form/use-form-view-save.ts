@@ -628,10 +628,14 @@ export function useFormViewSave({
         }
         if (result.status === "ok") {
           if (isCreate) idempotencyKey.current = null;
-          await Promise.all([
+          // Started, not awaited: the form shows its own record, which the write's answer carries. A read
+          // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
+          // answers must not hold the confirmation back or keep Save from the next write; its failure is
+          // its own query's to report.
+          void Promise.all([
             ...dependentInvalidations.map((target) => invalidate(target)),
             ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
-          ]);
+          ]).catch(() => undefined);
         }
         return result;
       } catch (error) {
