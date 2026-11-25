@@ -48,7 +48,7 @@ class SpellingRule(IntEnum):
     SELF_CLOSING = 4
     END_TAG = 5
     TEMPLATE_CODE = 6
-    MODE_ELEMENTS = 7
+    ELEMENTS = 7
     ENDS_IN_TEXT = 8
 
     @property
@@ -75,43 +75,52 @@ SPELLING: dict[SpellingRule, str] = {
         "template code sits in text or inside a double-quoted attribute value, never in a tag, an end tag, a "
         "declaration or a comment"
     ),
-    SpellingRule.MODE_ELEMENTS: (
-        "an element that changes how a reader reads what follows is not allowed in a mail; title and style are"
+    SpellingRule.ELEMENTS: (
+        "a mail is written with the document, table, text, link, list and image elements alone (MAIL_ELEMENTS), "
+        "and in a layout's Outlook comment Office's settings"
     ),
     SpellingRule.ENDS_IN_TEXT: "a form ends in text, outside any tag, comment or <style> or <title> element",
 }
 """The refusal of each :class:`SpellingRule`, stated once."""
 
-MODE_ELEMENTS = frozenset({
-    "script", "iframe", "noscript", "xmp", "noembed", "noframes", "plaintext", "textarea", "svg", "math", "template",
-    "select",
+MAIL_ELEMENTS = frozenset({
+    "html", "head", "body", "meta", "title", "style",
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
+    "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "hr", "center",
+    "span", "a", "b", "strong", "i", "em", "u", "s", "small", "sub", "sup", "code", "br", "font",
+    "ul", "ol", "li",
+    "img",
 })
-"""Elements that switch how a reader reads what follows them (rule 7); ``title`` and ``style`` alone are admitted."""
+"""The elements a mail is written with (rule 7): the document, tables, block and inline text, links, lists and
+images, as the shipped rows, the Markdown pass and hand-written mail markup use them. ``title`` and ``style`` are the
+only ones that change how a reader reads what follows. Frames, forms and their controls, ``base``, ``link``,
+scripts, embedded and foreign content are not among them."""
 
-REFUSED_ELEMENTS = frozenset({"object", "embed", "form", "link", "base"})
-"""Elements a mail may not carry for what they load or submit."""
+OFFICE_ELEMENTS = frozenset({"xml", "o:officedocumentsettings", "o:allowpng", "o:pixelsperinch"})
+"""What Word reads inside Outlook's conditional comments, and only there: the ``xml`` island and its settings."""
 
-VOID_ELEMENTS = frozenset({
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
+VOID_ELEMENTS = frozenset({"br", "hr", "img", "meta"})
+"""The elements of :data:`MAIL_ELEMENTS` that have no content, which alone close themselves with ``/>`` (rule 4)."""
+
+MAIL_ATTRIBUTES = frozenset({
+    "class", "id", "style", "title", "lang", "xml:lang", "dir", "role", "aria-label", "aria-hidden",
+    "aria-roledescription",
+    "width", "height", "align", "valign", "bgcolor", "background", "border", "cellpadding", "cellspacing", "colspan",
+    "rowspan", "nowrap", "scope",
+    "href", "target", "rel", "src", "alt", "cite",
+    "xmlns", "xmlns:v", "xmlns:o", "name", "content", "charset", "type", "media",
+    "color", "face", "size", "start",
 })
-"""The elements that have no content, and alone may close themselves with ``/>`` (rule 4)."""
+"""The attributes a mail is written with; every other one, ``on*`` and ``http-equiv`` among them, is refused by
+name."""
 
-LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite", "poster", "action"})
-"""The attributes a mail uses for links: one ``url`` output, or a static link ``url`` leaves unchanged."""
-
-REFUSED_ATTRIBUTES = frozenset({
-    "http-equiv", "ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
-    "profile", "formaction", "srcset", "icon", "xlink:href",
-})
-"""The other attributes a reader follows as a link or acts on, refused by name with every ``on*``."""
+LINK_ATTRIBUTES = frozenset({"href", "src", "background", "cite"})
+"""The attributes of :data:`MAIL_ATTRIBUTES` a reader follows as a link: one ``url`` output, or a static link."""
 
 OUTPUT_ATTRIBUTES = frozenset({"alt", "title", "aria-label", "lang", "xml:lang", "dir"})
 """The text attributes an output may write."""
 
 CONDITION_TAGS = frozenset({"if", "elif", "else", "endif"})
-
-OFFICE_ELEMENTS = re.compile(r"xml|o:[a-z]+")
-"""What Word reads inside Outlook's conditional comments: the ``xml`` island and Office (``o:``) settings."""
 
 MSO_COMMENT = re.compile(r"\[if mso\]>(?P<markup>.*)<!\[endif\]", re.DOTALL)
 """The data of ``<!--[if mso]>…<![endif]-->``: markup classic Outlook alone renders."""
@@ -231,18 +240,15 @@ class _HtmlChecker(HTMLParser):
             or len(set(names)) != len(names) or not _start_tag(tag, attrs, closing=closing).fullmatch(written)
         ):
             self.broken(SpellingRule.START_TAG, f"the tag {written[:60]!r}")
-        if closing and tag not in VOID_ELEMENTS and not (self.office and OFFICE_ELEMENTS.fullmatch(tag)):
+        office = self.office and tag in OFFICE_ELEMENTS
+        if closing and tag not in VOID_ELEMENTS and not office:
             self.broken(SpellingRule.SELF_CLOSING, f"<{tag}/>")
-        if tag in MODE_ELEMENTS:
-            self.broken(SpellingRule.MODE_ELEMENTS, f"<{tag}>")
-        if tag in REFUSED_ELEMENTS:
-            self.refuse(f"<{tag}> is not allowed in a mail")
-        if (":" in tag or tag == "xml") and not (self.office and OFFICE_ELEMENTS.fullmatch(tag)):
-            self.refuse(f"<{tag}> is not allowed in a mail: xml and Office settings sit in Outlook's comments")
+        if tag not in MAIL_ELEMENTS and not office:
+            self.broken(SpellingRule.ELEMENTS, f"<{tag}>")
         for name, raw_value in attrs:
             value = raw_value or ""
-            if name in REFUSED_ATTRIBUTES or name.startswith("on"):
-                self.refuse(f"the {name} attribute is not allowed in a mail")
+            if name not in MAIL_ATTRIBUTES:
+                self.refuse(f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)")
                 continue
             ids = self.span_ids(value)
             self.check_conditions(name, ids)
@@ -410,10 +416,10 @@ def check_html(
 ) -> list[str]:
     """Return what an HTML form holds that a mail may not, its template spans read as placeholders.
 
-    Refused: what breaks a :class:`SpellingRule`; the elements in
-    :data:`REFUSED_ELEMENTS`; ``xml`` and namespaced elements but Office's inside
-    Outlook's comments; the attributes in :data:`REFUSED_ATTRIBUTES` and every
-    ``on*``; an ``if`` an attribute value does not hold whole; in an attribute of
+    Refused: what breaks a :class:`SpellingRule`, an element outside
+    :data:`MAIL_ELEMENTS` (rule 7) but Office's settings inside Outlook's
+    comments; an attribute outside :data:`MAIL_ATTRIBUTES`; an ``if`` an
+    attribute value does not hold whole; in an attribute of
     :data:`LINK_ATTRIBUTES` anything but one output whose last filter is ``url``,
     or a static link :func:`~angee.messaging_templates.engine.url` leaves as
     ``html.parser`` decodes it; in ``style`` an output but :data:`STYLE_OUTPUTS`;
@@ -423,8 +429,8 @@ def check_html(
     family one. ``document`` (a layout) admits the opening ``<!doctype html>`` and
     Outlook's ``<!--[if mso]>…<![endif]-->`` and
     ``<!--[if !mso]><!-->…<!--<![endif]-->``, balanced, static, the markup of the
-    first held to this same contract with ``xml`` and Office (``o:``) settings
-    admitted there alone. ``expression`` compiles one output span to its
+    first held to this same contract with :data:`OFFICE_ELEMENTS` admitted
+    there alone. ``expression`` compiles one output span to its
     ``FilterExpression``.
     """
 

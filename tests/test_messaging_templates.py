@@ -42,7 +42,7 @@ _CONTENT = "{% block content %}{% endblock %}"
 """The one empty block a layout's forms hold, which a template fills."""
 
 _KIND_VALUES: dict[str, dict[str, Any]] = {
-    "layout": {"format": "html", "source": f"<main>{_CONTENT}</main>", "text_source": _CONTENT},
+    "layout": {"format": "html", "source": f"<div>{_CONTENT}</div>", "text_source": _CONTENT},
     "template": {"format": "markdown", "source": "Hello.", "subject": "Hello", "layout": "base"},
     "block": {"format": "html", "source": "<p>Block</p>", "text_source": "Block"},
     "part": {"format": "markdown", "source": "Part."},
@@ -264,7 +264,7 @@ def test_every_save_fingerprints_what_renders(db: None) -> None:
         row.name = "Renamed"
         row.save(update_fields=["name"])
         assert _read(row).content_hash == first
-        row.source = "<main>Changed</main>"
+        row.source = "<div>Changed</div>"
         row.save(update_fields=["source"])
     changed = _read(row).content_hash
     assert changed != first
@@ -377,12 +377,12 @@ def test_an_admin_writes_the_deployments_rows_and_nobody_writes_a_baseline(db: N
     }
 
     baseline = _row(baseline=True)
-    edit = {"id": public_id_of(baseline), "set": {"source": f"<main>{_CONTENT}Edited</main>"}}
+    edit = {"id": public_id_of(baseline), "set": {"source": f"<div>{_CONTENT}Edited</div>"}}
     for document, variables in ((_UPDATE, edit), (_DELETE, {"id": public_id_of(baseline)})):
         refused = execute_schema(_schema(), document, variables, user=admin)
         assert refused.errors
         assert refused.errors[0].extensions["code"] == "PERMISSION_DENIED"
-    assert _read(baseline).source == f"<main>{_CONTENT}</main>"
+    assert _read(baseline).source == f"<div>{_CONTENT}</div>"
 
 
 # ---------- shipped defaults: the resource adapter and reload ----------
@@ -414,7 +414,7 @@ _LAYOUT_HEADERS = ["_xref", "kind", "key", "language", "name", "format", "source
 )
 def test_a_resource_row_never_states_the_flag_or_a_hash(db: None, column: str, refusal: str) -> None:
     del db
-    row = ("base", "layout", "base", "en", "Base", "html", "<main/>", "Body", "")
+    row = ("base", "layout", "base", "en", "Base", "html", "<div/>", "Body", "")
     with pytest.raises(ResourceLoadError, match=refusal):
         _load(row, headers=[*_LAYOUT_HEADERS, column])
     with system_context(reason="tests.messaging_templates.read"):
@@ -426,7 +426,7 @@ def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_has_upda
 
     del db
     first = _load(
-        ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One"),
+        ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}One</div>", f"{_CONTENT}One"),
         headers=_LAYOUT_HEADERS,
     )
     assert (first.created, first.updated) == (1, 0)
@@ -439,12 +439,12 @@ def test_a_reload_of_a_changed_default_stores_its_fingerprint_and_shows_has_upda
     assert not _read(override).has_updated_default
 
     second = _load(
-        ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}Two</main>", f"{_CONTENT}Two"),
+        ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}Two</div>", f"{_CONTENT}Two"),
         headers=_LAYOUT_HEADERS,
     )
     assert (second.created, second.updated) == (0, 1)
     reloaded = _read(baseline)
-    assert reloaded.source == f"<main>{_CONTENT}Two</main>"
+    assert reloaded.source == f"<div>{_CONTENT}Two</div>"
     assert reloaded.content_hash != shipped_before
     with system_context(reason="tests.messaging_templates.resave"):
         reloaded.save()
@@ -502,18 +502,18 @@ def test_keep_override_clears_has_updated_default_and_refuses_a_row_with_no_defa
     del db
     admin = create_platform_admin("messaging-templates-keeper")
     baseline = _row(baseline=True)
-    override = _row(source="<main>Ours</main>")
+    override = _row(source="<div>Ours</div>")
     own = _row(key="letter")
     assert override.baseline_hash == baseline.content_hash
     with system_context(reason="tests.messaging_templates.release"):
-        baseline.source = "<main>Released</main>"
+        baseline.source = "<div>Released</div>"
         baseline.save()
     assert _read(override).has_updated_default
     with actor_context(admin):
         kept = MessageTemplate.objects.keep_override(MessageTemplate.objects.get(pk=override.pk))
     assert kept.baseline_hash == _read(baseline).content_hash
     assert not _read(override).has_updated_default
-    assert _read(override).source == "<main>Ours</main>"
+    assert _read(override).source == "<div>Ours</div>"
     with system_context(reason="tests.messaging_templates.refuse"):
         for row in (baseline, own):
             with pytest.raises(ValidationError) as refused:
@@ -525,7 +525,7 @@ def test_deleting_the_override_resets_to_the_default(db: None) -> None:
     del db
     admin = create_platform_admin("messaging-templates-resetter")
     baseline = _row(baseline=True)
-    override = _row(source="<main>Ours</main>")
+    override = _row(source="<div>Ours</div>")
     assert result_data(execute_schema(_schema(), _DELETE, {"id": public_id_of(override)}, user=admin))
     with system_context(reason="tests.messaging_templates.read"):
         assert MessageTemplate.objects.effective("layout", "base") == baseline
@@ -550,7 +550,7 @@ def test_the_two_verbs_refuse_in_one_shape(db: None) -> None:
         "member": create_user("messaging-templates-verbs-member"),
         "admin": create_platform_admin("messaging-templates-verbs-admin"),
     }
-    targets = {"baseline": _row(baseline=True), "override": _row(source="<main>Ours</main>"), "local": _row(key="own")}
+    targets = {"baseline": _row(baseline=True), "override": _row(source="<div>Ours</div>"), "local": _row(key="own")}
     denied = {"code": "PERMISSION_DENIED"}
     signed_out = {"code": "PERMISSION_DENIED", "message": "Authentication required."}
 
@@ -613,11 +613,11 @@ def test_the_row_facts_read_as_fields_and_filter_the_list(db: None) -> None:
     del db
     member = create_user("messaging-templates-facts-reader")
     baseline = _row(baseline=True)
-    _row(source="<main>Ours</main>")
+    _row(source="<div>Ours</div>")
     _row(language="es", baseline=True)
     _row(key="letter")
     with system_context(reason="tests.messaging_templates.release"):
-        baseline.source = "<main>Released</main>"
+        baseline.source = "<div>Released</div>"
         baseline.save()
 
     def listed(where: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
@@ -668,7 +668,7 @@ def test_the_row_a_recipient_reads(db: None) -> None:
 
     del db
     _row(baseline=True)
-    override = _row(source="<main>Ours</main>")
+    override = _row(source="<div>Ours</div>")
     spanish = _row(language="es", baseline=True)
     german = _row(language="de")
     with system_context(reason="tests.messaging_templates.read"):
@@ -812,7 +812,7 @@ def test_an_overridden_layout_goes_back_to_its_default_when_the_override_is_dele
 @pytest.mark.parametrize(
     "write",
     [
-        pytest.param(lambda rows: rows.filter(key="base").update(source="<main>Bypassed</main>"), id="update"),
+        pytest.param(lambda rows: rows.filter(key="base").update(source="<div>Bypassed</div>"), id="update"),
         pytest.param(lambda rows: rows.filter(key="base").update(kind="block"), id="update-write-once-kind"),
         pytest.param(lambda rows: rows.bulk_update(list(rows.filter(key="base")), ["source"]), id="bulk-update"),
         pytest.param(lambda rows: rows.bulk_create([_unsaved(key="bulk")]), id="bulk-create"),
@@ -885,7 +885,7 @@ def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
     """The loader restores a stated ``created_at`` through the owner's write, past the closed ``update()``."""
 
     del db
-    row = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One",
+    row = ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}One</div>", f"{_CONTENT}One",
            "2020-01-02 03:04:05")
     assert _load(row, headers=[*_LAYOUT_HEADERS, "created_at"]).created == 1
     with system_context(reason="tests.messaging_templates.read"):
@@ -899,7 +899,7 @@ def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
 
 def test_an_unchanged_reload_writes_no_message_template_row(db: None) -> None:
     del db
-    row = ("base", "layout", "base", "en", "Base", "html", f"<main>{_CONTENT}One</main>", f"{_CONTENT}One")
+    row = ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}One</div>", f"{_CONTENT}One")
     _load(row, headers=_LAYOUT_HEADERS)
     table = MessageTemplate._meta.db_table
     with CaptureQueriesContext(connection) as captured:
@@ -938,11 +938,11 @@ def test_reverting_a_reset_restores_the_override_with_the_fingerprint_it_held(
     del db
     admin = create_platform_admin("messaging-templates-reverter")
     baseline = _row(baseline=True)
-    override = _row(source="<main>Ours</main>")
+    override = _row(source="<div>Ours</div>")
     held = override.baseline_hash
     with system_context(reason="tests.messaging_templates.release"):
         released = MessageTemplate.objects.get(pk=baseline.pk)
-        released.source = "<main>Released</main>"
+        released.source = "<div>Released</div>"
         released.save()
     # The reset's changeset closes on commit; only a closed changeset reverts.
     with actor_context(admin), django_capture_on_commit_callbacks(execute=True), changeset(fresh=True):
@@ -951,7 +951,7 @@ def test_reverting_a_reset_restores_the_override_with_the_fingerprint_it_held(
         reset = cast(Any, MessageTemplate).history.filter(id=override.pk, history_type="-").get()
         reset.changeset.with_actor(admin).revert()
     restored = _read(override)
-    assert (restored.source, restored.baseline_hash) == ("<main>Ours</main>", held)
+    assert (restored.source, restored.baseline_hash) == ("<div>Ours</div>", held)
     assert restored.has_updated_default
 
 

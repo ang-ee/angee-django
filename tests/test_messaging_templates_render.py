@@ -56,8 +56,10 @@ from angee.messaging_templates.engine import (
 )
 from angee.messaging_templates.html_checks import (
     LINK_ATTRIBUTES,
-    MODE_ELEMENTS,
+    MAIL_ATTRIBUTES,
+    MAIL_ELEMENTS,
     OUTPUT_ATTRIBUTES,
+    VOID_ELEMENTS,
     SpellingRule,
     check_html,
     compiled_expression,
@@ -372,7 +374,8 @@ LONG = "a" * 1_001
         pytest.param({"source": "{% if a in items %}{% endif %}", "variables": {"a": "x", "items.*": "x"}},
                      "in takes a literal", id="11-in-value"),
         pytest.param({"source": "<script>x</script>", "format": "html", "text_source": "x"},
-                     "changes how a reader reads what follows", id="12-html"),
+                     "a mail is written with the document, table, text, link, list and image elements alone",
+                     id="12-html"),
         pytest.param({"source": "Use `{{ a }}` here.", "variables": {"a": "x"}}, "inside Markdown code inline",
                      id="12-markdown"),
         pytest.param({"source": "{{ secret }}"}, "secret is not in its variables", id="13-undeclared"),
@@ -540,6 +543,15 @@ def test_the_html_checks(html: str, refused: bool) -> None:
         html, compiled_expression(HTML_ENGINE))
 
 
+OFF_THE_LIST = [
+    "script", "iframe", "noscript", "xmp", "noembed", "noframes", "plaintext", "textarea", "svg", "math", "template",
+    "select", "option", "frameset", "frame", "object", "embed", "applet", "param", "form", "input", "button", "label",
+    "link", "base", "video", "audio", "source", "track", "picture", "map", "area", "colgroup", "col", "caption",
+    "marquee", "isindex", "image", "portal", "bgsound", "keygen", "dialog", "details", "summary", "menu", "slot",
+    "search", "nobr", "listing", "xml", "o:p", "v:rect", "abbr", "q", "wbr",
+]
+"""Elements off :data:`MAIL_ELEMENTS`: every mode-switching, framing, form, embedded and foreign element, and others."""
+
 R = SpellingRule
 SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.NO_NUL, "<p>a\x00b</p>", False),
@@ -582,7 +594,7 @@ SPELLING_REFUSED: list[tuple[SpellingRule, str, bool]] = [
     (R.TEMPLATE_CODE, "<p>x</p{{ x }}>", False),
     (R.TEMPLATE_CODE, "<title>Hi</title{{ v }}><p>x</p></title>", False),
     (R.TEMPLATE_CODE, "<!--{{ x }}-->", True),
-    *((R.MODE_ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in sorted(MODE_ELEMENTS)),
+    *((R.ELEMENTS, f"<{tag}>x</{tag}>", False) for tag in OFF_THE_LIST),
     (R.ENDS_IN_TEXT, "<p>x</p><a", False),
     (R.ENDS_IN_TEXT, '<p>x</p><a title="x', False),
     (R.ENDS_IN_TEXT, '<p>x</p><a href="https://example.test/"', False),
@@ -620,6 +632,28 @@ def test_the_strict_spelling_admits_what_every_reader_reads_alike(html: str, doc
     """The case of names, the gaps between attributes, void elements' slashes and character references are free."""
 
     assert check_html(html, compiled_expression(HTML_ENGINE), document=document) == []
+
+
+def test_a_mail_is_written_with_its_own_elements_and_attributes() -> None:
+    """Rule 7 and the attribute list: each listed element and attribute is admitted, and every other is refused by
+    name with one message, an Office setting admitted inside a layout's Outlook comment alone."""
+
+    expression = compiled_expression(HTML_ENGINE)
+    for tag in sorted(MAIL_ELEMENTS):
+        form = f"<{tag}>" if tag in VOID_ELEMENTS else f"<{tag}>x</{tag}>"
+        assert check_html(form, expression) == [], tag
+    values = {"href": "https://example.test/", "src": "https://example.test/a.png", "background": "#",
+              "cite": "https://example.test/", "charset": "utf-8"}
+    for name in sorted(MAIL_ATTRIBUTES):
+        assert check_html(f'<p {name}="{values.get(name, "x")}">x</p>', expression) == [], name
+    for name in ("onclick", "onerror", "http-equiv", "srcset", "srcdoc", "formaction", "ping", "longdesc", "data",
+                 "data-x", "poster", "action", "popover", "xlink:href", "usemap", "is"):
+        assert check_html(f'<p {name}="x">x</p>', expression) == [
+            f"the {name} attribute is not one a mail is written with (MAIL_ATTRIBUTES)"], name
+    office = "<!--[if mso]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch>" \
+             "</o:OfficeDocumentSettings></xml><![endif]-->"
+    assert check_html(office, expression, document=True) == []
+    assert check_html(office.replace("xml>", "xmp>"), expression, document=True) != []
 
 
 def test_a_self_closing_style_is_refused_by_rule_4(plain: Any) -> None:
@@ -713,13 +747,13 @@ def test_link_attributes_follow_url_and_text_attributes_are_text() -> None:
     """URL-valued attributes: the ones mail links with follow url; the others are refused by name; text is text."""
 
     expression = compiled_expression(HTML_ENGINE)
-    for name in ("href", "src", "background", "cite", "poster", "action"):
+    for name in sorted(LINK_ATTRIBUTES):
         for value in ("javascript:alert(1)", "JaVaScRiPt:x", "java&#9;script:x", "data:text/html,x"):
             assert check_html(f'<td {name}="{value}">x</td>', expression), (name, value)
         assert check_html(f'<td {name}="https://example.test/a.png">x</td>', expression) == [], name
     for name in ("ping", "longdesc", "lowsrc", "dynsrc", "usemap", "data", "codebase", "archive", "manifest",
-                 "profile", "formaction", "srcset", "icon", "xlink:href"):
-        assert any(f"the {name} attribute is not allowed" in refusal for refusal in check_html(
+                 "profile", "formaction", "srcset", "icon", "xlink:href", "poster", "action"):
+        assert any(f"the {name} attribute is not one a mail" in refusal for refusal in check_html(
             f'<img {name}="https://example.test/">', expression)), name
     # A scheme an author splices from branches has nowhere left to go: each URL attribute is listed.
     assert check_html('<img longdesc="{% if a %}java{% else %}x{% endif %}script:alert(1)" alt="a">', expression)
