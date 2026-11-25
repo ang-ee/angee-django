@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 29
+// @rebac_schema_revision: 30
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -13,13 +13,20 @@ definition messaging/channel {
     relation reader: auth/user | auth/group#member
     relation annotator: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
+    // The system channel (backend `system`) records the framework's own mail, live
+    // sign-in links among it: administrators alone read, send on, write, annotate or
+    // delete it, whatever was granted, bound or transferred. Arrow-only through
+    // `system_kind`, as messaging/message#conceal: never check `system_seal` directly.
+    relation system_kind: messaging/channel // rebac:const={"target_id":"system","filters":{"backend_class":"system"}}
+    permission system_seal = authenticated + anonymous
+    permission sealed = system_kind->system_seal
 
     permission create = admin->member
-    permission read   = integration->read + reader + replier + admin->member
-    permission reply  = replier + integration->write + admin->member
-    permission write  = integration->write + admin->member
-    permission annotate = annotator + write
-    permission delete = integration->write + admin->member
+    permission read   = ((integration->read + reader + replier) - sealed) + admin->member
+    permission reply  = ((replier + integration->write) - sealed) + admin->member
+    permission write  = (integration->write - sealed) + admin->member
+    permission annotate = ((annotator + integration->write) - sealed) + admin->member
+    permission delete = (integration->write - sealed) + admin->member
     permission write__owner = integration->transfer
 }
 
