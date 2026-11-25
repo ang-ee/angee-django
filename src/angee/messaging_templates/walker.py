@@ -96,6 +96,9 @@ OPENERS_PER_LINE = 30
 FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
 NESTING_LIMIT = 16
+CONDITION_OPERATOR_LIMIT = 10
+"""The most operators (``and``, ``or``, ``not``, ``in``, comparisons) one ``if`` or ``elif`` condition holds. Django
+parses and evaluates a condition recursively, an operator a level, and the walk counts each operator as a node."""
 LITERAL_LIMIT = 200
 FILTERS_PER_EXPRESSION = 4
 FLOATFORMAT_PRECISION = 6
@@ -820,6 +823,18 @@ def _whole_number(name: str, argument: Any) -> int | None:
         return None
 
 
+def _operators(condition: Any) -> int:
+    """How many operators a compiled ``if`` condition holds, counted without recursion."""
+
+    count, pending = 0, [condition]
+    while pending:
+        operator = pending.pop()
+        if type(operator) is not TemplateLiteral:
+            count += 1
+            pending.extend(operand for operand in (operator.first, operator.second) if operand is not None)
+    return count
+
+
 def _nesting(text: str) -> int:
     """The deepest tag nesting in ``text``, counted on Django's tokens before anything compiles."""
 
@@ -864,7 +879,11 @@ class _RowRules:
                 self.refuse("text holds {{, {% or {# that is not template code")
         elif type(node) is IfNode:
             for condition, _ in node.conditions_nodelists:
-                if condition is not None:
+                if condition is None:
+                    continue
+                if _operators(condition) > CONDITION_OPERATOR_LIMIT:
+                    self.refuse(f"an if condition holds over {CONDITION_OPERATOR_LIMIT} operators")
+                else:
                     self.condition(condition)
         elif type(node) is ForNode:
             if len(node.loopvars) != 1:
@@ -1479,13 +1498,14 @@ class _TreeWalker:
         return binding if binding is not None else _Binding(BindingKind.COMPUTED)
 
     def condition(self, frame: _Frame, condition: Any) -> int:
-        """Judge each operand of an ``if``/``elif`` condition; return how many there are."""
+        """Judge each operand of an ``if``/``elif`` condition; return how many operands and operators it holds, each a
+        node."""
 
         if type(condition) is TemplateLiteral:
             self.expression(frame, cast(FilterExpression, condition.value), ReadUse.TEST)
             return 1
-        return sum(self.condition(frame, operand) for operand in (condition.first, condition.second)
-                   if operand is not None)
+        return 1 + sum(self.condition(frame, operand) for operand in (condition.first, condition.second)
+                       if operand is not None)
 
     def guards(self, frame: _Frame, condition: Any) -> frozenset[tuple[str, Path]]:
         """The paths an ``if`` branch guards: its condition, or each operand of an ``and`` of them."""

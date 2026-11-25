@@ -10,6 +10,7 @@ import itertools
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import zoneinfo
@@ -67,6 +68,7 @@ from angee.messaging_templates.html_checks import (
 )
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
+    CONDITION_OPERATOR_LIMIT,
     WALKED_NODES,
     RowPiece,
     TemplateWalk,
@@ -1716,10 +1718,13 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
 
 
 def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> None:
-    """Section 4: tags nested 16 deep, three includes, two loops and eight-segment paths reach no RecursionError."""
+    """Tags nested 16 deep, three includes, two loops, eight-segment paths and a condition of ten operators: the walk
+    and the render stay far under Python's default recursion limit, so no RecursionError, which stays unconverted,
+    can arise from a row."""
 
     del plain
-    nested = "\n".join(["{% if x %}"] * 16) + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
+    condition = "{% if " + "not " * CONDITION_OPERATOR_LIMIT + "x %}"
+    nested = "\n".join(["{% if x %}"] * 15) + condition + "{{ x }}" + "\n".join(["{% endif %}"] * 16)
     _row("part", "depth3", source=nested, variables={"x": "x"})
     _row("part", "depth2", source='{% include "parts/depth3" with x=x only %}', variables={"x": "x"})
     _row("part", "depth1", source='{% include "parts/depth2" with x=x only %}', variables={"x": "x"})
@@ -1734,7 +1739,52 @@ def test_the_deepest_admitted_row_and_values_render(plain: Any, kit: Any) -> Non
     node = values
     for segment in deep.split("."):
         node = node.setdefault(segment, {}) if segment != "h" else node.setdefault(segment, "Eight")
-    assert _render(template, values, kit).plain_text.count("Deep") == 100
+    base = len(inspect.stack(0))
+    walked = _deepest(lambda: TemplateWalker(saving=True).walk(template, MessageTemplate.objects))
+    rendered = _deepest(lambda: _render(template, values, kit))
+    assert rendered[1].plain_text.count("Deep") == 100
+    added = max(walked[0], rendered[0]) - base
+    print(f"deepest admitted row: base {base} frames, walk {walked[0]}, render {rendered[0]}; "  # noqa: T201
+          f"adds {added}, {sys.getrecursionlimit() - base - added} under the limit of {sys.getrecursionlimit()}")
+    assert added < DEEPEST_ADDED_FRAMES
+
+
+DEEPEST_ADDED_FRAMES = 300
+"""The most Python frames the walk or the render of the deepest admitted row may add to its caller's."""
+
+
+def _deepest(call: Callable[[], Any]) -> tuple[int, Any]:
+    """The deepest Python stack ``call`` reaches, and what it returns."""
+
+    peak = [0]
+
+    def profile(frame: Any, event_name: str, argument: Any) -> None:
+        del argument
+        if event_name == "call":
+            depth = 0
+            while frame is not None:
+                depth, frame = depth + 1, frame.f_back
+            peak[0] = max(peak[0], depth)
+
+    with system_context(reason="tests.messaging_templates.render.depth"):
+        sys.setprofile(profile)
+        try:
+            result = call()
+        finally:
+            sys.setprofile(None)
+    return peak[0], result
+
+
+def test_a_condition_holds_at_most_ten_operators_each_a_node(plain: Any) -> None:
+    """A chain of 240 nots cost 575 frames and was counted as one node: now refused past ten, each operator counted."""
+
+    del plain
+    refused = _unsaved(source="{% if " + "not " * 240 + "x %}{% endif %}", variables={"x": "x"})
+    assert f"an if condition holds over {CONDITION_OPERATOR_LIMIT} operators" in " ".join(_refusals(refused))
+    admitted = _unsaved("part", "ops", source="{% if not a and b or c == 'x' %}{% endif %}",
+                        variables={"a": "x", "b": "x", "c": "x"})
+    walk = TemplateWalker(saving=True).judge(admitted, _Rows(admitted))
+    assert walk.refusals == []
 
 
 def test_an_over_long_subject_is_refused_by_its_column_and_never_lexed(
@@ -2013,8 +2063,9 @@ def _deep_ifs(count: int) -> list[str]:
 
 
 DATED = [("{% with x=d|date:" + R20 + " %}{% endwith %}") * 10]
-CHAINS = ["{% if " + " or ".join(["x == y"] * 90) + " %}{% endif %}"] * 3
-"""Comparisons of two 10,000-character values that differ in their last character (the Django review's case)."""
+CHAINS = ["{% if " + " or ".join(["x == y"] * 5) + " %}{% endif %}"] * 30
+"""Comparisons of two 10,000-character values that differ in their last character (an earlier review's case), as many
+as the node cap admits now that each operator is a node: five to a condition, the most ten operators hold."""
 LINE = "{% for i in few %}{% with " + " ".join(f"v{index}=d|date:{R20}" for index in range(6)) + \
     " %}{% endwith %}{% endfor %}"
 """The costliest subject a 255-character column holds: six such dates an item, as many items as its pass allows."""
@@ -2155,15 +2206,15 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
         [(0, 0, 0), (500, 15_936, 498_000), (498, 15_936, 498_000)],
     ),
     "review": (
-        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]],
-        [(50, 0, 30_000), (453, 6_750, 450_000), (450, 6_750, 450_000)],
+        149_981, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]],
+        [(50, 0, 30_000), (453, 18_900, 450_000), (450, 18_900, 450_000)],
     ),
     "review-subject": (
-        149_981, [("html", 899, 4, 117), ("text", 882, 0, 15), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
+        149_981, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]], [(51, 0, 30_000)],
     ),
     "refused": (149_861, [("html", 19, 4, 498_344), ("text", 12, 0, 49_953), *LINES], []),
     "dated": (
-        23_322, [("html", 578, 284, 382), ("text", 568, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
+        23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
     ),
 }
 """The work of the costliest previews: the walk's 150,000 characters, its caps, and every pass's budget."""
