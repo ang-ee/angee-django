@@ -51,6 +51,7 @@ from angee.base.fields import DiagnosticTextField, ImplClassField, StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.base import AngeeDataModel
+from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
@@ -142,8 +143,9 @@ class DeliveryFailed(Exception):
     """A response could not be handed to its target; ``reason`` is what the response keeps of it.
 
     The reason is the failure's class, or ``refused: <code>`` when the target's
-    owner refused the response. It never carries the failure's own message,
-    which may quote an answer.
+    owner refused the response, or web forms did (``config_invalid``: the form's
+    stored configuration no longer validates). It never carries the failure's
+    own message, which may quote an answer.
     """
 
     def __init__(self, reason: str) -> None:
@@ -197,14 +199,20 @@ class FormQuerySet[FormT: Form](ArchiveQuerySet[FormT], AngeeHistoryQuerySet[For
 FormManager = AngeeHistoryManager.from_queryset(FormQuerySet)
 
 
-class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Form(ResourceLoadMixin, ImplDefaultsMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One public form: its name for staff, whether it takes submissions, and what a response becomes.
 
     An addon declares a form as one resource row (:class:`~angee.webforms.resources.FormResource`):
     the form, the version it serves (:meth:`serve`) and its addresses (:meth:`ensure_aliases`).
+
+    Its target's configuration is the implementation configuration of
+    ``target_class`` (:class:`ImplDefaultsMixin`): every save stores it as the
+    target's ``config_model`` validates it, system work included, and a refusal
+    is reported under ``target_config``.
     """
 
     resource_class = FormResource
+    impl_config_field = "target_config"
     sqid_prefix = "wbf_"
 
     name = models.CharField(max_length=160)
@@ -219,7 +227,7 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
     """
     target_class = ImplClassField(FormTarget, default="store")
     target_config = models.JSONField(default=dict, blank=True)
-    """The target's own configuration, checked by its ``config_model``: how answers become its record's fields."""
+    """The target's own configuration, stored as its ``config_model`` validates it: how answers fill its record."""
     theme_id = models.CharField(max_length=64, blank=True, default="", validators=[THEME_ID])
     """The theme the public page wears; empty follows the deployment's default."""
     retention_days = models.PositiveIntegerField(
@@ -252,24 +260,31 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
         return self.name
 
     def clean(self) -> None:
-        """Check the target's configuration against the target the form selects.
+        """Leave the target's validated configuration on the form, and check it against the target it selects.
 
-        A target or configuration being chosen is also held to the target's own
-        :meth:`FormTarget.clean`, whoever chooses it.
+        The configuration is validated first, so what is compared with the
+        stored one, and read by the target, is what would be stored. A target or
+        configuration being chosen is also held to the target's own
+        :meth:`FormTarget.clean`, whoever chooses it; its refusal is under
+        ``target_config``.
         """
 
         super().clean()
-        try:
-            target = self.target()
-            if self._target_changed():
+        self.validate_impl_configs()
+        target = self.target()
+        if self._target_changed():
+            try:
                 target.clean()
-        except ValidationError as error:
-            raise ValidationError({"target_config": error.messages}) from error
+            except ValidationError as error:
+                raise ValidationError({"target_config": error.messages}) from error
 
     def target(self) -> FormTarget:
-        """Return this form's target, bound to it and to its checked configuration."""
+        """Return this form's target, bound to it and its checked configuration; refused under ``target_config``."""
 
-        return self.get_target_class_impl()(self)
+        try:
+            return self.get_target_class_impl()(self)
+        except ValidationError as error:
+            raise self.impl_config_error(error) from None
 
     def undelivered(self) -> tuple[int, datetime | None]:
         """Return how many responses still wait for delivery, and when the first of them is removed.
@@ -292,10 +307,19 @@ class Form(ResourceLoadMixin, HistoryMixin, ArchiveMixin, AngeeDataModel, concre
         return int(count or 0), expires
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Refuse a target, or a configuration of it, the acting user may not choose."""
+        """Store the target's validated configuration; refuse a target or configuration the actor may not choose.
+
+        The configuration is validated, and a new form's target defaults
+        seeded, before :meth:`_target_changed` compares the choice with what is
+        stored, so the same configuration given another way is no new choice.
+        ``ImplDefaultsMixin`` repeats both when it saves, finding nothing left
+        to change.
+        """
 
         fields = kwargs.get("update_fields")
         if fields is None or {"target_class", "target_config"} & set(fields):
+            self.prepare_impl_defaults()
+            self.validate_impl_configs(update_fields=fields)
             self._require_target_choice()
         super().save(*args, **kwargs)
 
@@ -886,7 +910,11 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
         and the values in its frames may quote an answer, so neither is stored,
         logged or raised. What is logged is where it was raised. The response is
         tried again later (:meth:`ResponseManager.redeliver`) unless its
-        target's owner refused it (:class:`~angee.webforms.targets.DeliveryRefused`).
+        target's owner refused it (:class:`~angee.webforms.targets.DeliveryRefused`),
+        or its form's stored configuration no longer builds the target (its
+        ``config_model`` changed since it was saved): a refusal as
+        ``config_invalid``, for every target, which staff answer by correcting
+        the form's target and delivering again.
 
         The attempt is counted and its next try set under the row's lock,
         before the target runs and in a transaction of its own: an attempt whose
@@ -904,7 +932,12 @@ class Response(AppendOnlyModel, AngeeDataModel, concrete=True):
                     return self._record()
                 made = row._record()
                 if made is None:
-                    made = row.form.target().deliver(row)
+                    try:
+                        target = row.form.target()
+                    except ValidationError:
+                        # Its message may quote the configuration: the refusal keeps its code alone.
+                        raise DeliveryRefused("config_invalid") from None
+                    made = target.deliver(row)
                     if made is not None:
                         if not _model("ResponseRecord").declares_target(type(made)):
                             # Nothing would erase the answers when an undeclared record goes.

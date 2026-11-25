@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Collection, Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -27,12 +27,20 @@ class ImplDefaultsMixin(models.Model):
     form (API, resource seed) still gets the chosen impl's defaults — for the fields
     the caller did not supply. Form-created rows pass their (possibly edited) values,
     so the impl never overrides them, even when a value equals the model default.
+
+    Every save stores the selected implementation's validated configuration in
+    the model's configuration column, system work included: ``config`` unless the
+    model names another (:attr:`impl_config_field`). A configuration the
+    implementation refuses is reported under that column's name.
     """
 
     class Meta:
         """Own row defaults, typed config and persisted selector invariants."""
 
         abstract = True
+
+    impl_config_field: ClassVar[str] = "config"
+    """The concrete JSON column holding the configuration of the model's typed implementation selector."""
 
     _loaded_impl_keys: dict[str, Any]
 
@@ -199,13 +207,31 @@ class ImplDefaultsMixin(models.Model):
 
     @classmethod
     def _config_field(cls) -> models.JSONField:
-        """Resolve the single conventional JSON config column on this model."""
+        """Resolve the model's one JSON configuration column (:attr:`impl_config_field`)."""
 
         model: type[models.Model] = cls
-        field = model._meta.get_field("config")
+        field = model._meta.get_field(cls.impl_config_field)
         if not isinstance(field, models.JSONField) or not field.concrete:
-            raise FieldDoesNotExist(f"{cls._meta.label}.config must be a concrete JSONField.")
+            raise FieldDoesNotExist(f"{cls._meta.label}.{cls.impl_config_field} must be a concrete JSONField.")
         return field
+
+    def impl_config_error(self, error: ValidationError) -> ValidationError:
+        """Return ``error``, an implementation's refusal of a configuration, under this model's column.
+
+        An implementation names what it refuses from ``config`` down
+        (``ImplBase.parse_config``); the row reports it at its own column, with
+        the same path below it.
+        """
+
+        name = self.impl_config_field
+        if name == "config":
+            return error
+        if not hasattr(error, "error_dict"):
+            return ValidationError({name: error.error_list})
+        return ValidationError({
+            f"{name}{key[len('config'):]}" if key == "config" or key.startswith("config.") else key: errors
+            for key, errors in error.error_dict.items()
+        })
 
     def apply_config_patch(self, patch: object) -> set[str]:
         """Merge top-level config keys, removing explicit ``None`` values.
@@ -214,9 +240,9 @@ class ImplDefaultsMixin(models.Model):
         still validates and normalizes the merged config through its impl.
         """
 
-        if not isinstance(patch, Mapping):
-            raise ValidationError({"config": "Config patch must be an object."})
         field = self._config_field()
+        if not isinstance(patch, Mapping):
+            raise ValidationError({field.name: "Config patch must be an object."})
         current = field.value_from_object(self) or {}
         merged = dict(current)
         for key, value in patch.items():
@@ -227,14 +253,15 @@ class ImplDefaultsMixin(models.Model):
         if merged == current:
             return set()
         field.save_form_data(self, merged)
-        return {"config"}
+        return {field.name}
 
     def validate_impl_configs(self, *, update_fields: Any = None) -> None:
         """Validate declared config models on save, leaving untyped row config alone."""
 
+        name = self.impl_config_field
         if not self._state.adding and (
-            (update_fields is not None and "config" not in update_fields)
-            or (update_fields is None and "config" in self.get_deferred_fields())
+            (update_fields is not None and name not in update_fields)
+            or (update_fields is None and name in self.get_deferred_fields())
         ):
             # Django omits deferred columns from an ordinary save. Resolving a
             # deferred selector first would load and write an untouched column.
@@ -252,7 +279,10 @@ class ImplDefaultsMixin(models.Model):
                     update_fields is None or config_field.name not in update_fields
                 ):
                     continue
-                normalized = impl.normalize_config(config_field.value_from_object(self))
+                try:
+                    normalized = impl.normalize_config(config_field.value_from_object(self))
+                except ValidationError as error:
+                    raise self.impl_config_error(error) from None
                 config_field.save_form_data(self, normalized)
 
     def materialize_impl_defaults(
@@ -263,7 +293,9 @@ class ImplDefaultsMixin(models.Model):
     ) -> set[str]:
         """Seed this row from the implementation defaults on create.
 
-        Seeds only fields the caller did not supply. A string foreign-key default
+        Seeds only fields the caller did not supply. The configuration defaults
+        (the ``config`` key of ``ImplBase.effective_defaults``) seed the model's
+        configuration column (:attr:`impl_config_field`). A string foreign-key default
         resolves against the related model's ``slug``, a seeded row: a missing one
         raises ``ImproperlyConfigured`` with the load guidance. Mutable defaults are
         deep-copied so rows never alias the class-level dict.
@@ -271,6 +303,8 @@ class ImplDefaultsMixin(models.Model):
 
         changed: set[str] = set()
         for field_name, value in impl.effective_defaults().items():
+            if field_name == "config":
+                field_name = self.impl_config_field
             try:
                 field = self._meta.get_field(field_name)
             except FieldDoesNotExist:
