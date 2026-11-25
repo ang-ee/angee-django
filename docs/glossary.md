@@ -356,8 +356,9 @@ integrate's shared stream engine; activity and history classify each record
 against the feed's live horizon. See [public feeds](../src/angee/posts/README.md).
 
 **Delivery settlement** — messaging's reflection of provider acceptance or refusal
-into the outbound message's status, provider identity and retry schedule. See
-[the delivery owner](../src/angee/messaging/delivery.py).
+into the outbound message's status, provider identity and retry schedule, with
+its attempts (`delivery_attempts`) and, for whoever may act on it, why it last
+failed (`delivery_error`). See [the delivery owner](../src/angee/messaging/delivery.py).
 
 **Chatter** — a record's own conversation: the thread a `ThreadAttachment` with
 the `chatter` role binds to one record, read through that record's read
@@ -385,6 +386,7 @@ addresses, the message's `Recipient` rows, one per handle and envelope role
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
 hand-off, decided for the caller by read on the message it answers and `reply` on
 its channel, or by `reply` on the channel and post on the record it is sent on.
+The console composes through the `compose_message` mutation.
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
