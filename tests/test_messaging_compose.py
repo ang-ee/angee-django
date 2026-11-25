@@ -138,6 +138,31 @@ def test_a_new_email_on_a_channel_starts_its_own_thread_titled_by_its_subject(de
     assert desk.sent == []
 
 
+def test_inbound_mail_joins_a_composed_thread_only_through_its_threading_headers(desk: Any) -> None:
+    """A subject alone groups inbound mail with inbound mail, never into a conversation a person started."""
+
+    alice, bob = (
+        Message.objects.compose(channel=desk, to=[address], subject="Salary review", text="Your numbers.",
+                                actor=desk.owner)
+        for address in ("alice@example.test", "bob@example.test")
+    )
+
+    def receive(key: str, *, in_reply_to: str = "") -> Any:
+        with system_context(reason="tests.messaging.compose.fuse"):
+            (message,) = Message.objects.ingest([ParsedMessage(
+                external_id=f"<{key}@example.test>", platform="email", subject="Re: Salary review",
+                in_reply_to=in_reply_to, sender=ParsedHandle(platform="email", value=f"{key}@example.test"),
+                body=ParsedPart(text=key),
+            )], channel=desk)
+        return message
+
+    unrelated, again = receive("mallory"), receive("carol")
+    answer = receive("alice", in_reply_to=alice.external_id)
+    assert unrelated.thread_id not in (alice.thread_id, bob.thread_id)
+    assert again.thread_id == unrelated.thread_id
+    assert (answer.thread_id, answer.parent_id) == (alice.thread_id, alice.pk)
+
+
 def test_the_text_part_comes_from_the_text_and_never_from_the_html(desk: Any) -> None:
     owner = desk.owner
     bodies = {

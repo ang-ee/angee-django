@@ -933,8 +933,9 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
 
         Otherwise the email priority applies: ``In-Reply-To`` → ``References``
         (newest-first, i.e. right-to-left, resolved in one batch query) →
-        normalised subject → a new thread. The subject match and the create run
-        under ``select_for_update`` on a deterministic external id
+        normalised subject, matched only on a subject-grouped (``subj:``) thread,
+        never on one a composed message started → a new thread. The subject
+        match and the create run under ``select_for_update`` on a deterministic external id
         (``subj:<normalized>`` or ``msg:<id>``) so two concurrent batches
         resolving the same subject collide on the unique constraint and converge
         to one thread instead of double-creating.
@@ -994,9 +995,12 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
                 title_digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
                 title_fragment = fragment_model._base_manager.filter(hash=title_digest).first()
                 if title_fragment is not None:
+                    # Only a subject-grouped thread takes mail by subject: a conversation a
+                    # person started (``msg:``) is joined through its threading headers alone.
                     existing = (
                         self.lock_if_supported()
                         .filter(platform=platform, channel=channel, title=title_fragment)
+                        .filter(external_id__startswith="subj:")
                         .order_by("-created_at")
                         .first()
                     )
@@ -1025,32 +1029,33 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
         modality: Any = None,
         visibility: Any = None,
     ) -> ThreadT:
-        """Get or create the thread a message without a threading hint starts, on its deterministic key.
+        """Get or create, in one transaction, the thread a message with no threading hint starts.
 
         ``group_by_subject`` keys a subject-bearing thread on its normalised
         subject (``subj:``), as a received email is grouped; otherwise the thread
         is the message's own, ``msg:<external id>``, titled with the normalised
         subject when there is one, so messages that only share a subject never
-        fuse. The one create step of :meth:`resolve`: the key prefixes and a new
-        thread's title, modality and visibility defaults are written here alone.
+        fuse. :meth:`resolve` creates such a thread through it; a source's named
+        conversation (``chat:``) is created by :meth:`resolve` itself.
         """
 
         normalized = normalize_subject(subject)
-        title = (
-            apps.get_model("messaging", "Fragment").objects.upsert(text=normalized, created_by_id=created_by_id)
-            if normalized else None
-        )
-        thread, _created = self.get_or_create_by_external_id(
-            platform=platform,
-            external_id=f"subj:{normalized}" if normalized and group_by_subject else f"msg:{message_external_id}",
-            defaults={
-                "channel_id": channel.pk if channel is not None else None,
-                "title_id": title.pk if title is not None else None,
-                "modality": modality or self.model.Modality.EMAIL_THREAD,
-                "visibility": visibility or self.model.Visibility.PRIVATE,
-                "created_by_id": created_by_id,
-            },
-        )
+        with transaction.atomic():
+            title = (
+                apps.get_model("messaging", "Fragment").objects.upsert(text=normalized, created_by_id=created_by_id)
+                if normalized else None
+            )
+            thread, _created = self.get_or_create_by_external_id(
+                platform=platform,
+                external_id=f"subj:{normalized}" if normalized and group_by_subject else f"msg:{message_external_id}",
+                defaults={
+                    "channel_id": channel.pk if channel is not None else None,
+                    "title_id": title.pk if title is not None else None,
+                    "modality": modality or self.model.Modality.EMAIL_THREAD,
+                    "visibility": visibility or self.model.Visibility.PRIVATE,
+                    "created_by_id": created_by_id,
+                },
+            )
         return cast("ThreadT", thread)
 
     def get_or_create_by_external_id(

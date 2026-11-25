@@ -6,9 +6,9 @@ from typing import Any
 import pytest
 from django.db import connection, transaction
 from django.test import override_settings
-from rebac import to_subject_ref
+from rebac import system_context, to_subject_ref
 
-from angee.messaging.testing.models import Channel, Message
+from angee.messaging.testing.models import Channel, Message, Thread
 from angee.provenance.context import changeset_model
 from tests.conftest import make_integration
 from tests.lock_waits import submit, wait_for_lock
@@ -17,6 +17,19 @@ pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
+
+
+def test_a_thread_is_opened_outside_any_transaction() -> None:
+    """``open_thread`` takes its own transaction for the identity lock it reads under."""
+
+    channel: Any = make_integration("compose-open", model=Channel, backend_class="email")
+    assert not connection.in_atomic_block
+    with system_context(reason="tests.messaging.open_thread"):
+        opened = Thread.objects.open_thread(
+            platform="email", channel=channel, message_external_id="open@example.test", subject="Open",
+            group_by_subject=False,
+        )
+    assert (opened.external_id, opened.display_title) == ("msg:open@example.test", "Open")
 
 
 @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
