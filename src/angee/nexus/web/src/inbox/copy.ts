@@ -66,6 +66,7 @@ export const inboxMessages = {
   "inbox.relation.forward": "Forward",
   "inbox.relation.crosspost": "Crosspost",
   "inbox.relation.mention": "Mention",
+  "inbox.role.sender": "From",
   "inbox.title": "Inbox",
   "inbox.senders": "Senders",
   "inbox.related": "Links",

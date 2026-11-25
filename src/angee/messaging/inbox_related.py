@@ -262,11 +262,12 @@ class InboxRelated:
             if sender_id is not None and not found.filter(pk=sender_id).exists():
                 sender_id = None
         # The sender leads the recipients in either order; the recipients' window shifts past it.
-        # A sender has no envelope role, so its row carries none.
+        # Its row carries the pane token ``sender``, not a recipient role: a sender has no
+        # envelope role, and the pane labels the token through its own copy.
         lead = int(sender_id is not None)
         ordered = recipients.order_by("created_at" if oldest else "-created_at", "pk")
         selected = [
-            *([(f"sender:{message.sqid}", sender_id, "")] if lead and window.start == 0 else []),
+            *([(f"sender:{message.sqid}", sender_id, "sender")] if lead and window.start == 0 else []),
             *((str(row.sqid), row.handle_id, row.role)
               for row in ordered[max(window.start - lead, 0):window.stop - lead]),
         ]

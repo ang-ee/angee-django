@@ -646,7 +646,7 @@ def test_related_relations_authorize_both_endpoints_and_keep_reply_provenance():
 
 
 def test_related_participants_list_the_message_sender_then_its_recipients():
-    """The pane lists the sender from the message, with no envelope role, then the recipient rows."""
+    """The pane lists the sender from the message, as the pane token ``sender``, then the recipient rows."""
     owner = User.objects.create_user(username="explorer-participants")
     other = User.objects.create_user(username="explorer-participants-hidden")
     channel = make_integration(owner.username, model=Channel, owner=owner)
@@ -675,7 +675,7 @@ def test_related_participants_list_the_message_sender_then_its_recipients():
         assert (related.summary().label, related.summary().count) == ("Participants", 3)
         page = related.page(oldest=True)
         assert [(row.id, row.label, row.role, row.handle) for row in page.rows] == [
-            (f"sender:{message.sqid}", "Ada", "", ada),
+            (f"sender:{message.sqid}", "Ada", "sender", ada),
             (str(to.sqid), "Bob", "to", bob),
             (str(cc.sqid), "Unavailable identity", "cc", None),
         ]
@@ -700,8 +700,8 @@ def test_related_participants_list_the_message_sender_then_its_recipients():
             assert ([row.id for row in searched.rows], searched.count, searched.message_count) == ([expected], 1, 3)
         # An unreadable sender is listed without its identity and never matches a search.
         hidden_sender = InboxRelated(inbox, f"participants:{unattributed.sqid}")
-        assert [(row.id, row.label, row.handle) for row in hidden_sender.page().rows] == [
-            (f"sender:{unattributed.sqid}", "Unavailable identity", None),
+        assert [(row.id, row.label, row.role, row.handle) for row in hidden_sender.page().rows] == [
+            (f"sender:{unattributed.sqid}", "Unavailable identity", "sender", None),
         ]
         assert hidden_sender.page(text="hidden").count == 0
 
