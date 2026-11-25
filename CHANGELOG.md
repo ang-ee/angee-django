@@ -59,7 +59,10 @@ live in code docstrings.
     Inbound mail joins a thread by its subject only when the thread was grouped
     by subject: a conversation a person composed is joined through its threading
     headers alone. Intake asks a requester by email when their request has only
-    a `Reply-To`, and only when the reviewer may reply on the channel. Creating a
+    a `Reply-To`. A reviewer who may not reply on the request's channel is
+    refused with that permission refusal, as before, when the email is the only
+    way to ask; a requester who may post on the task is now asked on chatter
+    alone instead of the whole question being refused. Creating a
     message part (`messaging/part#create`) requires `write` on its message or
     the administrators (schema revision 28), and creating a message
     (`messaging/message#create`) requires `write` on its channel or the
