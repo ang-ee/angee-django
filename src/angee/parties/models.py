@@ -2,7 +2,7 @@
 
 Parties are the people and organisations a project keeps track of. A party is
 reached through one or more :class:`Handle` rows (an email address, a phone
-number, a social handle) — the same handle that messaging uses as a participant,
+number, a social handle) — the same handle that messaging uses as a sender or recipient,
 so this addon is the contacts foundation the messaging addon builds on. The link
 between a party and a handle is a confidence-bearing member statement
 so a sync can record an uncertain match as a weak candidate instead of guessing.
