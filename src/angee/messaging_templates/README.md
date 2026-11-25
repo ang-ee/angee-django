@@ -317,10 +317,13 @@ record, one placement away, once the list's split placement gives the record a
 scrolling container. **New** opens the form with the name, kind, key
 and language alone, the four fields the insert takes; the server seeds the rest
 and the new row opens. A shipped default is read-only: **Override** starts the
-deployment's override and opens it. An override whose shipped default changed
-offers **Keep override**, and **Delete** shows where the row projects `delete`. A
-notice above the form says which of these the row is, each hint only to a reader
-who may use its verb.
+deployment's override and opens it, offered where the record's `can_override`
+admits the reader and the default has no override yet. An override whose shipped
+default changed offers **Keep override** where its `can_keep_override` admits the
+reader, and **Delete** shows where the row projects `delete`. A notice above the
+form says which of these the row is, each hint only where the same answer admits
+the reader to its verb, and on an override (`overrides_default`) that deleting it
+returns to the shipped default.
 
 The **Preview** pane renders the saved row with its sample, in a brand kit chosen
 there or the default one, and lists what the preview warns about, or why the row

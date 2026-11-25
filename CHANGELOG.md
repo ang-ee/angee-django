@@ -144,10 +144,11 @@ live in code docstrings.
     library grouped by kind, each row opening in its registered form, the
     presets `messaging_templates.default-updated` and
     `messaging_templates.effective`, New over the four insertable fields,
-    Override, Keep override and Delete, a notice saying what the row is, a
-    Preview pane of the saved row in the framework's sandboxed message frame with
-    a brand kit select, and a Backlinks group in the record's Links tab for
-    whoever may preview message templates.
+    Override and Keep override where the record's `can_override` and
+    `can_keep_override` admit the reader, Delete, a notice saying what the row
+    is, a Preview pane of the saved row in the framework's sandboxed message
+    frame with a brand kit select, and a Backlinks group in the record's Links
+    tab for whoever may preview message templates.
     `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
     stack's JS dependencies, which links the new fragment, then regenerate the
     web codegen.
