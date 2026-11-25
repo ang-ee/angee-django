@@ -205,7 +205,8 @@ def test_the_policy_decides_every_messaging_permission(db):
         (thread, "transfer", "thread-owner admin", "thread-editor"),
         (thread, "write__owner", "thread-owner", "thread-editor"),
         # messaging/message, with a trashed channel message
-        (message, "create", "outsider", "anonymous"),
+        (channel_message, "create", "channel-owner admin", "replier channel-reader outsider anonymous"),
+        (message, "create", "admin", "thread-owner thread-editor outsider"),
         (message, "identity_source", "identity", "outsider"),
         (trashed, "conceal", "outsider", "anonymous"),
         (trashed, "withheld", "outsider", "anonymous"),
