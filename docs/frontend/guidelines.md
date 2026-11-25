@@ -1322,6 +1322,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `actionFormSubmitResult(data, root)` and normalized outcomes with
   `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  A refusal's form-level messages stay several: the form-level error holds a
+  list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
+  and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
+  several as a list; never join them into one text. A record form's refused
+  save brings the person to its reason: the first shown field it names takes
+  focus (`applyFormErrors` with `focus`), else the banner does, and Save stays
+  focusable while it runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
@@ -2415,7 +2422,12 @@ Native form saves refresh their resource queries and authored reads of that
 model; custom commands retain their mutation owner's invalidation. Declare
 other affected models through `invalidateModels`; the
 [shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
+resolves their resource and authored-query invalidation. The save confirms as
+soon as the write answers: it starts those refreshes and does not wait for
+them, so a list of a dependent model or a read in the record's chrome may show
+the saved state a moment after the confirmation, and a read that fails or
+never answers cannot hold a save. Only a save that writes lines waits, for its
+own model's lists. A dependency between
 read models is not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no

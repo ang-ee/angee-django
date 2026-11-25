@@ -125,7 +125,7 @@ function ActionArgsDialog({
     fieldNames: argNames,
   });
   const {
-    formError,
+    formErrors,
     submitting,
     saveConflict,
   } = actionForm;
@@ -151,7 +151,7 @@ function ActionArgsDialog({
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
       {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} unregisterHidden /> : null}
-      <ErrorBanner description={formError} />
+      <ErrorBanner messages={formErrors} />
     </>
   );
 

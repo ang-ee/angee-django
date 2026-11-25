@@ -7,7 +7,7 @@ import { useUiT } from "../../i18n";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
-  SURFACE_RENDERS_FAILURE, applyFormErrors, serverErrorsFromForm, formSubmitError, type FormSubmitResult,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, formErrorsFromForm, serverErrorsFromForm, formSubmitError, type FormSubmitResult,
 } from "./validation-errors";
 import { useFieldValidation, type FieldValidationForm } from "./use-field-validation";
 
@@ -42,7 +42,8 @@ export interface UseActionFormResult<TValues extends FieldValues, TSubmitValues 
   run: () => Promise<boolean>;
   submitting: boolean;
   fieldErrors: Record<string, readonly string[]>;
-  formError: string | null;
+  /** The form-level messages of the last refused or failed submit, each its own entry; empty when there is none. */
+  formErrors: readonly string[];
   saveConflict: boolean;
   clearFieldError: (name: string) => void;
   resetErrors: () => void;
@@ -99,7 +100,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
     form: enhancedForm, run,
     submitting: form.formState.isSubmitting,
     fieldErrors: serverErrorsFromForm(form.formState.errors),
-    formError: form.formState.errors.root?.server?.message ?? null,
+    formErrors: formErrorsFromForm(form.formState.errors),
     saveConflict: form.formState.errors.root?.server?.type === "conflict",
     clearFieldError,
     resetErrors: clearErrors,

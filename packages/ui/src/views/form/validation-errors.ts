@@ -239,6 +239,8 @@ function assertNeverResult(_result: never): never {
 /** Narrow one submit result and bind its issues to RHF; malformed results fail loudly.
  * A failure is shown once: a message bound to a rendered field stays under that field,
  * and `fallback` stands in only for a failure no field and no form-level message names.
+ * The form-level messages stay several: `root.server` holds them as a list (its `types`),
+ * read with `formErrorsFromForm`; its `message` is their text, one per line.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -249,6 +251,13 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     fieldNames?: Iterable<string>;
     fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
     fallback?: string;
+    /**
+     * Bring the person to the refusal: move focus to the first rendered field it names, in the
+     * order of `fieldNames` (the server's order without them), through the form library's own
+     * `shouldFocus`. A submit's answer asks for it; an owner that projects issues while the person
+     * edits elsewhere does not.
+     */
+    focus?: boolean;
   } = {},
 ): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
   let issues: ValidationErrors;
@@ -275,25 +284,43 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       return assertNeverResult(result);
   }
   const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
+  const named = Object.keys(issues.fieldErrors).filter((name) => issues.fieldErrors[name]!.length > 0);
+  const focused = !options.focus ? undefined
+    : fieldNames ? fieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
   const bound: Record<string, readonly string[]> = {};
   const unclaimed: Record<string, readonly string[]> = {};
   for (const [name, messages] of Object.entries(issues.fieldErrors)) {
     if (messages.length === 0) continue;
     form.setError(name as Path<TValues>, {
       type, message: messages.join(" "), types: { [type]: [...messages] },
-    });
+    }, name === focused ? { shouldFocus: true } : undefined);
     const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
     target[name] = messages;
   }
-  const summary = [...issues.formErrors];
-  if (summary.length === 0 && Object.keys(bound).length && options.fieldSummary) {
-    summary.push(options.fieldSummary(bound));
+  const messages = [...issues.formErrors];
+  if (messages.length === 0 && Object.keys(bound).length && options.fieldSummary) {
+    messages.push(options.fieldSummary(bound));
   }
-  const unclaimedSummary = dottedPathErrorSummary(unclaimed);
-  if (unclaimedSummary) summary.push(unclaimedSummary);
-  const message = summary.join(" ") || (Object.keys(bound).length > 0 ? "" : options.fallback);
-  if (message) form.setError("root.server", { type, message });
+  messages.push(...dottedPathErrorMessages(unclaimed));
+  if (messages.length === 0 && Object.keys(bound).length === 0 && options.fallback) messages.push(options.fallback);
+  if (messages.length > 0) {
+    form.setError("root.server" as Path<TValues>, { type, message: messages.join("\n"), types: { [type]: messages } });
+  }
   return true;
+}
+
+/**
+ * The form-level messages a submit left on the form (`root.server`), each its own entry: the list
+ * `applyFormErrors` stored, or the one message another owner set there. Empty when there is none.
+ */
+export function formErrorsFromForm(errors: object): readonly string[] {
+  const server = "root" in errors && errors.root && typeof errors.root === "object" && "server" in errors.root ? errors.root.server : undefined;
+  if (!server || typeof server !== "object") return EMPTY_FIELD_NAMES;
+  const type = "type" in server && typeof server.type === "string" ? server.type : undefined;
+  const listed = type && "types" in server && server.types && typeof server.types === "object" ? (server.types as Record<string, unknown>)[type] : undefined;
+  // The stored list itself, so its identity changes exactly when a new answer lands.
+  if (Array.isArray(listed) && listed.every((message) => typeof message === "string")) return listed;
+  return "message" in server && typeof server.message === "string" && server.message ? [server.message] : EMPTY_FIELD_NAMES;
 }
 
 /**
@@ -487,12 +514,15 @@ function dottedPathBelongsToField(path: string, field: string): boolean {
   return path === field || path.startsWith(`${field}.`);
 }
 
+/** One `field: message` entry per message of a path no rendered field claims. */
+function dottedPathErrorMessages(errors: DottedPathFieldErrorMap): string[] {
+  return Object.entries(errors).flatMap(([field, entries]) => entries.map((message) => `${field}: ${message}`));
+}
+
 function dottedPathErrorSummary(
   errors: DottedPathFieldErrorMap,
 ): string | null {
-  const messages = Object.entries(errors).flatMap(([field, entries]) =>
-    entries.map((message) => `${field}: ${message}`),
-  );
+  const messages = dottedPathErrorMessages(errors);
   return messages.length > 0 ? messages.join(" ") : null;
 }
 

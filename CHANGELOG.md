@@ -10,6 +10,47 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A refused save brings the person to its reason. With the
+  record's sheet scrolled down to the field being edited, the banner at its
+  top was out of view, and focus fell to the page because Save was disabled
+  while it ran. The answer now moves focus to the first shown field it names,
+  in the form's order (`applyFormErrors` takes `focus`, through the form
+  library's `shouldFocus`; the record form's save passes it); a refusal that
+  names no shown field focuses the banner; and Save stays focusable while a
+  save runs (`aria-disabled`). The form's own required check already behaved
+  so. Not changed: a dialog's refusal, and an owner that projects issues while
+  the person edits elsewhere, move no focus. **Upgrade:** a test that expected
+  a pending Save to carry `disabled` finds `aria-disabled="true"`.
+- `@angee/ui`: **Changed API.** A refusal's form-level messages stay several.
+  `applyFormErrors` (`validation-errors.ts`) joined the form-level messages
+  and each message no rendered field claims with a space into the one
+  `root.server` text, so a save refused for three reasons read as one run-on
+  sentence on the record form's banner and in both dialogs, to the eye and to
+  a screen reader. The form-level error now holds a list (`formErrorsFromForm`
+  reads it), and `ErrorBanner` takes `messages`: one is the banner's body,
+  several are a list, one item each. `FormViewSaveSurface.saveErrors` replaces
+  `saveError`, and an action form's `formErrors` replaces `formError`; the
+  three addons that read it follow (the tasks pane, the thread composer, the
+  workflow studio's action banner). Known, not changed: the workflow studio's
+  own issue summary still sets its lines in one text, and
+  `useDottedPathFieldErrors.formSummary`, which nothing reads, still joins.
+  **Upgrade:** read `saveErrors` or `formErrors` and pass them to
+  `<ErrorBanner messages={…} />`; a test that matched a refusal's reasons as
+  one sentence finds one list item per reason.
+- `@angee/ui`: A record form confirms a save as soon as the write answers.
+  The save awaited the refresh of every dependent resource and of every
+  authored read registered on the saved model, among them the reads a record's
+  own chrome mounts on every saved form; a slow one delayed "Changes saved", a
+  failing one held it through the query's retries (about seven seconds under
+  the app's defaults), and one that never answered held it for ever while Save
+  sent no further write. The save (`use-form-view-save.ts`) now starts those
+  refreshes and does not wait for them: the form shows its own record, which
+  the write's answer carries, and a failing read reports through its own
+  query. A list of a dependent model, or an authored read of the saved model,
+  may therefore show the saved state a moment after the confirmation where it
+  showed it just before; the saved model's own lists already did. A save that
+  writes lines still waits for its own model's lists, and a record action or
+  a dialog still waits for its refreshes (`useAuthoredMutation`).
 - `@angee/ui`: A record form tells what its Save would write before a save.
   The save surface a pane (`RecordPanelContext.form`) and a toolbar
   (`RecordToolbarContext.form`) receive has `nextSave(): FormNextSave`,

@@ -67,7 +67,7 @@ import {
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult,
+  applyFormErrors, formErrorsFromForm, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult,
 } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
@@ -208,7 +208,8 @@ export interface FormViewSaveSurface {
   formTakesEdits: boolean;
   formIsDirty: boolean;
   pending: boolean;
-  saveError: string | null;
+  /** The form-level messages of the last refused or failed save, each its own entry; empty when there is none. */
+  saveErrors: readonly string[];
   saveConflict: boolean;
   serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
@@ -550,7 +551,7 @@ export function useFormViewSave({
     syncRecordValues(values);
   }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
-  const saveError = form.formState.errors.root?.server?.message ?? null;
+  const saveErrors = formErrorsFromForm(form.formState.errors);
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
   const customSubmit = useMutation({
@@ -628,10 +629,14 @@ export function useFormViewSave({
         }
         if (result.status === "ok") {
           if (isCreate) idempotencyKey.current = null;
-          await Promise.all([
+          // Started, not awaited: the form shows its own record, which the write's answer carries. A read
+          // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
+          // answers must not hold the confirmation back or keep Save from the next write; its failure is
+          // its own query's to report.
+          void Promise.all([
             ...dependentInvalidations.map((target) => invalidate(target)),
             ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
-          ]);
+          ]).catch(() => undefined);
         }
         return result;
       } catch (error) {
@@ -678,6 +683,7 @@ export function useFormViewSave({
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
+      focus: true,
     }) ? null : result;
   }, [checkFields, fieldByName, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
@@ -1017,7 +1023,7 @@ export function useFormViewSave({
     formTakesEdits,
     formIsDirty,
     pending,
-    saveError,
+    saveErrors,
     saveConflict,
     serverFieldErrors,
     clearServerFieldError,
