@@ -55,6 +55,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Message template CPU-time bounds, skipped otherwise since they depend on the machine and its load: run whenever `src/angee/messaging_templates/` changes and at integration, serially, and report the times with the load | `ANGEE_TIMED_TESTS=1 env -u DATABASE_URL uv run --locked python -m pytest -q -s -n 0 tests/test_messaging_templates_render.py` |
+| Message template mutations: drop or widen each rule that keeps a value text, and see that the value properties fail on generated examples alone where the mutation is a real break; run when those rules or their generator change, in a slot whose addon holds no uncommitted change (it restores the files) | `env -u DATABASE_URL uv run --locked python scripts/messaging_templates_mutations.py` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |

