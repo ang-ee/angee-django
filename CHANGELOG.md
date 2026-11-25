@@ -10,6 +10,24 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: **Changed behaviour.** A handle's ingestion keys, `platform`,
+  `value` and `external_id`, are written once (`Handle.immutable_fields`, through
+  the foundation's `ImmutableFieldsMixin`). A message reads its addresses from its
+  handles when it is sent, and whoever held `write` on a handle (the person who
+  first typed a contact's address holds it) could re-address it with a field
+  write: another person's held message to that contact was then sent to the new
+  address. A save that changes a key is now refused with the foundation's
+  write-once refusal, whoever saves it, system work included. Only the handle
+  owner's verbs change one: `HandleManager.upsert` rewrites `value` when a
+  source's `external_id` matched and the account behind it moved, and
+  `HandleManager.reidentify` rewrites or folds a handle; history's revert restores
+  earlier keys as they were. Display fields stay writable as before. A resource
+  row that names another address under an xref a load already wrote is refused
+  (`ResourceLoadError`). **Upgrade:** a caller that set `platform`, `value` or
+  `external_id` on an existing handle and saved it lands the new address as its
+  own handle (`HandleManager.upsert`), or, as admitted system work, rewrites the
+  handle with `HandleManager.reidentify`; a seed gives a new address its own row.
+  No migration and no `rebac sync`.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
