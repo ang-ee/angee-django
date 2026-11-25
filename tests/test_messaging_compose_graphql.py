@@ -1,4 +1,11 @@
-"""The console composes a message through its one owner and reads back what delivery made of it."""
+"""The console composes a message through its one owner and reads back what delivery made of it.
+
+``compose``'s own refusals, envelope and seats are proved at their owner
+(``tests/test_messaging_compose.py``) and its permissions in messaging's decision
+table; this module proves what the console adds: the arguments that reach
+``compose`` and the keys its refusals bind to, the resolver's own gates, the
+delivery facts and the cost of reading them.
+"""
 
 from __future__ import annotations
 
@@ -10,21 +17,20 @@ from unittest.mock import Mock
 
 import pytest
 from django.core import mail
-from django.db import connection
+from django.db import connection, reset_queries
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import evaluator_scope, system_context
 
-from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data
+from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.jobs.enqueue import celery_app
-from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedThread
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.delivery import run_message_delivery
-from angee.messaging.testing.models import Channel, Message, Recipient, Thread
-from angee.provenance.context import changeset_model
-from tests.conftest import File, create_platform_admin, make_integration
+from angee.messaging.testing.models import Channel, Message, Part, Recipient, Thread
+from tests.conftest import make_integration
 from tests.messaging_campaign import grant, make_user
-from tests.test_messaging_compose import DESK, _file, _receive, _refused, _rows, _wire
+from tests.test_messaging_compose import DESK, _file, _receive, _rows
 from tests.test_messaging_compose import desk as desk
 from tests.test_messaging_graphql import _schema
 
@@ -43,7 +49,9 @@ mutation ComposeMessage(
 
 DELIVERY = """
 query Delivery($message: String!, $channel: String!) {
-  messages_by_pk(id: $message) { id status is_held scheduled_at delivery_error delivery_attempts }
+  messages_by_pk(id: $message) {
+    id status is_held scheduled_at delivery_error delivery_attempts delivery_actions
+  }
   channels_by_pk(id: $channel) { id permissions }
 }
 """
@@ -90,174 +98,115 @@ def _delivery(console: Any, actor: Any, message: str, channel: Any) -> tuple[Any
     return data["messages_by_pk"], data["channels_by_pk"]
 
 
-def _failed(desk: Any) -> Any:
-    """A message on ``desk`` whose delivery settlement recorded two refused attempts."""
+def _settle(message: Any, **local: Any) -> None:
+    """Record ``local`` as the failed delivery's facts on ``message``, as settlement stores them."""
 
-    message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
     with system_context(reason="tests.messaging.compose.graphql.settled"):
-        Message._base_manager.filter(pk=message.pk).update(status="failed", metadata={"local": {
-            "delivery_error": "The email recipients were refused.", "delivery_attempts": 2,
-        }})
-    return message
+        Message._base_manager.filter(pk=message.pk).update(status="failed", metadata={"local": local})
 
 
-def test_an_answer_is_composed_on_its_parents_thread_and_threads_back_to_it(console: Any, desk: Any) -> None:
-    request = _receive(desk, "answered", reply_to="Applicant <applicant@example.test>")
+def _statements(queries: CaptureQueriesContext) -> list[str]:
+    return [query["sql"] for query in queries if not query["sql"].startswith(SAVEPOINTS)]
+
+
+def test_an_answer_is_composed_on_the_parent_it_names(console: Any, desk: Any) -> None:
+    request = _receive(desk, "answered")
     composed = _compose(console, desk.owner, parent=request.public_id, text="Which team?", idempotency_key="answer")
     message = Message._base_manager.get(sqid=composed["id"])
     assert (message.parent_id, message.thread_id, message.status) == (request.pk, request.thread_id, "queued")
-    with system_context(reason="tests.messaging.compose.graphql.answer"):
-        to = list(Recipient._base_manager.filter(message=message).values_list("role", "handle__value"))
-    assert to == [("to", "applicant@example.test")]
-    wire = _wire(desk, message)
-    assert wire["In-Reply-To"] == wire["References"] == request.external_id
-    assert wire["From"] == DESK
 
 
-def test_a_new_email_carries_its_envelope_and_attachments(console: Any, desk: Any) -> None:
+def test_a_new_email_carries_each_argument_to_compose(console: Any, desk: Any) -> None:
     attachment = _file(desk.owner, b"Invoice 42: 100.00")
+    later = timezone.now() + timedelta(hours=1)
     composed = _compose(
         console, desk.owner, **_new(desk, cc=["copy@example.test"], bcc=["blind@example.test"]),
-        subject="Invoice 42", attachments=[attachment.public_id], idempotency_key="new",
+        subject="Invoice 42", attachments=[attachment.public_id], queued=False, scheduled_at=later.isoformat(),
+        idempotency_key="new",
     )
     message = Message._base_manager.get(sqid=composed["id"])
-    wire = _wire(desk, message)
-    assert (wire["From"], wire["To"], wire["Cc"], wire["Subject"]) == (
-        DESK, "Client <client@example.test>", "copy@example.test", "Invoice 42",
-    )
-    assert wire["Message-ID"] == f"<{message.external_id}>"
     with system_context(reason="tests.messaging.compose.graphql.new"):
         roles = sorted(Recipient._base_manager.filter(message=message).values_list("role", "handle__value"))
+        attached = list(Part._base_manager.filter(message=message, file__isnull=False).values_list("file", flat=True))
     assert roles == [("bcc", "blind@example.test"), ("cc", "copy@example.test"), ("to", "client@example.test")]
-    assert [part.get_filename() for part in wire.walk() if part.get_content_disposition() == "attachment"] == [
-        "invoice.txt",
-    ]
-
-
-def test_a_message_is_held_or_scheduled_as_asked(
-    console: Any, desk: Any, django_capture_on_commit_callbacks: Any,
-) -> None:
-    later = timezone.now() + timedelta(hours=1)
-    with django_capture_on_commit_callbacks(execute=True):
-        held = _compose(console, desk.owner, **_new(desk), queued=False, idempotency_key="held")
-        scheduled = _compose(
-            console, desk.owner, **_new(desk), queued=False, scheduled_at=later.isoformat(), idempotency_key="later",
-        )
-    assert desk.sent == []
-    assert held["message"] != scheduled["message"]
-    held_row, _channel = _delivery(console, desk.owner, held["id"], desk)
-    scheduled_row, _channel = _delivery(console, desk.owner, scheduled["id"], desk)
-    assert (held_row["status"], held_row["is_held"], held_row["scheduled_at"]) == ("DRAFT", True, None)
-    assert (scheduled_row["status"], scheduled_row["scheduled_at"]) == ("DRAFT", later.isoformat())
+    assert (message.title(), attached) == ("Invoice 42", [attachment.pk])
+    row, _channel = _delivery(console, desk.owner, composed["id"], desk)
+    assert (row["status"], row["scheduled_at"]) == ("DRAFT", later.isoformat())
 
 
 @pytest.mark.parametrize(
-    ("anchor", "arguments", "key"),
+    ("arguments", "key"),
     [
-        pytest.param("new", {"channel": None}, "channel", id="no-anchor"),
-        pytest.param("new", {"text": "  "}, "text", id="no-text"),
-        pytest.param("new", {"subject": "One\nTwo"}, "subject", id="two-line-subject"),
-        pytest.param("reply", {"subject": "Other"}, "subject", id="titled-answer"),
-        pytest.param("reply", {"to": ["other@example.test"]}, "to", id="addressed-answer"),
-        pytest.param("new", {"to": []}, "to", id="no-recipient"),
-        pytest.param("new", {"to": ["not an address"]}, "to", id="not-an-address"),
-        pytest.param("new", {"to": [], "cc": ["Reader <reader@example>"]}, "cc", id="cc-not-an-address"),
-        pytest.param("new", {"to": [], "bcc": ["x" * 320 + "@example.test"]}, "bcc", id="bcc-not-an-address"),
-        pytest.param("new", {"queued": True, "scheduled_at": "later"}, "scheduledAt", id="queued-and-scheduled"),
-        pytest.param("new", {"idempotency_key": " "}, "idempotencyKey", id="blank-key"),
-        pytest.param("new", {"idempotency_key": "k" * 129}, "idempotencyKey", id="oversized-key"),
-        pytest.param("chat", {}, "sender", id="chat-answer-without-sender"),
+        pytest.param({"channel": None}, "channel", id="channel"),
+        pytest.param({"text": "  "}, "text", id="text"),
+        pytest.param({"subject": "One\nTwo"}, "subject", id="subject"),
+        pytest.param({"to": ["not an address"]}, "to", id="to"),
+        pytest.param({"to": [], "cc": ["Reader <reader@example>"]}, "cc", id="cc"),
+        pytest.param({"to": [], "bcc": ["x" * 320 + "@example.test"]}, "bcc", id="bcc"),
+        pytest.param({"queued": True, "scheduled_at": "later"}, "scheduledAt", id="scheduled-at"),
+        pytest.param({"idempotency_key": " "}, "idempotencyKey", id="idempotency-key"),
     ],
 )
-def test_a_refusal_of_the_arguments_binds_under_its_key_before_anything_is_written(
-    console: Any, desk: Any, anchor: str, arguments: dict[str, Any], key: str,
+def test_compose_refuses_an_argument_under_its_name(
+    console: Any, desk: Any, arguments: dict[str, Any], key: str,
 ) -> None:
-    """Each key is the argument's camel-cased name; one the form has no control for shows at form level."""
+    """The mutation's arguments are compose's names, so each refusal binds to the argument it is about."""
 
-    actor = desk.owner
-    if anchor == "chat":
-        chat = make_integration("compose-graphql-chat", model=Channel, backend_class="manual")
-        question = _receive(chat, "room/1", sender="U-asker", platform="slack", thread=ParsedThread(external_id="room"))
-        actor, values = chat.owner, {"parent": question.public_id, "text": "Yes."}
-    elif anchor == "reply":
-        values = {"parent": _receive(desk, "refused").public_id, "text": "Which team?"}
-    else:
-        values = _new(desk)
     if arguments.get("scheduled_at") == "later":
         arguments = {**arguments, "scheduled_at": (timezone.now() + timedelta(hours=1)).isoformat()}
-    with _refused(_Refusal) as refused:
-        _compose(console, actor, **{"idempotency_key": f"refused-{key}", **values, **arguments})
-    payload = refused.value.payload
-    assert payload is not None and list(payload["validation_errors"]) == [key], payload
-
-
-def _unconfigured(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = False
-    return desk.owner, {"parent": _receive(desk, "unconfigured").public_id, "text": "Which team?"}
-
-
-def _not_connected(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    manual = make_integration("compose-graphql-manual", model=Channel, backend_class="manual")
-    return manual.owner, _new(manual)
-
-
-def _invalid_sender(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    channel = make_integration("compose-graphql-sender", model=Channel, backend_class="email",
-                               config={"from_email": "Desk <not an address>"})
-    return channel.owner, _new(channel)
-
-
-def _reply_to_without_address(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    relayed = _receive(desk, "relayed", sender="noreply@forms.example.test", reply_to="Applicant <applicant@intranet>")
-    return desk.owner, {"parent": relayed.public_id, "text": "Thanks."}
-
-
-def _unaddressed(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    return desk.owner, {"parent": _receive(desk, "unaddressed", sender=None).public_id, "text": "Thanks."}
-
-
-def _threadless(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    with system_context(reason="tests.messaging.compose.graphql.threadless"):
-        parent = Message._base_manager.create(channel=desk, platform="email", message_type="email")
-    return desk.owner, {"parent": parent.public_id, "text": "Thanks."}
-
-
-def _discarded(desk: Any, settings: Any) -> tuple[Any, dict[str, Any]]:
-    values = _new(desk)
-    original = Message.objects.compose(channel=desk, to=values["to"], text=values["text"], actor=desk.owner,
-                                       idempotency_key="present-state")
-    with system_context(reason="tests.messaging.compose.graphql.discard"):
-        Message._base_manager.filter(pk=original.pk).update(is_trashed=True)
-    return desk.owner, values
-
-
-@pytest.mark.parametrize(
-    ("world", "key", "code"),
-    [
-        pytest.param(_unconfigured, "channel", "OUTBOUND_EMAIL_NOT_CONFIGURED", id="delivery-not-configured"),
-        pytest.param(_not_connected, "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="no-email-channel"),
-        pytest.param(_invalid_sender, "channel", None, id="invalid-channel-sender"),
-        pytest.param(_reply_to_without_address, "replyTo", None, id="reply-to-names-no-address"),
-        pytest.param(_unaddressed, "parent", None, id="unaddressed-parent"),
-        pytest.param(_threadless, "parent", None, id="incomplete-parent"),
-        pytest.param(_discarded, "idempotencyKey", None, id="discarded-original"),
-    ],
-)
-def test_a_refusal_of_present_state_leaves_no_message_and_no_claim(
-    console: Any, desk: Any, settings: Any, world: Any, key: str, code: str | None,
-) -> None:
-    """Present state is read after the claim; its refusal rolls the claim back with everything else."""
-
-    actor, values = world(desk, settings)
-    claims = changeset_model()._base_manager.filter(key="present-state").count()
-    rows = _rows()
     with pytest.raises(_Refusal) as refused:
-        _compose(console, actor, **values, idempotency_key="present-state")
+        _compose(console, desk.owner, **{**_new(desk), "idempotency_key": f"refused-{key}", **arguments})
+    assert refused.value.payload is not None and list(refused.value.payload["validation_errors"]) == [key]
+
+
+def test_a_refusal_with_a_code_reaches_the_client_with_it(console: Any, desk: Any, settings: Any) -> None:
+    request = _receive(desk, "unconfigured")
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = False
+    with pytest.raises(_Refusal) as refused:
+        _compose(console, desk.owner, parent=request.public_id, text="Which team?", idempotency_key="unconfigured")
     payload = refused.value.payload
-    assert payload is not None and list(payload["validation_errors"]) == [key], payload
-    assert payload["code"] == code
-    assert _rows() == rows
-    assert changeset_model()._base_manager.filter(key="present-state").count() == claims
+    assert payload is not None and list(payload["validation_errors"]) == ["channel"]
+    assert payload["code"] == "OUTBOUND_EMAIL_NOT_CONFIGURED"
+
+
+def test_the_key_and_queued_are_required(console: Any, desk: Any) -> None:
+    """A complete call composes; one without either required argument is refused before anything runs."""
+
+    document = 'mutation { compose_message(channel: "%s", to: ["a@example.test"], text: "Hi."%s%s) { ok id } }'
+    key, queued = ', idempotency_key: "required"', ", queued: false"
+    assert result_data(execute_schema(console, document % (desk.public_id, key, queued), user=desk.owner))[
+        "compose_message"]["ok"]
+    for missing in ((desk.public_id, "", queued), (desk.public_id, key, "")):
+        with CaptureQueriesContext(connection) as queries:
+            result = execute_schema(console, document % missing, user=desk.owner)
+        assert result.errors and result.data is None, missing
+        assert len(queries) == 0
+
+
+def test_a_caller_without_a_session_is_refused_before_anything_is_read(console: Any, desk: Any) -> None:
+    request = _receive(desk, "anonymous")
+    for values in ({"parent": request.public_id, "text": "Which team?"}, _new(desk)):
+        with CaptureQueriesContext(connection) as queries, pytest.raises(_Refusal) as refused:
+            _compose(console, None, **values, idempotency_key="anonymous")
+        assert refused.value.code == "PERMISSION_DENIED"
+        assert _statements(queries) == []
+
+
+def test_a_parent_the_caller_cannot_read_is_not_found_whether_unreadable_missing_or_malformed(
+    console: Any, desk: Any,
+) -> None:
+    """The resolver reads the parent under the caller's read, and every way of missing it answers alike."""
+
+    request = _receive(desk, "hidden")
+    for actor, parent in (
+        (make_user("compose-graphql-outsider"), request.public_id),
+        (desk.owner, Message.public_id_from_pk(10**9)),
+        (desk.owner, "msg_not-a-public-id"),
+    ):
+        with pytest.raises(_Refusal) as refused:
+            _compose(console, actor, parent=parent, text="Which team?", idempotency_key="hidden")
+        assert refused.value.payload is not None, parent
+        assert (refused.value.payload["code"], refused.value.payload["validation_errors"]) == ("not_found", None)
 
 
 def test_an_answer_naming_a_channel_is_refused_before_anything_is_read(console: Any, desk: Any) -> None:
@@ -266,63 +215,48 @@ def test_an_answer_naming_a_channel_is_refused_before_anything_is_read(console: 
         _compose(console, desk.owner, parent=request.public_id, channel=desk.public_id, text="Hi.",
                  idempotency_key="anchored")
     assert refused.value.payload is not None and list(refused.value.payload["validation_errors"]) == ["channel"]
-    assert [query["sql"] for query in queries if not query["sql"].startswith(SAVEPOINTS)] == []
+    assert _statements(queries) == []
 
 
-SEATS = {
-    # seat: (answers a message, sends a new email, reads why delivery failed, the channel answers reply)
-    # ``None`` reads nothing: neither the message nor the channel is the seat's to read.
-    "owner": ("ok", "ok", True, True),
-    "replier": ("ok", "ok", False, True),
-    "reader": ("PERMISSION_DENIED", "PERMISSION_DENIED", False, False),
-    "outsider": ("not_found", "PERMISSION_DENIED", None, None),
-    "admin": ("ok", "ok", True, True),
-    "anonymous": ("PERMISSION_DENIED", "PERMISSION_DENIED", None, None),
-    "replier-with-an-unreadable-file": ("PERMISSION_DENIED", "PERMISSION_DENIED", False, True),
-}
+def test_why_delivery_failed_is_read_by_who_may_act_on_it_and_not_by_its_author(console: Any, desk: Any) -> None:
+    author, other = make_user("compose-graphql-author"), make_user("compose-graphql-replier")
+    for replier in (author, other):
+        grant(desk, "replier", replier)
+    composed = _compose(console, author, **_new(desk), idempotency_key="authored")
+    _settle(Message._base_manager.get(sqid=composed["id"]), delivery_error="Refused.", delivery_attempts=2)
+    read = {seat: _delivery(console, actor, composed["id"], desk)[0]
+            for seat, actor in (("owner", desk.owner), ("replier", other), ("author", author))}
+    assert {seat: (row["delivery_error"], row["delivery_attempts"]) for seat, row in read.items()} == {
+        "owner": ("Refused.", 2), "replier": (None, 2), "author": (None, 2),
+    }
 
 
-@pytest.mark.parametrize("seat", SEATS)
-def test_who_may_compose_and_who_reads_why_delivery_failed(console: Any, desk: Any, seat: str) -> None:
-    """An outsider answering finds no message in band; every other refusal is the schema's permission error."""
+def test_whether_one_may_send_on_a_channel_is_answered_to_each_viewer(console: Any, desk: Any) -> None:
+    replier, reader = make_user("compose-graphql-sender"), make_user("compose-graphql-reader")
+    grant(desk, "replier", replier)
+    grant(desk, "reader", reader)
+    message = _receive(desk, "permissions")
+    answers = {seat: _delivery(console, actor, message.public_id, desk)[1]["permissions"]
+               for seat, actor in (("replier", replier), ("reader", reader))}
+    assert answers == {"replier": ["reply"], "reader": []}
 
-    if seat == "owner":
-        actor = desk.owner
-    elif seat == "admin":
-        actor = create_platform_admin("compose-graphql-admin")
-    elif seat != "anonymous":
-        actor = make_user(f"compose-graphql-{seat}")
-    else:
-        actor = None
-    relation = {"replier": "replier", "reader": "reader", "replier-with-an-unreadable-file": "replier"}.get(seat)
-    if relation is not None:
-        grant(desk, relation, actor)
-    attachments = []
-    if seat == "replier-with-an-unreadable-file":
-        hidden = _file(make_user("compose-graphql-stranger"), b"Not yours")
-        with system_context(reason="tests.messaging.compose.graphql.hidden"):
-            File._base_manager.filter(pk=hidden.pk).update(visibility="record")
-        attachments = [hidden.public_id]
-    request = _receive(desk, f"seat-{seat}")
-    answer, new, reads_error, replies = SEATS[seat]
-    for anchor, expected, values in (
-        ("answer", answer, {"parent": request.public_id, "text": "Which team?"}),
-        ("new", new, _new(desk)),
-    ):
-        arguments = {**values, "attachments": attachments, "idempotency_key": f"seat-{seat}-{anchor}"}
-        if expected == "ok":
-            assert _compose(console, actor, **arguments)["id"]
-            continue
-        with _refused(_Refusal) as refused:
-            _compose(console, actor, **arguments)
-        assert (refused.value.code or refused.value.payload["code"]) == expected, (anchor, refused.value)
-    message, channel = _delivery(console, actor, _failed(desk).public_id, desk)
-    if reads_error is None:
-        assert (message, channel) == (None, None)
-        return
-    assert (message["status"], message["delivery_attempts"]) == ("FAILED", 2)
-    assert message["delivery_error"] == ("The email recipients were refused." if reads_error else None)
-    assert channel["permissions"] == (["reply"] if replies else [])
+
+def test_a_stored_fact_that_reads_as_json_comes_back_as_written(console: Any, desk: Any) -> None:
+    """A delivery error ``"null"`` reads as that text, and a conflict ``"0"`` still blocks a retry.
+
+    Both are read from the row's annotation on a list and by primary key.
+    """
+
+    message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
+    _settle(message, delivery_error="null", delivery_conflict="0", delivery_attempts=1)
+    by_pk, _channel = _delivery(console, desk.owner, message.public_id, desk)
+    thread = Thread._base_manager.get(pk=message.thread_id).public_id
+    (listed,) = result_data(execute_schema(
+        console, "query List($thread: String!) { messages(where: {thread: {_eq: $thread}}) {"
+        " delivery_error delivery_actions } }", {"thread": thread}, user=desk.owner,
+    ))["messages"]
+    assert (by_pk["delivery_error"], by_pk["delivery_actions"]) == ("null", [])
+    assert listed == {"delivery_error": "null", "delivery_actions": []}
 
 
 def test_one_key_composes_one_message_and_other_content_under_it_conflicts(
@@ -341,32 +275,19 @@ def test_one_key_composes_one_message_and_other_content_under_it_conflicts(
     assert _rows() == rows
 
 
-def test_a_call_without_a_key_is_refused_before_it_runs(console: Any, desk: Any) -> None:
-    document = 'mutation { compose_message(channel: "%s", to: ["a@example.test"], text: "Hi.", queued: true) { ok } }'
-    with CaptureQueriesContext(connection) as queries:
-        result = execute_schema(console, document % desk.public_id, user=desk.owner)
-    assert result.errors and result.data is None
-    assert len(queries) == 0
-
-
 def test_every_status_a_replay_can_return_is_reported(console: Any, desk: Any) -> None:
-    """A keyed replay returns its original as it is now; each delivery outcome reads distinctly."""
+    """A keyed replay returns its original as it is now, whatever its delivery became."""
 
     values = _new(desk, queued=False, idempotency_key="replayed")
     first = _compose(console, desk.owner, **values)
-    banners = {}
     for status in Message.MessageStatus.values:
         for scheduled_at in (None, timezone.now() + timedelta(hours=1)):
             with system_context(reason="tests.messaging.compose.graphql.settle"):
                 Message._base_manager.filter(sqid=first["id"]).update(status=status, scheduled_at=scheduled_at)
             replay = _compose(console, desk.owner, **values)
-            assert replay["id"] == first["id"] and replay["message"]
-            banners[status, scheduled_at is not None] = replay["message"]
-    outcomes = (
-        ("draft", False), ("draft", True), ("queued", False), ("queued", True), ("sent", False), ("failed", False),
-        ("uncertain", False),
-    )
-    assert len({banners[outcome] for outcome in outcomes}) == len(outcomes)
+            assert replay["id"] == first["id"] and replay["message"], (status, scheduled_at)
+            row, _channel = _delivery(console, desk.owner, replay["id"], desk)
+            assert row["status"] == status.upper()
 
 
 @pytest.fixture
@@ -395,7 +316,8 @@ def test_a_delivered_email_reads_back_sent_and_its_replay_sends_nothing_more(
     assert (row["status"], row["delivery_error"], row["delivery_attempts"]) == ("SENT", None, 1)
     with django_capture_on_commit_callbacks(execute=True):
         replay = _compose(console, desk.owner, **values)
-    assert replay["id"] == composed["id"] and replay["message"] != composed["message"]
+    assert replay["id"] == composed["id"]
+    assert _delivery(console, desk.owner, replay["id"], desk)[0]["status"] == "SENT"
     assert (len(mailer), len(mail.outbox)) == (1, 1)
 
 
@@ -420,6 +342,21 @@ def test_a_refused_delivery_reads_back_why_and_how_often(
     assert (row["scheduled_at"] is not None) is (status == "QUEUED")
 
 
+def _measured(console: Any, document: str, variables: dict[str, Any], actor: Any) -> GraphQLDocumentRead:
+    """``document``'s second execution as ``actor``, measured on an emptied query log.
+
+    Django keeps 9,000 captured statements per connection and then counts none,
+    so the log is emptied first and a read that counted nothing fails.
+    """
+
+    measure_graphql_document(console, document, variables, actor=actor)
+    reset_queries()
+    read = measure_graphql_document(console, document, variables, actor=actor)
+    assert read.statements, "the query log counted no statement"
+    return read
+
+
+SIZES = (1, 25)
 ROW = "id status is_held scheduled_at"
 FACTS = "delivery_error delivery_attempts"
 READS = {
@@ -450,11 +387,14 @@ READ_BUDGETS = {
     "messages": {"statements": 12, "repeated": 8},
     "channels": {"statements": 6, "repeated": 3},
 }
-"""Each read's statements and repeated texts with the delivery facts (``channels``: with ``permissions``), measured.
+"""Each read's statements and repeated texts with the delivery facts (``channels``: with ``permissions``).
 
-The same for the channel's owner and a replier, at either size. Two of them are
-REBAC's per-request statements deciding which grants the viewer can hold, which
-a permission answer pays once (``send_held`` here, ``reply`` on channels).
+Measured for the channel's owner and for a replier, the same at 1 row and at 25.
+Two of them are REBAC's per-request statements deciding which grants the viewer
+can hold, which a permission answer pays once (``send_held`` on messages,
+``reply`` on channels; the owner of the channels pays none there, 3 statements in
+all). An administrator pays more on every read, and three statements, not two,
+for a permission answer: 37, 25, 15 and 8 statements.
 """
 
 
@@ -468,26 +408,23 @@ def _conversation(desk: Any, rows: int) -> dict[str, Any]:
         )], channel=desk)
     answers = [Message.objects.compose(parent=request, text=f"Answer {index}.", actor=desk.owner)
                for index in range(rows - 1)]
-    with system_context(reason="tests.messaging.compose.graphql.conversation"):
-        Message._base_manager.filter(pk__in=[answer.pk for answer in answers[::2]]).update(
-            status="failed", metadata={"local": {"delivery_error": "Refused.", "delivery_attempts": 2}},
-        )
-        thread = Thread._base_manager.get(pk=request.thread_id).public_id
+    for answer in answers[::2]:
+        _settle(answer, delivery_error="Refused.", delivery_attempts=2)
+    thread = Thread._base_manager.get(pk=request.thread_id).public_id
     return {"thread": thread, "ids": [request.public_id, *(answer.public_id for answer in answers)]}
 
 
 def test_the_delivery_facts_are_read_with_the_rows_of_every_list_the_composer_reads(console: Any, desk: Any) -> None:
-    """A feed page, its revalidation and the message list read the facts with their rows, at 3 rows as at 6.
+    """A feed page, its revalidation and the message list read the facts with their rows, at 1 row as at 25.
 
     ``delivery_attempts`` is a column of the page's own statement. ``delivery_error``
     shares ``delivery_actions``' answer to ``send_held``, so beside it the facts
-    add nothing, and alone they cost exactly that answer: REBAC's statements
-    deciding which grants the viewer can hold, once per request.
+    add nothing, and alone they cost exactly that answer.
     """
 
     replier = make_user("compose-graphql-list-replier")
     grant(desk, "replier", replier)
-    conversations = {rows: _conversation(desk, rows) for rows in (3, 6)}
+    conversations = {rows: _conversation(desk, rows) for rows in SIZES}
     for seat, actor in (("owner", desk.owner), ("replier", replier)):
         for name, (document, rows_of) in READS.items():
             counts = {}
@@ -495,40 +432,47 @@ def test_the_delivery_facts_are_read_with_the_rows_of_every_list_the_composer_re
                 for selection, fields in SELECTIONS.items():
                     query = document % fields
                     arguments = variables if "$ids" in query else {"thread": variables["thread"]}
-                    measure_graphql_document(console, query, arguments, actor=actor)
-                    read = measure_graphql_document(console, query, arguments, actor=actor)
+                    read = _measured(console, query, arguments, actor)
                     assert len(rows_of(read.data)) == rows
                     counts[selection, rows] = (read.statements, read.repeated)
                     if selection == "actions and facts":
                         read.assert_ceiling(**READ_BUDGETS[name])
             for selection in SELECTIONS:
-                assert counts[selection, 3] == counts[selection, 6], (name, seat, selection, counts)
-            assert counts["facts", 6] == counts["actions", 6] == counts["actions and facts", 6], (name, seat, counts)
+                assert counts[selection, 1] == counts[selection, 25], (name, seat, selection, counts)
+            assert counts["facts", 25] == counts["actions", 25] == counts["actions and facts", 25], (
+                name, seat, counts,
+            )
 
 
-def test_whether_one_may_send_on_a_channel_is_read_with_the_channels(console: Any, db: None) -> None:
-    """``permissions`` is answered in the channels' own statement, for 1 channel as for 4."""
+def test_whether_one_may_send_is_read_with_the_channels(console: Any, db: None) -> None:
+    """``permissions`` is answered in the channels' own statement, for 1 channel as for 25."""
 
-    counts = {}
-    for size in (1, 4):
-        replier = make_user(f"compose-graphql-channels-{size}")
-        for index in range(size):
-            grant(make_integration(f"compose-graphql-{size}-{index}", model=Channel, backend_class="email"),
-                  "replier", replier)
-        for fields in ("id", "id permissions"):
-            document = "query Channels { channels { %s } }" % fields
-            measure_graphql_document(console, document, {}, actor=replier)
-            read = measure_graphql_document(console, document, {}, actor=replier)
-            assert len(read.data["channels"]) == size
-            assert all(row.get("permissions", ["reply"]) == ["reply"] for row in read.data["channels"])
-            counts[size, fields] = (read.statements, read.repeated)
-        read.assert_ceiling(**READ_BUDGETS["channels"])
-    assert counts[1, "id permissions"] == counts[4, "id permissions"], counts
-    assert counts[1, "id"] == counts[4, "id"], counts
+    for seat in ("owner", "replier"):
+        counts = {}
+        for size in SIZES:
+            viewer = make_user(f"compose-graphql-channels-{seat}-{size}")
+            for index in range(size):
+                slug = f"compose-graphql-{seat}-{size}-{index}"
+                if seat == "owner":
+                    make_integration(slug, model=Channel, backend_class="email", owner=viewer)
+                else:
+                    grant(make_integration(slug, model=Channel, backend_class="email"), "replier", viewer)
+            for fields in ("id", "id permissions"):
+                read = _measured(console, "query Channels { channels { %s } }" % fields, {}, viewer)
+                assert len(read.data["channels"]) == size
+                assert all(row.get("permissions", ["reply"]) == ["reply"] for row in read.data["channels"])
+                counts[size, fields] = (read.statements, read.repeated)
+            read.assert_ceiling(**READ_BUDGETS["channels"])
+        assert counts[1, "id permissions"] == counts[25, "id permissions"], (seat, counts)
+        assert counts[1, "id"] == counts[25, "id"], (seat, counts)
+
+
+PARENT_READ_STATEMENTS = 6
+"""What the resolver adds to answer a message: reading the parent under the caller's read, measured."""
 
 
 def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) -> None:
-    """The resolver decodes and dispatches: a new email costs compose's statements, at 1 recipient as at 20.
+    """A new email costs compose's statements at 1 recipient as at 20; an answer adds only its parent's read.
 
     The direct call runs in an evaluator scope, as every GraphQL operation does,
     so both decide the viewer's grants alike; compose's own test bounds what a
@@ -536,14 +480,22 @@ def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) ->
     """
 
     known = [f"known-{index}@example.test" for index in range(20)]
+    request = _receive(desk, "measured")
     Message.objects.compose(channel=desk, to=known, text="Hi.", actor=desk.owner, idempotency_key="warm")
+    Message.objects.compose(parent=request, text="Hi.", actor=desk.owner, idempotency_key="warm-answer")
+    cases = {
+        **{size: ({"channel": desk}, {"channel": desk.public_id}, {"to": known[:size]}) for size in (1, 20)},
+        "answer": ({"parent": request}, {"parent": request.public_id}, {}),
+    }
     added = {}
-    for size in (1, 20):
-        values = {"to": known[:size], "text": "Hi."}
+    for case, (direct_anchor, mutation_anchor, values) in cases.items():
+        reset_queries()
         with evaluator_scope(), CaptureQueriesContext(connection) as direct:
-            Message.objects.compose(channel=desk, **values, actor=desk.owner, idempotency_key=f"direct-{size}")
+            Message.objects.compose(**direct_anchor, **values, text="Hi.", actor=desk.owner,
+                                    idempotency_key=f"direct-{case}")
         with CaptureQueriesContext(connection) as mutation:
-            _compose(console, desk.owner, channel=desk.public_id, **values, queued=False,
-                     idempotency_key=f"mutation-{size}")
-        added[size] = len(mutation) - len(direct)
-    assert added == {1: 0, 20: 0}, added
+            _compose(console, desk.owner, **mutation_anchor, **values, text="Hi.", queued=False,
+                     idempotency_key=f"mutation-{case}")
+        assert len(direct) and len(mutation), case
+        added[case] = len(mutation) - len(direct)
+    assert added == {1: 0, 20: 0, "answer": PARENT_READ_STATEMENTS}, added

@@ -20,7 +20,6 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
-from django.db.models.fields.json import KT
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, current_actor
@@ -338,7 +337,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
             "status", "scheduled_at", "delivery_lease_until", "is_trashed", "delivery_possibly_accepted",
             "direction", "channel", "external_id",
         ],
-        annotate={"_delivery_conflict": models.F("metadata__local__delivery_conflict")},
+        annotate=Message.local_fact_annotation("delivery_conflict"),
         extensions=[PermissionsExtension((Message.delivery_action_permission,))],
     )
     def delivery_actions(self) -> list[str]:
@@ -348,7 +347,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         return row.delivery_actions(held_permissions(row, (Message.delivery_action_permission,)))
 
     @strawberry_django.field(
-        annotate={"_delivery_error": KT("metadata__local__delivery_error")},
+        annotate=Message.local_fact_annotation("delivery_error"),
         extensions=[PermissionsExtension((Message.delivery_action_permission,))],
     )
     def delivery_error(self) -> str | None:
@@ -357,7 +356,7 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         row = cast(Any, self)
         return row.delivery_error(held_permissions(row, (Message.delivery_action_permission,)))
 
-    @strawberry_django.field(annotate={"_delivery_attempts": models.F("metadata__local__delivery_attempts")})
+    @strawberry_django.field(annotate=Message.local_fact_annotation("delivery_attempts", number=True))
     def delivery_attempts(self) -> int:
         """The provider attempts delivery has made, for every reader of the message."""
 
@@ -1329,20 +1328,18 @@ class MessagingQuery:
         return list(with_record_reference_access(edges))
 
 
-_COMPOSED: dict[str, tuple[str, str]] = {
+_COMPOSE_RESULT_MESSAGE: dict[str, tuple[str, ...]] = {
     Message.MessageStatus.DRAFT: ("Message held for approval.", "Message scheduled."),
     Message.MessageStatus.QUEUED: ("Message queued for delivery.", "Message queued; delivery will be retried."),
-    Message.MessageStatus.SENT: ("Message sent.", "Message sent."),
-    Message.MessageStatus.SYNCED: ("Message sent.", "Message sent."),
-    Message.MessageStatus.EDITED: ("Message sent.", "Message sent."),
-    Message.MessageStatus.FAILED: ("Message not delivered.", "Message not delivered."),
-    Message.MessageStatus.UNCERTAIN: ("Message delivery is uncertain.", "Message delivery is uncertain."),
+    **dict.fromkeys(Message.PUBLISHED_STATUSES, ("Message sent.",)),
+    Message.MessageStatus.FAILED: ("Message not delivered.",),
+    Message.MessageStatus.UNCERTAIN: ("Message delivery is uncertain.",),
 }
-"""What ``compose_message`` reports by the status of the message it returns, ``(unscheduled, scheduled)``.
+"""The result message of ``compose_message`` by the returned message's status, closed over every status.
 
-Closed over every status: a keyed replay returns its original as it is now,
-held, queued, retrying, sent or failed. The second banner applies when the row
-carries a release or retry time.
+A keyed replay returns its original as it is now: held, queued, retrying, sent
+or failed. Where a pair is given, the second applies when the row carries a
+release or retry time.
 """
 
 
@@ -1379,29 +1376,36 @@ class MessagingMutation:
     ) -> ActionResult:
         """Write one outgoing message (``MessageManager.compose``): an answer to ``parent``, or an email on ``channel``.
 
-        A verb, not the messages resource's insert: that insert decides the
-        message's ``create`` rather than ``reply`` on the channel, looks its replay
-        up before deciding, and fingerprints the request as sent, where compose
-        replays the same intent whatever its hold; and none of compose's
-        arguments is a message column. ``compose`` owns every decision and
-        refusal; ``id`` is the message, fresh or replayed.
+        A verb, not the generic keyed insert, which the messages resource does
+        not expose: that insert would decide the message's ``create`` rather than
+        ``reply`` on the channel, look its replay up before deciding, and
+        fingerprint the request as sent, where compose replays the same intent
+        whatever its hold; and none of compose's arguments is a message column.
+        The resolver refuses a caller with no session and an answer to a parent
+        the caller cannot read (``not_found``); ``compose`` decides and refuses
+        everything else. ``id`` is the message, fresh or replayed.
         """
 
+        actor = session_user(info)
+        # compose refuses an answer that names a channel before it reads
+        # anything, so the parent is read, under the actor, only when answered.
+        answered = (
+            None if parent is None
+            else _message(parent) if channel is None
+            else Message(pk=public_pk_decoder(Message)(parent))
+        )
         message = Message.objects.compose(
-            actor=session_user(info),
-            # compose refuses an answer that names a channel before it reads
-            # anything, so the parent is read, under the actor, only when answered.
-            parent=(
-                None if parent is None
-                else _message(parent) if channel is None else Message(pk=public_pk_decoder(Message)(parent))
-            ),
+            actor=actor,
+            parent=answered,
             channel=None if channel is None else Channel(pk=public_pk_decoder(Channel)(channel)),
             to=to or (), cc=cc or (), bcc=bcc or (), subject=subject, text=text,
             attachments=[File(pk=public_pk_decoder(File)(file)) for file in attachments or ()],
             idempotency_key=idempotency_key, queued=queued, scheduled_at=scheduled_at,
         )
-        unscheduled, scheduled = _COMPOSED[message.status]
-        return ActionResult(ok=True, message=scheduled if message.scheduled_at else unscheduled, id=message.sqid)
+        result_messages = _COMPOSE_RESULT_MESSAGE[message.status]
+        return ActionResult(
+            ok=True, message=result_messages[-1] if message.scheduled_at else result_messages[0], id=message.sqid,
+        )
 
     @strawberry.mutation(name="acknowledge_message_delivery")
     @action_guard("Delivery acknowledgement refused.")

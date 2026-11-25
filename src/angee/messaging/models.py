@@ -37,7 +37,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
-from django.db.models.fields.json import KeyTextTransform
+from django.db.models.fields.json import KT, KeyTextTransform
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
 from django.views.decorators.debug import sensitive_variables
@@ -1164,6 +1164,24 @@ class Message(
         local = (self.metadata or {}).get("local")
         return dict(local) if isinstance(local, dict) else {}
 
+    @staticmethod
+    def local_fact_annotation(key: str, *, number: bool = False) -> dict[str, Any]:
+        """Annotate a list's rows with the local fact ``key`` as ``_<key>``, which :meth:`local_fact` reads.
+
+        Text is read as text (``KT``): ``F()`` would let SQLite decode text that
+        looks like JSON, so ``"null"`` would read as null and ``"0"`` as zero. A
+        ``number`` is read through ``F()``, which decodes it on both databases.
+        """
+
+        path = f"metadata__local__{key}"
+        return {f"_{key}": models.F(path) if number else KT(path)}
+
+    def local_fact(self, key: str) -> Any:
+        """The local fact ``key``, from the row's :meth:`local_fact_annotation` when a list loaded one."""
+
+        value = self.__dict__.get(f"_{key}", models.DEFERRED)
+        return self.local_metadata.get(key) if value is models.DEFERRED else value
+
     @property
     def is_locally_written(self) -> bool:
         """Local delivery states distinguish authored envelopes from synced own mail."""
@@ -1182,10 +1200,7 @@ class Message(
 
         if self.is_trashed and not self.delivery_needs_reconciliation:
             return True
-        conflict = self.__dict__.get("_delivery_conflict", models.DEFERRED)
-        if conflict is models.DEFERRED:
-            conflict = self.local_metadata.get("delivery_conflict")
-        return bool(conflict)
+        return bool(self.local_fact("delivery_conflict"))
 
     delivery_action_permission: ClassVar[str] = "send_held"
 
@@ -1205,28 +1220,19 @@ class Message(
         Settlement records the refusal in words safe for operators
         (``safe_integration_failure``), so it is read by those who may act on it,
         as :meth:`delivery_actions` is. Acceptance clears it; an operator's retry
-        keeps it until the next settlement. A list's rows carry it annotated as
-        ``_delivery_error``.
+        keeps it until the next settlement.
         """
 
         if self.delivery_action_permission not in permissions:
             return None
-        error = self.__dict__.get("_delivery_error", models.DEFERRED)
-        if error is models.DEFERRED:
-            error = self.local_metadata.get("delivery_error")
+        error = self.local_fact("delivery_error")
         return str(error) if error else None
 
     @property
     def delivery_attempts(self) -> int:
-        """The provider attempts settlement has counted, ``0`` before the first; an operator's retry resets it.
+        """The provider attempts settlement has counted, ``0`` before the first; an operator's retry resets it."""
 
-        A list's rows carry it annotated as ``_delivery_attempts``.
-        """
-
-        attempts = self.__dict__.get("_delivery_attempts", models.DEFERRED)
-        if attempts is models.DEFERRED:
-            attempts = self.local_metadata.get("delivery_attempts")
-        return int(attempts or 0)
+        return int(self.local_fact("delivery_attempts") or 0)
 
     def delivery_resolution_error(self, *, retry: bool) -> ValidationError | None:
         """The retained row's admission for an operator retry or acknowledgement.
