@@ -67,7 +67,8 @@ def test_a_second_override_waits_on_the_default_and_returns_the_first() -> None:
 
 
 def test_the_override_verb_racing_an_insert_of_the_same_row_returns_that_row() -> None:
-    """A console insert does not take the default's lock; the verb's insert waits on the row, then answers with it."""
+    """An insert from code does not take the default's lock, and the console's insert creates no override; the
+    verb's insert waits on the row, then answers with it."""
 
     admin = create_platform_admin("messaging-templates-race-inserter")
     baseline = _row(baseline=True)

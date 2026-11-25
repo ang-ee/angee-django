@@ -1,5 +1,5 @@
-"""What the message templates console reads: a row's permissions, its kind's message fields and the rows naming
-it."""
+"""What the message templates console reads and creates: a row's permissions, its kind's message fields, the rows
+naming it, and the deployment's own row, decided before any work and seeded by the server."""
 
 from __future__ import annotations
 
@@ -8,17 +8,21 @@ import time
 from typing import Any
 
 import pytest
+from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import system_context, to_subject_ref
+from rebac import actor_context, system_context, to_subject_ref
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
+from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker
 from tests.conftest import create_platform_admin, create_user
 from tests.test_messaging_templates import _row, _schema
+from tests.test_messaging_templates_layout import library as library
 from tests.test_messaging_templates_render import TIMED, _recording
 
 _LAYOUT = {
@@ -26,6 +30,8 @@ _LAYOUT = {
     "text_source": "{% block content %}{% endblock %}",
 }
 """A layout's two forms, each holding the one empty content block."""
+
+_DUPLICATE_MESSAGE = "This deployment already has a message template with this kind, key and language."
 
 
 def _template(key: str, source: str, language: str = "en", *, layout: str = "base") -> Any:
@@ -261,3 +267,141 @@ def test_backlinks_time(blocks: None) -> None:
     print(f"backlinks CPU 25 blocks {spent:.3f}s load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     assert len(rows) == 25
     assert spent < 1.0
+
+
+# ---------- creating the deployment's own row ----------
+
+
+_INSERT = """
+mutation($object: message_templates_insert_input!, $idempotency: String) {
+  insert_message_templates_one(object: $object, idempotency_key: $idempotency) {
+    id kind key language name is_baseline
+  }
+}
+"""
+_PREVIEW = "query($id: ID!) { message_template_preview(template: $id) { rendered { html } warnings { code } } }"
+
+
+def _insert(
+    user: Any, kind: str, key: str, language: str = "en", name: str = "New", *, idempotency: str | None = None,
+) -> Any:
+    variables = {"object": {"kind": kind, "key": key, "language": language, "name": name}, "idempotency": idempotency}
+    return execute_schema(_schema(), _INSERT, variables, user=user)
+
+
+def _rows(kind: str, key: str) -> list[Any]:
+    with system_context(reason="tests.messaging_templates.console.read"):
+        return list(MessageTemplate.objects.filter(kind=kind, key=key).order_by("language", "is_baseline"))
+
+
+@pytest.mark.parametrize("kind", [str(kind) for kind in MessageTemplateKind])
+def test_each_kind_starts_on_a_new_key_as_its_defaults_and_previews(library: dict[str, Any], kind: str) -> None:
+    """Of the four inputs only the identity and the name are the caller's; the rest is the kind's starting row."""
+
+    del library
+    admin = create_platform_admin(f"messaging-templates-console-{kind}-creator")
+    key = "tests.fresh" if kind == "template" else "fresh"
+    created = result_data(_insert(admin, kind, key, name="Fresh"))["insert_message_templates_one"]
+    assert {**created, "id": None} == {
+        "id": None, "kind": kind.upper(), "key": key, "language": "en", "name": "Fresh", "is_baseline": False,
+    }
+    (row,) = _rows(kind, key)
+    defaults = MessageTemplateKind(kind).handler.defaults
+    assert {name: getattr(row, name) for name in defaults} == defaults
+    preview = result_data(execute_schema(_schema(), _PREVIEW, {"id": created["id"]}, user=admin))
+    assert preview["message_template_preview"]["rendered"] is not None, preview
+    if kind == "template":
+        assert row.layout == "base"
+        assert [warning["code"] for warning in preview["message_template_preview"]["warnings"]] == ["PREHEADER"]
+
+
+def test_a_new_language_of_a_key_starts_as_what_that_language_reads_today(library: dict[str, Any]) -> None:
+    """Shipped ``greeting`` in English and Spanish: a German row starts as the English one, so German mail stays."""
+
+    admin = create_platform_admin("messaging-templates-console-translator")
+    values = {"person": {"first_name": "Ana"}}
+    with system_context(reason="tests.messaging_templates.console.render"):
+        english = MessageTemplate.objects.effective("part", "greeting", language="de")
+        before = english.render(values, kit=library["kit"])
+    assert (english.language, english.is_baseline) == ("en", True)
+    result_data(_insert(admin, "part", "greeting", "de", name="Begrüßung"))
+    with system_context(reason="tests.messaging_templates.console.render"):
+        german = MessageTemplate.objects.effective("part", "greeting", language="de")
+        after = german.render(values, kit=library["kit"])
+    assert (german.language, german.is_baseline) == ("de", False)
+    assert german.override_values() == {**english.override_values(), "name": "Begrüßung"}
+    assert (after.html, after.plain_text) == (before.html, before.plain_text)
+
+
+def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
+    del library
+    admin = create_platform_admin("messaging-templates-console-shadower")
+    refused = _insert(admin, "part", "greeting", "en")
+    (error,) = refused.errors
+    assert (error.extensions["code"], error.extensions["formErrors"]) == ("VALIDATION", [SHIPPED_DEFAULT_MESSAGE])
+    with actor_context(admin), pytest.raises(ValidationError) as raised:
+        MessageTemplate.objects.create_own(kind="part", key="greeting", language="EN", name="Greeting")
+    assert raised.value.code == "shipped_default"
+    assert [(row.language, row.is_baseline) for row in _rows("part", "greeting")] == [("en", True), ("es", True)]
+
+
+def test_a_duplicate_is_refused_in_the_constraints_words_even_past_full_clean(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second insert of one identity, then one a racing writer won after ``full_clean()`` judged it."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-duplicator")
+    result_data(_insert(admin, "part", "fresh"))
+    (error,) = _insert(admin, "part", "fresh").errors
+    assert error.extensions["formErrors"] == [_DUPLICATE_MESSAGE]
+    judged: list[Any] = []
+    validate_constraints = MessageTemplate.validate_constraints
+
+    def won_by_a_racer(row: Any, exclude: Any = None) -> None:
+        judged.append(row)
+        if len(judged) > 1:  # full_clean()'s own judgement saw no rival: the racer's insert came after it
+            validate_constraints(row, exclude=exclude)
+
+    monkeypatch.setattr(MessageTemplate, "validate_constraints", won_by_a_racer)
+    with actor_context(admin), pytest.raises(ValidationError) as raised:
+        MessageTemplate.objects.create_own(kind="part", key="fresh", language="en", name="Again")
+    assert (raised.value.messages, len(judged)) == ([_DUPLICATE_MESSAGE], 2)
+    assert len(_rows("part", "fresh")) == 1
+
+
+def test_a_member_or_a_signed_out_caller_is_refused_before_anything_is_judged(
+    library: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Create is decided first: a malformed identity and a shipped one get the same refusal, and nothing is lexed."""
+
+    del library
+    member = create_user("messaging-templates-console-intruder")
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    for user in (member, AnonymousUser()):
+        for kind, key, language, name in (
+            ("part", "fresh", "en", "Fresh"), ("part", "Not A Key", "en-us", ""), ("part", "greeting", "en", "Shadow"),
+            ("template", "tests.fresh", "de", "Fresh"),
+        ):
+            (error,) = _insert(user, kind, key, language, name).errors
+            assert error.extensions["code"] == "PERMISSION_DENIED", (user, key)
+    assert checked == []
+    assert _rows("part", "fresh") == [] and _rows("template", "tests.fresh") == []
+
+
+def test_an_identity_its_validators_refuse_is_refused_under_its_fields(db: None) -> None:
+    del db
+    admin = create_platform_admin("messaging-templates-console-misspeller")
+    (error,) = _insert(admin, "part", "Not A Key", "en-us").errors
+    assert error.extensions["code"] == "VALIDATION"
+    assert set(error.extensions["validationErrors"]) == {"key", "language"}
+    assert _rows("part", "Not A Key") == []
+
+
+def test_a_replayed_insert_returns_the_row_it_created(db: None) -> None:
+    del db
+    admin = create_platform_admin("messaging-templates-console-replayer")
+    first = result_data(_insert(admin, "part", "fresh", idempotency="console-create"))
+    assert result_data(_insert(admin, "part", "fresh", idempotency="console-create")) == first
+    assert len(_rows("part", "fresh")) == 1

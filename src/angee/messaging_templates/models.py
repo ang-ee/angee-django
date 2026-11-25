@@ -19,7 +19,8 @@ baselines (``is_baseline``), which loads alone write. The deployment's override 
 a baseline is the non-baseline row with the baseline's kind, key and language,
 started by :meth:`MessageTemplateManager.override` and kept over a changed default
 by :meth:`MessageTemplateManager.keep_override`; deleting it resets to the default.
-A non-baseline row with no baseline is the deployment's own. ``content_hash``
+A non-baseline row with no baseline is the deployment's own, started by
+:meth:`MessageTemplateManager.create_own`. ``content_hash``
 fingerprints what renders, and an override's ``baseline_hash`` is the baseline's
 fingerprint when the override started or was last kept, so "has an updated default"
 is a comparison of the two (:attr:`MessageTemplateQuerySet.row_fact_expressions`).
@@ -51,7 +52,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
-from rebac import actor_context, system_context
+from rebac import actor_context, current_actor, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
@@ -101,6 +102,7 @@ UNRESOLVED_DELETE_MESSAGE = (
 )
 ONE_AT_A_TIME_MESSAGE = "Message templates are written one at a time, so each save derives its content hash."
 NO_BRAND_KIT_MESSAGE = "No brand kit is the default, and a message renders in a brand kit's name and colours."
+SHIPPED_DEFAULT_MESSAGE = "A shipped default has this kind, key and language: override it instead."
 
 LAYOUT_PREVIEW = PreviewFrame(
     subject="A message in this layout",
@@ -111,6 +113,10 @@ LAYOUT_PREVIEW = PreviewFrame(
          "width, the colours and the type.",
 )
 """The fixed body, subject and preheader a layout is previewed with."""
+
+BASE_LAYOUT = "base"
+"""The layout this addon ships (``resources/install/030_messaging_templates.messagetemplate.yaml``);
+a new template starts in it."""
 
 
 class MessageTemplateKind(models.TextChoices):
@@ -157,6 +163,9 @@ class MessageTemplateKindHandler:
     """Whether a row of this kind writes the mail's document: its opening doctype and Outlook's conditional comments."""
     preview_frame: ClassVar[PreviewFrame | None] = None
     """The fixed body, subject and preheader a row of this kind is previewed around; ``None`` previews it alone."""
+    defaults: ClassVar[Mapping[str, Any]] = {}
+    """The columns a deployment's own row of this kind starts with when no row resolves its key
+    (:meth:`MessageTemplateManager.create_own`); the identity and the name are the caller's."""
 
     def template_name(self, key: str) -> str:
         """Return the name the engine knows a row of this kind and ``key`` by."""
@@ -193,6 +202,21 @@ class LayoutHandler(MessageTemplateKindHandler):
     holds_content = True
     writes_document = True
     preview_frame = LAYOUT_PREVIEW
+    defaults = {
+        "format": MessageTemplateFormat.HTML,
+        "source": (
+            "<!doctype html>\n"
+            '<html lang="{{ lang }}" dir="{{ dir }}">\n'
+            '<head>\n<meta charset="utf-8">\n<title>{{ subject }}</title>\n</head>\n'
+            '<body style="margin:0;padding:24px 12px;background:{{ brand.light.canvas }}">\n'
+            '<div style="max-width:600px;margin:0 auto;font:16px/24px {{ brand.font.body }};'
+            'color:{{ brand.light.text }}">{% block content %}{% endblock %}</div>\n'
+            "</body>\n</html>"
+        ),
+        "text_source": "{% block content %}{% endblock %}",
+        "variables": {},
+        "sample": {},
+    }
 
     def naming_rows(self, rows: models.QuerySet[Any], keys: Iterable[str]) -> dict[str, list[Any]]:
         """Return, for each of ``keys``, the rows whose ``layout`` is it, in one read; only templates fill it."""
@@ -208,6 +232,16 @@ class TemplateHandler(MessageTemplateKindHandler):
 
     carries_message_fields = True
     reads_message_fields = True
+    defaults = {
+        "format": MessageTemplateFormat.MARKDOWN,
+        "subject": "A message from {{ brand.name }}",
+        "preheader": "",
+        "layout": BASE_LAYOUT,
+        "source": "Write this message here.",
+        "text_source": "",
+        "variables": {},
+        "sample": {},
+    }
 
     def layout_name(self, row: MessageTemplate) -> str | None:
         """Return the name of the layout the template's ``layout`` column names."""
@@ -252,12 +286,26 @@ class BlockHandler(IncludedHandler):
     """A message template block is a styled piece of a mail that rows include."""
 
     template_prefix = "blocks/"
+    defaults = {
+        "format": MessageTemplateFormat.HTML,
+        "source": '<p style="margin:0 0 16px">Write this block here.</p>',
+        "text_source": "Write this block here.",
+        "variables": {},
+        "sample": {},
+    }
 
 
 class PartHandler(IncludedHandler):
     """A message template part is a piece of wording that rows include."""
 
     template_prefix = "parts/"
+    defaults = {
+        "format": MessageTemplateFormat.MARKDOWN,
+        "source": "Write this part here.",
+        "text_source": "",
+        "variables": {},
+        "sample": {},
+    }
 
 
 _KIND_HANDLERS: Mapping[MessageTemplateKind, MessageTemplateKindHandler] = {
@@ -457,7 +505,8 @@ _MessageTemplateManagerBase = AngeeHistoryManager.from_queryset(MessageTemplateQ
 
 
 class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManagerBase[TemplateT]):
-    """Owns the writes that start from a shipped default: overriding it and keeping an override over it."""
+    """Owns the writes that start a row or an override: the deployment's own row, overriding a shipped default and
+    keeping an override over it."""
 
     def override(self, baseline: TemplateT) -> TemplateT:
         """Return the deployment's override of ``baseline``, created from it when there is none.
@@ -534,6 +583,48 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             if unscoped:
                 locked.unsudo()
             return locked
+
+    def create_own(self, *, kind: str, key: str, language: str, name: str) -> TemplateT:
+        """Create the deployment's own row of ``kind``, ``key`` and ``language``, called ``name``; the rest is seeded.
+
+        Requires ``create`` on the candidate row for the acting reader before
+        anything is cleaned, read or written. Then refuses, keyed by field, what
+        the identity's own validators refuse, and an identity a shipped default
+        holds in this language (``shipped_default``): that row is overridden
+        (:meth:`override`), never shadowed. The row starts as what a recipient in
+        its language reads for its kind and key today (:meth:`MessageTemplate.override_values`
+        of :meth:`MessageTemplateQuerySet.effective`), so creating it changes no
+        recipient's mail; a key nothing resolves starts from its kind's
+        :attr:`MessageTemplateKindHandler.defaults`. ``full_clean()`` then judges
+        the row before it is saved, and a writer that inserts the same identity
+        meanwhile is refused with the constraint's own message.
+        """
+
+        row = self.model(kind=kind, key=key, language=language, name=name, is_baseline=False)
+        row.require_access("create", current_actor())
+        identity = {"kind", "key", "language", "name"}
+        row.clean_fields(exclude=[field.name for field in self.model._meta.fields if field.name not in identity])
+        shipped = self.model.system_queryset().filter(
+            is_baseline=True, kind=row.kind, key=row.key, language=row.language,
+        )
+        if shipped.exists():
+            raise ValidationError(SHIPPED_DEFAULT_MESSAGE, code="shipped_default")
+        try:
+            values = self.effective(row.kind, row.key, language=row.language).override_values()
+        except self.model.DoesNotExist:
+            values = deepcopy(dict(row.handler.defaults))
+        values.pop("name", None)
+        for field, value in values.items():
+            setattr(row, field, value)
+        try:
+            with transaction.atomic():
+                row.full_clean()
+                row.save()
+        except IntegrityError:
+            # A writer inserted the same identity after full_clean() judged it: refuse in its words.
+            row.validate_constraints()
+            raise
+        return row
 
 
 class _Backlinks(InstancePrefetch):

@@ -20,7 +20,7 @@ and a reader who may not preview the row a ``PERMISSION_DENIED`` GraphQL error.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import strawberry
 import strawberry_django
@@ -129,6 +129,16 @@ class MessageTemplateType(AngeeNode):
         return parent.has_updated_default
 
 
+class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
+    """Write semantics for message templates: create belongs to the manager factory."""
+
+    def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
+        """Create the deployment's own row; the manager decides create before any work."""
+
+        del info
+        return MessageTemplate.objects.create_own(**data)
+
+
 _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
     MessageTemplateType,
     model=MessageTemplate,
@@ -137,9 +147,9 @@ _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
     sortable=["kind", "key", "language", "name", "updated_at"],
     aggregatable=["id"],
     groupable=["kind", "language", "format", "is_baseline"],
-    insertable=["kind", "key", "language", *MessageTemplate.edited_fields],
+    insertable=["kind", "key", "language", "name"],
     updatable=list(MessageTemplate.edited_fields),
-    write_backend=AngeeHasuraWriteBackend(MessageTemplate),
+    write_backend=MessageTemplateWriteBackend(MessageTemplate),
     id_column="sqid",
 )
 

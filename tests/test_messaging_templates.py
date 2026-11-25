@@ -235,7 +235,7 @@ def test_a_caller_may_declare_more_paths_than_a_row() -> None:
 
 
 def test_declared_variables_are_judged_in_linear_time() -> None:
-    """A console insert runs the grammar before it checks who may insert, so a hostile declaration stays cheap."""
+    """Every clean runs the grammar on what an administrator wrote, so a hostile declaration stays cheap."""
 
     parent = ".".join(["a" * 100_000] * 7)
     hostile = [
@@ -364,8 +364,7 @@ def test_an_admin_writes_the_deployments_rows_and_nobody_writes_a_baseline(db: N
     del db
     admin = create_platform_admin("messaging-templates-writer")
     member = create_user("messaging-templates-onlooker")
-    part = {"kind": "part", "key": "signature", "language": "en", "name": "Signature", "format": "markdown",
-            "source": "The team", "variables": {"team.name": "The team's name"}}
+    part = {"kind": "part", "key": "signature", "language": "en", "name": "Signature"}
     for refused in (member, AnonymousUser()):
         result = execute_schema(_schema(), _INSERT, {"object": part}, user=refused)
         assert result.errors
@@ -864,21 +863,6 @@ def test_a_deployment_whose_default_language_moves_can_still_edit_its_template(d
         assert _system_clean(template) == {}
         template.layout = "letter_two"
         assert set(_system_clean(template)) == {"layout"}
-
-
-def test_a_caller_who_reads_no_layout_gets_one_answer_for_any_layout_key(db: None) -> None:
-    """An anonymous insert naming an existing and a missing layout is refused the same way: nothing to learn."""
-
-    del db
-    _row(baseline=True)
-    answers = []
-    for layout in ("base", "nope"):
-        template = {"kind": "template", "key": "tests.welcome", "language": "en", "name": "Welcome",
-                    "format": "markdown", "source": "Hello.", "layout": layout}
-        result = execute_schema(_schema(), _INSERT, {"object": template}, user=AnonymousUser())
-        assert result.errors
-        answers.append([(error.message, error.extensions) for error in result.errors])
-    assert answers[0] == answers[1]
 
 
 def test_a_load_that_states_the_creation_stamp_keeps_it(db: None) -> None:
