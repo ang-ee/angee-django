@@ -270,6 +270,13 @@ class PreviewFrame:
     text: str
 
 
+class TextDirection(StrEnum):
+    """The direction a mail's text reads in, as an HTML ``dir`` takes it."""
+
+    RTL = "rtl"
+    LTR = "ltr"
+
+
 @dataclass
 class RenderedMessage:
     """One rendered message: subject and preheader on one line each, the HTML and plain-text bodies."""
@@ -279,10 +286,10 @@ class RenderedMessage:
     html: str
     plain_text: str
     language: str
-    direction: str
-    """``"rtl"`` or ``"ltr"``: the direction of the mail's own text, the one the HTML's ``dir`` says, for whoever
-    shows the subject, the preheader or the plain text outside the HTML. Django's bidi answer for the row's language,
-    ``"ltr"`` for a language Django does not know."""
+    direction: TextDirection
+    """The direction of the mail's own text, the one the HTML's ``dir`` says, for whoever shows the subject, the
+    preheader or the plain text outside the HTML. Django's bidi answer for the row's language, left to right for a
+    language Django does not know."""
 
 
 class TemplateWarningCode(StrEnum):
@@ -532,8 +539,8 @@ class TemplateWalk:
         language = self.language
         with translation.override(language):
             prepared = self.prepare(values)
-            direction = "rtl" if translation.get_language_bidi() else "ltr"
-            mail_globals = {"brand": brand_values(kit), "lang": language, "dir": direction}
+            direction = TextDirection.RTL if translation.get_language_bidi() else TextDirection.LTR
+            mail_globals = {"brand": brand_values(kit), "lang": language, "dir": direction.value}
             text_engine = self._engine(RowPiece.TEXT, mail_globals)
             html_engine = self._engine(RowPiece.HTML, mail_globals)
             with RenderBudget.for_lines().spend():

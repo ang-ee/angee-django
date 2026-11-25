@@ -80,6 +80,7 @@ from angee.messaging_templates.walker import (
     TemplateWalker,
     TemplateWarning,
     TemplateWarningCode,
+    TextDirection,
     _frame,
     _RowRules,
     _Tree,
@@ -1730,7 +1731,7 @@ def test_dates_numbers_and_direction_follow_the_rows_language(
     template = _mail("{{ when|date:'DATE_FORMAT' }}|{{ dir }}|{{ ok|yesno }}", {"when": "x", "ok": "x"},
                      language=language, key="tests.dated")
     rendered = _render(template, {"when": datetime.date(2026, 11, 24), "ok": True}, kit)
-    assert (rendered.language, rendered.direction) == (language, direction)
+    assert (rendered.language, rendered.direction) == (language, TextDirection(direction))
     assert f'dir="{direction}"' in rendered.html and f"|{direction}|" in rendered.plain_text
     if date is not None:
         assert rendered.plain_text.startswith(date)

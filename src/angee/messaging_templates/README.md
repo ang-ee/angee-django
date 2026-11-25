@@ -150,8 +150,8 @@ present and not null, every declared path filled, ISO dates parsed at the paths
 read through `date`), and renders it on Django's template engine in the row's
 language: the subject and preheader on one line each, the HTML body escaping
 every value, and the plain-text body from the rows' text forms, with the row's
-`language` and its text `direction` (`rtl` or `ltr`, the one the HTML's `dir`
-says), for whoever shows the subject, preheader or plain text outside the
+`language` and its text `direction` (`TextDirection`: `rtl` or `ltr`, the one
+the HTML's `dir` says), for whoever shows the subject, preheader or plain text outside the
 HTML. A render reads
 rows and the brand kit through the caller's scope, the default kit when `kit` is
 `None`. It raises `ValidationError` and nothing else, and each item of the error
