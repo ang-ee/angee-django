@@ -1327,38 +1327,38 @@ _PART = st.one_of(st.just(""), _HTML)
 )
 @given(head=_PART, tail=_PART, before=_PART, block=_PART, after=_PART, value=st.one_of(
     st.sampled_from(HOSTILE), st.text(max_size=40)), family=st.one_of(st.none(), st.sampled_from(FAMILIES)),
-    family_value=st.booleans())
+    family_value=st.booleans(), alone=st.booleans())
 # Rows found to break the property: a repeated attribute name and a noscript splice (S1); a row ending inside a tag
 # or a <style> (S2); a self-closing <style/>, in a block and in a layout (rule 4); template code glued to </title
 # (rule 6); a literal NUL forging a placeholder (rule 1).
 @example(head="", tail="", before='<span title="a" title={{ v }}>x</span>', block="", after="", value=SPLICE,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before='<span TITLE="a" title={{ v }}>x</span>', block="", after="", value=SPLICE,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before='<noscript><p title="</noscript><b title={{ v }}>"></p></noscript>', block="",
          after="", value=SPLICE,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before="", block="<p>Hi</p><a",
          after=' href="{{ v }}" style="background:url({{ v }})">Open</a>', value=JAVASCRIPT,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before="", block='<p>Hi</p><a title="x', after='" href="{{ v }}">Open</a>',
          value=JAVASCRIPT,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before="", block="<p>Hi</p><style>", after="Hello {{ v }}, welcome.", value=CSS,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before="", block="<p>Hi</p><style/>", after="<p>Hello {{ v }}, welcome.</p>", value=CSS,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="<p>Hi</p><style/>", tail="", before="", block="", after="<p>Hello {{ v }}, welcome.</p>", value=CSS,
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before='<title>Hi</title{{ v }}><img alt={{ v }} src="https://example.test/x.png"></title>',
          block="", after="<p>Body</p>", value="/ onerror=alert(1)",
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 @example(head="", tail="", before='<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ v }}">y</p>',
          block="", after="", value=";background-image:url(https://tracker.example/leak)",
-         family=None, family_value=False)
+         family=None, family_value=False, alone=False)
 def test_a_value_never_becomes_markup(
     kit: Any, head: str, tail: str, before: str, block: str, after: str, value: str,
-    family: tuple[dict[str, str], str] | None, family_value: bool,
+    family: tuple[dict[str, str], str] | None, family_value: bool, alone: bool,
 ) -> None:
     """Property 1, over the rows the walk admits, read as a browser reads them (html5lib).
 
@@ -1366,12 +1366,14 @@ def test_a_value_never_becomes_markup(
     every quoting, spelling and whitespace of their attributes, self-closing and raw-text elements, comments,
     declarations, entities and template code, ending anywhere. Half the compositions put one of the
     :data:`FAMILIES` the closed lists refuse in place of the parts it names, half of those with the value that shows
-    what it would break, so that dropping any rule admits a break the generated examples alone find.
+    what it would break and half alone in the composition, so that dropping any rule admits a break the generated
+    examples alone find.
     """
 
     if family is not None:
         overrides, shown = family
-        parts = {"head": head, "tail": tail, "before": before, "block": block, "after": after, **overrides}
+        parts = {"head": head, "tail": tail, "before": before, "block": block, "after": after}
+        parts = {**(dict.fromkeys(parts, "") if alone else parts), **overrides}
         head, tail, before, block, after = (parts[name] for name in ("head", "tail", "before", "block", "after"))
         value = shown if family_value else value
     template = _unsaved(
