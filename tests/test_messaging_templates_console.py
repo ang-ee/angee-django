@@ -24,12 +24,17 @@ from rebac.testing import install_schema
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
-from angee.messaging_templates.models import SHIPPED_DEFAULT_MESSAGE, MessageTemplateKind, MessageTemplateQuerySet
+from angee.messaging_templates.models import (
+    BASE_LAYOUT,
+    SHIPPED_DEFAULT_MESSAGE,
+    MessageTemplateKind,
+    MessageTemplateQuerySet,
+)
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TextDirection
 from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
-from tests.test_messaging_templates import _row, _schema
+from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
 from tests.test_messaging_templates_render import TIMED, _recording
 
@@ -536,6 +541,25 @@ def test_starter_text_lands_only_on_a_key_with_no_row(db: None) -> None:
         with actor_context(admin):
             dutch = MessageTemplate.objects.create_own(kind="part", key="away", language="nl", name="Hoi")
     assert dutch.override_values() == {**english.override_values(), "name": "Hoi"}
+
+
+def test_a_new_template_sits_in_a_layout_whichever_row_seeds_it(library: dict[str, Any]) -> None:
+    """A new template starts in a layout and passes ``full_clean()``, seeded from what its language reads today, from
+    the key's row in another language, or from the kind's starting row; the console refuses emptying its layout."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-placer")
+    _template("tests.read", "Read today.")  # the default language's row: what a German recipient reads today
+    _template("tests.abroad", "Bonjour.", "fr")  # nothing resolves for German, so the French row seeds it
+    starter = MessageTemplateKind("template").handler.defaults["source"]
+    for key, seeded in (("tests.read", "Read today."), ("tests.abroad", "Bonjour."), ("tests.fresh", starter)):
+        created = result_data(_insert(admin, "template", key, "de", name="Neu"))["insert_message_templates_one"]
+        (row,) = [row for row in _rows("template", key) if row.language == "de"]
+        assert (row.source, row.layout) == (seeded, BASE_LAYOUT), key
+        with actor_context(admin):
+            row.full_clean()
+    (error,) = execute_schema(_schema(), _UPDATE, {"id": created["id"], "set": {"layout": ""}}, user=admin).errors
+    assert (error.extensions["code"], list(error.extensions["validationErrors"])) == ("VALIDATION", ["layout"])
 
 
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
