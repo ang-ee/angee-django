@@ -364,13 +364,20 @@ BUDGETS = {
 
 
 # document: statements beyond the first of each statement text, for either actor. Every
-# other read issues each text once. A repeat is a lookup issued per row or a read asked twice.
+# other read issues each text once. A repeat is a lookup issued per row, a read asked twice,
+# or two relation paths that read one model with equal texts; the per-row test below tells
+# a lookup per row from the other two.
 REPEATED = {
     # The senders and the reply parents' senders each read the same parties, their field
     # gates and their avatar handles.
     "transcript": 3,
     # Two bypass audit rows, the user read twice and one field-gate probe twice.
     "person": 3,
+    # The sender and the recipients' handles are two relation reads of one model, each
+    # carrying one id, so their texts are equal. Batching to-one reads per target model in
+    # angee/graphql/relations.py is the owner fix that returns this entry, and the
+    # transcript's, to 0.
+    "selected": 1,
     # The MIME type is read twice.
     "related": 1,
 }
