@@ -63,7 +63,8 @@ live in code docstrings.
     under `layout`. A walk also stops once what its rows' checks read passes
     600,000 characters of forms or 4,000 spans, comments included, fetches no
     row past the include depth a tree reaches, counts each level from its rows'
-    lengths before it reads their text (never their description or sample), and
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
     on a save resolves a level's include targets in one query. A Markdown row's
     link and image labels may
     make the pass scan at most 50,000 characters, and no row holds an opener
@@ -118,7 +119,8 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
     `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
