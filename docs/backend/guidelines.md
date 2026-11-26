@@ -1845,10 +1845,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   embed a variable; a client passes the whole value as one variable, which
   graphql-core coerces once per operation. `validation_issues` and `validate`
   apply the same bounds before a JSON Schema keyword walks a value. A body or
-  WebSocket message too deep for Python's JSON decoder is malformed JSON
-  (`decode_json`), answered as Strawberry answers any other. A domain
-  bound stays with its owner: `GraphQLSchemas.resource_filter` bounds a stored
-  resource condition's depth with the same walk.
+  WebSocket message nested past `MAX_JSON_DOCUMENT_DEPTH` is malformed JSON
+  (`decode_json`), answered as Strawberry answers any other. That document
+  bound admits a value at `MAX_JSON_DEPTH` inside the deepest envelope its
+  docstring measures; an input path that nests a `JSON` field deeper
+  re-derives it. A domain bound stays with its owner:
+  `GraphQLSchemas.resource_filter` bounds a stored resource condition's depth
+  with the same walk.
 - **Delete previews are generated with the resource's delete surface.**
   [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
   `<resource>_delete(id, confirm)` and its metadata when `delete=True`.

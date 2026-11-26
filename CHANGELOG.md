@@ -10,6 +10,43 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
+  answers for `user`. It checked the ambient REBAC actor instead, so asking about
+  someone else returned the current actor's answer, and asking outside any actor
+  (a worker, a mail bridge) returned `False` even for an administrator. It now
+  checks `user`'s own effective membership of the platform-admin role
+  (`REBAC_UNIVERSAL_ADMIN_ROLE`), under any actor and inside a system context; an
+  anonymous user or `None` is still never an administrator. The framework's
+  callers (the platform-admin GraphQL gate, IAM's role and grant catalogues,
+  integrate's implementation choices and the profiling hook) pass the request's
+  own user, so their answers are unchanged. New
+  `angee.iam.roles.platform_admin_holders()` lists the user ids holding the role
+  in the shape of `protected_account_holders()`: every path REBAC's subject lookup
+  follows, `None` when every user holds it, empty when no role is configured.
+  **Upgrade:** a caller that passed one user while relying on the answer for the
+  ambient actor now gets that user's answer; pass the actor it means
+  (`get_current_user(info)` in a resolver), or ask
+  `angee.iam.permissions.current_actor_has_role(role)` about the ambient actor.
+  Code that spelled `platform_admin_role()` with `subject_has_role` or a subject
+  lookup to read someone else's membership or the role's holders can call
+  `is_platform_admin` or `platform_admin_holders()`.
+
+- Framework images: `django-angee-base` and `django-angee` build on the CPython
+  release `.python-version` pins, `python:3.14.9-slim`. The Dockerfile's
+  `PYTHON_VERSION` default stayed `3.14`, a tag that now carries 3.14.10, while the
+  dependency stage's `uv sync` reads the pin and never downloads an interpreter, so
+  every image build since the pin failed with `No interpreter found for Python
+  3.14.9` and no framework image was published. The default names the pin, and the
+  static tier's runtime image tests refuse a Dockerfile whose default differs from
+  `.python-version`: a pin change edits both. Docker rebuilds only the current
+  patch release's tags, so the base stage first upgrades the Debian packages of
+  `python:3.14.9-slim`'s last build (2026-10-21) when it builds.
+
+- CI: a pull request that changes `.python-version` runs the whole SQLite suite on
+  the interpreter it pins. The changed-path selection did not count the pin among
+  the inputs every test reads, so a pin change alone started no SQLite shard,
+  although the pin exists for the SQLite library that suite needs.
+
 - **Message templates render, on Django's template engine.**
   - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
     `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
@@ -256,13 +293,30 @@ live in code docstrings.
     host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
     the same, and no setting raises it. A resource condition keeps its own
     depth bound of 12, measured by the same walk.
-  - A request body or WebSocket message nested too deeply for Python's JSON
-    decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
-    `decode_json` in `angee.base.serialization`: the GraphQL view answers
-    Strawberry's own 400, a refused view-as preview still answers its 403, the
-    GraphQL WebSocket closes with Strawberry's 4400, anonymous ingress
-    refuses it as `invalid_request`, and an agent's ACP WebSocket skips the
-    record as invalid JSON. Each raised an uncaught `RecursionError` before.
+  - A request body, WebSocket message or ACP record nested deeper than
+    `MAX_JSON_DOCUMENT_DEPTH` (128) is malformed JSON on every machine,
+    through `decode_json` in `angee.base.serialization`: the GraphQL view
+    answers Strawberry's own 400, a refused view-as preview still answers its
+    403, the GraphQL WebSocket closes with Strawberry's 4400, anonymous
+    ingress refuses it as `invalid_request`, and an agent's ACP WebSocket
+    skips the record as invalid JSON. Before, only the decoder's own limit
+    stood in the way, and on Python 3.14 it follows the thread's C stack (some
+    60,000 levels on a macOS main thread, 100,000 and more on GitHub's Linux
+    runners): past it, the decoder raised an uncaught `RecursionError`; within
+    it, the document reached the recursive walks behind the decoder. A
+    document too deep for a small thread's stack is malformed JSON too.
+  - The document bound admits every value the value bound admits. The deepest
+    envelope, a graphql-transport-ws message carrying a nested insert's line
+    field, encloses a value in 7 arrays and objects, so 71 is the least such
+    bound; a GraphQL HTTP body encloses one in 6, an ACP record its view
+    context in 4, and an ingress body its fields in 1. The rest of 128 leaves
+    an envelope room to grow and keeps graphql-core's input coercion and
+    strawberry-django-hasura's input reduction far inside Python's recursion
+    limit. `json_bound_violation` measures it, without the member bound.
+  - `angee.integrate` decodes a pasted key file and a vendor's error body
+    through `decode_json` as well: a key file nested past the document bound
+    is refused as "Paste the provider's JSON key file.", and a refusal keeps
+    no body nested past it.
   - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
     through nested lists and expands shared references; bounding it belongs to
     that library's own release.

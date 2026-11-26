@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import logging
 from collections.abc import Collection, Mapping
 from datetime import datetime, timedelta
@@ -16,6 +15,7 @@ from django.utils import timezone
 from joserfc.errors import JoseError
 from joserfc.jwk import RSAKey
 
+from angee.base.serialization import decode_json
 from angee.integrate.errors import IntegrationError, is_transient_failure
 from angee.integrate.net import parse_http_url
 from angee.integrate.oauth.client import jwt_bearer_grant
@@ -416,7 +416,7 @@ class JwtBearerCredentialHandler(CredentialKindHandler):
 
         self.validate(dict(material))
         try:
-            document = json.loads(str(material["key_file"]))
+            document = decode_json(str(material["key_file"]))
         except ValueError:
             document = None
         if not isinstance(document, dict):
