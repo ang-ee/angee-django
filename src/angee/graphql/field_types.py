@@ -16,17 +16,31 @@ through ``django-choices-field``'s ``TextChoicesField``. Optional states declare
 ``null=True, blank=True`` on the model and project natively as nullable enums. The
 opaque-id ``SqidField`` is a non-concrete column projected explicitly as
 ``strawberry.ID`` by ``AngeeNode`` — neither reaches ``field_type_map``.
+
+An implementation-key column (``ImplClassField``) projects as its choices enum
+the same way, and every Angee schema reads it nullable: ``AngeeSchema.get_fields``
+reads each such output field through :func:`read_implementation_key`, so a key
+the registry no longer names reads as null while its declaration stays ``auto``.
 """
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Awaitable
 from datetime import datetime
 from typing import Any
 
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
+from strawberry import Info
+from strawberry.annotation import StrawberryAnnotation
+from strawberry.extensions.field_extension import FieldExtension, SyncExtensionResolver
+from strawberry.types.base import StrawberryOptional
+from strawberry.types.field import StrawberryField
+from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.fields.types import field_type_map
 
+from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.text import ColorField, DiagnosticTextField, ModelLabelField
 from angee.base.models.timestamps import CreatedAtField
@@ -60,3 +74,68 @@ register_field_type(DiagnosticTextField, str)
 register_field_type(ModelLabelField, str)
 register_field_type(ColorField, str)
 register_field_type(CreatedAtField, datetime)
+
+
+class ImplementationKeyRead(FieldExtension):
+    """Read a stored implementation key its column's choices no longer name as null.
+
+    Such a row keeps the key as its text (``ImplClassField.from_db_value``),
+    which the column's GraphQL enum cannot represent; null lets the row's list
+    and record still answer, without an error. A key the choices name reads as
+    its enum member, as before.
+    """
+
+    def __init__(self, field: ImplClassField[Any]) -> None:
+        """Read through ``field``'s choices."""
+
+        super().__init__()
+        self.field = field
+
+    def apply(self, field: StrawberryField) -> None:
+        """Project the column nullable, as Strawberry lets an extension set its field's type."""
+
+        field.type_annotation = StrawberryAnnotation(self.field.choices_enum | None)
+
+    def resolve(self, next_: SyncExtensionResolver, source: Any, info: Info, **kwargs: Any) -> Any:
+        """Return the column's value, or null for a key its choices do not name; an awaited value alike."""
+
+        value = next_(source, info, **kwargs)
+        if inspect.isawaitable(value):
+            return self._read_awaited(value)
+        return self._read(value)
+
+    def _read(self, value: Any) -> Any:
+        return value if value is None or self.field.has_key(value) else None
+
+    async def _read_awaited(self, value: Awaitable[Any]) -> Any:
+        return self._read(await value)
+
+
+def read_implementation_key(field: StrawberryField) -> None:
+    """Read ``field`` through :class:`ImplementationKeyRead`, once, when it projects an implementation key.
+
+    That is a strawberry-django output field reading an ``ImplClassField``
+    column as its choices enum. The extension goes on the declared field itself,
+    where Strawberry's printer looks for a type's fields, so the column prints
+    nullable in every schema the declaration joins; any other field is left
+    alone.
+    """
+
+    if not isinstance(field, StrawberryDjangoField):
+        return
+    if any(isinstance(extension, ImplementationKeyRead) for extension in field.extensions):
+        return
+    django_type = field.origin_django_type
+    if django_type is None or django_type.is_input or field.base_resolver is not None:
+        return
+    try:
+        model_field = django_type.model._meta.get_field(field.django_name or field.python_name)
+    except FieldDoesNotExist:
+        return
+    if not isinstance(model_field, ImplClassField) or model_field.base_class is None:
+        return
+    projected = field.type
+    if isinstance(projected, StrawberryOptional):
+        projected = projected.of_type
+    if projected is getattr(model_field.choices_enum, "__strawberry_definition__", None):
+        field.extensions = [*field.extensions, ImplementationKeyRead(model_field)]

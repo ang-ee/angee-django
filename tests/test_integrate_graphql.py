@@ -66,6 +66,7 @@ from tests.conftest import (
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import failure_state
+from tests.tables import store_column
 from tests.test_agents import InferenceModel, InferenceProvider
 
 User = get_user_model()
@@ -1640,6 +1641,63 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
     with system_context(reason="test.integrate.lifecycle.verify"):
         bridge.refresh_from_db()
         assert str(bridge.lifecycle) == "disconnected"
+
+
+def test_an_implementation_key_the_registry_no_longer_names_reads_null_in_a_list_and_a_record(db: None) -> None:
+    """The column reads nullable: a retired key reads null with no error, a registered one its member as before."""
+
+    del db
+    admin = _platform_admin("retired-key-admin")
+    retired = make_integration("retired-key", model=VcsBridge, backend_class="stub")
+    kept = make_integration("kept-key", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, retired.pk, "backend_class", "retired")
+    schema = _schema()
+
+    listed = _data(execute_schema(schema, "{ vcs_bridges { id backend_class } }", user=admin))["vcs_bridges"]
+    record = _data(
+        execute_schema(
+            schema,
+            "query($id: String!) { vcs_bridges_by_pk(id: $id) { backend_class } }",
+            {"id": _public_id(retired)},
+            user=admin,
+        )
+    )["vcs_bridges_by_pk"]
+    found = _data(
+        execute_schema(schema, '{ vcs_bridges(where: {backend_class: {_eq: "retired"}}) { id } }', user=admin)
+    )["vcs_bridges"]
+
+    assert {row["id"]: row["backend_class"] for row in listed} == {_public_id(retired): None, _public_id(kept): "STUB"}
+    assert record == {"backend_class": None}
+    assert found == [{"id": _public_id(retired)}]
+    assert "  backend_class: VcsBackendImpl\n" in schema.as_str()
+
+
+def test_editing_a_row_whose_implementation_key_is_retired_is_refused_under_the_key_column(db: None) -> None:
+    """The generic update saves the whole row, so the key's own refusal answers, under its field, not a failure."""
+
+    del db
+    admin = _platform_admin("retired-key-editor")
+    bridge = make_integration("retired-key-edit", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+
+    result = execute_schema(
+        _schema(),
+        """
+        mutation($id: String!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {display_name: "Renamed"}) { id }
+        }
+        """,
+        {"id": _public_id(bridge)},
+        user=admin,
+    )
+
+    assert result.errors is not None
+    assert result.errors[0].extensions == {
+        "code": "VALIDATION",
+        "validationErrors": {"backend_class": ["Value 'retired' is not a valid choice."]},
+        "formErrors": [],
+    }
+    assert VcsBridge._base_manager.get(pk=bridge.pk).display_name == bridge.display_name
 
 
 def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(db: None) -> None:

@@ -46,6 +46,7 @@ from angee.graphql.data.metadata import (
     finalize_data_resources,
     readable_model_field_names,
 )
+from angee.graphql.field_types import read_implementation_key
 from angee.graphql.ids import assert_unique_sqid_prefixes
 from angee.graphql.introspection import (
     django_model,
@@ -111,6 +112,20 @@ class AngeeSchema(strawberry.Schema):
             *super().get_extensions(sync=sync),
             *(import_string(path)(sync=sync)() for path in settings.ANGEE_GRAPHQL_EXTENSION_FACTORIES),
         ]
+
+    def get_fields(self, type_definition: StrawberryObjectDefinition) -> list[StrawberryField]:
+        """Read each output field projecting an implementation key nullable (``read_implementation_key``).
+
+        Strawberry asks every object type's fields, its extensions' included,
+        through this hook before converting them, so every such column of every
+        type an Angee schema exposes reads alike, with no declaration naming it.
+        """
+
+        fields = super().get_fields(type_definition)
+        if not type_definition.is_input:
+            for field in fields:
+                read_implementation_key(field)
+        return fields
 
     @lru_cache
     def get_type_by_name(

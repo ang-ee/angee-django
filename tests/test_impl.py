@@ -16,7 +16,7 @@ import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import connection, models, transaction
+from django.db import models, transaction
 from django.db.models import Value
 from django.test import override_settings
 from django.test.utils import isolate_apps
@@ -41,7 +41,7 @@ from angee.provenance.context import changeset
 from angee.provenance.querysets import model_history
 from angee.storage.backends import LocalBackend, StorageBackend
 from tests.conftest import OAuthClient, VcsBridge, Vendor, create_user, vault_for
-from tests.tables import model_tables
+from tests.tables import model_tables, store_column
 
 
 class _KeyedStorageBackend(StorageBackend):
@@ -1509,25 +1509,13 @@ def test_a_config_only_save_is_validated_against_the_rows_implementation(registe
     assert VcsBridge._base_manager.get(pk=row.pk).config == stored
 
 
-def _store_key(model: type[models.Model], pk: Any, field_name: str, key: str) -> None:
-    """Store ``key`` in one row's column as an earlier release did, past the field that would refuse it now."""
-
-    quote = connection.ops.quote_name
-    column = quote(model._meta.get_field(field_name).column)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            f"UPDATE {quote(model._meta.db_table)} SET {column} = %s WHERE {quote(model._meta.pk.column)} = %s",
-            [key, pk],
-        )
-
-
 def _retired_backend(slug: str) -> Any:
     """A storage backend row whose stored key no implementation is registered under any more."""
 
     backend_model = apps.get_model("storage", "Backend")
     with system_context(reason="test.impl.retired.create"):
         row = backend_model.objects.create(slug=slug, label=slug.title(), backend_class="local")
-    _store_key(backend_model, row.pk, "backend_class", "retired")
+    store_column(backend_model, row.pk, "backend_class", "retired")
     return backend_model._base_manager.get(pk=row.pk)
 
 
@@ -1625,8 +1613,8 @@ def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_rec
         vault.save(update_fields=("name",))
     vault_model = type(vault)
     first, renamed = vault.history.order_by("history_id")
-    _store_key(type(first), first.history_id, "retrieval_class", "retired")
-    _store_key(vault_model, vault.pk, "retrieval_class", "retired")
+    store_column(type(first), first.history_id, "retrieval_class", "retired")
+    store_column(vault_model, vault.pk, "retrieval_class", "retired")
     with (
         actor_context(owner),
         pytest.raises(ValidationError) as refused,
