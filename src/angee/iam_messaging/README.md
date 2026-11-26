@@ -124,10 +124,15 @@ in before continuing. The password form stays below it as the fallback.
 
 The token is minted in `SignInLinkManager.issue` and leaves it only inside the
 mail; nothing here logs it, puts it in a refusal or holds it in an on-commit
-callback. While `issue` runs, an error reporter that records frame locals would
-see it: Angee's Sentry setup records none, and the functions holding it are
-marked `sensitive_variables` for Django's own reports. The mail is stored on the
-system channel, where the link lives until it signs in, expires or is retired:
+callback. Angee's Sentry setup sends no frame's local variables
+(`include_local_variables=False`), so its reports never hold it. Django's own
+error reports can: `SignInLinkManager.issue` is marked `sensitive_variables`,
+but the link passes unmarked through the template's render and messaging's
+compose, so Django's debug page under `DEBUG`, or an HTML error report (an
+`AdminEmailHandler` with `include_html`), for an exception raised inside the
+send shows it in those frames. Django's plain-text error report shows no local
+variables. The mail is stored on the system channel, where the link lives until
+it signs in, expires or is retired:
 
 - the message's text and HTML parts, and the content-addressed text fragments
   they point to, which are indexed for search and kept after the message is
