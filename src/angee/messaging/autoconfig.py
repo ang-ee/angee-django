@@ -55,7 +55,7 @@ SETTINGS: _Settings = {
     ],
     # The most addresses one composed message takes across to, cc and bcc: the
     # per-message limit of the strictest common mail provider. Each new address
-    # costs one transaction about 34 statements; bulk sending is a path of its own.
+    # costs one transaction about 35 statements; bulk sending is a path of its own.
     "ANGEE_MESSAGING_MAX_RECIPIENTS": 50,
     # The most files one composed message attaches, about 17 statements each.
     # Providers bound a message's attachments by total size, not count, so this
