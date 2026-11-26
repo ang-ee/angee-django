@@ -32,7 +32,9 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
     A stored key its choices do not name (one a later release retired, or one
     another process's registry holds) still loads, lists and filters, as its
-    text; no value the field prepares writes one, and resolving it raises.
+    text; no value the field prepares writes one, and resolving it raises. Its
+    GraphQL read is null, so the row's list and record still answer; the row
+    saves again once a registered implementation is chosen.
     """
 
     def __init__(

@@ -468,7 +468,11 @@ Use these owners instead of maintaining another contract in an addon:
   read as text; no value the field prepares writes a key its choices do not
   name (a history copy records it), while an expression (`F`, `Subquery`,
   `Cast`, `Case`, or a `Value` without the field as its output) is not checked;
-  resolving the key raises naming the field, the key and the setting.
+  resolving the key raises naming the field, the key and the setting. Every
+  Angee GraphQL schema reads such a key as null
+  ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
+  the console labels "Not registered", and the row cannot be saved until an
+  administrator chooses a registered implementation.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs

@@ -28,12 +28,25 @@ live in code docstrings.
   history tables included) refuses it as before. Resolving its
   implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
   `ImproperlyConfigured` naming the field, the key and the registry's setting.
-  A GraphQL read that selects the column still fails, but differently: it
-  failed on the list with the public `VALIDATION` error "Value '…' is not a
-  valid choice."; it now fails on the cell with a masked `INTERNAL` error, which
-  the console shows as "Request failed." and retries up to three times.
-  **Upgrade:** code that reads a selector's value as a member (`.label`,
-  `.value`) takes `field.key_for(value)` instead; none in the framework does.
+  `angee.graphql`: **Changed read contract.** Every output field projecting an
+  implementation key is nullable on read, in every Angee schema (the column
+  stays non-null in the database, and inputs, filters and ordering, already
+  strings, are unchanged: `_eq: "retired"` still finds the row). Null there
+  means the stored key is one the registry no longer names; a registered key
+  reads its enum member as before. A list or a record holding such a row loads
+  with no error, where the read failed with "Value '…' is not a valid choice."
+  `AngeeSchema.get_fields` reads each such field through
+  `angee.graphql.field_types.ImplementationKeyRead`, so no declaration changes
+  (`auto` stays `auto`). The console labels such a value "Not registered" in a
+  list cell and marks the field so on its record, whose control still offers
+  every registered implementation. Such a row cannot be saved until an
+  administrator chooses a registered implementation: the generic update runs
+  `full_clean()` and saves the whole row, and is refused under the key's field
+  with its own message. **Upgrade:** a consumer with generated types takes
+  `| null` on these fields (one in the framework's own documents:
+  `ChannelBackendImpl` in messaging's overview); code that reads a selector's
+  value as a member (`.label`, `.value`) takes `field.key_for(value)` instead;
+  none in the framework does.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.
