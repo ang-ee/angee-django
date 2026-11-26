@@ -1,8 +1,12 @@
 """Source identity folds channel copies into a retained redirect without moving rows."""
 
+import logging
+
 import pytest
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.mail import send_mail
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from graphql import GraphQLError
@@ -13,6 +17,7 @@ from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_transcript import InboxTranscript
+from angee.messaging.source_copies import observe_email_identity
 from angee.messaging.testing.models import (
     Channel,
     Message,
@@ -21,11 +26,13 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
+from angee.provenance.statements import Statement
 from tests.chatterdemo.models import ChatterDoc
-from tests.conftest import make_integration
+from tests.conftest import create_platform_admin, make_integration
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging import ThreadedTicket, _ingest, _parsed
 from tests.test_messaging import channel as channel
+from tests.test_messaging_system_mail import LOCMEM, SENDER, SYSTEM, _install, _recorded
 from tests.test_nexus import _schema
 
 
@@ -206,6 +213,47 @@ def test_a_records_chatter_thread_is_never_folded_with_a_mailbox_thread(settings
             assert (own.merged_into_id, own.is_record_attached()) == (None, False)
     with actor_context(sales):
         assert own.pk in set(Thread.objects.with_actor(sales).inbox().values_list("pk", flat=True))
+
+
+def _statement_count():
+    with system_context(reason="tests.messaging.source_copies.statements"):
+        return sum(model._base_manager.count() for model in apps.get_models() if issubclass(model, Statement))
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_system_mail_copy_in_an_administrators_mailbox_is_never_asserted(settings, monkeypatch, caplog):
+    """The rule asserts nothing on system mail: the copy stays apart, and nothing is refused or logged.
+
+    A system mail delivered to an administrator comes back through their own mailbox
+    with its Message-ID. The seal refuses the rule's write on the system copy, so the
+    rule never tries, from either side: no statement, no refusal logged by the commit hook.
+    """
+
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    settings.DEFAULT_FROM_EMAIL = SENDER
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    system = _install()
+    admin = create_platform_admin("copy-admin")
+    send_mail("Report", "Body.", None, ["admin@example.test"])
+    (sent,) = _recorded(system)
+    mailbox = make_integration("copy-mailbox", model=Channel, backend_class="manual", owner=admin)
+    copy = ParsedMessage(
+        external_id=sent.external_id, platform="email", subject="Report",
+        sender=ParsedHandle(platform="email", value="noreply@example.test"),
+        recipients=(ParsedRecipient(handle=ParsedHandle(platform="email", value="admin@example.test"), role="to"),),
+        body=ParsedPart(text="Body."),
+    )
+    statements = _statement_count()
+    caplog.set_level(logging.ERROR)
+    assert _ingest([copy], channel=mailbox) == 1
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
+    observe_email_identity(sent)
+    assert _statement_count() == statements
+    with system_context(reason="tests.messaging.source_copies.system"):
+        rows = Message._base_manager.filter(external_id=sent.external_id).select_related("thread")
+        assert sorted((row.channel_id, row.merged_into_id, row.thread.merged_into_id) for row in rows) == sorted(
+            [(system.pk, None, None), (mailbox.pk, None, None)]
+        )
 
 
 @pytest.mark.django_db(transaction=True)
