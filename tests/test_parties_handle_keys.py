@@ -34,11 +34,13 @@ def owner(db: None) -> Any:
     return create_user("handle-keys-owner")
 
 
-def _stored_with(owner: Any, value: str, key: str, *, platform: str = "email", version: int = 0) -> Any:
+def _stored_with(
+    owner: Any, value: str, key: str, *, platform: str = "email", version: int = 0, external_id: str = "",
+) -> Any:
     """A handle as another version of the rule left it: ``key`` stored under ``version``, 0 before the rule had one."""
 
     with system_context(reason="tests.parties.handle_keys"):
-        handle = Handle.objects.upsert(platform=platform, value=value, created_by_id=owner.pk)
+        handle = Handle.objects.upsert(platform=platform, value=value, external_id=external_id, created_by_id=owner.pk)
         Handle._base_manager.filter(pk=handle.pk).update(normalized_value=key, normalized_version=version)
     return Handle._base_manager.get(pk=handle.pk)
 
@@ -83,20 +85,21 @@ def _unsaveable(handle: Any) -> Iterator[None]:
 
 
 def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -> None:
-    """The handle's save is the one writer of the key: an insert, a changed value, an upsert that reads it again."""
+    """The handle's save is the one writer of the key: an insert, a value the handle owner's verbs change, an upsert
+    that reads it again."""
 
     current = Handle.NORMALIZATION_VERSION
     with system_context(reason="tests.parties.handle_keys"):
         made = Handle._base_manager.create(platform="email", value="Ada@Example.test", created_by=owner)
     assert _keyed(made) == ("ada@example.test", current)
 
-    renamed = _stored_with(owner, "bo@example.test", "behind")
+    renamed = _stored_with(owner, "bo@example.test", "behind", external_id="bo-account")
     refreshed = _stored_with(owner, "cy@example.test", "behind")
     rewritten = _stored_with(owner, "di@example.test", "behind")
     labelled = _stored_with(owner, "ed@example.test", "behind")
     with system_context(reason="tests.parties.handle_keys"):
-        renamed.value = "Bo@Example.test"
-        renamed.save(update_fields=["value"])
+        # The address behind the source's stable id moved: upsert rewrites the value its row names.
+        Handle.objects.upsert(platform="email", value="Bo@Example.test", external_id="bo-account")
         Handle.objects.upsert(platform="email", value="cy@example.test")
         Handle.objects.reidentify(rewritten, expected_value="di@example.test", value="Di@Example.test")
         labelled.label = "work"

@@ -151,6 +151,7 @@ def test_a_new_email_carries_each_argument_to_compose(console: Any, desk: Any) -
         pytest.param({"queued": False, "scheduled_at": "2030-01-01T10:00:00"}, "scheduled_at",
                      id="scheduled-at-without-an-offset"),
         pytest.param({"idempotency_key": " "}, "idempotency_key", id="idempotency-key"),
+        pytest.param({"parent": "a sender that is no address"}, "parent", id="parent-sender-not-an-address"),
     ],
 )
 def test_compose_refuses_an_argument_under_its_name(
@@ -170,8 +171,12 @@ def test_compose_refuses_an_argument_under_its_name(
     if arguments.get("attachments") == "over the bound":
         attached = _file(desk.owner, b"Attached.").public_id
         arguments = {**arguments, "attachments": [attached] * (settings.ANGEE_MESSAGING_MAX_ATTACHMENTS + 1)}
+    values = _new(desk)
+    if arguments.get("parent") == "a sender that is no address":
+        values = {"text": "Thanks.", "parent": _receive(desk, "unaddressed", sender="a\x1bb@example.test").public_id}
+        arguments = {}
     with pytest.raises(_Refusal) as refused:
-        _compose(console, desk.owner, **{**_new(desk), "idempotency_key": f"refused-{key}", **arguments})
+        _compose(console, desk.owner, **{**values, "idempotency_key": f"refused-{key}", **arguments})
     assert refused.value.payload is not None and list(refused.value.payload["validation_errors"]) == [key]
     assert key in _argument_names(console)
 
@@ -506,8 +511,11 @@ def test_whether_one_may_send_is_read_with_the_channels(console: Any, db: None) 
         assert counts[1, "id"] == counts[25, "id"], (seat, counts)
 
 
-PARENT_READ_STATEMENTS = 6
-"""What the resolver adds to answer a message: reading the parent under the caller's read, measured."""
+PARENT_READ_STATEMENTS = 4
+"""What the resolver adds to answer a message: reading the parent under the caller's read, measured.
+
+Both sides answer a parent read fresh, so compose's loads of the parent's thread and sender count on both.
+"""
 
 
 def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) -> None:
@@ -528,6 +536,9 @@ def test_the_mutation_executes_what_compose_executes(console: Any, desk: Any) ->
     }
     counts = {}
     for case, (direct_anchor, mutation_anchor, values) in cases.items():
+        if "parent" in direct_anchor:
+            # Read fresh, as the resolver reads it, so compose loads the parent's sender on both sides.
+            direct_anchor = {"parent": Message._base_manager.get(pk=request.pk)}
         reset_queries()
         with evaluator_scope(), CaptureQueriesContext(connection) as direct:
             Message.objects.compose(**direct_anchor, **values, text="Hi.", actor=desk.owner,

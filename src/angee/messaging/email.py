@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import unicodedata
 from email.utils import formataddr, getaddresses, parseaddr
 from smtplib import SMTPRecipientsRefused, SMTPResponseException, SMTPServerDisconnected
 from typing import Any
@@ -23,10 +24,12 @@ from django.core.exceptions import ValidationError
 from django.core.mail import mailers
 from django.core.mail.backends.base import BaseEmailBackend
 from django.core.validators import validate_email
+from django.utils.encoding import punycode
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
+from angee.base.serialization import strip_null_bytes
 from angee.integrate.errors import IntegrationError, is_transient_status
 from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
 
@@ -36,6 +39,30 @@ logger = logging.getLogger(__name__)
 # so a retained header part never adds a second copy of one.
 _ENVELOPE_HEADERS = frozenset({"bcc", "cc", "from", "in-reply-to", "message-id", "references", "subject", "to"})
 _HEADER_NAME_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
+_ENCODED_WORD_OPENER = re.compile(r"=(?=\?[^?]*\?[bq]\?)", re.IGNORECASE)
+"""The ``=`` that opens an RFC 2047 encoded word: a mail library decodes one with any or no charset, either
+encoding letter in either case, terminated or not, and inside a word too."""
+
+
+def header_text(text: str) -> str:
+    """Return ``text`` as an outgoing mail header carries it: one line, with no control character and no encoded word.
+
+    Each control character and line break becomes a space, and every encoded-word
+    opener (``=?charset?q?`` or ``?b?``) is broken with a space after its ``=``, so
+    neither a mail library nor a reader's client decodes anything out of it, and no
+    provider that receives the text as a string can either: the text written, the
+    text on the wire and the text a reader sees are the same string. Text that
+    opens no word (``2+2=?``) is kept. Every outgoing subject takes it (a typed one
+    and one derived from a conversation's title), and so does every display name
+    this backend writes; a typed recipient it would change is refused
+    (``MessageManager.clean_recipient``).
+    """
+
+    text = "".join(
+        " " if unicodedata.category(character) in ("Cc", "Zl", "Zp") else character
+        for character in strip_null_bytes(text or "")
+    )
+    return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
 class AnymailEmailChannelBackend(ChannelBackend):
@@ -85,6 +112,9 @@ class AnymailEmailChannelBackend(ChannelBackend):
             raise IntegrationError("Outbound email delivery is not configured.")
         try:
             email = self.email_message(message)
+        except IntegrationError:
+            # Rendering has not entered the transport; its own reason is the one to keep.
+            raise
         except Exception as error:
             # Rendering has not entered the transport, so it cannot have sent mail.
             raise IntegrationError("The email could not be rendered.") from error
@@ -217,7 +247,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
         values = _source_addresses(message, "from")
         if values:
             return values[0]
-        return formataddr(self.outbound_sender())
+        return _mailbox(*self.outbound_sender())
 
     def _recipients(self, message: Any) -> dict[str, list[str]]:
         """The message's addresses per envelope role, else its source's for a role it has none in."""
@@ -272,15 +302,39 @@ class AnymailEmailChannelBackend(ChannelBackend):
         return headers
 
 
+def _mailbox(name: str, address: str) -> str:
+    """One mailbox as this backend writes it into a header; its display name as :func:`header_text` carries it.
+
+    Every name the backend writes (a recipient's, a sender's, a retained source
+    header's) is written here, so a name holding a literal encoded word, which
+    inbound mail can store, reaches the wire as written instead of decoded into
+    another name or address. An internationalised domain is written in its ASCII
+    (IDNA) form, as Django writes one in the headers it builds, so every
+    transport is given an address it can carry; the stored address keeps what
+    was typed. A local part outside ASCII cannot be written, as no transport here
+    speaks SMTPUTF8: the delivery fails with that reason.
+    """
+
+    local, at, domain = address.rpartition("@")
+    if at and not local.isascii():
+        raise IntegrationError(
+            f"{address} cannot be delivered: this mail transport cannot carry an address whose part before "
+            "the @ is outside ASCII. Send to another address of this contact.",
+        )
+    if at and not domain.isascii():
+        address = f"{local}@{punycode(domain)}"
+    return formataddr((header_text(name), address))
+
+
 def _address(handle: Any) -> str:
     value = str(handle.value or "").strip()
     if "@" not in value:
         return ""
-    return formataddr((str(handle.display_name or "").strip(), value))
+    return _mailbox(str(handle.display_name or ""), value)
 
 
 def _source_addresses(message: Any, header: str) -> list[str]:
-    return [formataddr((name, address)) for name, address in getaddresses(message.source_header_values(header))
+    return [_mailbox(name, address) for name, address in getaddresses(message.source_header_values(header))
             if address]
 
 

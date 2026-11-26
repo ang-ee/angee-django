@@ -71,9 +71,10 @@ class OwnedRow(OwnerMixin, HistoryMixin, AngeeModel):
 
 
 class ReceiptRow(ImmutableFieldsMixin):
-    immutable_fields = ("identity", "recipient_id")
+    immutable_fields = ("identity", "recipient_id", "external_id")
     identity = models.CharField(max_length=40)
     recipient = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    external_id = models.CharField(max_length=40, blank=True, default="")
     title = models.CharField(max_length=40, default="original")
 
     class Meta:
