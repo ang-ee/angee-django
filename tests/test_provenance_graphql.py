@@ -44,17 +44,27 @@ from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
 from angee.provenance.context import changeset
 from angee.provenance.evidence import EvidenceReference, readable_records
+from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     StatementLinkMixin,
 )
-from tests.conftest import Page, addon_schema, create_user, current_stream, make_integration, vault_for
+from tests.conftest import (
+    Page,
+    addon_schema,
+    create_platform_admin,
+    create_user,
+    current_stream,
+    make_integration,
+    vault_for,
+)
 from tests.core_persistence import OwnedRow
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 Party = apps.get_model("parties", "Party")
 Handle = apps.get_model("parties", "Handle")
+Person = apps.get_model("parties", "Person")
 
 HISTORY = """
 query History($model: String!, $id: ID!, $limit: Int, $offset: Int, $selected: ID) {
@@ -330,6 +340,45 @@ def test_history_never_offers_a_revert_whose_earlier_state_is_no_longer_recorded
     assert rename["can_revert"] is False
     page.refresh_from_db()
     assert page.title == "Final title"
+
+
+def test_an_mti_parent_write_reverts_to_the_childs_version_dated_the_same_instant() -> None:
+    """An equal date is an earlier state: a person's version carries its party's columns up to and at that instant."""
+
+    admin = create_platform_admin("revert-carrier-tie")
+    with actor_context(admin), changeset(fresh=True, change_reason="Create person"):
+        person = Person.objects.create(display_name="Gamma")
+    with actor_context(admin), changeset(fresh=True, change_reason="Party-only write"):
+        party = Party._base_manager.get(pk=person.pk)
+        party.display_name = "Gamma P"
+        party.save(update_fields=("display_name",))
+    with system_context(reason="tests.history.carrier_tie"):
+        written = Party.history.filter(id=person.pk).latest("history_id")
+        get_history_manager_for_model(Person).filter(id=person.pk).update(history_date=written.history_date)
+    schema = _schema()
+    [write] = [entry for entry in _history(schema, admin, "parties.Party", party)["entries"]
+               if entry["change_reason"] == "Party-only write"]
+
+    assert write["can_revert"] is True
+    assert _revert(schema, admin, party, write, model="parties.Party")["ok"] is True
+    assert Party._base_manager.get(pk=person.pk).display_name == "Gamma"
+
+
+def test_a_baseline_recorded_after_a_change_is_not_a_later_change() -> None:
+    """A baseline is the state before the write that recorded it, never a later write, whenever it was recorded."""
+
+    owner = create_user("revert-baseline-after")
+    _vault, page = _titled_page(owner)
+    with system_context(reason="tests.history.baseline_after"):
+        model_history(Page).record_baselines(Page, [page.pk])
+    schema = _schema()
+    rename = next(entry for entry in _history(schema, owner, "knowledge.Page", page)["entries"]
+                  if entry["change_reason"] == "Rename")
+
+    assert rename["can_revert"] is True
+    assert _revert(schema, owner, page, rename)["ok"] is True
+    page.refresh_from_db()
+    assert page.title == "Draft title"
 
 
 def test_a_revert_refuses_a_boundary_another_record_shares_before_a_later_change() -> None:
