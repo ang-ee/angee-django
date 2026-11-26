@@ -56,6 +56,7 @@ import {
   fieldErrorMessages,
   flattenedFormFields,
   formDisplaysGroup,
+  formFieldLabel,
   formSections,
   formViewFieldLayout,
   isEmptySection,
@@ -82,6 +83,7 @@ import {
 } from "./use-form-view-save";
 
 export type {
+  FormNextSave,
   FormSubmit,
   FormSubmitAcknowledgement,
   FormSubmitContext,
@@ -110,6 +112,12 @@ export interface RecordPanelContext {
   form: FormViewSaveSurface;
   /** Focus one registered RHF field: in the sheet, or in the pane `recordTabId` names once it mounts. */
   focusField: (path: string, options?: RecordFieldFocusOptions) => void;
+  /**
+   * The text of the label the form shows for its field `name`, so a pane that reports on a field
+   * names it as the form does: undefined for a field the form does not hold, one it shows without
+   * a label, or one whose label is not text.
+   */
+  fieldLabel: (name: string) => string | undefined;
 }
 
 export interface RecordToolbarContext {
@@ -911,12 +919,13 @@ export function useFormViewSurface({
     save.form.setFocus(pending.path);
     setRequestedFocusPath(null);
   }, [activeRecordTab, focusRequest, save.form]);
+  const fieldLabel = React.useCallback((name: string) => formFieldLabel(fieldByName, name), [fieldByName]);
   const recordPanelContext = React.useMemo<RecordPanelContext | null>(
     () =>
       !isCreate && id != null
-        ? { recordId: id, reload: save.reload, form: save, focusField }
+        ? { recordId: id, reload: save.reload, form: save, focusField, fieldLabel }
         : null,
-    [focusField, id, isCreate, save],
+    [fieldLabel, focusField, id, isCreate, save],
   );
 
   return {

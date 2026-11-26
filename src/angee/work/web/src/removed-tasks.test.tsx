@@ -14,10 +14,10 @@ const removed = {
 
 function renderRemoved(content: ReactNode, rows: readonly Record<string, unknown>[]): GraphQLWireRequest[] {
   const requests: GraphQLWireRequest[] = [];
-  const schemas = { console: { ...storySchema({
+  const schemas = storySchema({
     removed_tasks: () => rows,
     restore_task: (args) => ({ ok: true, message: "Task restored.", id: args.task, validation_errors: null }),
-  }, (request) => requests.push(request)).public!, metadata: { angee: { resources: [testDataResource("projects.Task")] } } } };
+  }, { schema: "console", resources: [testDataResource("projects.Task")], onRequest: (request) => requests.push(request) });
   render(<RuntimeFixture activeSchema="console" schemas={schemas}>{content}</RuntimeFixture>);
   return requests;
 }

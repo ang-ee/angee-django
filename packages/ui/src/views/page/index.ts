@@ -257,6 +257,7 @@ function actionDescriptor(props: ActionProps): ActionDescriptor {
     ...(props.run !== undefined ? { run: props.run } : {}),
     ...(props.args !== undefined ? { args: props.args } : {}),
     ...(props.submit !== undefined ? { submit: props.submit } : {}),
+    ...(props.idempotencyScope !== undefined ? { idempotencyScope: props.idempotencyScope } : {}),
     ...(props.visibleWhen !== undefined
       ? { visibleWhen: props.visibleWhen }
       : {}),

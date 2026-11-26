@@ -313,7 +313,7 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
           </Button>
         </div>
         {(dayError ?? typeError) ? <ErrorBanner description={(dayError ?? typeError)?.message} /> : null}
-        {form.formError ? <ErrorBanner description={form.formError} /> : null}
+        <ErrorBanner messages={form.formErrors} />
       </FormRoot>
     </div>
   );

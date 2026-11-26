@@ -155,7 +155,9 @@ measurement: CPU seconds on an 18-core Apple M-series machine with CPython 3.14.
 taken at the load each run states. `test_preview_time` and `test_pass_time` (under
 `ANGEE_TIMED_TESTS=1`) state their bounds as measured there at a load near 13 (2 s
 a preview, 1 s a pass) and scale them by a fixed reference workload measured in
-the same process, so a busy machine slows the case and the bound alike.
+the same process, so a busy machine slows the case and the bound alike; the
+costliest admitted preview written into a saved row as a patch keeps a
+preview's 2 s (`review patched` in `test_preview_time`).
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|
@@ -224,14 +226,27 @@ bidirectional override and no encoded-word opener, so a mail library stores
 exactly the string it was given. A sender never compiles rendered output as a
 template again, since a value may spell `{{ … }}`.
 
-`row.preview(kit=None)` renders the row's `sample`: a template whole, a layout
-around a fixed body, subject and preheader, a block or part alone. It returns
-the rendered message, or none, and warnings (`TemplateWarningCode`): a long
-subject, an empty or long preheader, a declared value nothing reads, a declared
-`unsubscribe_url` the body does not show, an empty plain-text body, HTML near
-Gmail's clipping size, or the render error. The console's `message_template_preview`
-read returns it to administrators (`preview` permission), in the kit it names or
-the default one.
+`row.preview(kit=None, patch=None)` renders the row's `sample`: a template
+whole, a layout around a fixed body, subject and preheader, a block or part
+alone. It returns the rendered message, or none, and warnings
+(`TemplateWarningCode`): a long subject, an empty or long preheader, a declared
+value nothing reads, a declared `unsubscribe_url` the body does not show, an
+empty plain-text body, HTML near Gmail's clipping size, or a render error, one
+for each refusal, naming the column it belongs to (`field`, none for a refusal
+of the row as a whole). A `patch` of edited columns previews the row as it
+would save. It asks `write` as well as `preview`, and what the save's own gates
+ask of the columns it edits (a deployment's `write__<field>` among them), all
+before anything is copied or walked, so a shipped default, which only a resource
+load writes, takes no patch. Its copy of the row is validated as the save would
+validate it (`full_clean()`), refused for whatever the save would refuse, and
+never saved. What saving it would refuse is `save_refused`; `render_error` keeps
+meaning that the row, as saved or as the patch would save it, does not render
+with its sample, so an edit that would save but that its sample cannot render
+is told apart from one Save would refuse.
+One walk serves it: the one that validation ran, or the row's own when the
+patch changed only the name, the description or the sample. The console's
+`message_template_preview` read returns it to administrators (`preview`
+permission), in the kit it names or the default one.
 
 ## Sending as system work
 
@@ -531,10 +546,19 @@ runs. `can_keep_override` rides the list's statement; `can_override` decides the
 reader's `create` on the override for each row, so it is a read for one record's
 page.
 
-`message_template_preview(template, brand_kit)` returns a row's preview, in the
-named kit or the default one, to a caller who may preview it. It refuses as the
-verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
-reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
+`message_template_preview(template, brand_kit, patch)` returns a row's preview,
+in the named kit or the default one, to a caller who may preview it. `patch` is
+the resource's own `message_templates_set_input`, the input the update takes,
+decoded as the update decodes it (an enum member name such as `MARKDOWN`
+included): the open form's unsaved edits, previewed as Save would write them,
+for a caller who may also write the row. It refuses as the verbs do: a
+signed-out caller gets the session's GraphQL error, and a caller who reads the
+row but may not preview it, or write it with a patch, a `PERMISSION_DENIED`
+GraphQL error. What Save would refuse comes back in band: `rendered` is null
+and each refusal is a `SAVE_REFUSED` warning in the update's words, its `field`
+the column the update reports it under, null for one of its `formErrors`. An
+edit Save admits that does not render with its sample answers `RENDER_ERROR`,
+as a saved row that does not render does.
 Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
 (`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
 says), which a page sets as `dir` on the subject, preheader and plain text it
@@ -559,3 +583,44 @@ a refusal raised as a list, as `invalid_values` is, so its `code` is null. A
 row projects `can_send_test`, what the verb asks first; it rides the list's
 statement, and it is the row's side alone, so a test it admits may still be
 refused in band for the account, the channel or the sample.
+
+### The Message templates page
+
+The addon's web fragment, `@angee/messaging-templates`, puts **Message templates**
+in Settings for whoever holds `messaging_templates.MessageTemplate#preview`
+(`MessageTemplatesPage`). The library is one list, grouped by kind; its presets
+list the overrides whose shipped default changed and the effective rows. A row
+opens its form in place of the list. The intended shape is the list beside the
+record; it waits for the shared list's side of a split, which overflows its pane
+and shows no empty state while no row is open. Once those are fixed the page
+moves to the split placement, stacking the record under the list on a narrow
+screen. **New** opens the form with the name, kind, key
+and language alone, the four fields the insert takes; the server seeds the rest
+and the new row opens. A shipped default is read-only: **Override** starts the
+deployment's override and opens it, offered where the record's `can_override`
+admits the reader and the default has no override yet. An override whose shipped
+default changed offers **Keep override** where its `can_keep_override` admits the
+reader, and **Delete** shows where the row projects `delete`. A notice above the
+form says which of these the row is, each hint only where the same answer admits
+the reader to its verb, and on an override (`overrides_default`) that deleting it
+returns to the shipped default.
+
+The **Preview** pane renders the saved row with its sample, in a brand kit chosen
+there or the default one, and lists what the preview warns about, or why the row
+does not render, in the server's words. While the form holds unsaved edits its
+Save would write, sample values included, the pane renders those edits as Save
+would write them (`nextSave`, sent as `patch` once the edits have settled for a
+moment) and says so; with no such edits, after Discard or Save, it shows the saved
+row again at once. Edits Save would refuse are titled so, each refusal in Save's
+words, and one under a column is titled by the form's label for that field and
+takes the person there when chosen; edits Save would keep that the sample cannot
+render say that. What the pane says of the render, a read the server refuses
+included, is announced politely as it changes, never as an alert: it is never the
+answer to a save. The pane says it is
+busy, and dims what it shows, until the preview on screen is the one for the kit
+and the edits now chosen. It shows a mail's subject, preheader and plain text in
+the direction the mail is rendered in. The HTML shows only in the
+framework's sandboxed message frame, which runs no script, has no same origin and
+loads remote images only when asked; the frame's own body styles sit under the
+mail, so a mail client may space and size it slightly differently. A message
+template's Links tab lists its **Backlinks**, the rows naming its kind and key.

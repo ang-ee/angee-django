@@ -1,12 +1,15 @@
 """GraphQL schema contributions for brand kits.
 
-Exposed on the console. A kit is an ordinary resource (list, detail, insert,
-update, delete); its logos are read here and written by no console root, since
-only storage's ``FileManager.ingest_image`` puts files on the image drive a logo
-must come from. ``default_brand_kit`` reads the deployment's default kit; a kit's
-``contrast_warnings`` project
+On the console, a kit is an ordinary resource (list, detail, insert, update,
+delete); its logos are read there and written by no console root, since only
+storage's ``FileManager.ingest_image`` puts files on the image drive a logo must
+come from. A kit's ``contrast_warnings`` project
 :meth:`~angee.brandkit.models.BrandKit.contrast_warnings` for the registered
 form's read widget.
+
+On the public schema, ``default_brand_kit_colors`` reads the default kit's ten
+colours, and nothing else of any kit, for every caller signed in or not: the
+``read_colors`` disclosure in ``permissions.zed``.
 """
 
 from __future__ import annotations
@@ -35,7 +38,11 @@ ContrastWarningType = strawberry.type(ContrastWarning, name="ContrastWarningType
 
 @strawberry_django.type(BrandKit)
 class BrandKitType(AngeeNode):
-    """Console projection of one brand kit."""
+    """Console projection of one brand kit.
+
+    Its colours are ``BrandKit.THEME_COLORS``, annotated here in that order after
+    ``is_default``: tools that summarise a resource take its first fields in this order.
+    """
 
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
@@ -73,8 +80,7 @@ class BrandKitType(AngeeNode):
 
 
 _BRAND_KIT_WRITABLE_FIELDS = (
-    "name", "is_default",
-    "brand", "accent", "neutral", "canvas", "surface", "rail", "success", "warning", "danger", "info",
+    "name", "is_default", *BrandKitModel.THEME_COLORS,
     "font_heading", "font_body", "footer_organization", "footer_address", "voice",
 )
 
@@ -92,20 +98,30 @@ _BRAND_KIT_RESOURCE = hasura_model_resource(
 )
 
 
+@strawberry_django.type(BrandKit, name="BrandKitColors", fields=list(BrandKitModel.THEME_COLORS))
+class BrandKitColorsType:
+    """A kit's colours, ``BrandKit.THEME_COLORS`` and no other column, as everyone reads the default kit's."""
+
+
 @strawberry.type
-class BrandKitQuery:
-    """Reads of the deployment's brand."""
+class BrandKitPublicQuery:
+    """The default kit's colours, for every page a theme dresses, signed in or not."""
 
-    @strawberry.field(name="default_brand_kit")
-    def default_brand_kit(self) -> BrandKitType | None:
-        """Return the deployment's default brand kit, or ``None`` when no kit the actor reads is the default."""
+    @strawberry.field(name="default_brand_kit_colors")
+    def default_brand_kit_colors(self) -> BrandKitColorsType | None:
+        """Return the default kit's colours under the ``read_colors`` disclosure, or ``None`` with no default kit."""
 
-        return cast("BrandKitType | None", BrandKit.objects.default())
+        kits = BrandKit.objects.with_action("read_colors").only(*BrandKitModel.THEME_COLORS)
+        return cast("BrandKitColorsType | None", kits.default())
 
 
 schemas = {
+    "public": {
+        "query": [BrandKitPublicQuery],
+        "types": [BrandKitColorsType],
+    },
     "console": {
-        "query": [BrandKitQuery, _BRAND_KIT_RESOURCE.query],
+        "query": [_BRAND_KIT_RESOURCE.query],
         "mutation": [_BRAND_KIT_RESOURCE.mutation],
         "types": [BrandKitType, ContrastWarningType, *_BRAND_KIT_RESOURCE.types],
     },

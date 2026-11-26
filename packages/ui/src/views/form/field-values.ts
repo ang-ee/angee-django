@@ -9,8 +9,15 @@ export function textValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
 
-/** The widgets that edit a number; their control holds `null` when it holds nothing. */
-export const NUMBER_WIDGETS: ReadonlySet<string> = new Set(["integer", "float"]);
+/**
+ * The widgets that show or edit a number (`percent` only shows one): with no `string` kind they hold
+ * `null` when they hold nothing, and a record form's edit sends one holding the empty text as `null`.
+ * The `money` widget,
+ * which the money addon's fragment registers, is not one of them: this rule waits for a seam where a
+ * widget declares the kind of value it holds. `EditableLines` keeps its own list of number widgets,
+ * for alignment.
+ */
+export const NUMBER_WIDGETS: ReadonlySet<string> = new Set(["integer", "float", "percent", "progressBar"]);
 /** The widgets that pick a date, a time, or a date and time; their control holds `null` when it holds nothing. */
 export const DATE_TIME_WIDGETS: ReadonlySet<string> = new Set(["date", "datetime", "time"]);
 /** The widgets that hold a list; a relation list (`isRelationListField`) holds one too. */
@@ -26,14 +33,16 @@ const LIST_WIDGETS: ReadonlySet<string> = new Set(["tagInput", "list", "rows"]);
  *    kind and widget, since `""` is none of them. Then an explicit `string` kind: `""`, whatever its
  *    widget, since a controlled text input needs a text and a widget only presents. The format, never
  *    the widget, tells a date carried as text from text.
- * 2. A number widget (`NUMBER_WIDGETS`: `integer`, `float`) or a date or time widget
- *    (`DATE_TIME_WIDGETS`: `date`, `datetime`, `time`): `null`.
+ * 2. A number widget (`NUMBER_WIDGETS`: `integer`, `float`, `percent`, `progressBar`) or a date or
+ *    time widget (`DATE_TIME_WIDGETS`: `date`, `datetime`, `time`): `null`.
  * 3. The `tagInput`, `list` and `rows` widgets and a relation list (`many2many`): `[]`.
  * 4. The `switch` widget: `false`; the `object` widget: `{}`; the `json` widget: `[]` for an `array`
  *    kind, `null` for an `any` kind (a form spec's untyped value), `{}` otherwise (a widget alone).
  * 5. An `array` kind: `[]`; `object`: `{}`; `boolean` or `switch`: `false`; `integer`, `number` or
  *    `any`: `""` under the `select` widget, else `null`.
  * 6. Otherwise `""`.
+ * The widget rows (2 to 4) are read before the kinds (5): under a number or a date widget, a
+ * `boolean`, `switch`, `object` or `array` kind holds `null`.
  */
 export function emptyValueForField(field: Pick<FieldDescriptor, "name" | "widget" | "kind" | "format">): unknown {
   if (field.format !== undefined) return null;
@@ -110,9 +119,13 @@ export function isEmptyFieldValue(value: unknown): boolean {
 /**
  * The first rule `value` fails. A value is missing when it is absent, `undefined`, or a `null` the
  * field does not allow; a missing value fails `required` where the field is `required`,
- * presence-required, or holds the key. Any other value is a value, a `null` the field allows, a
- * blank text and an empty list included: whether it is acceptable is the descriptor's
- * constraints' to say, unless `validateConstraints` is off and a schema resolver reports them.
+ * presence-required, or holds the key. One `null` is not held against the key, whoever put it
+ * there: a `null` equal to the field's own empty value (its `emptyValueForField`, which
+ * `refusesSeed` does not refuse), the one a form seeds a field with when it holds nothing, so a
+ * form never refuses its own seed in an optional field. Any other value is a value,
+ * a `null` the field allows, a blank text and an empty list included: whether it is acceptable is
+ * the descriptor's constraints' to say, unless `validateConstraints` is off and a schema resolver
+ * reports them.
  */
 function failedValueRule(
   field: FieldDescriptor,
@@ -122,7 +135,8 @@ function failedValueRule(
   validateConstraints: boolean,
 ): JsonSchemaRule | undefined {
   if (!present || value === undefined || (value === null && !field.nullable)) {
-    return required || field.presenceRequired || present ? REQUIRED_RULE : undefined;
+    const seeded = value === null && emptyValueForField(field) === null && !refusesSeed(field, null);
+    return required || field.presenceRequired || (present && !seeded) ? REQUIRED_RULE : undefined;
   }
   if (value === null || !validateConstraints) return undefined;
   return failedDescriptorConstraint(field, value);
@@ -160,13 +174,15 @@ function failedDescriptorConstraint(field: FieldDescriptor, value: unknown): Jso
  * and `required`, then an integer or number field's `type`, then the lower bound before the upper
  * (`minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`), each with its `limit`.
  * `required` means presence here: a missing value (absent, `undefined`, or a `null` the field does
- * not allow) fails `required` where the field is required, presence-required, or holds the key,
+ * not allow) fails `required` where the field is required, presence-required, or holds the key
+ * with anything but the `null` a form seeds it with when it holds nothing (`failedValueRule`),
  * while a `null` it allows, a blank text, an empty list and any object are values, which the
  * descriptor's own constraints (`minLength`, `minItems`, …) judge. The field's own path is
  * required when `required` says so (by default its own flag); each member answers to its own
- * flag. One case reads as presence: an empty text under a `minLength` of one is `required` when
- * the field is neither omittable nor nullable. With `validateConstraints=false`, only presence is
- * checked, at every depth. Below the field's own path, a member or a list item that is `hidden` or
+ * flag, and a list item is always required. One case reads as presence: an empty text under a
+ * `minLength` of one is `required` when the field is neither omittable nor nullable. With
+ * `validateConstraints=false`, only presence is checked, at every depth. Below the field's own
+ * path, a member or a list item that is `hidden` or
  * `readOnly` is not asked, nor anything under it: the object and list widgets (`StructuredField`)
  * render no control for a hidden member and a read-only control for a read-only one, so the person
  * cannot change it and the server answers for it.
@@ -197,8 +213,9 @@ export function structuredFieldErrors(
     }
   }
   if (Array.isArray(value) && field.itemTemplate && personChanges(field.itemTemplate)) {
+    // A list item is always required: it has no key to leave out, so an item that holds nothing is missing.
     value.forEach((item, index) => {
-      errors.push(...structuredFieldErrors(field.itemTemplate!, item, true, `${path}.${index}`, validateConstraints));
+      errors.push(...structuredFieldErrors(field.itemTemplate!, item, true, `${path}.${index}`, validateConstraints, true));
     });
   }
   return errors;
@@ -215,7 +232,8 @@ function personChanges(child: FieldDescriptor): boolean {
  * as `required`, and whether its constraints are checked). A structured field, one with a presence
  * flag, a template or a bound, answers to its rules at every depth (`structuredFieldErrors`), where
  * `required` means presence: the surface's `required` at its own path, below it each member's own
- * flag, a hidden or read-only member or list item not asked. Any other field fails `required` when
+ * flag and each list item always required, a hidden or read-only member or list item not asked.
+ * Any other field fails `required` when
  * it is required and empty (`isEmptyFieldValue`), a `null` included even where the field allows
  * one. The surface keeps its own facts: which fields it asks, how it reads them, which count as
  * required, and whether constraints are checked; the record form's `formRuleErrors` and the

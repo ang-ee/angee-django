@@ -3,9 +3,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { afterEach, expect, test, vi } from "vitest";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { createUiTestProviders } from "../../testing";
+import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, createRouteHref } from "../../runtime";
+import { defaultWidgets } from "../../widgets";
+import { ActionFormDialog } from "../form/ActionFormDialog";
+import type { ActionRelationArg } from "../page";
 import { RelationFieldWidget } from "./RelationFieldWidget";
+import { FieldDescriptorControl } from "../form/field-descriptor-control";
+import { LabeledDescriptorField } from "../form/DescriptorFieldList";
 import { RelationField } from "../../widgets/RelationField";
 import { useRelationSelectedOption } from "./relation-options";
 import { customFilterChipsFor } from "../resource/resource-view-utils";
@@ -146,4 +153,186 @@ test("a missing relation honors its authored placeholder while retaining its sto
     aria-label="Account" onChange={change} /></Provider>);
   expect(trigger.textContent).toContain("unloaded-id");
   expect(change).not.toHaveBeenCalled();
+});
+
+test("a relation field offers inline edit of its selected record, and `edit: null` declines it", async () => {
+  // A related model with a field a person can edit: the picker then offers to edit the selected record.
+  const scalar = (name: string, type: string, editable: boolean) => ({
+    name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
+    creatable: editable, updatable: editable, requiredOnCreate: false,
+  });
+  const resource = testDataResource("contacts.Channel", {
+    recordRepresentation: "name", fields: [scalar("id", "ID", false), scalar("name", "String", true)],
+  });
+  const selected = { id: "channel-1", name: "Support" };
+  const dataProvider = { getOne: vi.fn(async () => ({ data: selected })), getList: vi.fn(async () => ({ data: [selected], total: 1 })) };
+  const relation = { resource: "contacts.Channel", labelField: "name", canCreate: false };
+  const view = render(<Provider resources={[resource]} refineResources={[]} dataProvider={dataProvider}>
+    <RelationFieldWidget value={selected.id} onChange={vi.fn()} relation={relation} aria-label="Channel" />
+  </Provider>);
+  await screen.findByText("Support");
+  expect(screen.getByRole("button", { name: "Edit record" })).toBeTruthy();
+
+  view.rerender(<Provider resources={[resource]} refineResources={[]} dataProvider={dataProvider}>
+    <RelationFieldWidget value={selected.id} onChange={vi.fn()} relation={relation} edit={null} aria-label="Channel" />
+  </Provider>);
+  await screen.findByText("Support");
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
+  // The picker itself is unchanged: the same control, still naming the selected record.
+  expect(screen.getByRole("combobox", { name: "Channel: Support" })).toBeTruthy();
+});
+
+test("a field declared for a dialog declines inline edit with `relationEdit: null`, and shows the label of a row it is given without reading it", async () => {
+  const scalar = (name: string, type: string, editable: boolean) => ({
+    name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
+    creatable: editable, updatable: editable, requiredOnCreate: false,
+  });
+  const channel = testDataResource("contacts.Channel", {
+    recordRepresentation: "name", fields: [scalar("id", "ID", false), scalar("name", "String", true)],
+  });
+  const draft = testDataResource("contacts.Draft", { fields: [scalar("id", "ID", false), {
+    ...scalar("channel", "ID", true), kind: "relation" as const, scalar: null, relationModelLabel: "contacts.Channel",
+  }] });
+  const dataProvider = { getOne: vi.fn(async () => ({ data: { id: "channel-1", name: "Support" } })), getList: vi.fn(async () => ({ data: [], total: 0 })) };
+  // The field's value is the related row the dialog already holds: its id is the value, its label is known.
+  const row = { id: "channel-1", name: "Support" };
+  const control = (field: { name: string; relationEdit?: null }, readOnly = false) =>
+    <Provider resources={[draft, channel]} refineResources={[]} dataProvider={dataProvider}>
+      <FieldDescriptorControl resource="contacts.Draft" field={field} value={row} onChange={vi.fn()} readOnly={readOnly} />
+    </Provider>;
+
+  const view = render(control({ name: "channel" }));
+  await screen.findByText("Support");
+  expect(screen.getByRole("button", { name: "Edit record" })).toBeTruthy();
+
+  view.rerender(control({ name: "channel", relationEdit: null }));
+  await screen.findByText("Support");
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
+
+  // Read-only, the label comes from the row: the related record is never read for its name.
+  view.rerender(control({ name: "channel", relationEdit: null }, true));
+  expect(await screen.findByText("Support")).toBeTruthy();
+  expect(dataProvider.getOne).not.toHaveBeenCalled();
+});
+
+test("a dialog's relation field declines inline edit with `relationEdit: null`, and shows the label of a row it is given without reading it", async () => {
+  const scalar = (name: string, type: string, editable: boolean) => ({
+    name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
+    creatable: editable, updatable: editable, requiredOnCreate: false,
+  });
+  const channel = testDataResource("contacts.Channel", {
+    recordRepresentation: "name", fields: [scalar("id", "ID", false), scalar("name", "String", true)],
+  });
+  const dataProvider = { getOne: vi.fn(async () => ({ data: { id: "channel-1", name: "Support" } })), getList: vi.fn(async () => ({ data: [], total: 0 })) };
+  // The dialog seeds the field with the related row it already holds.
+  const row = { id: "channel-1", name: "Support" };
+  const field = (extra: { relationEdit?: null }, readOnly = false) =>
+    <Provider resources={[channel]} refineResources={[]} dataProvider={dataProvider}>
+      <AppRuntimeProvider runtime={{}}>
+        <LabeledDescriptorField field={{ name: "channel", label: "Channel", relation: { resource: "contacts.Channel", labelField: "name" }, ...extra }}
+          value={row} onChange={vi.fn()} readOnly={readOnly} />
+      </AppRuntimeProvider>
+    </Provider>;
+
+  const view = render(field({}));
+  await screen.findByText("Support");
+  expect(screen.getByRole("button", { name: "Edit record" })).toBeTruthy();
+  // The label came from the row: the record was not read for it.
+  expect(dataProvider.getOne).not.toHaveBeenCalled();
+
+  view.rerender(field({ relationEdit: null }));
+  await screen.findByText("Support");
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
+
+  view.rerender(field({ relationEdit: null }, true));
+  expect(await screen.findByText("Support")).toBeTruthy();
+  expect(dataProvider.getOne).not.toHaveBeenCalled();
+});
+
+test("a dialog's relation field given a row without its label member reads the record for it", async () => {
+  const scalar = (name: string, type: string, editable: boolean) => ({
+    name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
+    creatable: editable, updatable: editable, requiredOnCreate: false,
+  });
+  const channel = testDataResource("contacts.Channel", {
+    recordRepresentation: "name", fields: [scalar("id", "ID", false), scalar("name", "String", true)],
+  });
+  const dataProvider = { getOne: vi.fn(async () => ({ data: { id: "channel-1", name: "Support" } })), getList: vi.fn(async () => ({ data: [], total: 0 })) };
+  const field = (value: unknown) =>
+    <Provider resources={[channel]} refineResources={[]} dataProvider={dataProvider}>
+      <AppRuntimeProvider runtime={{}}>
+        <LabeledDescriptorField field={{ name: "channel", label: "Channel", relation: { resource: "contacts.Channel", labelField: "name" } }}
+          value={value} onChange={vi.fn()} />
+      </AppRuntimeProvider>
+    </Provider>;
+
+  // The row names another member than the relation's label field: its id is not shown as its name.
+  const view = render(field({ id: "channel-1", title: "Support desk" }));
+  await screen.findByText("Support");
+  expect(screen.queryByText("channel-1")).toBeNull();
+  expect(dataProvider.getOne).toHaveBeenCalledTimes(1);
+  expect(dataProvider.getOne).toHaveBeenCalledWith(expect.objectContaining({ id: "channel-1" }));
+
+  // A row that holds the member, empty: the record has no name, and nothing more is read for it.
+  view.rerender(field({ id: "channel-2", name: null }));
+  await screen.findByText("channel-2");
+  expect(dataProvider.getOne).toHaveBeenCalledTimes(1);
+});
+
+test("a registered widget's field carries the descriptor's `relationEdit`, on a record form's field and on a dialog's", async () => {
+  const seen: unknown[] = [];
+  const widget = { read: () => null, edit: (props: { field?: { relationEdit?: null } }) => { seen.push(props.field?.relationEdit); return <span>custom relation</span>; } };
+  const channel = testDataResource("contacts.Channel", { recordRepresentation: "name" });
+  const descriptor = { name: "channel", label: "Channel", widget: "custom", relationEdit: null } as const;
+  const view = render(<Provider resources={[channel]} refineResources={[]} dataProvider={{}}>
+    <AppRuntimeProvider runtime={{ widgets: { custom: widget } }}>
+      <FieldDescriptorControl resource="contacts.Channel" field={descriptor} value="channel-1" onChange={vi.fn()} />
+    </AppRuntimeProvider>
+  </Provider>);
+  await screen.findByText("custom relation");
+  expect(seen.at(-1)).toBeNull();
+
+  seen.length = 0;
+  view.rerender(<Provider resources={[channel]} refineResources={[]} dataProvider={{}}>
+    <AppRuntimeProvider runtime={{ widgets: { custom: widget } }}>
+      <LabeledDescriptorField field={{ ...descriptor, relation: { resource: "contacts.Channel", labelField: "name" } }}
+        value="channel-1" onChange={vi.fn()} />
+    </AppRuntimeProvider>
+  </Provider>);
+  await screen.findByText("custom relation");
+  expect(seen.at(-1)).toBeNull();
+});
+
+test("an action dialog's relation argument offers inline edit of its selected record, and its `relationEdit: null` declines it", async () => {
+  const scalar = (name: string, type: string, editable: boolean) => ({
+    name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
+    creatable: editable, updatable: editable, requiredOnCreate: false,
+  });
+  const channel = testDataResource("contacts.Channel", {
+    recordRepresentation: "name", fields: [scalar("id", "ID", false), scalar("name", "String", true)],
+  });
+  // An argument holds a bare id, so its record is read for its name.
+  const dataProvider = { getOne: vi.fn(async () => ({ data: { id: "channel-1", name: "Support" } })), getList: vi.fn(async () => ({ data: [], total: 0 })) };
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const argument = { name: "channel", argKind: "relation", resource: "contacts.Channel", label: "Channel", defaultValue: "channel-1" } satisfies ActionRelationArg;
+  // Written out, not spread from a loose object: the compiler checks the member against the argument's type.
+  const declining = { ...argument, relationEdit: null } satisfies ActionRelationArg;
+  const dialog = (arg: ActionRelationArg) =>
+    <Provider resources={[channel]} refineResources={[]} dataProvider={dataProvider}>
+      <RouterContextProvider router={router}><ModalsHost><ToastProvider>
+        <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+          <ActionFormDialog open onOpenChange={() => undefined} context={{ record: null, selectedIds: [] }}
+            action={{ id: "send", label: "Send", submit: vi.fn(), args: [arg] }} />
+        </AppRuntimeProvider>
+      </ToastProvider></ModalsHost></RouterContextProvider>
+    </Provider>;
+
+  render(dialog(argument));
+  await screen.findByText("Support");
+  expect(screen.getByRole("button", { name: "Edit record" })).toBeTruthy();
+  cleanup();
+
+  render(dialog(declining));
+  await screen.findByText("Support");
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
 });

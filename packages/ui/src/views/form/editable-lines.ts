@@ -233,6 +233,12 @@ export function lineLockedFields(row: Row | undefined, config: LineDiffConfig): 
   return Array.isArray(locked) ? locked.filter((name): name is string => typeof name === "string") : [];
 }
 
+/** A row's identity across moves and re-renders: its public id, else its client key. */
+export function lineRowKey(row: Row, config: LineDiffConfig): string | undefined {
+  const key = row[CLIENT_LINE_KEY];
+  return rowId(row, config) ?? (typeof key === "string" && key !== "" ? key : undefined);
+}
+
 /**
  * Duplicate a row for the composer's "duplicate" action: the copy drops the source's
  * id, client key and lock, and gets a client key of its own.

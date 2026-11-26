@@ -337,6 +337,9 @@ class TemplateWarningCode(StrEnum):
     PLAIN_TEXT = "plain_text"
     SIZE = "size"
     RENDER_ERROR = "render_error"
+    """The row, as saved or as a patch would save it, does not render with its sample."""
+    SAVE_REFUSED = "save_refused"
+    """Saving the patch the preview was asked for would be refused: what the save's validation says."""
 
 
 @dataclass
@@ -345,6 +348,9 @@ class TemplateWarning:
 
     code: TemplateWarningCode
     detail: str
+    field: str | None = None
+    """The column a refusal names, as the row's edited columns are named; ``None`` for a warning, or a refusal of
+    the row as a whole."""
 
 
 @dataclass

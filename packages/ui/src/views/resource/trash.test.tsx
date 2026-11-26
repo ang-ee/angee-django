@@ -39,8 +39,10 @@ vi.mock("@refinedev/core", async (importOriginal) => ({
   },
 }));
 
+import type { ModelMetadata } from "@angee/metadata";
+import type { BulkActionRunner } from "./bulk-action";
 import { RestoreRecord, TrashRecord } from "./documents";
-import { RemovedList, RemovedRecords, useTrashActions, useTrashRecord } from "./trash";
+import { BulkTrashActions, RemovedList, RemovedRecords, useTrashActions, useTrashRecord } from "./trash";
 
 const flag: DataResourceFieldMetadata = {
   name: "is_trashed",
@@ -210,6 +212,31 @@ describe("shared trash verbs", () => {
   });
 });
 
+
+test.each([
+  ["every reason the server gave, each once", {
+    message: "Restoring the record failed.",
+    validation_errors: {
+      __all__: ["The page's space is in the trash.", "You are not allowed to restore this page."],
+      id: ["You are not allowed to restore this page."],
+    },
+  }, "The page's space is in the trash.; You are not allowed to restore this page."],
+  ["the server's message when it gave no reason", { message: "Restoring the record failed." }, "Restoring the record failed."],
+  ["the shared no-result text when it gave neither", { message: "" }, "The action returned no result."],
+])("a refused row of a bulk restore reports %s", async (_case, refusal, reason) => {
+  mocks.mutate.mockResolvedValueOnce({ restore_record: { ok: false, ...refusal } });
+  const run = vi.fn();
+  const bulk = { run, pending: false, blocked: false, reason: {} } as unknown as BulkActionRunner;
+  render(<BulkTrashActions modelMetadata={{ resource: PAGES } as ModelMetadata}
+    selectedRows={[{ id: "pag_1", is_trashed: true }]} unprocessedCount={0} bulk={bulk} />);
+  fireEvent.click(screen.getByRole("button"));
+  expect(run).toHaveBeenCalledOnce();
+  const { perform } = run.mock.calls[0]![0] as { perform: (id: string) => Promise<unknown> };
+  await expect(perform("pag_1")).resolves.toEqual({ status: "refused", reason });
+  expect(mocks.mutate).toHaveBeenLastCalledWith(RestoreRecord, { target_type: "knowledge/page", target_id: "pag_1" });
+  cleanup();
+  mocks.mutate.mockReset();
+});
 
 test("RemovedList without resource metadata refuses the default Restore", () => {
   render(<RemovedList rows={[{ id: "one", title: "Plan", permissions: ["delete"] }]}

@@ -220,6 +220,12 @@ export interface ActionOutcome {
    * backend populated `validation_errors`; absent on success and on a plain result.
    */
   validationErrors?: Record<string, readonly string[]>;
+  /**
+   * A refusal's stable code, set by the caller that builds the outcome (`CREATION_KEY_CONFLICT`
+   * for a create whose key an earlier version spent). The generated action documents select no
+   * `ActionResult.code`, so an answer read through one carries none.
+   */
+  code?: string;
 }
 
 /** Variables for an action mutation targeted by `id` with optional extra arguments. */
@@ -485,6 +491,7 @@ export function extractActionOutcome(
       ? { id: outcome.id }
       : {}),
     ...(validationErrors ? { validationErrors } : {}),
+    ...(typeof outcome.code === "string" && outcome.code !== "" ? { code: outcome.code } : {}),
   };
 }
 
@@ -505,15 +512,30 @@ function stringListMap(
 }
 
 /**
+ * A refusal's in-band reasons as one line: every `validationErrors` message, under any key, each
+ * once, in the server's order; empty when the outcome carries none. A surface that binds the keys
+ * to its inputs (a typed-args action form) reads the map; one that only tells the person why (a
+ * toast, a rendered action's failure) reads this.
+ */
+export function actionOutcomeReasons(
+  outcome: Pick<ActionOutcome, "validationErrors">,
+): string {
+  return [...new Set(Object.values(outcome.validationErrors ?? {}).flat())].join("; ");
+}
+
+/**
  * Normalize a backend ActionResult into the rendered action contract: a business
- * failure throws, a success returns the success message, and a missing outcome
- * stays silent because the mutation transport already reported the failure.
+ * failure throws its reasons (its message when it carries none; a refused target's
+ * message is only the verb's summary, and the reason arrives in-band) and a success
+ * returns the success message. A missing outcome (an answer without `ok`) returns
+ * `undefined`: a transport failure has already rejected before this projection, so
+ * a caller that must tell an empty answer does so itself.
  */
 export function runActionResult(
   outcome: ActionOutcome | null | undefined,
 ): string | undefined {
   if (!outcome) return undefined;
-  if (!outcome.ok) throw new Error(outcome.message);
+  if (!outcome.ok) throw new Error(actionOutcomeReasons(outcome) || outcome.message);
   return outcome.message;
 }
 

@@ -9,6 +9,7 @@ import type { ListQueryFieldArgument } from "@angee/refine";
 
 import { FieldDescription, FieldError, FieldLabel, FieldRoot } from "../../ui/field";
 import { relationValueId, type WidgetFocusTarget } from "../../widgets/types";
+import { relationSelectedOption } from "../relation/relation-options";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
@@ -342,7 +343,9 @@ export function LabeledDescriptorField({
  * related resource's list root (narrowed by the field's `filters`), and "Create …"
  * opens the field's own create form. The option query is deferred until the
  * popover first opens; an existing bare-id value resolves through its independent
- * record read. An empty untouched relation performs no work.
+ * record read, and a value that is the related row (`{ id, <label field> }`) shows its
+ * label with no read. An empty untouched relation performs no work. The field's
+ * `relationEdit: null` declines the picker's inline edit, as on a record form.
  */
 function DescriptorRelationControl({
   controlId,
@@ -432,6 +435,7 @@ function DescriptorRelationControl({
     relation: optionInfo,
     filters: field.filters ?? relation.filters,
     create: create ?? null,
+    fieldName: field.name,
     readOnly,
     onChange,
     onCommit,
@@ -443,6 +447,9 @@ function DescriptorRelationControl({
     ? <RelationMultiFieldWidget {...common} value={Array.isArray(value) ? value : []} />
     : <RelationFieldWidget {...common}
       value={relationValueId(value)}
+      // A value that is the related row carries its own label: shown without reading the record.
+      selectedOption={relationSelectedOption(value, optionInfo.labelField)}
+      edit={field.relationEdit}
       placeholder={field.placeholder}
       optionDescriptionField={relation.optionDescriptionField}
       optionStatusField={relation.optionStatusField}

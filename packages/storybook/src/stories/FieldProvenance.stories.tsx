@@ -22,11 +22,10 @@ const fields: readonly DescriptorField[] = [
   { name: "display_name", label: "Name", readOnly: true },
   { name: "language", label: "Language", readOnly: true },
 ];
-const schemas = storySchema({});
-schemas.public!.metadata = { angee: { resources: [
+const schemas = storySchema({}, { resources: [
   testDataResource("parties.Party", { schemaName: "public" }),
   testDataResource("parties.PartyStatement", { schemaName: "public" }),
-] } };
+] });
 const runtime = {
   routeHref: createRouteHref([
     { name: "parties.statements", path: "/parties/statements" },
