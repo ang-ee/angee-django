@@ -3376,11 +3376,14 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
 def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, purged: str) -> None:
     """The preview and the confirmed totals count every recipient row the purge deletes.
 
-    A recipient row cascades from its message and from its thread; the inventory
-    reaches it through its message, which is exact because every writer gives the row
-    its message's thread: ingest, a re-sync that moves a message to the thread its
-    References name, a source-thread correction, an email reply's envelope, and the
-    fold of one channel's copy into another's, which moves no row.
+    A recipient row cascades from its message and from its thread, and a thread's delete
+    takes its messages too; the inventory counts messages and recipients by the message's
+    channel. That is exact on two premises every writer keeps. A recipient's thread is
+    its message's: ingest, a re-sync that moves a message to the thread its References
+    name, a source-thread correction, an email reply's envelope, and a merge of one
+    channel's thread and message into another's, which moves no row. A message in a
+    channel's thread belongs to that channel: a reply received through another account
+    answering this channel's message lands in a thread of its own channel.
     """
 
     channel = make_integration("purge-recipients", model=Channel, backend_class="email")
@@ -3393,6 +3396,9 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, pu
     )
     messaging_models._ingest([late], channel=channel)
     messaging_models._ingest([parsed("request@example.test", subject="Access")], channel=other)
+    messaging_models._ingest(
+        [parsed("answer@example.test", subject="Elsewhere", in_reply_to="parent@example.test")], channel=other,
+    )
     messages = messaging_models.Message._base_manager
     request, copy = (messages.get(channel=source, external_id="request@example.test") for source in (channel, other))
     with system_context(reason="test.channel.purge_recipients.seed"):
@@ -3406,8 +3412,8 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, pu
             [corrected], channel=channel, explicit_thread=second, expected_thread=first, historical=True,
         )
         desk = messaging_models.Handle.objects.upsert(platform="email", value="desk@example.test")
-        request.thread.fold([copy.thread])
-        request.fold([copy])
+    request.thread.with_actor(channel.owner).merge(records=[copy.thread.public_id])
+    request.with_actor(channel.owner).merge(records=[copy.public_id])
     reply = messaging_models.Message.objects.compose_reply(
         request, body="Which team?", sender=desk, actor=channel.owner,
     )
@@ -3420,6 +3426,8 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, pu
     assert messages.get(pk=copy.pk).merged_into_id == request.pk
     pairs = recipients.values_list("pk", "thread_id", "message__thread_id")
     assert [pair for pair in pairs if pair[1] != pair[2]] == []
+    homes = messages.filter(thread__channel__isnull=False).values_list("pk", "channel_id", "thread__channel_id")
+    assert [home for home in homes if home[1] != home[2]] == []
 
     target = channel if purged == "survivor" else other
     before = recipients.count()
@@ -3438,7 +3446,7 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, pu
     counted = {group["label"]: group["count"] for group in shown["deleted"]}
     deleted = before - recipients.count()
     assert counted[str(messaging_models.Recipient._meta.verbose_name_plural)] == deleted == (
-        5 if purged == "survivor" else 1
+        5 if purged == "survivor" else 2
     )
 
 
