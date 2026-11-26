@@ -1578,6 +1578,9 @@ importers:
       lucide-react:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
+      use-debounce:
+        specifier: ^10.1.1
+        version: 10.1.1(react@19.3.1)
     devDependencies:
       '@angee/storybook':
         specifier: workspace:*
