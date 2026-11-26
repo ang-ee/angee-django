@@ -26,8 +26,10 @@ from rebac import (
     system_context,
     to_subject_ref,
 )
+from rebac.backends import backend
 from rebac.models import PermissionAuditEvent
 from rebac.roles import revoke as revoke_role
+from rebac.schema.ast import PermBinOp, PermRef
 
 from angee.brandkit.testing.models import BrandKit
 from angee.jobs.enqueue import celery_app
@@ -553,6 +555,52 @@ def test_an_account_with_no_address_writes_nothing_and_a_refused_render_leaves_t
         MessageTemplate.objects.send_test(unrenderable, actor=tester)
     assert [item.code for item in refusal.value.error_list] == ["invalid_values"]
     assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, TEST_SEND_REASON)]
+
+
+def _union_terms(expression: Any) -> list[Any]:
+    """The terms a permission expression unions: a fragment only ever widens a permission into such a union."""
+
+    if isinstance(expression, PermBinOp) and expression.op == "+":
+        return [*_union_terms(expression.left), *_union_terms(expression.right)]
+    return [expression]
+
+
+def test_every_signed_in_reader_reads_every_template_and_kit_in_the_composed_schema(db: None) -> None:
+    """The condition the test send's elevated render rests on: it reads nothing its administrator's preview does not.
+
+    In the schema the session synchronised, ``read`` on both definitions holds the owner's ``authenticated`` (widened
+    only), the template's one ``read__`` gate is ``read__sample`` (which no render of an included row reads) and the
+    kit has none.
+    """
+
+    del db
+    definitions = {
+        definition.resource_type: {permission.name: permission for permission in definition.permissions}
+        for definition in backend().schema().definitions
+        if definition.resource_type in ("messaging_templates/message_template", "brandkit/brand_kit")
+    }
+    expected = {"messaging_templates/message_template": ["read__sample"], "brandkit/brand_kit": []}
+    for resource_type, gates in expected.items():
+        permissions = definitions[resource_type]
+        assert PermRef(name="authenticated") in _union_terms(permissions["read"].expression), resource_type
+        assert sorted(name for name in permissions if name.startswith("read__")) == gates, resource_type
+
+
+def test_a_signed_in_user_with_no_grant_reads_every_template_row_and_every_kit(kit: Any) -> None:
+    """The same condition, at the rows: shipped defaults, overrides, own rows of every kind, a kit that is not the
+    default."""
+
+    del kit
+    outsider = create_user("messaging-templates-send-outsider")
+    _row("layout", "plain", is_baseline=True)
+    _row("layout", "plain")
+    _sampled()
+    _row("block", "card")
+    _row("part", "end", language="es")
+    with system_context(reason="tests.messaging_templates.send.kit"):
+        BrandKit.objects.create(**{**ANGEE, "name": "Other", "is_default": False})
+    for model in (MessageTemplate, BrandKit):
+        assert model.objects.with_actor(outsider).count() == model._base_manager.count() > 1, model
 
 
 def _claim(key: str, actor: Any) -> Any:

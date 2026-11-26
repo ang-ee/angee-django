@@ -765,8 +765,12 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         The render reads what ``actor``'s own preview of the row reads: every
         signed-in reader reads every message template and brand kit, the render
         never reads an included row's sample, and the values are the sample of
-        ``row`` as the caller loaded it. It stores what :meth:`send_as_system`
-        stores, for the system channel's readers (messaging's README, "System
+        ``row`` as the caller loaded it. Two tests in
+        ``tests/test_messaging_templates_send.py`` hold that condition, over the
+        composed schema and over the rows:
+        ``test_every_signed_in_reader_reads_every_template_and_kit_in_the_composed_schema``
+        and ``test_a_signed_in_user_with_no_grant_reads_every_template_row_and_every_kit``.
+        It stores what :meth:`send_as_system` stores, for the system channel's readers (messaging's README, "System
         mail"); through every verb those are administrators, who read samples
         and account addresses already. ``actor``'s existing handle for the
         address receives it, as compose finds one.
