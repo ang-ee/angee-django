@@ -733,6 +733,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
   `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
   and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
+- **A class composed through a variant is a registered utility.** `styles/index.css`
+  declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
+  Tailwind gives a variant to a registered utility only, and a plain class in
+  `@layer utilities` compiles to nothing under one, silently
+  ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
   `EmptyState` and `InlineEmpty` own every other error and empty surface. Owner story:

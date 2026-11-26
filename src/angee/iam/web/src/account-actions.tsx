@@ -17,19 +17,31 @@ import {
 
 import { IamIssueUserPassword, IamResetUserPassword } from "./documents";
 import { useIamT } from "./i18n";
+import { USER_MODEL } from "./users-list";
 
-const USER_MODEL = "iam.User";
+/**
+ * IAM's own account actions, each named by its Zed permission on `auth/user` (`UserAccountAction` in
+ * `angee.iam.models`). The wire spells them so whatever the composed enum's type is named, which differs by
+ * host; a misspelt property does not compile.
+ */
+const IAM_ACCOUNT_ACTIONS = {
+  setActive: "set_active",
+  rename: "rename",
+  resetPassword: "reset_password",
+  issuePassword: "issue_password",
+  setPassword: "set_password",
+} as const;
 
-/** Account verbs the server projects per user row through their own admission rules. */
-export type UserAccountAction = "set_active" | "rename" | "reset_password" | "issue_password" | "issue_sign_in_link" | "set_password";
-
-/** Fields every account verb reads from the open user record. */
+/** Fields every account action reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
 
-/** Whether the row's server projection offers `action`; the client never derives eligibility itself. */
-export function offersAccountAction(record: Row, action: UserAccountAction): boolean {
+/**
+ * Whether the row's server projection offers account action `action`, named by its Zed permission
+ * (`issue_password`, or an action another addon contributes); the client never derives eligibility itself.
+ */
+export function offersAccountAction(record: Row, action: string): boolean {
   const offered = record.account_actions;
-  return Array.isArray(offered) && offered.some((value) => String(value).toLowerCase() === action);
+  return Array.isArray(offered) && offered.includes(action);
 }
 
 /** The revision the open record was read at, sent so a stale account write is refused. */
@@ -73,7 +85,7 @@ export function useChangePasswordAction(): ActionDescriptor {
   };
 }
 
-/** Set a chosen password through the account verb, including its observed revision. */
+/** Set a chosen password through the account action, including its observed revision. */
 export function useSetPasswordAction(): ActionDescriptor {
   const t = useIamT();
   const passwordForm = newPasswordForm("password", t);
@@ -83,7 +95,7 @@ export function useSetPasswordAction(): ActionDescriptor {
   return {
     id: "set-password", label: t("users.setPassword"), danger: true,
     args: passwordForm.args,
-    visibleWhen: (record) => offersAccountAction(record, "set_password"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.setPassword),
     submit: async (values, context) => {
       const invalid = passwordForm.validate(values);
       if (invalid) return invalid;
@@ -132,7 +144,7 @@ export function useIssuePasswordAction(): ActionDescriptor {
   return {
     id: "give-access", label: t("users.giveAccess"), run,
     confirm: { title: t("users.giveAccess.confirmTitle"), body: t("users.giveAccess.confirmBody") },
-    visibleWhen: (record) => offersAccountAction(record, "issue_password"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.issuePassword),
   };
 }
 
@@ -148,19 +160,7 @@ export function useResetPasswordAction(): ActionDescriptor {
   return {
     id: "reset-access", label: t("users.resetAccess"), run, danger: true,
     confirm: { title: t("users.resetAccess.confirmTitle"), body: t("users.resetAccess.confirmBody"), danger: true },
-    visibleWhen: (record) => offersAccountAction(record, "reset_password"),
-  };
-}
-
-/** Email a person a single-use sign-in link; the link goes to their email and is never shown here. */
-export function useIssueSignInLinkAction(): ActionDescriptor {
-  const t = useIamT();
-  const [issueLink] = useActionResultMutation<ActionFieldName>("issue_user_sign_in_link", { invalidateModels: [USER_MODEL] });
-  const run = useRecordAction((id) => issueLink(id));
-  return {
-    id: "send-sign-in-link", label: t("users.sendSignInLink"), run,
-    confirm: { title: t("users.sendSignInLink.confirmTitle"), body: t("users.sendSignInLink.confirmBody") },
-    visibleWhen: (record) => offersAccountAction(record, "issue_sign_in_link"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.resetPassword),
   };
 }
 
@@ -176,12 +176,12 @@ export function useSetActiveActions(): readonly ActionDescriptor[] {
     {
       id: "deactivate", label: t("users.deactivate"), danger: true, run: deactivate,
       confirm: { title: t("users.deactivate.confirmTitle"), body: t("users.deactivate.confirmBody"), danger: true },
-      visibleWhen: (record: Row) => record.is_active === true && offersAccountAction(record, "set_active"),
+      visibleWhen: (record: Row) => record.is_active === true && offersAccountAction(record, IAM_ACCOUNT_ACTIONS.setActive),
     },
     {
       id: "reactivate", label: t("users.reactivate"), run: reactivate,
       confirm: { title: t("users.reactivate.confirmTitle"), body: t("users.reactivate.confirmBody") },
-      visibleWhen: (record: Row) => record.is_active === false && offersAccountAction(record, "set_active"),
+      visibleWhen: (record: Row) => record.is_active === false && offersAccountAction(record, IAM_ACCOUNT_ACTIONS.setActive),
     },
   ];
 }
@@ -208,11 +208,12 @@ export function useRenameAction(): ActionDescriptor {
   }, [rename, t]);
   return {
     id: "rename", label: t("users.rename"), args, submit,
-    visibleWhen: (record) => offersAccountAction(record, "rename"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.rename),
   };
 }
 
-function AccountActionBar({ actions }: { actions: readonly ActionDescriptor[] }): React.ReactElement | null {
+/** An `iam.User#actions-menu` child's bar: `actions` on the open account record, for IAM's and contributed actions. */
+export function AccountActionBar({ actions }: { actions: readonly ActionDescriptor[] }): React.ReactElement | null {
   const { record } = useRecordChromeContext();
   return record ? <RecordActionBar record={record} actions={actions} /> : null;
 }
@@ -235,19 +236,13 @@ export function IssuePasswordRecordAction(): React.ReactElement | null {
   return <AccountActionBar actions={[action]} />;
 }
 
-/** `iam.User#actions-menu` child: email the open account a sign-in link. */
-export function IssueSignInLinkRecordAction(): React.ReactElement | null {
-  const action = useIssueSignInLinkAction();
-  return <AccountActionBar actions={[action]} />;
-}
-
 /** `iam.User#actions-menu` child: reset the open account's password. */
 export function ResetPasswordRecordAction(): React.ReactElement | null {
   const action = useResetPasswordAction();
   return <AccountActionBar actions={[action]} />;
 }
 
-/** `iam.User#actions-menu` child: set a chosen password through the set_user_password account verb. */
+/** `iam.User#actions-menu` child: set a chosen password through the set_user_password account action. */
 export function SetPasswordRecordAction(): React.ReactElement | null {
   const action = useSetPasswordAction();
   return <AccountActionBar actions={[action]} />;

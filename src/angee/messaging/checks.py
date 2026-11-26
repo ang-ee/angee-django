@@ -42,10 +42,14 @@ subtracts. The thread's ``write``, which fragments extend, subtracts the seal fr
 its own arms only.
 """
 
-check_messaging_seals = partial(check_sealed_permissions, "messaging", {
-    resource_type: (*DERIVED_READS.get(resource_type, ()), *SEALED.get(resource_type, ()))
-    for resource_type in sorted({*DERIVED_READS, *SEALED})
-}, "messaging.E003")
+check_messaging_seals = partial(
+    check_sealed_permissions, "messaging", {
+        resource_type: (*DERIVED_READS.get(resource_type, ()), *SEALED.get(resource_type, ()))
+        for resource_type in sorted({*DERIVED_READS, *SEALED})
+    }, "messaging.E003",
+    "Union the fragment's arm into an extension point the sealed expression composes, "
+    "or grant the need through the fragment's own record's read.",
+)
 """``messaging.E003``: the derived thread and message reads, and the permissions the system channel's seal guards."""
 
 

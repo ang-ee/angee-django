@@ -230,8 +230,11 @@ histories, including history-only apps whose source addon has been removed.
 Read-only checks never author missing packages. A disabled migration mapping
 cannot receive authored migrations or a history reset.
 
-The native drop guard refuses autodetected removal of populated storage.
-Declare a reviewed data cutover when retiring data. Resources' retirement policy
+The native drop guard refuses removal of populated storage where `makemigrations`
+autodetects it and where `migrate`, and so `provision`, is about to apply it from the
+project's history. Declare a reviewed data cutover when retiring data: the migration
+that moves or retires the data writes its removal as `IntendedRemoveField` or
+`IntendedDeleteModel` from `django_compose.operations`. Resources' retirement policy
 may exempt only rows proved seeded by the retiring owner through its ledger;
 other rows remain protected. Database aliases and routing remain Django-owned.
 `check_migrations`, `retire_history` and `reset_migration_history` are explicit

@@ -75,7 +75,11 @@ template's test adds the legacy schema to a `ProjectState` derived from the
 installed models and to the table, then applies and unapplies the template's
 `Migration` through Django's `MigrationExecutor`, so its callables run on
 historical models; fixtures and assertions may use live models (the
-[address-book template test](../tests/test_parties_addressbook_upgrade.py)).
+[address-book template test](../tests/test_parties_addressbook_upgrade.py)). A
+template that removes storage is also copied into a project's own history
+([`tests/project_history.py`](../tests/project_history.py)) and migrated on rows that
+hold data, so the drop guard judges it as `migrate` does; a copy without its
+declarations is refused there.
 The [native-history tests](../tests/test_native_initial_history.py)
 cover initial authoring, project data operations and preservation across rebuilds;
 the [migration-policy tests](../tests/test_runtime_migrations.py) cover Resources'

@@ -37,6 +37,12 @@ from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
+RECORD_READ_HINT = (
+    "Union the fragment's arm into an extension point the sealed expression composes, "
+    "or grant the need through the fragment's own record's read."
+)
+"""The remedy this seal keeps: its owner offers extension points and a record's own read."""
+
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 # Each installed contributor's thread arm and the extension point it widens.
@@ -134,6 +140,7 @@ def test_check_refuses_fragment_arms_on_derived_reads(tmp_path: Path, fragment: 
     else:
         [error] = errors
         assert error.id == "messaging.E003"
+        assert error.hint == RECORD_READ_HINT
         assert refused in error.msg
         assert "inbox_contrib" in error.msg
 
