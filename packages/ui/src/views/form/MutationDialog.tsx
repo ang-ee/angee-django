@@ -13,7 +13,7 @@ import { emptyValueForField, fieldRuleErrors, refusesSeed } from "./field-values
 import { isFieldControlVisible, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
-  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formSubmitError, invalidFormSubmit,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formErrorsFromForm, formSubmitError, invalidFormSubmit,
   markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
@@ -281,7 +281,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const shownFields = visibleFields(fields, values);
   const renderedFieldNames = shownFields.filter((field) => !field.hidden).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
-  const error = form.formState.errors.root?.server?.message ?? null;
+  const errors = formErrorsFromForm(form.formState.errors);
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
     && shownFields
       .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values))
@@ -380,7 +380,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       <ActionFormProvider {...{ ...form, registerFieldValidation }}>
         <DescriptorFieldList fields={fields} unregisterHidden />
       </ActionFormProvider>
-      <ErrorBanner description={error} />
+      <ErrorBanner messages={errors} />
     </DialogForm>
   );
 }

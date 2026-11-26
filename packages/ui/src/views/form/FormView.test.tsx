@@ -2838,18 +2838,22 @@ describe("FormView", () => {
     expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
   });
 
-  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, holding null offers Set value, which writes an empty text", async () => {
+  // A date carried as text declares its format beside its date widget, as the backend's form spec emits
+  // it: the format, not the widget, makes its empty value null. The backend also marks every member
+  // omittable or presence-required; the edit and draft tests below use members without those marks, as
+  // a hand-written or raw schema declares them, which is where those seeds changed.
+  test("a date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
     sdkMocks.record = { id: "note-1", title: "First", due: null };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={deserializeFormSpec({ type: "object", properties: {
-      due: { anyOf: [{ type: "string", widget: "date" }, { type: "null" }], label: "Due" },
+      due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" },
     } }, defaultWidgets)} />);
     await screen.findByText("Left empty");
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
   });
 
-  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, seeds an empty text, so an edit that writes its object sends it as one where it sent null, and a create draft holds one", async () => {
+  test("a date carried as text that the record lacks is sent as null when an edit writes its object", async () => {
     const members = deserializeFormSpec({ type: "object", properties: {
-      name: { type: "string", label: "Name" }, day: { type: "string", widget: "date", label: "Day" },
+      name: { type: "string", label: "Name" }, day: { type: "string", format: "date", widget: "date", label: "Day" },
     } }, defaultWidgets).map((field) => ({ ...field, name: `config.${field.name}` }));
     sdkMocks.record = { id: "note-1", title: "First", config: { name: "a" } };
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={members} />);
@@ -2859,7 +2863,15 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate.mock.calls[0]![0].data.config.day).toBeNull();
-    expect(emptyDraft(members)).toStrictEqual({ config: { name: "", day: null } });
+  });
+
+  test.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+    ["nullable, holds null", { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }] }, { name: "", day: null }],
+    ["neither required nor nullable, is left out, as its type refuses null", { type: "string", format: "date", widget: "date" }, { name: "" }],
+  ])("a create draft's date carried as text that is %s", (_case, day, draft) => {
+    const members = deserializeFormSpec({ type: "object", properties: { name: { type: "string", label: "Name" }, day } }, defaultWidgets)
+      .map((field) => ({ ...field, name: `config.${field.name}` }));
+    expect(emptyDraft(members)).toStrictEqual({ config: draft });
   });
 
   const labelField = { name: "label", label: "Label", required: true } satisfies FormField;
@@ -4157,16 +4169,44 @@ describe("FormView", () => {
   const banner = () => screen.queryAllByRole("alert").map((node) => node.textContent ?? "").join(" ");
 
   test.each([
-    ["alone", [], "code: Code is taken."],
-    ["with a form-level error", ["Note is misconfigured."], "Note is misconfigured. code: Code is taken."],
-  ])("a hidden field the server refuses %s shows the server's own text in the banner, and no field is called highlighted", async (_case, formErrors, text) => {
+    ["alone", [], ["code: Code is taken."]],
+    ["with a form-level error", ["Note is misconfigured."], ["Note is misconfigured.", "code: Code is taken."]],
+  ])("a hidden field the server refuses %s shows the server's own text in the banner, each message its own, and no field is called highlighted", async (_case, formErrors, messages) => {
     refuse(formErrors);
     renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);
     fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(banner()).toContain(text));
+    await screen.findByText(messages.at(-1)!);
+    // One message is the banner's body; several are a list, one item each, never one run-on sentence.
+    const alert = screen.getByRole("alert");
+    expect(within(alert).queryAllByRole("listitem").map((item) => item.textContent)).toEqual(messages.length > 1 ? messages : []);
+    for (const message of messages) expect(within(alert).getByText(message)).toBeTruthy();
     expect(banner()).not.toContain("highlighted");
+  });
+
+  test("a save the server refuses for shown fields moves focus to the first of them in the form's order, not the answer's", async () => {
+    sdkMocks.mutate.mockRejectedValue({ graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: { code: "VALIDATION", validationErrors: { code: ["Code is taken."], label: ["Label is taken."] }, formErrors: [] },
+    }] });
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code" }]} />);
+    const label = await screen.findByLabelText("Label");
+    fireEvent.change(label, { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText("Label is taken.");
+    await screen.findByText("Code is taken.");
+    expect(document.activeElement).toBe(label);
+  });
+
+  test("a save the server refuses for no shown field moves focus to its banner", async () => {
+    refuse(["Note is misconfigured."]);
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);
+    fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = (await screen.findByText("Note is misconfigured.")).closest<HTMLElement>('[role="alert"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(alert.getAttribute("tabindex")).toBe("-1");
   });
 
   test("a field of a group the record does not display that the server refuses shows the server's own text in the banner, called highlighted nowhere and marked invalid nowhere", async () => {
@@ -6213,9 +6253,10 @@ describe("FormView", () => {
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     await screen.findByText("This field cannot be blank.");
     // Server-only issues retain both their field name and their actionable reason.
-    expect(
-      screen.getByText("Please fix the highlighted fields: Title. environment: This field cannot be blank."),
-    ).toBeTruthy();
+    const banner = screen.getByText("environment: This field cannot be blank.").closest<HTMLElement>('[role="alert"]')!;
+    expect(within(banner).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Please fix the highlighted fields: Title.", "environment: This field cannot be blank.",
+    ]);
   });
 });
 

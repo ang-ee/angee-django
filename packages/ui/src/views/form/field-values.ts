@@ -22,10 +22,10 @@ const LIST_WIDGETS: ReadonlySet<string> = new Set(["tagInput", "list", "rows"]);
  * has a rule of its own (`emptyCellValue`, `editable-lines.ts`), which this owner does not decide.
  * First match wins; the widget is the one the descriptor resolves (`fieldWidgetId`: its `widget`,
  * else its `kind`).
- * 1. An explicit `string` kind: `""`, whatever its widget, since a controlled text input needs a text
- *    and a widget only presents. A date or a date and time carried as text takes this row too: the
- *    descriptor carries no declared format to tell it from text, though `""` is no valid date (the
- *    tests record that as expected failures).
+ * 1. A declared `format` (a date, a date and time, or a time carried as text): `null`, whatever its
+ *    kind and widget, since `""` is none of them. Then an explicit `string` kind: `""`, whatever its
+ *    widget, since a controlled text input needs a text and a widget only presents. The format, never
+ *    the widget, tells a date carried as text from text.
  * 2. A number widget (`NUMBER_WIDGETS`: `integer`, `float`) or a date or time widget
  *    (`DATE_TIME_WIDGETS`: `date`, `datetime`, `time`): `null`.
  * 3. The `tagInput`, `list` and `rows` widgets and a relation list (`many2many`): `[]`.
@@ -35,7 +35,8 @@ const LIST_WIDGETS: ReadonlySet<string> = new Set(["tagInput", "list", "rows"]);
  *    `any`: `""` under the `select` widget, else `null`.
  * 6. Otherwise `""`.
  */
-export function emptyValueForField(field: Pick<FieldDescriptor, "name" | "widget" | "kind">): unknown {
+export function emptyValueForField(field: Pick<FieldDescriptor, "name" | "widget" | "kind" | "format">): unknown {
+  if (field.format !== undefined) return null;
   if (field.kind === "string") return "";
   const widget = fieldWidgetId(field);
   if (NUMBER_WIDGETS.has(widget) || DATE_TIME_WIDGETS.has(widget)) return null;

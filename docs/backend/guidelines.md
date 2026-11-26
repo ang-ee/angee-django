@@ -610,7 +610,13 @@ Use these owners instead of maintaining another contract in an addon:
   in [`workflows.schemas`](../../src/angee/workflows/schemas.py).
   [`FormSpec`](../../src/angee/base/schemas/form_spec.schema.json) is the one
   contract for Python projection, generated TypeScript types and UI validation;
-  messaging composes it with its own public-form admission policy.
+  messaging composes it with its own public-form admission policy. The spec
+  [`config_form_spec`](../../src/angee/base/schemas/forms.py) projects from a
+  typed model keeps a date member's `format` as the value's declared type; no
+  validator is handed that spec, so nothing asserts it and typed parsing
+  validates the value. A raw schema read as a form, such as a workflow's
+  input, is its own validation schema: admission and the schema dialog assert
+  its formats.
 - **Actor-scoped scalar subqueries and keyset cursors belong to `angee.base`.**
   The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
   shape and the signed `(order_at, pk)` cursor pager are framework primitives;

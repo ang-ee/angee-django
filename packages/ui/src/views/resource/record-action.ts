@@ -14,12 +14,10 @@ import {
   useResourceInvalidates,
 } from "@angee/metadata";
 
-import {
-  useActionResultRun,
-  type ActionResultRunOptions,
-} from "./action-result-run";
+import { useActionResultRun, useCreatedRecordLink } from "./action-result-run";
 import { useRecordChromeContext } from "./record-chrome-context";
 import { useAuthoredResourceMutation } from "./authored-resource-mutation";
+import { useUiT } from "../../i18n";
 import type { ActionContext, ActionResult } from "../page";
 
 export type RecordActionRunner = (
@@ -32,7 +30,7 @@ export interface UseRecordActionOptions extends UseActionResultMutationOptions {
   idArgument?: string;
   /** Extra generated action arguments derived from the current record id. */
   actionArguments?: (id: string) => ActionArguments;
-  /** Message returned when the action itself returns no message. */
+  /** Message returned when the action itself returns none: nothing, or an empty text. */
   defaultMessage?: string;
   /** Error thrown when the form action is invoked before a saved record exists. */
   missingRecordMessage?: string;
@@ -45,8 +43,6 @@ export interface UseRecordActionOptions extends UseActionResultMutationOptions {
   ) => void | Promise<void>;
   /** Route a successful id-returning `ActionResult` to the created record. */
   linkTo?: string;
-  /** Let the shared ActionResult owner toast and optionally deep-link the result. */
-  settle?: boolean | ActionResultRunOptions;
 }
 
 export type RecordAction = (context: ActionContext) => Promise<ActionResult>;
@@ -76,7 +72,7 @@ export function useRecordAction(
         if (missingRecordMessage) throw new Error(missingRecordMessage);
         return;
       }
-      const result = (await run(id, context)) ?? defaultMessage;
+      const result = (await run(id, context)) || defaultMessage;
       if (refresh) context.refresh();
       await afterSuccess?.(context, result);
       return result;
@@ -88,7 +84,12 @@ export function useRecordAction(
 /**
  * Compose single-id `ActionResult` mutations into a record form action.
  *
- * The returned `run` callback can be passed directly to `<Action run={...} />`.
+ * The returned `run` callback can be passed directly to `<Action run={...} />`, and
+ * the action bar toasts its outcome: a success resolves the message the bar shows
+ * (`defaultMessage` when the server's is empty); a refusal rejects with its reasons
+ * (`runActionResult`) and an answer with no outcome rejects too, each toasted under
+ * the verb's label. A verb that returns the record it created is followed there
+ * (`linkTo`), before the record refreshes.
  * @owner RecordActionBar
  */
 export function useRecordActionMutation<TField extends string = string>(
@@ -96,42 +97,21 @@ export function useRecordActionMutation<TField extends string = string>(
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
   const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
-  const settleOptions = React.useMemo<ActionResultRunOptions | null>(() => {
-    if (options?.settle === false) return null;
-    if (options?.settle && typeof options.settle === "object") {
-      return {
-        ...(options.linkTo ? { linkTo: options.linkTo } : {}),
-        ...options.settle,
-      };
-    }
-    if (options?.linkTo) return { linkTo: options.linkTo };
-    return options?.settle === true ? {} : null;
-  }, [options?.linkTo, options?.settle]);
-  const settleActionResult = useActionResultRun(settleOptions ?? undefined);
-  // Rendered callers project the in-band outcome to the `<Action run>`
-  // contract. Id-returning bridge actions delegate toast/link settling to the
-  // shared ActionResult owner so consumer hooks stay declarative.
+  const follow = useCreatedRecordLink(options?.linkTo);
+  const t = useUiT();
   const run = React.useCallback<RecordActionRunner>(
-    async (id, context) => {
+    async (id) => {
       const arguments_ = options?.actionArguments?.(id);
-      const mutateRecord = () => arguments_ === undefined
-        ? mutate(id)
-        : mutate(id, arguments_);
-      if (settleOptions) {
-        const outcome = await settleActionResult(mutateRecord);
-        if (outcome?.ok) {
-          if (options?.refresh !== false) context.refresh();
-          await options?.afterSuccess?.(context, outcome.message);
-        }
-        return undefined;
-      }
-      return runActionResult(await mutateRecord());
+      const outcome = await (arguments_ === undefined ? mutate(id) : mutate(id, arguments_));
+      // A transport failure throws before this line; an answer that carries no outcome is told too.
+      if (!outcome) throw new Error(t("action.noResult"));
+      const message = runActionResult(outcome);
+      follow(outcome);
+      return message;
     },
-    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
+    [follow, mutate, options?.actionArguments, t],
   );
-  return [useRecordAction(run, settleOptions
-    ? { ...options, afterSuccess: undefined, refresh: false }
-    : options), state];
+  return [useRecordAction(run, options), state];
 }
 
 export interface UseActionResultMutationOptions extends Pick<UseActionMutationOptions, "transient" | "errorNotification"> {

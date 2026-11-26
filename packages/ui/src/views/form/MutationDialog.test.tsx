@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render as testingRender, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 
@@ -154,15 +154,34 @@ describe("MutationDialog", () => {
     expect(seen.mock.calls.at(-1)![0]).toStrictEqual({ note: null });
   });
 
-  test.fails("defect: a date carried as text, a string kind with only its widget to tell it from text, holding null offers Set value, which writes an empty text", async () => {
+  test("a date carried as text, holding null, offers no Set value: its declared format makes its empty value null", async () => {
     const parse = vi.fn(parseRawValues);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={deserializeFormSpec({ type: "object", properties: {
-        due: { anyOf: [{ type: "string", widget: "date" }, { type: "null" }], label: "Due" },
+        due: { anyOf: [{ type: "string", format: "date", widget: "date" }, { type: "null" }], label: "Due" },
       } }, defaultWidgets)} submitLabel="Plan" parseValues={parse} onSubmit={vi.fn().mockResolvedValue(ok)} />
     </AppRuntimeProvider>);
     await screen.findByText("Left empty");
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  test("Add item on a list of dates carried as text keeps submit disabled, with the message under the item", async () => {
+    const [days] = deserializeFormSpec({ type: "object", properties: {
+      days: { type: "array", widget: "list", label: "Days", items: { type: "string", format: "date", widget: "date" } },
+    } }, defaultWidgets);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Plan" fields={[days!]}
+        submitLabel="Plan" parseValues={parseRawValues} onSubmit={vi.fn().mockResolvedValue(ok)} />
+    </AppRuntimeProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Add item" }));
+    const message = await screen.findByText("This field is required.");
+    // The item's own row holds the message: the nearest row around it holds the item's control and
+    // neither the list's label nor its "Add item".
+    const row = message.closest('[data-layout="stack"]')!;
+    expect(row.contains(screen.getByRole("button", { name: /^Item/ }))).toBe(true);
+    expect(row.contains(screen.getByRole("button", { name: "Add item" }))).toBe(false);
+    expect(row.contains(screen.getByText("Days"))).toBe(false);
+    expect((screen.getByRole("button", { name: "Plan" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test("a domain readiness gate blocks buttons and form submission until ready", async () => {
@@ -298,9 +317,11 @@ describe("MutationDialog", () => {
     const message = await screen.findByText("Choose a title Use a unique value");
     const input = screen.getByRole("textbox", { name: "Title" });
     expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(message.id);
-    expect(screen.getByText(/The entry changed/)).toBeTruthy();
-    expect(screen.getByText(/Review the values/)).toBeTruthy();
-    expect(screen.getByText(/Refresh the entry/)).toBeTruthy();
+    // The form-level message and each message no rendered field claims are separate items of the banner.
+    const banner = screen.getByText("Review the values").closest<HTMLElement>('[role="alert"]')!;
+    expect(within(banner).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Review the values", "missing: The entry changed", "token: Refresh the entry",
+    ]);
     expect(submit).not.toHaveBeenCalled();
   });
 

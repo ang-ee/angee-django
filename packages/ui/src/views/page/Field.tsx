@@ -103,7 +103,8 @@ export interface FieldDescriptor extends FieldPresentation {
    * the targets it hides are dropped from the draft.
    * On save, each preset field whose value changed writes its preset's value for every target that
    * is hidden now and was loaded with a different value, in declaration order (the later wins).
-   * `prefill` therefore also runs at save and must be pure.
+   * `prefill` therefore also runs at save, and at each read of what Save would write (a record form's
+   * `nextSave`), and must be pure.
    */
   prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */
@@ -128,6 +129,13 @@ export interface FieldDescriptor extends FieldPresentation {
   /** Main record body; `document` renders continuous prose without a visible field label or box. */
   body?: boolean | "document";
   kind?: PageFieldKind;
+  /**
+   * The value's declared type as text, by its JSON Schema `format`: a date, a date and time, or a
+   * time. Never its presentation, which the widget owns. A form spec's parser sets it; a field that
+   * holds nothing holds `null` when it declares one (`emptyValueForField`), whatever its kind and
+   * widget, so declare it only on a value held as text.
+   */
+  format?: "date" | "date-time" | "time";
   description?: ReactNode;
 }
 

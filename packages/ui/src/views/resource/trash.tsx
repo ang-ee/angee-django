@@ -5,7 +5,7 @@ import {
   type CrudFilter,
   type HttpError,
 } from "@refinedev/core";
-import { extractActionOutcome, refineFieldsFromPaths, stableSerialize } from "@angee/refine";
+import { actionOutcomeReasons, extractActionOutcome, refineFieldsFromPaths, stableSerialize } from "@angee/refine";
 import {
   allowsRecordPermission,
   refineResourceName,
@@ -194,8 +194,7 @@ function TrashSelectionActions({ modelMetadata, selectedRows, unprocessedCount, 
             );
             if (!outcome) throw new Error(t("action.noResult"));
             if (!outcome.ok) {
-              const firstReason = Object.values(outcome.validationErrors ?? {}).flat()[0];
-              return { status: "refused", reason: firstReason || outcome.message || t("action.noResult") };
+              return { status: "refused", reason: actionOutcomeReasons(outcome) || outcome.message || t("action.noResult") };
             }
           },
           done: (count) => t(restore ? "trash.bulkRestored" : "trash.bulkDone", { count }),

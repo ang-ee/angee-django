@@ -5,7 +5,8 @@
 What a form field holds when it holds nothing is now decided by one rule, which
 the record form's draft and seeds, the action, mutation and schema dialogs and
 the presence control all read; the record form's own rule is gone. First match
-wins: an explicit `string` kind holds `""`, whatever its widget; the `integer`,
+wins: a field that declares a `format` (a date, a date and time or a time
+carried as text) holds `null`; an explicit `string` kind holds `""`, whatever its widget; the `integer`,
 `float`, `date`, `datetime` and `time` widgets hold `null`; the list widgets
 (`tagInput`, `list`, `rows`) and a relation list hold `[]`; the `switch` widget
 holds `false`, the `object` widget `{}`, and the `json` widget `[]` for an
@@ -35,7 +36,7 @@ no member it emits reaches those rows today.
 | | record form: an edit, a sibling changed | `{}` | `null` |
 | a number kind under a widget that is not a number's (`percent`) | record form: a create | `""` | left out |
 | | record form: an edit, a sibling changed | `""` | `null` |
-| a date, a time, or a date and time, carried as text (a `string` kind with a date or time widget) | record form: an edit, a sibling changed | `null` | `""` |
+| a date, a time, or a date and time, carried as text with no declared `format` (a `string` kind with only a date or time widget) | record form: an edit, a sibling changed | `null` | `""` |
 | the `date`, `time`, `integer` or `float` widget with no kind | an action dialog's optional argument, at its `submit`; a `MutationDialog` field, at its `parseValues` | `""` | `null` |
 | the `datetime` widget with no kind | a `MutationDialog` field, at its `parseValues` | `""` | `null` |
 | the `json` widget with no kind | an action dialog's optional argument; a `MutationDialog` field | `""` | `{}` |
@@ -49,14 +50,6 @@ a text widget holds `{}`, `[]` or `null` (left out of a create) where it held
 `""`, and a text declared under a list or the `json` widget holds `""` where it
 held `[]` or `{}`. No other change was found over the pairs a form spec, the
 metadata layer or a hand-written descriptor produces.
-
-The row for a date carried as text is a step back for the record form, and is
-recorded as an expected failure until a descriptor carries its declared format:
-the backend's form spec emits a date member as a `string` kind with a date
-widget, so nothing but the widget tells it from text, and the rule does not read
-a widget against an explicit kind. `""` is no valid date, and "Set value" on a
-nullable one holding `null` writes `""` on every surface. No form of the
-framework or of its products declares such a member today.
 
 A field whose empty value is `null` (a number, a date or time, an untyped
 value) has no "present but empty" state: holding `null`, or nothing without a

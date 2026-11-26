@@ -505,15 +505,30 @@ function stringListMap(
 }
 
 /**
+ * A refusal's in-band reasons as one line: every `validationErrors` message, under any key, each
+ * once, in the server's order; empty when the outcome carries none. A surface that binds the keys
+ * to its inputs (a typed-args action form) reads the map; one that only tells the person why (a
+ * toast, a rendered action's failure) reads this.
+ */
+export function actionOutcomeReasons(
+  outcome: Pick<ActionOutcome, "validationErrors">,
+): string {
+  return [...new Set(Object.values(outcome.validationErrors ?? {}).flat())].join("; ");
+}
+
+/**
  * Normalize a backend ActionResult into the rendered action contract: a business
- * failure throws, a success returns the success message, and a missing outcome
- * stays silent because the mutation transport already reported the failure.
+ * failure throws its reasons (its message when it carries none; a refused target's
+ * message is only the verb's summary, and the reason arrives in-band) and a success
+ * returns the success message. A missing outcome (an answer without `ok`) returns
+ * `undefined`: a transport failure has already rejected before this projection, so
+ * a caller that must tell an empty answer does so itself.
  */
 export function runActionResult(
   outcome: ActionOutcome | null | undefined,
 ): string | undefined {
   if (!outcome) return undefined;
-  if (!outcome.ok) throw new Error(outcome.message);
+  if (!outcome.ok) throw new Error(actionOutcomeReasons(outcome) || outcome.message);
   return outcome.message;
 }
 
