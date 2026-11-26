@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from django.apps import apps
+from django.contrib.auth.models import AnonymousUser
+from rebac import PermissionDenied, actor_context, system_context
+from rebac.testing import assert_decisions
 
 from angee.base.build import extension_source_map
 from angee.messaging.checks import check_derived_reads
+from angee.messaging.testing.models import Channel, Message, Part, Person, Thread
+from angee.projects.testing.models import Project, ProjectBinding
+from angee.spaces.testing.models import Group, Membership
+from tests.conftest import create_platform_admin, create_user, make_integration
+from tests.messaging_campaign import grant
+from tests.test_iam_account_actions import _manager
+from tests.test_messaging_system_mail import LOCMEM, SENDER, _install
 from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
 
 # A fragment arm on each sealed channel permission would reach the system channel past its
@@ -43,3 +55,140 @@ def test_check_refuses_fragment_arms_on_the_sealed_channel_permissions(tmp_path:
     assert error.id == "messaging.E003"
     assert f"messaging/channel#{permission}" in error.msg
     assert "channel_contrib" in error.msg
+
+
+# Every seat that reaches an ordinary channel by a grant, a binding or an ownership: the
+# administrator's own acts open each path, and the seal closes each on the system channel.
+_BOUND_SEATS = ("channel_reader", "channel_replier", "integration_reader", "team_member", "project_reader", "owner")
+_UNBOUND_SEATS = ("member", "people_manager", "other_channel_reader", "recipient", "cause", "anonymous")
+_CHECKED = ("read", "reply", "write")
+
+
+def _bind(channel: Any, admin: Any, seats: SimpleNamespace, team: Any, project: Any) -> None:
+    """Open every way a channel is read, each through an administrator's own act."""
+
+    channel.with_actor(admin).grant_record_access("reader", seats.channel_reader)
+    channel.with_actor(admin).grant_record_access("replier", seats.channel_replier)
+    channel.integration_ptr.with_actor(admin).grant_record_access("reader", seats.integration_reader)
+    with system_context(reason="tests.messaging.seal.bind"):
+        Channel._base_manager.filter(pk=channel.pk).update(team=team)
+        ProjectBinding.objects.bind(project=project, target=channel.integration_ptr)
+    with actor_context(admin):
+        Channel._base_manager.get(pk=channel.pk).with_actor(admin).transfer_ownership(seats.owner)
+
+
+@pytest.fixture
+def sealed(db: None, settings: Any) -> SimpleNamespace:
+    """The system channel and an ordinary email channel, each with one message, bound to the same seats."""
+
+    del db
+    settings.MAILERS = {"default": LOCMEM, "transport": LOCMEM}
+    settings.DEFAULT_FROM_EMAIL = SENDER
+    system = _install()
+    admin = create_platform_admin("seal-admin")
+    seats = SimpleNamespace(
+        admin=admin, anonymous=AnonymousUser(), people_manager=_manager("seal-people-manager"),
+        **{name: create_user(f"seal-{name.replace('_', '-')}") for name in (*_BOUND_SEATS, "member", "cause")},
+        other_channel_reader=create_user("seal-other-channel-reader"),
+    )
+    with system_context(reason="tests.messaging.seal.recipient"):
+        seats.recipient = type(admin).objects.create_user("seal-recipient", "seal-recipient@example.test")
+        team = Group.objects.create(name="Seal team", slug="seal-team")
+        Membership.objects.create(group=team, party=Person.objects.for_user(seats.team_member), role="member",
+                                  is_confirmed=True)
+        project = Project.objects.create(title="Seal project")
+    grant(project, "reader", seats.project_reader)
+    control = make_integration("seal-control", model=Channel, backend_class="email", owner=None)
+    other = make_integration("seal-other", model=Channel, backend_class="email")
+    grant(other, "reader", seats.other_channel_reader)
+    for channel in (system, control):
+        _bind(channel, admin, seats, team, project)
+    with actor_context(seats.cause):
+        mail = Message.objects.compose_as_system(
+            reason="tests.messaging.seal", to=["seal-recipient@example.test"], subject="Sign in", text="Your link.",
+        )
+    control_mail = Message.objects.compose(channel=control, to=["seal-recipient@example.test"], text="Hello.",
+                                           actor=admin)
+    with system_context(reason="tests.messaging.seal.rows"):
+        rows = {
+            name: (Channel._base_manager.get(pk=message.channel_id), Thread._base_manager.get(pk=message.thread_id),
+                   Message._base_manager.get(pk=message.pk), Part._base_manager.filter(message=message).first())
+            for name, message in (("system", mail), ("control", control_mail))
+        }
+    return SimpleNamespace(seats=seats, rows=rows, other=other)
+
+
+def test_administrators_alone_read_send_on_and_write_the_system_channel(sealed: SimpleNamespace) -> None:
+    """The decision table: every path that opens an ordinary channel is closed on the system channel.
+
+    The control channel, bound to the same seats by the same acts, proves each seat's path is open,
+    so no refused cell on the system channel passes for want of a grant.
+    """
+
+    seats = sealed.seats
+
+    def cells(name: str) -> list[tuple[Any, str, Any, bool]]:
+        channel, thread, message, part = sealed.rows[name]
+        allowed_on = {"admin"} | (set(_BOUND_SEATS) if name == "control" else set())
+        targets = (
+            *((channel, action) for action in _CHECKED),
+            (thread, "read"), (message, "read"), (message, "read_inbox"), (part, "read"),
+        )
+        return [
+            (getattr(seats, seat), action, target, seat in allowed_on and (seat, action) not in _CONTROL_GAPS)
+            for seat in ("admin", *_BOUND_SEATS, *_UNBOUND_SEATS)
+            for target, action in targets
+        ]
+
+    assert_decisions(checks=[*cells("system"), *cells("control")])
+
+
+_CONTROL_GAPS = {
+    # On an ordinary channel these seats read but do not send or manage: the table states each.
+    *((seat, action) for seat in ("channel_reader", "integration_reader", "team_member", "project_reader")
+      for action in ("reply", "write")),
+    ("channel_replier", "write"),
+}
+
+
+def test_the_system_channel_is_offered_to_nobody_yet_an_administrator_may_compose_on_it(
+    sealed: SimpleNamespace,
+) -> None:
+    """Today's answer for a person's compose on the system channel, pending the framework coordinator's ruling.
+
+    No seat, administrators included, is offered the system channel to send from
+    (``ChannelQuerySet.outbound_email``, the console's sendable selection). Yet ``compose`` decides
+    ``reply`` alone, which administrators hold on it, so an administrator's
+    ``compose(channel=system_channel())`` is admitted. Whether a person's compose there is admitted
+    (an administrator's test send is one candidate) is pending; the line that would refuse it is
+    ``MessageManager.compose``'s channel gate also refusing a backend that is not offered.
+    """
+
+    seats = sealed.seats
+    system = Channel.objects.system_channel()
+    for seat in ("admin", *_BOUND_SEATS, *_UNBOUND_SEATS):
+        actor = getattr(seats, seat)
+        if seat != "anonymous":
+            sendable = set(Channel.objects.with_actor(actor).outbound_email())
+            assert system not in sendable, seat
+        if seat == "admin":
+            composed = Message.objects.compose(channel=system, to=["test-send@example.test"], text="Test.", actor=actor)
+            assert composed.channel_id == system.pk
+        elif seat != "anonymous":
+            with pytest.raises(PermissionDenied):
+                Message.objects.compose(channel=system, to=["test-send@example.test"], text="Test.", actor=actor)
+    assert sealed.rows["control"][0] in set(Channel.objects.with_actor(seats.admin).outbound_email())
+
+
+def test_system_threads_show_in_administrators_inbox_lists_and_nobody_elses(sealed: SimpleNamespace) -> None:
+    """No filter hides system mail from the inbox: its readers, administrators alone, find its threads there."""
+
+    seats = sealed.seats
+    thread = sealed.rows["system"][1]
+    replier_elsewhere = create_user("seal-replier-elsewhere")
+    sealed.other.with_actor(seats.admin).grant_record_access("replier", replier_elsewhere)
+    listed = {
+        name: thread.pk in set(Thread.objects.with_actor(actor).inbox().values_list("pk", flat=True))
+        for name, actor in (("admin", seats.admin), ("member", seats.member), ("replier", replier_elsewhere))
+    }
+    assert listed == {"admin": True, "member": False, "replier": False}
