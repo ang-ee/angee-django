@@ -78,11 +78,12 @@ export { MessageReader, type MessageReaderProps } from "./MessageReader";
 export type { MessageReaderData } from "./documents";
 
 /**
- * The tones of a message's delivery status that the shared vocabulary leaves unnamed, scoped to
- * the message's `status` field: an app that shows messages declares them in its `vocabulary`
- * (messaging's own below; Nexus for its inbox). Draft and Failed keep the shared tones.
+ * The tones of a message's delivery status, scoped to the message's `status` field: an app that
+ * shows messages declares them in its `vocabulary` (messaging's own below; Nexus for its inbox).
+ * A draft is waiting, not a problem, so it is neutral (the shared word reads amber, as Uncertain
+ * does); Failed keeps the shared danger.
  */
-export const MESSAGE_STATUS_TONES = { QUEUED: "info", SENT: "success", UNCERTAIN: "warning" } as const;
+export const MESSAGE_STATUS_TONES = { DRAFT: "neutral", QUEUED: "info", SENT: "success", UNCERTAIN: "warning" } as const;
 
 export interface MessagingAddonOptions {
   /** Composer shortcut for this app's Activity comment source. */

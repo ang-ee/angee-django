@@ -18,7 +18,9 @@ describe("messaging addon manifest", () => {
     expect(messaging.statusTones).not.toHaveProperty("queued");
     expect(messaging.vocabulary).toEqual([{ app: "messaging", resources: { "messaging.Message": { fields: { status: { tones: MESSAGE_STATUS_TONES } } } } }]);
     // What tells the states apart: Queued and Sent are not alarms, Uncertain is not Failed.
-    expect(MESSAGE_STATUS_TONES).toEqual({ QUEUED: "info", SENT: "success", UNCERTAIN: "warning" });
+    expect(MESSAGE_STATUS_TONES).toEqual({ DRAFT: "neutral", QUEUED: "info", SENT: "success", UNCERTAIN: "warning" });
+    // A scheduled draft does not read as Uncertain does.
+    expect(statusTone("DRAFT", { ...MESSAGE_STATUS_TONES })).not.toBe(statusTone("UNCERTAIN", { ...MESSAGE_STATUS_TONES }));
     expect(statusTone("FAILED", { ...MESSAGE_STATUS_TONES })).toBe("danger");
     expect(statusTone("UNCERTAIN", { ...MESSAGE_STATUS_TONES })).toBe("warning");
     expect(messaging.icons).toHaveProperty("reply");
