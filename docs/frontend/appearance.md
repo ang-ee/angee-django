@@ -49,10 +49,12 @@ own theme, else its own defaults. The
 options it answers replace the build's options for that theme; when it answers
 none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
 is that source. While the source's first read is on its way, the provider keeps
-the first paint and the boot cache for appearance that wears the host's options:
-a person following the app default, or a locked app. A person's own theme,
-customization or draft applies at once. A failure or a pause releases the hold
-onto the build's options. Pages render meanwhile under that paint: on a device's first
+each person's first paint, and the boot cache, where they wear the host's
+options: a person following the app default, or a locked app. A person's own saved
+theme or customization is painted at once. After the first paint, every choice
+applies at once, a draft's included; a return to the app default shows the build's
+options until the source answers. A failure or a pause releases the hold onto the
+build's options. Pages render meanwhile under that paint: on a device's first
 visit it is the build's appearance, which changes once when the answer arrives;
 on later visits it is the cached answer, so nothing changes. Every page inside the app wears the answer where it draws from
 tokens, signed in or out; a standalone web form page (`/forms/*`) keeps the build's

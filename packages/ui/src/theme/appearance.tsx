@@ -60,8 +60,8 @@ export interface HostAppearanceDefaults {
   fingerprint?: string;
   /**
    * The host's own options are still being read: where the appearance wears them (a
-   * person following the app default, or a locked app), keep the first paint and the
-   * boot cache until they arrive, as while identity resolves. Only the app's session frame
+   * person following the app default, or a locked app), keep that person's first paint
+   * and the boot cache until they arrive. Only the app's session frame
    * sets it, from its host appearance source, which clears it when its read settles,
    * fails or pauses; a build never does.
    */
@@ -184,14 +184,19 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   }, [hostTheme, host.options]);
 
   const resolvingIdentity = auth.status === "resolving";
-  // The first paint and the boot cache wait for identity, and for the host's own options only
-  // where they wear them: a person's own theme, customisation or draft applies at once.
-  const holdingPaint = resolvingIdentity || (host.pending === true && wearsHostOptions);
+  const actorId = resolvingIdentity ? null : auth.user?.id ?? "anonymous";
+  // The person whose first paint is on the document: a change of person starts a new first paint.
+  const [paintedFor, setPaintedFor] = useState<string | null>(null);
+  // Every paint waits for identity. The host's own pending options hold only this person's first
+  // paint, and only where it wears them; later choices, a draft's included, apply at once.
+  const holdingPaint = resolvingIdentity
+    || (paintedFor !== actorId && host.pending === true && wearsHostOptions);
   const holdingCache = resolvingIdentity || (host.pending === true && ownAppearance.wearsHostOptions);
   useEffect(() => {
     if (holdingPaint) return;
     applyAppearanceRoot({ themeId: effectiveThemeId, colorScheme, tokens: effectiveTokens });
-  }, [colorScheme, effectiveThemeId, effectiveTokens, holdingPaint]);
+    setPaintedFor(actorId);
+  }, [actorId, colorScheme, effectiveThemeId, effectiveTokens, holdingPaint]);
 
   useEffect(() => {
     if (holdingCache) return;
