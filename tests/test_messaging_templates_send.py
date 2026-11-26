@@ -759,16 +759,16 @@ def test_a_key_names_one_press_so_an_edit_of_the_rows_text_or_sample_is_another_
 
     del system_channel
     tester = create_platform_admin("messaging-templates-edited-retrier")
-    row = _sampled()
-    first = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="edited-1")
-    assert MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="edited-1").pk == first.pk
     for column, value in (("source", "Hello again, {{ name }}."), ("sample", {**SAMPLE, "name": "Bea"})):
+        row, key = _sampled(key=f"tests.edited_{column}"), f"edited-{column}"
+        first = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key=key)
+        assert MessageTemplate.objects.send_test(row, actor=tester, idempotency_key=key).pk == first.pk
         edited = MessageTemplate._base_manager.get(pk=row.pk)
         setattr(edited, column, value)
         with system_context(reason="tests.messaging_templates.send.edit"):
             edited.save()
         with pytest.raises(CreationKeyConflict):
-            MessageTemplate.objects.send_test(edited, actor=tester, idempotency_key="edited-1")
+            MessageTemplate.objects.send_test(edited, actor=tester, idempotency_key=key)
 
 
 def test_a_keyed_retry_of_a_test_whose_message_was_trashed_is_refused_as_discarded(system_channel: Any) -> None:
