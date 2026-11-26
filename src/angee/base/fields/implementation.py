@@ -46,7 +46,10 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     Reads forgive and writes do not: a lookup matches what a person or a URL
     may spell (``" local "``, the member's name ``"LOCAL"``), while a write
     stores only the registry's key as the registry spells it, so a typo in
-    code keeps failing loudly.
+    code keeps failing loudly, except where a model or the GraphQL input
+    normalises the key first: an ``ImplDefaultsMixin`` insert
+    (``prepare_impl_defaults``) and a GraphQL input, which maps the enum's
+    name to its key, both store ``"STUB"`` as ``stub``.
     """
 
     def __init__(

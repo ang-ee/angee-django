@@ -467,9 +467,11 @@ Use these owners instead of maintaining another contract in an addon:
   `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
   read as text; no value the field prepares writes a key its choices do not
   name (a history copy and a migration's state model write the key their row
-  stored), or a key spelled other than the registry's, while any other
-  expression (`F`, `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not
-  checked; a lookup forgives what a person or a URL may spell. Resolving the
+  stored), or a key spelled other than the registry's (except where a model or
+  the GraphQL input normalises it first: an `ImplDefaultsMixin` insert, a
+  GraphQL input), while any other expression (`F`, `Subquery`, `Cast`, `Case`,
+  or a `Value` inside one) is not checked; a lookup forgives what a person or a
+  URL may spell. Resolving the
   key raises naming the field, the key and the setting. Every Angee GraphQL
   schema reads such a key as null on a type's field
   ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which

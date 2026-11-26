@@ -23,8 +23,10 @@ live in code docstrings.
   row stored; any other expression (`F`, `Subquery`, `Cast`, `Case`, or a
   `Value` inside one) is not checked. A write stores a key only as the
   registry spells it: the member's name (`"LOCAL"`) or a padded key
-  (`" local "`) is refused, as before, by every field, though a lookup reads
-  both as the key. A save that leaves the column out
+  (`" local "`) is refused, as before, by every field, except where a model
+  or the GraphQL input normalises the key first (an `ImplDefaultsMixin`
+  insert, a GraphQL input), though a lookup reads both as the key. A save
+  that leaves the column out
   (`save(update_fields=...)`) succeeds from code and keeps the key, so sync
   jobs and the workers of a rolling deploy go on with the row; a GraphQL
   update or a model form saves the whole row and is refused naming the
