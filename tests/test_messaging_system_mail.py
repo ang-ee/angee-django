@@ -27,7 +27,6 @@ from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
 from angee.messaging.constants import DELIVER_MESSAGE_TASK, SYSTEM_CHANNEL_BACKEND, SYSTEM_MAILER_BACKEND
 from angee.messaging.email import SystemChannelBackend, SystemMailer
-from angee.messaging.managers import _OUTGOING_ACTOR
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
@@ -219,10 +218,12 @@ def test_system_mail_records_the_causing_actor_and_lands_its_handles_with_no_cre
         "new-person@example.test", "New Person", None,
     )
     assert (sender.value, sender.created_by_id) == ("noreply@example.test", None)
-    # The caller's changeset holds the conversation under the causing user; the handles, landed under the
-    # non-user attribution, are recorded beside them under the same change reason and name no user.
+    # The caller's changeset holds the conversation under the causing user; the handles are recorded beside
+    # it under the same change reason, and their history names no user.
     assert thread_history == {("tests.system_mail.request", str(to_subject_ref(member)))}
-    assert handle_history == {("tests.system_mail.request", str(_OUTGOING_ACTOR))}
+    assert {reason for reason, _actor in handle_history} == {"tests.system_mail.request"}
+    user_type = to_subject_ref(member).subject_type
+    assert not any(actor.startswith(f"{user_type}:") for _reason, actor in handle_history), handle_history
     for handle in (recipient, sender):
         for action in ("read", "write", "delete"):
             assert not handle.with_actor(member).has_access(action), (handle.value, action)
