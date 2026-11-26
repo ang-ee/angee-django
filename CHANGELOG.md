@@ -10,6 +10,17 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- Framework images: `django-angee-base` and `django-angee` build on the CPython
+  release `.python-version` pins, `python:3.14.9-slim`. The Dockerfile's
+  `PYTHON_VERSION` default stayed `3.14`, a tag that now carries 3.14.10, while the
+  dependency stage's `uv sync` reads the pin and never downloads an interpreter, so
+  every image build since the pin failed with `No interpreter found for Python
+  3.14.9` and no framework image was published. The default names the pin, and the
+  static tier's runtime image tests refuse a Dockerfile whose default differs from
+  `.python-version`: a pin change edits both. Follow-up: Docker rebuilds only the
+  current patch release's tags, so until the pin lifts the images carry the Debian
+  packages of `python:3.14.9-slim`'s last build (2026-10-21).
+
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.

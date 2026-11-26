@@ -130,12 +130,14 @@ jobs:
         env:
           PYTHONPATH: src
       # Static test contracts read source and docs without Django: patch
-      # targets, documentation links and recipes, and the agent methodology.
+      # targets, documentation links and recipes, the agent methodology, and the
+      # runtime image's Dockerfile, whose Python follows .python-version.
       - run: >-
           uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q
           tests/test_patch_targets.py tests/test_documentation_contracts.py tests/test_owner_index.py
           tests/test_agent_methodology.py tests/test_agent_owner_map_guard.py
           tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py
+          tests/test_runtime_image.py
 
   # One selection per run, which the SQLite shards and the PostgreSQL groups read.
   # A pull request's shards run the test files its changed paths reach
