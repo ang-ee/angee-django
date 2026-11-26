@@ -16,23 +16,29 @@ live in code docstrings.
     recipient with `effective("template", key, person=...)`) with the caller's
     values inside `system_context(reason=reason)`, and records it on messaging's
     system channel through `Message.objects.compose_as_system`, queued: one
-    message per call, returned unbound. It is for mail the framework writes on no
-    person's request: the caller's own gate authorised the send, the verb checks
-    no permission and decides nothing about the values or who may be mailed, and
-    no GraphQL field reaches it. A blank `reason` is a `ValueError`; every other
-    refusal comes before any row is written: `MessageTemplate.send_refusal()`
-    (a layout, block or part, `not_a_template`; a shipped default its override
-    replaces, `not_effective`), then the render's codes, then compose's (an
-    address, subject or body under its argument, system mail not configured, the
-    system channel missing or not connected). Entering the system context writes
-    its permission audit row at once, even when the render then refuses.
+    message per call, returned unbound, with no idempotency key. It is for mail
+    the framework writes on no person's request and is called only from named
+    system work: the caller's own gate authorised the send, the verb checks no
+    permission and decides nothing about the values or who may be mailed, and a
+    test lists the modules that call it. The caller looks the row up inside its
+    own `system_context(reason=...)`, under the reason it sends with (the
+    README's recipe). A blank `reason` is a `ValueError`; then
+    `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;
+    a row that is not what renders, `not_effective`), the render's codes, and what
+    `compose_as_system` refuses, as its docstring says; no message row is written
+    before a refusal, except for an address the transport cannot carry, which is
+    recorded and fails at delivery. Entering the system context writes its
+    permission audit row at once, even when the render then refuses. What a send
+    stores (the thread's title, the preview, the parts and their
+    content-addressed fragments, which outlive the message) is read by whoever
+    reads the system channel.
   - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
     kit=None)` sends a row with its `sample` to `actor`'s own account address on
     the system channel, the subject after `[Test] ` (`TEST_SUBJECT_PREFIX`). It
     is decided by `preview` alone (`MessageTemplate.send_test_refusal()`, which
     then asks `send_refusal()`), refuses an account with no address
-    (`no_test_address`), and renders under `actor`, never elevated, so a
-    refused test writes no permission audit row. The console gets
+    (`no_test_address`), and renders under `actor`, never elevated, so its
+    render writes no permission audit row. The console gets
     `send_message_template_test(template, brand_kit)`, an `ActionResult` naming
     the message (a signed-out caller gets the session's error, a caller who may
     not preview the row `PERMISSION_DENIED`, the rest in band with its code), and
@@ -54,12 +60,11 @@ live in code docstrings.
   - **Dependencies.** `angee-messaging-templates` requires `angee-messaging`;
     messaging still never imports message templates. **Upgrade:** a host that
     lists `angee.messaging_templates` without `angee.messaging` now also enables
-    messaging and what messaging requires (timeline, integrate, storage, tags,
-    jobs, web and their own requirements), since the composer turns on a
-    component's required addons, and so migrates, synchronizes the permission
-    schema and loads the install tier for them. With messaging comes its system
-    mailer as Django's default mailer (messaging's entry): a host that authored
-    its own `MAILERS["default"]` renames it before it starts.
+    messaging, since the composer turns on a component's required addons; the
+    rest of messaging's requirements were already this addon's, and the new
+    libraries are `django-anymail` and `requests`. Such a host migrates,
+    synchronizes the permission schema and loads the install tier for messaging,
+    whose mail settings then apply.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),

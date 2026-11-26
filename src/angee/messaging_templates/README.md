@@ -9,7 +9,9 @@ and a plain-text body. The [models module](models.py), the
 A sender renders a row and hands the result on. For mail the framework writes on
 no person's request, `MessageTemplate.objects.send_as_system` renders a template
 as named system work and records it on messaging's system channel, which
-delivers it ([Sending as system work](#sending-as-system-work)).
+delivers it ([Sending as system work](#sending-as-system-work)). The addon
+requires messaging: enabling it enables messaging and what messaging requires,
+and mail settings are [messaging's](../messaging/README.md).
 
 ## The rows
 
@@ -197,68 +199,87 @@ the default one.
 
 `MessageTemplate.objects.send_as_system(row, *, reason, to, values, kit=None)`
 sends mail the framework writes on no person's request: one effective template,
-one address, the values. The caller picks the row for its recipient with
-`effective("template", key, person=recipient)`, through
-`MessageTemplate.system_queryset()` when it has no actor, and its own gate
-authorised the send. The verb checks no permission and decides nothing about the
-values or about who may be mailed, so it is server code only: no GraphQL field
-reaches it. In order:
+one address, the values. It checks no permission and decides nothing about the
+values, the links in them or who may be mailed: the caller's own gate authorised
+the send, so it is called only from named system work, never from a path a
+person's request reaches with that person's choice of row, address or values (a
+resolver, an MCP tool, a view). A test lists the modules that call it, so a new
+caller is a reviewed change.
+
+The caller picks the row for its recipient inside its own named work, so the
+lookup and the send are audited under one reason:
+
+```python
+with system_context(reason="<addon>.<verb>"):
+    row = MessageTemplate.objects.effective("template", key, person=person)
+MessageTemplate.objects.send_as_system(row, reason="<addon>.<verb>", to=address, values=values)
+```
+
+A key with no row raises `DoesNotExist` there, a deployment's defect rather than
+a refusal. The row renders as the instance holds it: edits not yet saved are
+sent, and a row never saved is refused `not_effective`. `to` is one entry as
+messaging's `clean_recipient` reads it; pass a bare address, since a typed name
+fills the display name of a handle that has none. Nothing is idempotent: a caller
+that retries sends again. In order:
 
 1. a blank `reason` is a `ValueError`, before anything is read;
 2. the row's side, `MessageTemplate.send_refusal()`: a layout, block or part is
-   refused (`not_a_template`), and so is a shipped default its override replaces
-   (`not_effective`);
+   refused (`not_a_template`), and so is a row that is not what renders for its
+   kind, key and language (`not_effective`), such as a shipped default its
+   override replaces;
 3. the render, inside `system_context(reason=reason)`, so it reads every row and
    the default kit whoever calls, in the row's language and the active time
    zone. Entering it writes one permission audit row at once, which stays when
    the render then refuses with one of the codes above;
-4. messaging's `Message.objects.compose_as_system`, under the same reason and in
-   the caller's context and transaction: the rendered subject, plain text and
-   HTML, to `to`, from the deployment's `DEFAULT_FROM_EMAIL`, on the system
-   channel, queued. It refuses, under its argument, an address, subject or body it
-   cannot send (`to`, `subject`, `text`), system mail that is not configured
-   (`OUTBOUND_EMAIL_NOT_CONFIGURED` or an invalid sender, under `channel`), and a
-   system channel that is missing (`SYSTEM_CHANNEL_MISSING`) or not connected
-   (`OUTBOUND_EMAIL_CHANNEL_MISSING`).
+4. messaging's `Message.objects.compose_as_system`, under the same reason,
+   outside that context, in the caller's own context and transaction, with the
+   rendered subject, plain text and HTML; it refuses as its docstring says.
 
-Nothing is written before a refusal. Each call records one message with its own
-Message-ID and hands it to delivery once, when the outermost transaction
-commits; the message is returned unbound. The causing actor, if any, is its
-`created_by`, which grants nothing, and administrators alone read the system
-channel's threads and messages (messaging's permission schema seals the channel).
+No message row is written before a refusal, with one exception compose does not
+refuse up front: an address whose part before the `@` is outside ASCII is
+recorded and queued, and its delivery fails. The audit rows commit or roll back
+with the caller's transaction, and `reason` is recorded in them alone, never on
+the message. Each call records one message with its own Message-ID and hands it
+to delivery once, when the outermost transaction commits; the message is
+returned unbound, with the causing actor, if any, as its `created_by`, which
+grants nothing.
+
+**What a send stores, and who reads it.** Both this verb and the test send below
+store, on the system channel: a new thread titled with the rendered subject,
+kept in the thread's history; the message, whose preview is the first 280
+characters of its text; its title, text and HTML parts, which point to
+content-addressed text fragments that carry a search vector and that nothing
+deletes, so they outlive the message; and one `to` recipient on the address's
+handle. Whoever reads the system channel reads all of it: administrators alone,
+under messaging's seal on the channel. A value that is a credential, such as a
+sign-in link, is readable by them until it expires, and deleting the message does
+not remove its fragments.
 
 ### A test send
 
 `MessageTemplate.objects.send_test(row, *, actor, kit=None)` is an
 administrator's check of a row before it goes out: the row rendered with its
 `sample` and sent to `actor`'s own account address. It is decided by `preview`
-alone, as a preview is, and it is a user's request, so it runs as `actor`, never
-elevated:
+alone, as a preview is, and it is a user's request, so its render runs as
+`actor` and is never elevated:
 
 1. `MessageTemplate.send_test_refusal()`: without `preview`, `PermissionDenied`
-   before anything else is read, whatever the host's channel or mail settings;
-   then the row's side, as above;
+   before the verb reads anything else, whatever the host's channel or mail
+   settings; then the row's side, as above;
 2. an account with no email address: `no_test_address`;
 3. the render, under `actor`'s own scope (every row and kit a render reads is
-   readable by any signed-in reader), so a refused test writes no permission
-   audit row;
+   readable by any signed-in reader), so a test refused for its permission, its
+   address or its render writes no permission audit row;
 4. `compose_as_system` under the reason
    `messaging_templates.message_template.send_test`, with the rendered subject
-   after `[Test] ` (`TEST_SUBJECT_PREFIX`), refusing as above.
+   after `[Test] ` (`TEST_SUBJECT_PREFIX`); it refuses as its docstring says.
 
-What a test send stores, on the system channel: one queued email message, its
-title, text and HTML parts, and a new thread titled `[Test] <subject>` with no
-owner, all with `actor` as `created_by`; one `to` recipient on the handle the
-address lands on, the administrator's existing one when it has one. The mail
-holds the row's sample values and the administrator's address. Administrators
-alone read the system channel and they already read every sample and account
-address, so a test discloses nothing new; their inbox lists its thread.
-Messaging delivers it through the transport mailer.
-
-This addon requires messaging, so a host that installs it also enables messaging
-and what messaging requires, with messaging's mail settings: Django's default
-mailer is messaging's system mailer, and a host's own `MAILERS["default"]` takes
-another name.
+It stores what any send stores (above), with `actor` as `created_by` and the
+thread titled `[Test] <subject>`; the recipient is the administrator's existing
+handle for the address when there is one. The mail holds the row's sample values
+and the administrator's address. Administrators alone read the system channel
+and they already read every sample and account address, so a test discloses
+nothing new; their inbox lists its thread.
 
 ## Shipped defaults, overrides and reset
 
@@ -413,20 +434,19 @@ reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
 `send_message_template_test(template, brand_kit)` is the test send
 ([A test send](#a-test-send)) of a row, in the named kit or the default one, to
 the caller's own address; it returns an `ActionResult` whose `id` is the
-message's. It refuses as the verbs do: a signed-out caller gets the session's
-GraphQL error and a caller who may not preview the row a `PERMISSION_DENIED`
-GraphQL error; the rest comes back in band (`ok: false`) with its code: a
-layout, block or part (`not_a_template`), an overridden shipped default
-(`not_effective`), an account with no address (`no_test_address`), a kit the
-caller does not read (`not_found`), the system channel missing
-(`SYSTEM_CHANNEL_MISSING`) or not connected (`OUTBOUND_EMAIL_CHANNEL_MISSING`)
-and system mail not configured (`OUTBOUND_EMAIL_NOT_CONFIGURED`), each keyed
-`channel` in `validation_errors`, an address compose refuses (keyed `to`), and a
-render refusal, whose messages name each path; `ActionResult` keeps no code for
+message's. It reads the row and a named kit first, both readable by any
+signed-in reader, then refuses as the verbs do: a signed-out caller gets the
+session's GraphQL error and a caller who may not preview the row a
+`PERMISSION_DENIED` GraphQL error. The rest comes back in band (`ok: false`)
+with its code: a layout, block or part (`not_a_template`), a row that is not
+what renders (`not_effective`), an account with no address (`no_test_address`),
+a kit the caller does not read (`not_found`), a render refusal, whose messages
+name each path, and what `compose_as_system` refuses, keyed under its argument
+in `validation_errors`, as its docstring says. `ActionResult` keeps no code for
 a refusal raised as a list, as `invalid_values` is, so its `code` is null. A
-row projects `can_send_test`, what the verb asks first;
-it rides the list's statement, and it is the row's side alone, so a test it
-admits may still be refused in band for the account, the channel or the sample.
+row projects `can_send_test`, what the verb asks first; it rides the list's
+statement, and it is the row's side alone, so a test it admits may still be
+refused in band for the account, the channel or the sample.
 Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
 (`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
 says), which a page sets as `dir` on the subject, preheader and plain text it

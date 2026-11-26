@@ -165,7 +165,10 @@ ONE_AT_A_TIME_MESSAGE = "Message templates are written one at a time, so each sa
 NO_BRAND_KIT_MESSAGE = "No brand kit is the default, and a message renders in a brand kit's name and colours."
 SHIPPED_DEFAULT_MESSAGE = "A shipped default has this kind, key and language: override it instead."
 NOT_A_TEMPLATE_MESSAGE = "Only a template is sent: a layout, block or part reaches a mail inside a template."
-NOT_EFFECTIVE_MESSAGE = "This shipped default is overridden: the override is what renders, so send it instead."
+NOT_EFFECTIVE_MESSAGE = (
+    "This row is not what renders for its kind, key and language (a shipped default its override replaces, or a row "
+    "not saved): send the row that renders."
+)
 NO_TEST_ADDRESS_MESSAGE = "Your account has no email address to send the test to."
 
 TEST_SUBJECT_PREFIX = "[Test] "
@@ -625,30 +628,57 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     ) -> Message:
         """Render ``row`` with ``values`` as named system work and record it on the system channel, queued.
 
-        For mail the framework sends on no person's request. The caller picks
-        ``row`` for its recipient through the library's lookup,
-        :meth:`MessageTemplateQuerySet.effective` by kind, key and person (work
-        with no actor reads through ``MessageTemplate.system_queryset()``),
-        names one address and gives the values; its own gate authorised the
-        send. The verb checks no permission and decides nothing about the values
-        or about who may be mailed, so it is server code only: no GraphQL field
-        reaches it.
+        For mail the framework sends on no person's request. **Call it only from
+        named system work**, never from a path that a person's request reaches
+        with that person's choice of row, address or values (a resolver, an MCP
+        tool, a view): it checks no permission and decides nothing about the
+        values, the links in them or who may be mailed, since the caller's own
+        gate authorised the send. The modules that call it are listed by the test
+        of this boundary, so a new caller is a reviewed change.
+
+        The caller picks ``row`` for its recipient inside its own named work, so
+        the lookup and the send are audited under one reason::
+
+            with system_context(reason=reason):
+                row = MessageTemplate.objects.effective("template", key, person=person)
+            MessageTemplate.objects.send_as_system(row, reason=reason, to=address, values=values)
+
+        A key with no row raises ``DoesNotExist`` there: a deployment's defect,
+        not a refusal. ``row`` renders as the instance holds it, so edits not yet
+        saved are sent, and a row never saved is refused ``not_effective``. ``to``
+        is one entry as :meth:`~angee.messaging.managers.MessageManager.clean_recipient`
+        reads it: pass a bare address, since a typed name fills the display name
+        of a handle that has none. Nothing is idempotent: a caller that retries
+        sends again.
 
         In order: a blank ``reason`` is a ``ValueError``, before anything is read;
         :meth:`MessageTemplate.send_refusal`; the render
         (:meth:`MessageTemplate.render`) inside ``system_context(reason=reason)``,
-        which reads every row and the default kit, and whose entry writes its
-        permission audit row at once, even when the render then refuses; and
+        which reads every row and the default kit and whose entry writes one
+        permission audit row at once, kept when the render then refuses; then
         :meth:`~angee.messaging.managers.MessageManager.compose_as_system` under
-        the same reason, in the caller's context and transaction, with the
-        rendered subject, plain text and HTML. That refuses, under its argument,
-        an address, subject or body it cannot send, system mail not configured,
-        and a system channel missing or not connected. Every refusal is raised
-        before any row is written, each ``ValidationError`` item with its code.
-        Each call records one message and hands it to delivery once, when the
-        outermost transaction commits; it is returned unbound.
+        the same reason, outside that context, in the caller's own context and
+        transaction, with the rendered subject, plain text and HTML, which
+        refuses as its docstring says. No message row is written before a
+        refusal, with one exception compose does not refuse up front: an address
+        whose part before the ``@`` is outside ASCII is recorded and queued, and
+        its delivery fails. The audit rows commit or roll back with the caller's
+        transaction, and ``reason`` is recorded in them alone, never on the
+        message. Each call records one message and hands it to delivery once,
+        when the outermost transaction commits; it is returned unbound.
+
+        What a send stores, on the system channel, for whoever reads that channel
+        (administrators, under messaging's seal): a new thread titled with the
+        rendered subject, kept in the thread's history; the message, whose preview
+        is the first 280 characters of the text; its title, text and HTML parts,
+        which point to content-addressed text fragments that carry a search vector
+        and that nothing deletes, so they outlive the message; one ``to``
+        recipient on the address's handle. A value that is a credential, such as a
+        sign-in link, is readable by the system channel's readers until it
+        expires, and deleting the message does not remove its fragments.
         """
 
+        # compose_as_system refuses a blank reason too, but only after the render, which this refusal precedes.
         if not reason.strip():
             raise ValueError("System mail requires a named reason.")
         if (refusal := row.send_refusal()) is not None:
@@ -670,12 +700,13 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         reads the rows and the kit any signed-in reader reads and writes no
         permission audit row; then ``compose_as_system``, under the reason
         ``messaging_templates.message_template.send_test``, with the rendered
-        subject after :data:`TEST_SUBJECT_PREFIX`, which refuses as
-        :meth:`send_as_system` says. Nothing is written before a refusal.
-        ``actor`` is the message's ``created_by``. Administrators alone read the
-        system channel, and they read samples and account addresses already, so
-        a test send discloses nothing new; ``actor``'s existing handle for the
-        address receives it, as compose finds one.
+        subject after :data:`TEST_SUBJECT_PREFIX`, which refuses as its docstring
+        says. No message row is written before a refusal, with the exception
+        :meth:`send_as_system` names. It stores what :meth:`send_as_system`
+        stores, with ``actor`` as the message's ``created_by``. Administrators
+        alone read the system channel, and they read samples and account
+        addresses already, so a test send discloses nothing new; ``actor``'s
+        existing handle for the address receives it, as compose finds one.
         """
 
         with actor_context(actor):
@@ -872,6 +903,16 @@ class _Backlinks(InstancePrefetch):
         return answers, lambda answer: answer[0], lambda row: identities.get(row.pk)
 
 
+def _lacking(row: MessageTemplate, permission: str) -> PermissionDenied | None:
+    """``PermissionDenied`` in :meth:`~angee.base.models.base.AngeeModel.require_access`'s words when the acting reader
+    does not hold ``permission`` on ``row`` (:func:`~angee.graphql.capabilities.held_permissions`, the list's own
+    projection when it carries one); ``None`` when it does. The one denial the row's refusals answer with."""
+
+    if permission in held_permissions(row, (permission,)):
+        return None
+    return PermissionDenied(f"Denied: the current actor lacks {permission!r} on {to_object_ref(row)}.")
+
+
 class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One message template: a layout, template, block or part, for one key and one language."""
 
@@ -1052,8 +1093,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         ``can_keep_override`` from it.
         """
 
-        if "write" not in held_permissions(self, ("write",)):
-            return PermissionDenied(f"Denied: the current actor lacks 'write' on {to_object_ref(self)}.")
+        if (refused := _lacking(self, "write")) is not None:
+            return refused
         if not self.overrides_default:
             return ValidationError(NO_BASELINE_MESSAGE, code="no_baseline")
         return None
@@ -1071,8 +1112,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         sample's render.
         """
 
-        if "preview" not in held_permissions(self, ("preview",)):
-            return PermissionDenied(f"Denied: the current actor lacks 'preview' on {to_object_ref(self)}.")
+        if (refused := _lacking(self, "preview")) is not None:
+            return refused
         return self.send_refusal()
 
     def send_refusal(self) -> ValidationError | None:
@@ -1083,7 +1124,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         (:attr:`MessageTemplateKindHandler.carries_message_fields`), since a
         layout, block or part reaches a mail inside a template; else
         ``not_effective`` unless it is what renders for its kind, key and
-        language (:attr:`is_effective`, an overridden shipped default is not);
+        language (:attr:`is_effective`: an overridden shipped default is not, nor
+        is a row never saved);
         ``None`` when nothing does. It decides no permission: whoever sends
         decides that. It reads ``kind`` and at most one structural statement, none
         when the row carries the list's ``_is_effective`` annotation.

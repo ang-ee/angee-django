@@ -24,8 +24,8 @@ who may not create or write the override, or preview the row, gets a
 ``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
 not a shipped default and an override of none are refused in band (``ok: false``,
 with the codes ``not_a_baseline`` and ``no_baseline``), and so is what refuses a
-test send after its permission (``not_a_template``, ``not_effective``,
-``no_test_address``, the render's codes, and the system channel's). A row's
+test send after its permission: the row's side, the account's address, the
+render, and what ``compose_as_system`` refuses, as its docstring says. A row's
 ``is_effective``, ``is_overridden``, ``has_updated_default`` and
 ``overrides_default`` are read from its siblings and filter through the model's
 ``hasura_filter_expressions``.
@@ -235,7 +235,7 @@ _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
 )
 
 
-def _brand_kit(info: strawberry.Info, brand_kit: PublicID | None) -> Any:
+def _named_brand_kit(info: strawberry.Info, brand_kit: PublicID | None) -> Any:
     """The kit a caller names, read through their own scope (``not_found`` for one they do not read), or ``None``
     for the default kit."""
 
@@ -275,7 +275,8 @@ class MessageTemplateMutation:
         default one."""
 
         row = authorized_permission_target(info, MessageTemplate, template, "read")
-        message = MessageTemplate.objects.send_test(row, actor=session_user(info), kit=_brand_kit(info, brand_kit))
+        kit = _named_brand_kit(info, brand_kit)
+        message = MessageTemplate.objects.send_test(row, actor=session_user(info), kit=kit)
         return ActionResult(ok=True, message="A test of this message template is queued.", id=message.sqid)
 
 
@@ -290,7 +291,7 @@ class MessageTemplatePreviewQuery:
         """Render the row with its sample in the named kit, or the default one, and say what it warns about."""
 
         row = authorized_permission_target(info, MessageTemplate, template, "read")
-        return row.preview(kit=_brand_kit(info, brand_kit))
+        return row.preview(kit=_named_brand_kit(info, brand_kit))
 
 
 schemas = {
