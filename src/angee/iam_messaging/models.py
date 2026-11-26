@@ -239,7 +239,8 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         in. The token's account public id is not a secret, and an unknown one
         refuses like a wrong secret. The secret's digest is compared with every
         link of the account through ``constant_time_compare``, and only the
-        newest sent link signs in. It must be unused and unexpired, its account
+        account's newest link whose mail was recorded (``sent_at``) signs in;
+        :meth:`issue` saves no other kind. It must be unused and unexpired, its account
         facts (:meth:`SignInLink.account_digest`) unchanged, and its account an
         active, unprotected person. The account's
         row lock serializes redemption with issuing, and a conditional update
@@ -310,9 +311,10 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
     redeems them through :class:`SignInLinkManager`. A row keeps the token's
     keyed digest, never the token; a digest of the account facts the link is
     bound to; when it expires; when its mail was recorded and queued on the
-    system channel (``sent_at``); and when it signed in (``used_at``).
+    system channel (``sent_at``, set on every link :meth:`SignInLinkManager.issue`
+    saves, and no delivery state); and when it signed in (``used_at``).
     ``created_by`` is the issuer, empty for a system issue. Rows stay as the
-    issue record, and only the account's newest sent link signs in.
+    issue record, and only the account's newest link signs in.
 
     Django's ``PasswordResetTokenGenerator`` derives its tokens from account
     state: two links issued for one account stay valid together until the

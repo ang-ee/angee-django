@@ -21,17 +21,21 @@ system mail cannot be sent to (messaging's `Message.objects.clean_system_recipie
 one address the handle owner lands, which the transport can carry; the refusal
 names no address) and a deployment that cannot deliver the link. It also refuses a
 second link within `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN` seconds (60 by
-default). Then, in the action's transaction (`SignInLinkManager.issue`), it
+default). The checks are in two halves: the permission, the deliverability and
+the address in the action (`UserSignInLinks.issue_sign_in_link`, on the locked
+row), then the cooldown, the template, the render and the mail in
+`SignInLinkManager.issue`. Then, in the action's transaction, `issue`
 mails the link ([The mail](#the-mail)) and stores a `SignInLink` row with a
 keyed digest of the token, never the token itself, a digest of the account
-facts the link is bound to, and `sent_at`. Nothing is written before the last
+facts the link is bound to, and `sent_at`, the moment its mail was recorded and
+queued, set on every link `issue` saves. Nothing is written before the last
 refusal: a refused issue records no link and no mail. The action never shows
 the link, and `created_by` records who issued it. System callers issue under
 `system_context`, which leaves `created_by` empty; an automatic invitation must
 follow an approval a person reviewed, never an unreviewed request. The console
 mutation is `issue_user_sign_in_link` (an `ActionResult`).
 
-Only the newest sent link signs in: issuing again retires the older ones as soon
+Only the account's newest link signs in: issuing again retires the older ones as soon
 as the new link's mail is recorded, and a refused issue leaves the previous
 link working. A link expires after `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL`
 seconds (three days by default). Like Django's password-reset tokens, it is
@@ -57,7 +61,7 @@ as an override of the shipped row, as for any message template
 show `link` in both bodies: the send asks it (`must_print=["link"]`), so an
 override that drops the link, from either body or from a block it includes, or
 shows it only under a condition that is false for this person, is refused when a
-link is sent. The action refuses in band ("The sign-in link's email template does
+link is issued. The action refuses in band ("The sign-in link's email template does
 not show the link…", code `link_not_shown`), nothing is written, the earlier link
 stays current, and a warning on this addon's logger names the template row. The
 template reads
@@ -100,7 +104,7 @@ Sending again issues a new link, which retires the one before it, so the link of
 a mail that failed, or that was uncertain and did arrive, no longer signs in.
 Two consequences follow:
 
-- a link whose delivery later fails is still marked sent, and it replaces the
+- a link whose delivery later fails still has its `sent_at`, and it replaces the
   link that worked, so the person holds no working link until an administrator
   sends another;
 - a delivery whose connection fails is retried on the system channel with the
@@ -148,18 +152,25 @@ mail; nothing here logs it, puts it in a refusal or holds it in an on-commit
 callback. A host that logs `django.db.backends` at `DEBUG` logs every
 statement's parameters, so it logs each link the send writes. Angee's Sentry
 setup sends no frame's local variables (`include_local_variables=False`), so its
-reports never hold it. Django's own error reports, its debug page under `DEBUG`
-and an HTML error report (an `AdminEmailHandler` with `include_html`), show
-none either. Each entry of this addon that holds the token or the link hides
+reports never hold it. With `DEBUG` off, Django's error reports, an HTML admin
+error mail (an `AdminEmailHandler` with `include_html`) included, show none
+either. Under `DEBUG`, Django filters nothing, and its debug page shows every
+local. Each entry of this addon that holds the token or the link hides
 all its locals with a bare `@sensitive_variables()` (`SignInLinkManager.issue`
 and `redeem`, `SignInLinkBackend.authenticate`, the `redeem_sign_in_link`
 mutation); Django's filter cleanses every frame below a mark the same way, the
 helpers they call (`SignInLink.url_for`, the token's parts and digests) among
 them; and the template's send and messaging's write and delivery mark their
-own. So a failure before the render, in its refusal, inside the write, in
-delivery or in a redemption shows the token in no frame. A failure inside the
-GraphQL mutation never reaches Django's reports: the schema logs its class, path
-and frames, with no locals and no exception value. Django never filters an
+own. So, with `DEBUG` off, a failure before the render, in its refusal, inside
+the write, in delivery or in a redemption shows the token in no frame. An
+unexpected failure inside either GraphQL mutation reaches no Django report:
+Angee's schema logs its class, its path and its frames as text (file, line and
+source line, with no locals and no exception value), then detaches the exception,
+so Strawberry's own error line, which follows, carries no traceback either, and
+no log record holds one a report could be built from. That line quotes the
+request's document where the error points, so a token passed as a variable, as
+this addon's page passes it, is logged nowhere, but one written into the
+document itself is logged there. Django never filters an
 exception's own message: nothing this addon raises carries the link or the
 address, but a database's or a transport's error text is its own. Django's
 plain-text error report shows no local variables. The mail is stored on the
