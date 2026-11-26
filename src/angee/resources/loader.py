@@ -84,6 +84,15 @@ class AngeeResource(resources.ModelResource):
     }
     """Widget map that accepts native JSON values from structured files."""
 
+    never_create_only: ClassVar[Mapping[str, str]] = {}
+    """Columns whose omission this adapter's owner verb does not treat as keeping what is stored, each with why.
+
+    ``create_only`` omits a column from a changed row; such a verb then publishes the stored
+    value or applies a default instead, against the entry. An entry listing one, by field or
+    column name, is refused before any row of that entry, and the load rolls back. A subclass
+    adds to its parents' columns.
+    """
+
     def __init__(
         self,
         *,
@@ -114,7 +123,13 @@ class AngeeResource(resources.ModelResource):
         """Acquire batch-wide domain locks before imports; never import or write rows.
 
         Called once per declared resource class inside the loader's transaction.
-        A subclass may inspect the complete batch solely to order its locks.
+        A subclass may inspect the complete batch solely to order its locks. It suits
+        one owner-level lock taken once, in a fixed order, such as a singleton's row.
+        It does not suit locking every row the batch may touch: those locks are held to
+        commit while the import then locks the rows it re-applies in file order, so the
+        load can hold a later row and wait for an earlier one that another writer, taking
+        the two in order, already holds, and the two deadlock. A row's own lock belongs
+        where the row is saved, taken by its owner in the owner's order.
         """
 
     @classmethod
@@ -139,12 +154,19 @@ class AngeeResource(resources.ModelResource):
         return functools.partial(widget, model=model)
 
     def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
-        """Validate headers and reset any batch-planning state before importing."""
+        """Validate headers and ``create_only`` names, and reset any batch-planning state before importing."""
 
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
         self._validate_headers(list(self.entry.create_only), declared="create_only field(s)")
+        declared = {
+            self._column_name(name): reason
+            for base in reversed(type(self).__mro__)
+            for name, reason in vars(base).get("never_create_only", {}).items()
+        }
+        if refused := sorted(set(self._create_only_columns) & set(declared)):
+            raise ResourceLoadError(f"{self.entry.display}: " + " ".join(declared[name] for name in refused))
         self._hash_skips = set()
         self._creating.clear()
         self._instances.clear()
@@ -745,9 +767,12 @@ class AngeeResource(resources.ModelResource):
     def _create_only_columns(self) -> tuple[str, ...]:
         """Project the entry's ``create_only`` field names onto import columns."""
 
-        return tuple(
-            self.fields[name].column_name if name in self.fields else name for name in self.entry.create_only
-        )
+        return tuple(self._column_name(name) for name in self.entry.create_only)
+
+    def _column_name(self, name: str) -> str:
+        """Return the import column of field ``name``; a column name is its own."""
+
+        return self.fields[name].column_name if name in self.fields else name
 
     @staticmethod
     def _created_in_this_load(instance: models.Model) -> bool:

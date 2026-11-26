@@ -142,8 +142,8 @@ def test_core_history_owners_scope_changesets_and_admit_one_document(line_policy
         assert not touching.filter(pk=unrelated.pk).exists()
     assert edit.pk in project.admitted_reverts((edit,))
     assert unrelated.pk not in project.admitted_reverts((unrelated,))
-    assert edit.revertable(project, actor=owner)
-    assert not edit.revertable(project, actor=reader)
+    assert edit.pk in project.revertable_changesets((edit,), actor=owner)
+    assert edit.pk not in project.revertable_changesets((edit,), actor=reader)
 
 
 def test_core_history_diff_and_redaction_use_native_field_policy(line_policy: None) -> None:
