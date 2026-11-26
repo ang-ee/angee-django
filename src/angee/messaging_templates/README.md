@@ -316,11 +316,13 @@ deletes, so they outlive the message. Who reads system mail, and how its
 handles are recorded, is messaging's ([System mail](../messaging/README.md#system-mail)):
 a value that is a credential, such as a sign-in link, is readable by those
 readers until it expires, and deleting the message does not remove its
-fragments. An exception's report shows neither the values nor the rendered text:
-Django's `sensitive_variables` marks them in `send_as_system`, its shared step
-`_render_and_record` and `MessageTemplate.render`, and marks every variable of
-`TemplateWalk.render` and of each frame it calls, but Django's filter hides them
-only with `DEBUG` off.
+fragments. An exception's report hides the values and the rendered text in every
+frame of a send: Django's `sensitive_variables` marks them in `send_as_system`,
+its shared step `_render_and_record` and `MessageTemplate.render`, marks every
+variable of `TemplateWalk.render` and of each frame it calls, and messaging marks
+its system write below them ([System mail](../messaging/README.md#system-mail)).
+Django's filter hides them only with `DEBUG` off, and it never filters an
+exception's own message: a `value_not_linkable` refusal names the link's host.
 
 ### A test send
 

@@ -587,14 +587,14 @@ SECRET = "https://app.example.test/sign-in/SECRET-marker"
 
 
 def _leaks(error: BaseException) -> list[tuple[str, str, str]]:
-    """Each variable a Django exception report would show holding the marker, outside the test's own frames and
-    messaging's (which the system mailer marks for its own writer)."""
+    """Each variable a Django exception report would show holding the marker, outside the test's own frames: the
+    send's, the render's and messaging's system write alike."""
 
     reporter = ExceptionReporter(None, type(error), error, error.__traceback__)
     return [
         (frame["filename"], frame["function"], name)
         for frame in reporter.get_traceback_frames()
-        if "/tests/" not in frame["filename"] and "/angee/messaging/" not in frame["filename"]
+        if "/tests/" not in frame["filename"]
         for name, value in frame["vars"] if "SECRET-marker" in repr(value)
     ]
 
