@@ -8451,6 +8451,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useLateAnswerReport",
+    "source": "packages/ui/src/views/form/late-answer.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useLatestRef",
     "source": "packages/ui/src/lib/use-latest-ref.ts",
     "kind": null,

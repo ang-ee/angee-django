@@ -39,7 +39,8 @@ live in code docstrings.
   `ActionFormDialog` drops its own guard for it, and every `MutationDialog` and
   typed-args action dialog behaves so. An answer that lands after a dialog went
   away is still reported (`useLateAnswerReport`, reading refine's
-  `failedWriteOutcome`). `MessageActions` shows on a coarse pointer. The
+  `failedWriteOutcome`, exported for any surface whose answer can land after
+  it is gone). `MessageActions` shows on a coarse pointer. The
   unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
   **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`; an
   open form dialog renders under the router and `ModalsHost` and says so when
