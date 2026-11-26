@@ -5,11 +5,27 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
 from django.conf import settings as django_settings
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_SERVER_COMMAND_CONTEXT:append": list[str],
+        "AUTH_USER_MODEL": str,
+        "REBAC_UNIVERSAL_ADMIN_ROLE": str,
+        "ANGEE_PROFILING_PERMISSION": str,
+        "MIDDLEWARE:append": list[str],
+        "AUTHENTICATION_BACKENDS:append": list[str],
+        "SILENCED_SYSTEM_CHECKS:append": list[str],
+        "AXES_COOLOFF_TIME": int,
+        "AXES_USERNAME_CALLABLE": str,
+        "AXES_WHITELIST_CALLABLE": str,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_SERVER_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
