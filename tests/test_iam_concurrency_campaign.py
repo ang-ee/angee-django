@@ -1,23 +1,18 @@
-"""PostgreSQL-only account uniqueness and one-time credential serialization, sign-in links included."""
+"""PostgreSQL-only account uniqueness and one-time credential serialization."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
-from django.contrib.auth import authenticate, get_user_model
-from django.core import mail
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connection, connections
-from django.test import RequestFactory
-from django.test.utils import CaptureQueriesContext, override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
-from angee.iam.auth import sign_in_credentials
 from angee.iam.models import AccountExists
 from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
-from tests.iam_models import SignInLink
-from tests.test_iam_sign_in_links import DELIVERABLE, _token
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -66,59 +61,6 @@ def test_two_password_writers_return_exactly_one_credential(iam_admin):
     stored = User._base_manager.get(pk=target.pk)
     assert stored.check_password(passwords[0])
     assert stored.password != passwords[0]
-
-
-def _sign_in(token):
-    return authenticate(RequestFactory().post("/graphql/public/"), **sign_in_credentials(token))
-
-
-@override_settings(**DELIVERABLE)
-def test_two_redemptions_of_one_sign_in_link_sign_in_once(iam_admin):
-    target = User.objects.create_user("link-race", "link-race@example.com")
-    with actor_context(iam_admin):
-        target.with_actor(iam_admin).issue_sign_in_link()
-    token = _token(mail.outbox[-1].body)
-    ready = Barrier(2)
-
-    def redeem():
-        ready.wait(timeout=5)
-        return _sign_in(token)
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(_thread, redeem) for _ in range(2)]
-        outcomes = [future.result(timeout=15) for future in futures]
-    assert [user.pk for user in outcomes if user is not None] == [target.pk]
-    assert SignInLink._base_manager.get(user=target).used_at is not None
-
-
-@override_settings(**DELIVERABLE)
-def test_issuing_a_link_while_the_previous_one_is_redeemed_leaves_one_consistent_outcome(iam_admin):
-    target = User.objects.create_user("issue-race", "issue-race@example.com")
-    with actor_context(iam_admin):
-        target.with_actor(iam_admin).issue_sign_in_link()
-    previous = _token(mail.outbox[-1].body)
-    ready = Barrier(2)
-
-    def issue():
-        user = User._base_manager.get(pk=target.pk)
-        ready.wait(timeout=5)
-        with actor_context(iam_admin):
-            user.with_actor(iam_admin).issue_sign_in_link()
-
-    def redeem():
-        ready.wait(timeout=5)
-        return _sign_in(previous)
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        issued, redeemed = pool.submit(_thread, issue), pool.submit(_thread, redeem)
-        issued.result(timeout=15)
-        signed_in = redeemed.result(timeout=15)
-    newest = _token(mail.outbox[-1].body)
-    used = SignInLink._base_manager.filter(user=target, used_at__isnull=False).count()
-    # Either the previous link signed in before the new one was sent, or the new
-    # one was sent first and the previous one was no longer current.
-    assert (signed_in.pk, used) == (target.pk, 1) if signed_in is not None else used == 0
-    assert _sign_in(newest).pk == target.pk
 
 
 def test_two_person_creators_commit_one_account_and_one_parties_link(iam_admin):

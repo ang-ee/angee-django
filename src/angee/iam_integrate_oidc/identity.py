@@ -20,7 +20,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import system_context
 
-from angee.iam.auth import can_authenticate_user
+from angee.iam.auth import SESSION_BACKEND, can_authenticate_user
 from angee.iam.models import AmbiguousAccountEmail
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
@@ -32,7 +32,6 @@ from angee.integrate.oauth.state import StateFlow, StateRecord
 if TYPE_CHECKING:
     from django.contrib.auth.models import _User
 
-SESSION_AUTH_BACKEND = "angee.iam.auth.ModelBackend"
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +46,7 @@ class LoginCompletion:
     def __post_init__(self) -> None:
         """Bind Django's session backend contract for direct login()."""
 
-        self.user.backend = SESSION_AUTH_BACKEND
+        self.user.backend = SESSION_BACKEND
 
 
 @dataclass(frozen=True, slots=True)

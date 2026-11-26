@@ -226,6 +226,19 @@ users; agents and workflows link one service user each by composing
 [`ServiceUserMixin`](../src/angee/iam/models.py), whose sync and deactivation
 verbs their saves and delete receivers call.
 
+**Account action** — an action on a person's account (rename, deactivate, give
+or reset access, set a password, send a sign-in link), named by its Zed
+permission on `auth/user`. IAM owns the set and its shared refusals
+([`User.account_actions`](../src/angee/iam/models.py),
+`account_action_blockers`); an addon adds its own action through them, and the
+`account_actions` projection offers each action exactly where it acts.
+
+**Sign-in link** — a single-use link an administrator emails a person so they
+sign in once without a password; it expires, a newer link retires it, and it
+is never sent to a protected account. Owned by
+[`angee.iam_messaging`](../src/angee/iam_messaging/README.md); a host without
+that addon has none.
+
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,
 and triggered runs act as it; the user who enables a trigger only authorizes

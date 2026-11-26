@@ -5,8 +5,8 @@ from __future__ import annotations
 from angee.iam.models import Group as AbstractGroup
 from angee.iam.models import IAMKind as AbstractIAMKind
 from angee.iam.models import IAMProtected as AbstractIAMProtected
-from angee.iam.models import SignInLink as AbstractSignInLink
 from angee.iam.models import User as AbstractUser
+from angee.iam_messaging.models import UserSignInLinks
 from angee.provenance.contrib.iam.models import UserSource
 
 
@@ -44,7 +44,7 @@ class Group(AbstractGroup):
         rebac_subject_relation = "member"
 
 
-class User(UserSource, AbstractUser):
+class User(UserSignInLinks, UserSource, AbstractUser):
     """Concrete IAM user used by tests without running the composer."""
 
     class Meta(AbstractUser.Meta):
@@ -55,13 +55,3 @@ class User(UserSource, AbstractUser):
         db_table = "test_iam_user"
         rebac_resource_type = "auth/user"
 
-
-class SignInLink(AbstractSignInLink):
-    """Concrete sign-in link used by tests without running the composer."""
-
-    class Meta(AbstractSignInLink.Meta):
-        """Django model options for the canonical test sign-in link."""
-
-        abstract = False
-        app_label = "iam"
-        db_table = "test_iam_sign_in_link"
