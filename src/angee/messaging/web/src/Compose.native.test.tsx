@@ -332,6 +332,17 @@ function replyButtons(): HTMLElement[] {
   return screen.queryAllByRole("button", { name: /^Reply to / });
 }
 
+/** The danger toasts showing, by title: Base UI labels each toast by its title, never the hidden announcer repeating it. */
+function dangerToasts(): string[] {
+  return [...document.querySelectorAll("[aria-labelledby][data-type='danger']")]
+    .map((toast) => document.getElementById(toast.getAttribute("aria-labelledby") ?? "")?.textContent ?? "");
+}
+
+/** The box has its answer, and told it: its note and any toast are set together with the end of sending. */
+async function answered(box: HTMLElement): Promise<void> {
+  await waitFor(() => expect(box.getAttribute("aria-busy")).toBeNull());
+}
+
 async function openReply(text: string): Promise<HTMLElement> {
   const target = await row(text);
   fireEvent.click(await within(target).findByRole("button", { name: /^Reply to / }));
@@ -435,6 +446,29 @@ test("a replay refused for a revoked right says an earlier attempt may already h
   if (!("error" in denied)) throw new Error("The revoked replay was recorded as an answer.");
   expect((await screen.findAllByText(denied.error.message)).length).toBeGreaterThan(0);
   expect(await within(box).findByText(word("compose.replyMayAlreadyBeSent"))).toBeTruthy();
+});
+
+test("a reply's lost answer while the box is open is told by its note alone: no toast", async () => {
+  mount({ surface: "transcript", seat: "ana", lose: true });
+  const box = await openReply("Please add me.");
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  await within(box).findByText(ui("form.answerLostResend"));
+  await answered(box);
+  expect(dangerToasts()).toEqual([]);
+});
+
+test("a reply denied while the box is open is toasted once, in the server's words", async () => {
+  mount({ surface: "transcript", seat: "ana", lose: true, revokeAfterSend: true });
+  const box = await openReply("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  await within(box).findByText(ui("form.answerLostResend"));
+  submitReply(input);
+  await within(box).findByText(word("compose.replyMayAlreadyBeSent"));
+  await answered(box);
+  const denied = recordedSend("anaRevoked", "Thanks, adding you now.").answer;
+  if (!("error" in denied)) throw new Error("The revoked replay was recorded as an answer.");
+  expect(dangerToasts()).toEqual([denied.error.message]);
 });
 
 test("Reply on another email retargets the box and keeps its text; Cancel asks first and returns to the row", async () => {
