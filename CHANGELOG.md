@@ -10,6 +10,23 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: **Changed behaviour.** A row whose stored implementation key
+  its `ImplClassField` no longer names (a key a later release retired, or one
+  only another release's registry holds during a rolling deploy) loads, lists
+  and filters: the key loads as its text, where a key the field names still
+  loads as its member, and a filter on it finds the rows that store it. Loading
+  one raised `ValidationError` ("Value '…' is not a valid choice."), so no
+  query that read such a row could finish. Writing the column with such a key
+  stays refused, on every write (an insert, an update, `QuerySet.update`,
+  `bulk_update`), except by a history copy, which records its row's key; a save
+  that leaves the column out (`update_fields`) succeeds. Input (`full_clean`, a
+  model form, a deserialized fixture) refuses it as before. Resolving its
+  implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
+  `ImproperlyConfigured` naming the field, the key and the registry's setting.
+  Not changed: a GraphQL read that selects the column still fails, now at the
+  field's enum, which cannot represent the key. **Upgrade:** code that reads a
+  selector's value as a member (`.label`, `.value`) takes `field.key_for(value)`
+  instead; none in the framework does.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.

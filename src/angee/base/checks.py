@@ -111,7 +111,7 @@ def check_stored_impl_keys(
             for field in keyed:
                 if field.column not in columns:
                     continue
-                # Read the column as text: the field itself refuses a key it does not know.
+                # Read the column as stored text: the field reads an empty key as none.
                 stranded = (
                     model._base_manager.using(alias)
                     .annotate(stored_key=Cast(field.attname, models.CharField()))

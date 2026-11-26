@@ -29,6 +29,10 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     Addons contribute impls into that setting through autoconfig, making
     the key set closed at composition time. The field renders as a
     ``TextChoices`` enum and resolves only configured, trusted paths.
+
+    A stored key its choices do not name (one a later release retired, or one
+    another process's registry holds) still loads, lists and filters, as its
+    text; the column is never written with one, and resolving it raises.
     """
 
     def __init__(
@@ -101,7 +105,7 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         setattr(cls, accessor, partialmethod(_resolve_bound_implementation, field=self))
 
     refuses_unknown_keys = True
-    """Whether inserting a row refuses a key outside this field's choices.
+    """Whether writing the column refuses a key outside this field's choices.
 
     A history copy records the key its live row saved, so its owner turns this off.
     """
@@ -117,36 +121,75 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         return ValidationError(self.error_messages["invalid_choice"], code="invalid_choice", params={"value": value})
 
     def to_python(self, value: Any) -> Any:
-        """Convert as the enum field does, refusing a key outside the choices with the plain message."""
+        """Convert an input value as the enum field does, refusing a key outside the choices with the plain message.
+
+        Input reaches the field here: ``full_clean``, a model form, a
+        deserialized fixture, a source statement's members. Loading and lookups
+        do not (:meth:`from_db_value`, :meth:`get_prep_value`).
+        """
 
         if value not in self.empty_values and not self.has_key(value):
             raise self.invalid_key(value)
         return super().to_python(value)
 
-    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
-        """Refuse, as a new row is inserted, a key outside this field's choices.
+    def from_db_value(self, value: Any, expression: Any, connection: Any) -> Any:
+        """Load a stored key as its member, or as the stored text once the choices no longer name it."""
 
-        The insert runs after the save's REBAC gates, so a caller who may not
-        save the row gets that refusal. A stored row saves its key as it is,
-        and a historical migration field keeps whatever it stored.
+        if value in self.empty_values:
+            return None
+        try:
+            return self.choices_enum(value)
+        except ValueError:
+            return value
+
+    def get_prep_value(self, value: Any) -> Any:
+        """Prepare a lookup value: a key the choices name as its member, any other as its text.
+
+        A filter on a key the choices no longer name finds the rows that store
+        it; :meth:`get_db_prep_save` refuses to write one.
         """
 
-        value = super().pre_save(model_instance, add)
-        if not add or not self.refuses_unknown_keys or self.base_class is None or value in self.empty_values:
-            return value
-        if not self.has_key(value):
+        if value in self.empty_values or self.has_key(value):
+            return super().get_prep_value(value)
+        return self.key_for(models.Field.get_prep_value(self, value))
+
+    def get_db_prep_save(self, value: Any, connection: Any) -> Any:
+        """Refuse every write of a key outside this field's choices: an insert, an update, a bulk write.
+
+        The write runs after the save's REBAC gates, so a caller who may not
+        save the row gets that refusal. A stored row saves a key its choices
+        name, even once the registry dropped it; a save that leaves the column
+        out writes nothing here. A history copy records its row's key and a
+        historical migration field keeps whatever it stored.
+        """
+
+        if (
+            self.refuses_unknown_keys
+            and self.base_class is not None
+            and not hasattr(value, "as_sql")
+            and value not in self.empty_values
+            and not self.has_key(value)
+        ):
             raise ValidationError({self.name: self.invalid_key(value)})
-        return value
+        return super().get_db_prep_save(value, connection)
 
     def resolve_class(self, key: Any, *, default: str | None = None) -> type[T]:
-        """Return the impl class the configured mapping binds to ``key``."""
+        """Return the impl class the configured mapping binds to ``key``.
+
+        A key the mapping does not bind raises ``ImproperlyConfigured`` naming
+        this field, the key and the registry's setting, where the class is
+        needed: never at load.
+        """
 
         if self.base_class is None:
             raise ImproperlyConfigured("Historical implementation fields do not resolve runtime classes.")
         selected = self.key_for(key if key is not None else default)
         if not selected and default is not None:
             selected = self.key_for(default)
-        return resolve_impl_class(self.base_class, selected)
+        try:
+            return resolve_impl_class(self.base_class, selected)
+        except ImproperlyConfigured as error:
+            raise ImproperlyConfigured(f"{self}: {error}") from error
 
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
@@ -220,10 +263,11 @@ def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[mod
     compiled permission statement holding an implementation key then pickles too.
 
     A process whose registry holds other keys unpickles a member of an enum over
-    the pickling process's keys: it equals and hashes as its key, and the field's
-    ``to_python`` maps it onto the current member, or refuses a key the registry
-    no longer names. A pickler with a private ``dispatch_table`` that leaves out
-    copyreg's does not see the reduction and refuses the member.
+    the pickling process's keys: it equals and hashes as its key, and the field
+    takes it as that key's text. A key its choices name becomes the current
+    member; any other filters as its text and is refused as input or as a write.
+    A pickler with a private ``dispatch_table`` that leaves out copyreg's does
+    not see the reduction and refuses the member.
     """
 
     core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")

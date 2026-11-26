@@ -464,7 +464,10 @@ Use these owners instead of maintaining another contract in an addon:
   model, field, key and count under `check --database` and at the start of
   `migrate`, where a column the pending migrations have yet to add is passed
   over, and the addon that stopped providing a key states the remedy in
-  `ANGEE_IMPL_KEY_REMEDIES`.
+  `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
+  read as text; the column is never written with a key the field's choices do
+  not name (a history copy records it), and resolving it raises naming the
+  field, the key and the setting.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs

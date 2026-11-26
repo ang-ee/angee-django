@@ -9,18 +9,18 @@ import subprocess
 import sys
 from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import models
+from django.db import connection, models, transaction
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.hooks import resolve_hook, resolve_hooks
@@ -36,8 +36,10 @@ from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.schemas.forms import config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
+from angee.provenance.context import changeset
+from angee.provenance.querysets import model_history
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import OAuthClient, VcsBridge, Vendor
+from tests.conftest import OAuthClient, VcsBridge, Vendor, create_user, vault_for
 from tests.tables import model_tables
 
 
@@ -1504,3 +1506,154 @@ def test_a_config_only_save_is_validated_against_the_rows_implementation(registe
         with pytest.raises((ValidationError, ImproperlyConfigured)):
             loaded.save(update_fields=["config"])
     assert VcsBridge._base_manager.get(pk=row.pk).config == stored
+
+
+def _store_key(model: type[models.Model], pk: Any, field_name: str, key: str) -> None:
+    """Store ``key`` in one row's column as an earlier release did, past the field that would refuse it now."""
+
+    quote = connection.ops.quote_name
+    column = quote(model._meta.get_field(field_name).column)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE {quote(model._meta.db_table)} SET {column} = %s WHERE {quote(model._meta.pk.column)} = %s",
+            [key, pk],
+        )
+
+
+def _retired_backend(slug: str) -> Any:
+    """A storage backend row whose stored key no implementation is registered under any more."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.retired.create"):
+        row = backend_model.objects.create(slug=slug, label=slug.title(), backend_class="local")
+    _store_key(backend_model, row.pk, "backend_class", "retired")
+    return backend_model._base_manager.get(pk=row.pk)
+
+
+@pytest.mark.django_db
+def test_a_stored_key_its_choices_no_longer_name_loads_lists_and_filters_as_its_text() -> None:
+    """The row loads, lists, filters, displays and pickles; resolving its implementation raises, naming all three."""
+
+    retired = _retired_backend("retired")
+    backend_model = type(retired)
+    with system_context(reason="test.impl.retired.kept"):
+        kept = backend_model.objects.create(slug="kept", label="Kept", backend_class="local")
+    rows = backend_model._base_manager.filter(pk__in=(retired.pk, kept.pk))
+
+    assert type(retired.backend_class) is str and retired.backend_class == "retired"
+    choices = backend_model._meta.get_field("backend_class").choices_enum
+    assert backend_model._base_manager.get(pk=kept.pk).backend_class is choices("local")
+    assert sorted(rows.values_list("backend_class", flat=True)) == ["local", "retired"]
+    assert list(rows.filter(backend_class="retired")) == [retired]
+    assert list(rows.filter(backend_class__in=("retired",))) == [retired]
+    assert retired.get_backend_class_display() == "retired"
+    assert pickle.loads(pickle.dumps(retired)).backend_class == "retired"
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=r"^storage\.Backend\.backend_class: No impl for key 'retired' in settings\.ANGEE_STORAGE_BACKEND_CLASSES",
+    ):
+        retired.get_backend_class_impl()
+
+
+@pytest.mark.django_db
+def test_a_key_its_choices_no_longer_name_is_never_written() -> None:
+    """Saving, updating, bulk-writing, creating or cleaning with the key is refused; a save leaving it out is not."""
+
+    retired = _retired_backend("unwritten")
+    backend_model = type(retired)
+    writes = (
+        retired.save,
+        retired.full_clean,
+        lambda: backend_model._base_manager.filter(pk=retired.pk).update(backend_class="also-unknown"),
+        lambda: backend_model._base_manager.bulk_update([retired], ["backend_class"]),
+        lambda: backend_model.objects.create(slug="new", label="New", backend_class="retired"),
+    )
+    with system_context(reason="test.impl.retired.write"):
+        for write in writes:
+            with pytest.raises(ValidationError) as refused, transaction.atomic():
+                write()
+            assert "backend_class" in refused.value.message_dict
+        retired.label = "Renamed"
+        retired.save(update_fields=["label"])
+
+    stored = backend_model._base_manager.get(pk=retired.pk)
+    assert (stored.label, stored.backend_class) == ("Renamed", "retired")
+    assert not backend_model._base_manager.filter(slug="new").exists()
+
+
+@pytest.mark.django_db
+def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_recording_it() -> None:
+    """History loads under the retired key, its diff shows the key's text, and a later save still records it."""
+
+    owner = create_user("retired-history-owner")
+    vault = vault_for(owner)
+    with actor_context(owner), changeset(fresh=True, change_reason="Rename vault"):
+        vault.name = "Renamed"
+        vault.save(update_fields=("name",))
+    vault_model = type(vault)
+    first, renamed = vault.history.order_by("history_id")
+    _store_key(type(first), first.history_id, "retrieval_class", "retired")
+    _store_key(vault_model, vault.pk, "retrieval_class", "retired")
+
+    history = model_history(vault_model)
+    assert history is not None
+    changes = {change.field: (change.old, change.new) for change in history.diff(renamed, renamed).changes}
+    assert changes["retrieval_class"] == ("retired", "lexical")
+    with actor_context(owner), changeset(fresh=True, change_reason="Rename again"):
+        stored = vault_model._base_manager.get(pk=vault.pk)
+        stored.name = "Again"
+        stored.save(update_fields=("name",))
+    assert [version.retrieval_class for version in vault.history.order_by("history_id")] == [
+        "retired", "lexical", "retired",
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps()
+def test_a_release_whose_registry_lacks_a_key_reads_its_rows_and_refuses_only_to_resolve_or_write_it() -> None:
+    """Two releases share one table in a rolling deploy; each field's choices are its own release's registry."""
+
+    both = {"base": "tests.test_impl._BaseImpl", "refined": "tests.test_impl._RefinedImpl"}
+    older = {"base": "tests.test_impl._BaseImpl"}
+    with override_settings(ANGEE_TEST_IMPLS=both):
+
+        class NewRelease(models.Model):
+            adapter = ImplClassField(_BaseImpl)
+            label = models.CharField(max_length=20, default="")
+
+            class Meta:
+                app_label = "tests"
+                db_table = "test_impl_rolling_release"
+
+    with override_settings(ANGEE_TEST_IMPLS=older):
+
+        class OldRelease(models.Model):
+            adapter = ImplClassField(_BaseImpl)
+            label = models.CharField(max_length=20, default="")
+
+            class Meta:
+                app_label = "tests"
+                db_table = "test_impl_rolling_release"
+
+    with model_tables((NewRelease,)):
+        with override_settings(ANGEE_TEST_IMPLS=both):
+            written = NewRelease.objects.create(adapter="refined", label="new")
+            NewRelease.objects.create(adapter="base", label="shared")
+        with override_settings(ANGEE_TEST_IMPLS=older):
+            row = OldRelease.objects.get(pk=written.pk)
+            assert type(row.adapter) is str and row.adapter == "refined"
+            assert sorted(OldRelease.objects.values_list("adapter", flat=True)) == ["base", "refined"]
+            assert list(OldRelease.objects.filter(adapter="refined")) == [row]
+            with pytest.raises(
+                ImproperlyConfigured,
+                match=r"^tests\.OldRelease\.adapter: No impl for key 'refined' in settings\.ANGEE_TEST_IMPLS ",
+            ):
+                row.get_adapter_impl()
+            for write in (row.save, lambda: OldRelease.objects.create(adapter="refined")):
+                with pytest.raises(ValidationError, match="Value 'refined' is not a valid choice"):
+                    write()
+            row.label = "renamed"
+            row.save(update_fields=["label"])
+        with override_settings(ANGEE_TEST_IMPLS=both):
+            current = NewRelease.objects.get(pk=written.pk)
+            assert (current.label, current.get_adapter_impl()) == ("renamed", _RefinedImpl)
