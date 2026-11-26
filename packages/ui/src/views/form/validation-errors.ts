@@ -252,12 +252,15 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
     fallback?: string;
     /**
-     * Bring the person to the refusal: move focus to the first rendered field it names, in the
-     * order of `fieldNames` (the server's order without them), through the form library's own
-     * `shouldFocus`. A submit's answer asks for it; an owner that projects issues while the person
-     * edits elsewhere does not.
+     * Bring the person to the refusal; the surface's own way of focusing its banner
+     * (`useRefusalBannerFocus`). A refusal with a reason no field shows (a form-level one, or one
+     * of a field the form does not display) calls it: the banner, which then also carries the line
+     * naming the refused fields, is the one place that says everything. A refusal with field
+     * reasons only moves focus to the first rendered field it names, in the order of `fieldNames`
+     * (the server's order without them), through the form library's own `shouldFocus`. A submit's
+     * answer asks for this; an owner that projects issues while the person edits elsewhere does not.
      */
-    focus?: boolean;
+    focus?: () => void;
   } = {},
 ): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
   let issues: ValidationErrors;
@@ -285,7 +288,10 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
   }
   const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
   const named = Object.keys(issues.fieldErrors).filter((name) => issues.fieldErrors[name]!.length > 0);
-  const focused = !options.focus ? undefined
+  const claimed = (name: string) => !fieldNames || fieldNames.some((field) => dottedPathBelongsToField(name, field));
+  // A reason no field shows: the banner is then the one place that says everything, and takes the focus.
+  const bannerOnly = issues.formErrors.length > 0 || named.some((name) => !claimed(name));
+  const focused = !options.focus || bannerOnly ? undefined
     : fieldNames ? fieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
   const bound: Record<string, readonly string[]> = {};
   const unclaimed: Record<string, readonly string[]> = {};
@@ -294,24 +300,48 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     form.setError(name as Path<TValues>, {
       type, message: messages.join(" "), types: { [type]: [...messages] },
     }, name === focused ? { shouldFocus: true } : undefined);
-    const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
-    target[name] = messages;
+    (claimed(name) ? bound : unclaimed)[name] = messages;
   }
   const messages = [...issues.formErrors];
-  if (messages.length === 0 && Object.keys(bound).length && options.fieldSummary) {
-    messages.push(options.fieldSummary(bound));
-  }
+  if (Object.keys(bound).length && options.fieldSummary) messages.push(options.fieldSummary(bound));
   messages.push(...dottedPathErrorMessages(unclaimed));
   if (messages.length === 0 && Object.keys(bound).length === 0 && options.fallback) messages.push(options.fallback);
   if (messages.length > 0) {
     form.setError("root.server" as Path<TValues>, { type, message: messages.join("\n"), types: { [type]: messages } });
   }
+  if (focused === undefined) options.focus?.();
   return true;
+}
+
+/**
+ * A refusal's banner takes focus when its owner asks (`applyFormErrors`'s `focus`), or when a new
+ * list lands and focus is not in a refused field (the form library found no control to focus).
+ * Spread `banner` on the surface's `ErrorBanner` and pass `focusBanner` as that `focus`; `messages`
+ * is the list the banner renders (`formErrorsFromForm`), whose identity changes with each answer.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useRefusalBannerFocus(messages: readonly string[]): {
+  banner: { ref: React.RefObject<HTMLDivElement | null>; tabIndex: -1 };
+  focusBanner: () => void;
+} {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const asked = React.useRef(false);
+  const focusBanner = React.useCallback(() => { asked.current = true; }, []);
+  React.useEffect(() => {
+    const wanted = asked.current;
+    asked.current = false;
+    if (messages.length === 0) return;
+    if (wanted || document.activeElement?.getAttribute("aria-invalid") !== "true") ref.current?.focus();
+  }, [messages]);
+  return React.useMemo(() => ({ banner: { ref, tabIndex: -1 as const }, focusBanner }), [focusBanner]);
 }
 
 /**
  * The form-level messages a submit left on the form (`root.server`), each its own entry: the list
  * `applyFormErrors` stored, or the one message another owner set there. Empty when there is none.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function formErrorsFromForm(errors: object): readonly string[] {
   const server = "root" in errors && errors.root && typeof errors.root === "object" && "server" in errors.root ? errors.root.server : undefined;
