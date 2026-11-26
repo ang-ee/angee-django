@@ -221,8 +221,9 @@ export interface ActionOutcome {
    */
   validationErrors?: Record<string, readonly string[]>;
   /**
-   * The refusal's stable code (`ActionResult.code`), when the answer carries one: a caller's own
-   * refusal sets it too (`CREATION_KEY_CONFLICT` for a create whose key an earlier version spent).
+   * A refusal's stable code, set by the caller that builds the outcome (`CREATION_KEY_CONFLICT`
+   * for a create whose key an earlier version spent). The generated action documents select no
+   * `ActionResult.code`, so an answer read through one carries none.
    */
   code?: string;
 }

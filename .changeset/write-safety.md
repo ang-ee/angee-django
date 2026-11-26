@@ -68,9 +68,9 @@ pending write and typed values.
   sentence or not, so a returned one keeps its draft as a thrown one does,
   past a dismissal. A creation-key
   conflict does not lock a dialog's draft as a stale one does: the next
-  attempt is a new draft. `@angee/refine`'s `ActionOutcome` carries a
-  refusal's `code` when the answer has one, and a caller's own refusal may set
-  it.
+  attempt is a new draft. `@angee/refine`'s `ActionOutcome` takes a
+  refusal's `code`, set by the caller that builds the outcome: the generated
+  action documents select none.
 - The record form tells a create whose key an earlier attempt spent in its
   own words ("Created earlier": an earlier attempt from this form already
   created a record, which is in the list; saving again creates another), with
