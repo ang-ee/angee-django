@@ -79,6 +79,7 @@ from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
     PreviewFrame,
     RenderedMessage,
+    RowPiece,
     TemplatePreview,
     TemplateWalker,
     TemplateWarning,
@@ -661,6 +662,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
 
     def send_as_system(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
+        must_print: Collection[str] = (),
     ) -> Message:
         """Render ``row`` with ``values`` as named system work and record it on the system channel, queued.
 
@@ -682,8 +684,9 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 row = MessageTemplate.objects.effective("template", key, person=person)
             MessageTemplate.objects.send_as_system(row, reason=reason, to=address, values=values)
 
-        A key with no row raises ``DoesNotExist`` there: a deployment's defect,
-        not a refusal. ``row`` renders as the instance holds it, so edits not yet
+        The verb takes a row: a key with no row raises ``DoesNotExist`` from the
+        caller's own lookup, and a caller that offers the send to a person turns
+        it into its own coded refusal. ``row`` renders as the instance holds it, so edits not yet
         saved are sent, and a row never saved is refused ``not_effective``. ``to``
         is one entry as :meth:`~angee.messaging.managers.MessageManager.clean_recipient`
         reads it: pass a bare address, since a typed name fills the display name
@@ -691,11 +694,19 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         sends again, unless it claims a key of its own first, as :meth:`send_test`
         does.
 
+        ``must_print`` names the values the mail is useless without, a credential
+        or a call to action's target (``link``, ``person.first_name``): a caller
+        that mails one passes its path, and the send is refused
+        (``value_not_printed``) when the HTML or the plain-text body does not
+        print it, as a deployment's override that drops it would not
+        (:meth:`MessageTemplate.render`). The default requires nothing.
+
         In order: a blank ``reason`` is a ``ValueError``, before anything is read;
         :meth:`MessageTemplate.send_refusal`; the render
         (:meth:`MessageTemplate.render`) inside ``system_context(reason=reason)``,
         which reads every row and the default kit and whose entry writes one
-        permission audit row at once, kept when the render then refuses; then
+        permission audit row at once, kept when the render then refuses
+        (``value_not_printed`` among its refusals, before anything renders); then
         :meth:`~angee.messaging.managers.MessageManager.compose_as_system` under
         the same reason, outside that context, in the caller's own context and
         transaction, with the rendered subject, plain text and HTML, which
@@ -723,7 +734,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             raise ValueError("System mail requires a named reason.")
         if (refusal := row.send_refusal()) is not None:
             raise refusal
-        return self._render_and_record(row, reason=reason, to=to, values=values, kit=kit)
+        return self._render_and_record(row, reason=reason, to=to, values=values, kit=kit, must_print=must_print)
 
     def send_test(
         self, row: TemplateT, *, actor: User, kit: BrandKit | None = None, idempotency_key: str | None = None,
@@ -812,7 +823,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
 
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
-        subject_prefix: str = "",
+        subject_prefix: str = "", must_print: Collection[str] = (),
     ) -> Message:
         """Render ``row`` as named system work and record it on the system channel: the one path of both sends.
 
@@ -821,7 +832,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         """
 
         with system_context(reason=reason):
-            rendered = row.render(values, kit=kit)
+            rendered = row.render(values, kit=kit, must_print=must_print)
         return cast("Message", apps.get_model("messaging", "Message").objects.compose_as_system(
             reason=reason, to=[to], subject=subject_prefix + rendered.subject, text=rendered.plain_text,
             html=rendered.html,
@@ -1391,7 +1402,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         rows = type(self).objects
         TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
 
-    def render(self, values: Mapping[str, Any], *, kit: BrandKit | None = None) -> RenderedMessage:
+    def render(
+        self, values: Mapping[str, Any], *, kit: BrandKit | None = None, must_print: Collection[str] = (),
+    ) -> RenderedMessage:
         """Render this row with ``values``, in ``kit``'s name and colours (the default kit when ``None``).
 
         Walks the row first, so a row written past :meth:`clean` that would not
@@ -1403,12 +1416,34 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         that user, and named system work inside its own ``system_context``
         (:meth:`MessageTemplateManager.send_as_system`). Raises ``ValidationError``
         alone, each item with its code (``invalid_values``, ``values_too_large``,
-        ``message_template_refused``, ``render_budget``, ``subject_too_long``,
-        ``no_brand_kit``, ``render_failed``) in ``error_list``
+        ``message_template_refused``, ``value_not_printed``, ``render_budget``,
+        ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
         (:func:`~angee.messaging_templates.walker.refusals_only`).
+
+        ``must_print`` names the declared values the mail is useless without (a
+        sign-in link, a call to action's target): after the walk and before
+        anything renders, each must be printed by the HTML body and by the
+        plain-text body, through any include and whether or not a condition
+        guards it; a value only tested is not printed. A path either body does
+        not print is refused, one item per path and body, with the code
+        ``value_not_printed``. A path the row does not declare is refused the
+        same way, once: no body may read an undeclared value, and a deployment's
+        override can drop a declaration as well as an output. The preview warns
+        of a declared value nothing reads, but it knows no caller's requirement,
+        so it stays a warning; the requirement is the sender's to pass here.
         """
 
         walk = TemplateWalker().walk(self, type(self).objects)
+        unprinted: list[str] = []
+        for path in must_print:
+            if path not in self.variables:
+                unprinted.append(f"This message template does not declare {path}, so neither body prints it.")
+                continue
+            for form, body in ((RowPiece.HTML, "HTML"), (RowPiece.TEXT, "plain-text")):
+                if tuple(path.split(".")) not in walk.printed.get(form, set()):
+                    unprinted.append(f"The {body} body does not print {path}, which this mail is sent for.")
+        if unprinted:
+            raise ValidationError([ValidationError(message, code="value_not_printed") for message in unprinted])
         return walk.render(values, kit=self._brand_kit(kit))
 
     def preview(self, *, kit: BrandKit | None = None) -> TemplatePreview:

@@ -465,7 +465,8 @@ class TemplateWalk:
     ``required`` the paths a render's values must hold, not null, in every list
     item present; ``date_paths`` the paths read through ``date``, each with the
     formats it is printed in; ``float_paths`` the paths a filter reads as a float
-    (:data:`FLOAT_FILTERS`); ``reads`` every path of ``D`` some row reads.
+    (:data:`FLOAT_FILTERS`); ``reads`` every path of ``D`` some row reads; ``printed`` the paths of ``D`` each form
+    prints, by form, through any include, a condition around the output or not (a value only tested is not printed).
     """
 
     root: WalkedRow
@@ -478,6 +479,7 @@ class TemplateWalk:
     date_paths: dict[Path, set[str]] = field(default_factory=dict)
     float_paths: set[Path] = field(default_factory=set)
     reads: set[Path] = field(default_factory=set)
+    printed: dict[RowPiece, set[Path]] = field(default_factory=dict)
     includes: set[str] = field(default_factory=set)
     refusals: list[str] = field(default_factory=list)
 
@@ -1645,6 +1647,8 @@ class _TreeWalker:
         if value:
             if binding.effective is not None:
                 self.walk.reads.add(binding.effective)
+                if use == ReadUse.OUTPUT:
+                    self.walk.printed.setdefault(frame.form, set()).add(binding.effective)
             optional = names[:1] == ["default"] or self.guarded(frame, binding)
             if use in (ReadUse.OUTPUT, ReadUse.ARGUMENT) and not optional:
                 if binding.kind == BindingKind.UNPASSED:

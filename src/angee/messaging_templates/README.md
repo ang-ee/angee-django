@@ -199,7 +199,8 @@ carries its code in `error_list`, so a sender tells them apart:
 float holds where `floatformat` or `pluralize` reads it, a moment the local zone
 cannot hold, a bare date printed with a time), `values_too_large` (the values
 over 50,000 characters of JSON), `message_template_refused` (the
-walk), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
+walk), `value_not_printed` (a value passed in `must_print` that a body does not
+print; see [Sending as system work](#sending-as-system-work)), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
 any other failure, which is logged with its traceback first. Every string value,
 and the subject and preheader, drop the control characters and the bidirectional
@@ -225,7 +226,7 @@ the default one.
 
 ## Sending as system work
 
-`MessageTemplate.objects.send_as_system(row, *, reason, to, values, kit=None)`
+`MessageTemplate.objects.send_as_system(row, *, reason, to, values, kit=None, must_print=())`
 sends one effective template to one address with the caller's values, as named
 system work: system mail, which a person's button may cause when the caller's
 own permission decided the send, the causing actor recorded in the caller's
@@ -245,8 +246,21 @@ with system_context(reason="<addon>.<verb>"):
 MessageTemplate.objects.send_as_system(row, reason="<addon>.<verb>", to=address, values=values)
 ```
 
-A key with no row raises `DoesNotExist` there, a deployment's defect rather than
-a refusal. The row renders as the instance holds it: edits not yet saved are
+The verb takes a row: a key with no row raises `DoesNotExist` from the caller's
+own lookup, and a caller that offers the send to a person turns it into its own
+coded refusal.
+
+A caller that mails a credential or a call to action passes the paths of the
+values the mail is useless without as `must_print` (`["link"]`, or
+`["person.first_name"]` for a nested one). The render then refuses, before it
+renders anything, when the HTML body or the plain-text body does not print one of
+them (`value_not_printed`, one item per path and body), through any include and
+whether or not a condition guards the output; a value only tested in a condition
+is not printed, and a path the row does not declare is refused once. Both bodies
+are required because some clients show only the plain-text part. So a
+deployment's override that drops `{{ link }}`, or its declaration, is refused
+rather than sent without its link. The preview's "Nothing reads …" warning stays
+a warning: it knows no caller's requirement. The row renders as the instance holds it: edits not yet saved are
 sent, and a row never saved is refused `not_effective`. `to` is one entry as
 messaging's `clean_recipient` reads it; pass a bare address, since a typed name
 fills the display name of a handle that has none. Nothing is idempotent: a caller

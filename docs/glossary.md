@@ -573,7 +573,8 @@ recipient reads; messaging delivers what is sent. See
 **Send a message template as system work** — render an effective message
 template for one address as named system work and record it on messaging's
 system channel (`MessageTemplateManager.send_as_system`); the row's language is
-the mail's, and the caller's own gate authorised the send. See
+the mail's, the caller's own gate authorised the send, and the caller names the
+values the mail is useless without (`must_print`), which each body must print. See
 [sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
 
 **Test send** — an administrator's send of a message template with its sample

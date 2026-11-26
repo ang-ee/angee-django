@@ -12,7 +12,7 @@ live in code docstrings.
 
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
-    kit=None)` renders one effective template (the caller picks it for its
+    kit=None, must_print=())` renders one effective template (the caller picks it for its
     recipient with `effective("template", key, person=...)`) with the caller's
     values inside `system_context(reason=reason)`, and records it on messaging's
     system channel through `Message.objects.compose_as_system`, queued: one
@@ -24,9 +24,13 @@ live in code docstrings.
     an MCP tool or a view that hands it a person's choice of row, address or values
     unchecked. It checks no permission and decides nothing about the values, the
     links in them or who may be mailed; a test lists the modules that call it. The
-    caller looks the row up inside its
-    own `system_context(reason=...)`, under the reason it sends with (the
-    README's recipe). A blank `reason` is a `ValueError`; then
+    caller looks the row up inside its own `system_context(reason=...)`, under
+    the reason it sends with (the README's recipe), and names in `must_print` the
+    values the mail is useless without (a sign-in link's path):
+    `MessageTemplate.render(values, *, kit=None, must_print=())` refuses
+    (`value_not_printed`) before rendering when the HTML or the plain-text body
+    does not print one, so an override that drops it is refused, not sent; the
+    walk records what each form prints (`TemplateWalk.printed`). A blank `reason` is a `ValueError`; then
     `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;
     a row that is not what renders, `not_effective`), the render's codes, and what
     `compose_as_system` refuses, as its docstring says, an address the transport

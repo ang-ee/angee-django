@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import email.policy
+from collections.abc import Callable
 from contextlib import nullcontext
 from email import message_from_bytes
 from email.message import EmailMessage
@@ -290,6 +291,69 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
     reasons = [reason for _, reason in _audits()[len(audits):]]
     assert reasons[0] == REASON, reasons
     assert ("messaging.system_channel" in reasons) is looked_up, reasons
+
+
+LINKED = {"link": "Where the reader signs in."}
+LINK = {"link": "https://app.example.test/sign-in/once"}
+
+
+def test_an_override_that_no_longer_prints_the_value_its_sender_needs_is_refused_with_nothing_sent(
+    system_channel: Any, sent: list[str], django_capture_on_commit_callbacks: Any,
+) -> None:
+    """A deployment's override of a shipped sign-in mail that drops ``{{ link }}`` (and one that drops its
+    declaration too) is refused, in both bodies; the shipped text sends, and so does the override with no
+    requirement passed, as before."""
+
+    del system_channel
+    _mail("Hello. [Sign in]({{ link }})", LINKED, key="tests.signin", is_baseline=True)
+    override = _mail("Hello, and welcome.", LINKED, key="tests.signin")
+    undeclared = _mail("Hello, and welcome.", {}, key="tests.signin_bare")
+    for row, expected in ((override, 2), (undeclared, 1)):
+        with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
+            _send(row, LINK, must_print=["link"])
+        assert [item.code for item in refusal.value.error_list] == ["value_not_printed"] * expected, row.key
+        assert (callbacks, sent) == ([], [])
+    assert "sign-in/once" not in _stored(_send(override, LINK))[1]
+    shipped = _mail("Hello. [Sign in]({{ link }})", LINKED, key="tests.signin_shipped")
+    subject, text, html = _stored(_send(shipped, LINK, must_print=["link"]))
+    assert "https://app.example.test/sign-in/once" in text and "https://app.example.test/sign-in/once" in html
+
+
+@pytest.mark.parametrize(
+    ("make", "must_print", "unprinted"),
+    [
+        pytest.param(lambda: _mail("[Sign in]({{ link }})", LINKED), ["link"], [], id="both-bodies"),
+        pytest.param(
+            lambda: _row("template", "tests.html_only", format="html", variables=LINKED,
+                         source='<p><a href="{{ link|url }}">Sign in</a></p>', text_source="Sign in."),
+            ["link"], ["plain-text"], id="html-body-only",
+        ),
+        pytest.param(lambda: _mail("{% if link %}Sign in.{% endif %}", LINKED), ["link"], ["HTML", "plain-text"],
+                     id="only-tested-is-not-printed"),
+        pytest.param(lambda: _mail("{% if link %}[Sign in]({{ link }}){% endif %}", LINKED), ["link"], [],
+                     id="printed-under-a-condition"),
+        pytest.param(lambda: _mail("Hi {{ person.first_name }}.", {"person.first_name": "A name."}),
+                     ["person.first_name"], [], id="a-nested-path"),
+        pytest.param(lambda: (_row("part", "signin_line", source="[Sign in]({{ url }})", variables={"url": "Where."}),
+                              _mail('{% include "parts/signin_line" with url=link only %}', LINKED))[1],
+                     ["link"], [], id="printed-by-an-included-part"),
+    ],
+)
+def test_a_required_value_must_be_printed_by_each_body_through_any_include(
+    system_channel: Any, make: Callable[[], Any], must_print: list[str], unprinted: list[str],
+) -> None:
+    del system_channel
+    row = make()
+    values = {"link": "https://app.example.test/sign-in/once", "person": {"first_name": "Ana"}}
+    if not unprinted:
+        _send(row, {key: value for key, value in values.items() if key in {p.split(".")[0] for p in must_print}},
+              must_print=must_print)
+        return
+    with _refused(ValidationError) as refusal:
+        _send(row, {"link": values["link"]}, must_print=must_print)
+    assert [item.code for item in refusal.value.error_list] == ["value_not_printed"] * len(unprinted)
+    assert [body for body in ("HTML", "plain-text") if any(f"The {body} body" in item.message
+                                                          for item in refusal.value.error_list)] == unprinted
 
 
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
