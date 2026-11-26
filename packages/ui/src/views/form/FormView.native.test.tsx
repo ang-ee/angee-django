@@ -458,7 +458,7 @@ test("a pane focuses a sheet field's native control in place", async () => {
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
-test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, as leaving does", async () => {
+test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, alone or with the tab, as leaving does", async () => {
   const f = await fixture();
   edit("title", "Local edit");
   // The form publishes its dirty state a render after the value, as the person's next move finds it.
@@ -469,8 +469,15 @@ test("a record's tab switch keeps a dirty form and asks nothing; any other searc
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 
   act(() => { void f.router.history.push("/?recordTab=activity&page=2"); });
+  const asked = await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" });
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+  fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+  act(() => { void f.router.history.push("/?recordTab=history&page=2"); });
   expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
   expect(f.router.history.location.search).toBe("?recordTab=activity");
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
 test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
