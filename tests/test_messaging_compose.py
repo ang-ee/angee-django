@@ -1011,9 +1011,24 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     with system_context(reason="tests.messaging.compose.reply_to.read"):
         to = {name: list(Recipient._base_manager.filter(message=reply).values_list("handle__value", flat=True))
               for name, reply in replies.items()}
-    assert to == {"reply-to": ["ann@example.test"], "sender": ["requester@example.test"]}
+    assert to == {"reply-to": ["Ann@Example.test"], "sender": ["requester@example.test"]}
     unaddressed = _receive(desk, "unaddressed", sender=None)
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
+
+
+def test_an_answer_goes_once_to_each_address_a_reply_to_names_as_the_header_spells_it(desk: Any) -> None:
+    """Two spellings of one address in a Reply-To are one recipient, addressed as the header first spells it."""
+
+    relayed = _receive(
+        desk, "relayed-twice", sender="relay@example.test",
+        reply_to="Ann <Ann@Example.test>, ann@EXAMPLE.test, Bob <bob@xn--bcher-kva.example>, bob@bücher.example",
+    )
+    assert relayed.reply_addresses(actor=desk.owner) == {"Ann@Example.test": "Ann", "bob@xn--bcher-kva.example": "Bob"}
+    reply = Message.objects.compose(parent=relayed, text="Thanks.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.reply_to.twice"):
+        to = list(Recipient._base_manager.filter(message=reply).order_by("pk").values_list("handle__value", flat=True))
+    assert to == ["Ann@Example.test", "bob@xn--bcher-kva.example"]
+    assert _wire(desk, reply)["To"] == "Ann <Ann@Example.test>, Bob <bob@xn--bcher-kva.example>"
 
 
 @pytest.mark.parametrize("local", ["a\x1bb", "a\u202eb", "a\u2028b", "a\u200bb", "a\x85b"])

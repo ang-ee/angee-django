@@ -1383,17 +1383,23 @@ class Message(
         """Return the addresses this message's ``Reply-To`` names, each with its display name.
 
         The header is read through :meth:`source_header_values` with the caller's
-        access, in header order. Each address is in the form a handle stores it
-        (``Handle.email_value``); a repeated address keeps its first display name,
-        and an entry the handle owner's predicate (``Handle.is_email_address``)
-        rejects is no address. Without a ``Reply-To`` the mapping is empty.
+        access, in header order. One entry per address, by its spelling key
+        (``Handle.spelling_key_of``: any letter case or domain spelling of an
+        address is one), keeping the spelling and display name the header gives it
+        first, which an answer is landed on and addressed to as the handle owner
+        lands any spelling; an entry the handle owner's predicate
+        (``Handle.is_email_address``) rejects is no address. Without a
+        ``Reply-To`` the mapping is empty.
         """
 
         addresses: dict[str, str] = {}
+        named: set[str] = set()
         for name, address in getaddresses(self.source_header_values("reply-to", actor=actor)):
-            address = Handle.email_value(address)
-            if Handle.is_email_address(address):
-                addresses.setdefault(address, name.strip())
+            address = address.strip()
+            key = Handle.spelling_key_of(Handle.Platform.EMAIL, address)
+            if Handle.is_email_address(address) and key not in named:
+                named.add(key)
+                addresses[address] = name.strip()
         return addresses
 
     def require_reply(self, actor: Any) -> Channel:
