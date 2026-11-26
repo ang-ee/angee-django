@@ -10,7 +10,7 @@ import { useToast } from "../../feedback";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
 import { emptyValueForField, fieldRuleErrors, refusesSeed } from "./field-values";
-import { fieldValidationSummary, isFieldControlVisible, visibleFields } from "./form-view-model";
+import { fieldValidationSummary, shownFields, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
   SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formErrorsFromForm, formSubmitError, formSubmitOutcome, invalidFormSubmit,
@@ -338,14 +338,15 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
-  const shownFields = visibleFields(fields, values);
-  const renderedFieldNames = shownFields.filter((field) => !field.hidden).map((field) => field.name);
+  // The fields the values hold, hidden ones included, and of those the ones a control shows.
+  const visible = visibleFields(fields, values);
+  const renderedFieldNames = shownFields(fields, values).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
   const errors = formErrorsFromForm(form.formState.errors);
   const { banner, focusBanner } = useRefusalBannerFocus(errors);
   const fieldByName = React.useMemo(() => new Map(fields.map((field) => [field.name, field])), [fields]);
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
-    && shownFields
+    && visible
       .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values))
       .every((field) => !field.required && !field.presenceRequired));
   const ready = fieldsReady && (canSubmit?.(values) ?? true);
@@ -394,7 +395,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   };
   const allowRootErrorRetry = async (): Promise<void> => {
     if (!renderedFieldNames.some((name) => form.getFieldState(name).invalid)) {
-      await form.trigger(shownFields.map((field) => field.name));
+      await form.trigger(visible.map((field) => field.name));
     }
   };
 
@@ -487,7 +488,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
 
 /** A dialog's errors for the rules its fields fail, each field's found by `fieldRuleErrors` and
  * worded by `fieldErrorsFromRules`. As the record form's check (`formRuleErrors`) does, it asks
- * only the fields shown for `values` (`isFieldControlVisible`) that the person can change. It
+ * only the fields shown for `values` (`shownFields`) that the person can change. It
  * differs from the record form's check in four facts only: it decides read-only by the field's
  * `readOnly` and `readOnlyWhen`, where the record form reads the resolved field's `readOnly`
  * alone; it reads each name as one flat key, where the record form reads dotted paths (both read
@@ -504,8 +505,8 @@ export function dialogRuleErrors(
   t: UiTranslate,
   validateConstraints = true,
 ): FieldErrors<Record<string, unknown>> {
-  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values);
-  const editable = resolved.filter((field) => isFieldControlVisible(field, values) && !field.readOnly && !field.readOnlyWhen?.(values));
+  const editable = shownFields(typeof fields === "function" ? fields(values) : fields, values)
+    .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values));
   return fieldErrorsFromRules(editable.flatMap((field) => {
     const value = values[field.name];
     return fieldRuleErrors(

@@ -399,7 +399,7 @@ calendar.
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base ([E2E guide](frontend/e2e.md)) |
 | @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), using Playwright MCP's native per-project persistent profile in the OS cache; source checkouts own no browser state. The agent navigates to the stack's configured `ANGEE_UI_PORT`. Container MCP services keep their declared stack-owned profile mount. Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
-| Storybook | Component workshop | `@angee/ui` and addon previews |
+| Storybook | Component workshop | `@angee/ui` and addon previews; the workshop package's story check composes its stories through the portable-stories API (`composeStories` over the preview's annotations) |
 | GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |
 

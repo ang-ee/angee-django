@@ -114,6 +114,24 @@ const FORBIDDEN_VALUE = /[;{}@]|url\s*\(|expression\s*\(|!important/i;
 const INTEGER_VALUE = /^(?:0|[1-9]\d*)$/;
 const CSS_NUMBER_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 const EASING_KEYWORDS = new Set(["linear", "ease", "ease-in", "ease-out", "ease-in-out"]);
+// The shadow forms the contract accepts, each spelled out whole (see `isShadowList`).
+// CSS whitespace: JavaScript's `\s` also matches a no-break space and its kin, which CSS does not
+// take as a separator, so a value holding one would pass here and be void in a browser.
+const SHADOW_SPACE = String.raw`[ \t\n\r\f]`;
+const SHADOW_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+const SHADOW_ALPHA = `${SHADOW_NUMBER}%?`;
+const SHADOW_HEX = "#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})";
+const SHADOW_COLOR = [
+  SHADOW_HEX, "transparent", "currentcolor",
+  String.raw`rgba?\(${SHADOW_SPACE}*${SHADOW_NUMBER}${SHADOW_SPACE}+${SHADOW_NUMBER}${SHADOW_SPACE}+${SHADOW_NUMBER}(?:${SHADOW_SPACE}*\/${SHADOW_SPACE}*${SHADOW_ALPHA})?${SHADOW_SPACE}*\)`,
+  String.raw`rgba?\(${SHADOW_SPACE}*${SHADOW_NUMBER}${SHADOW_SPACE}*,${SHADOW_SPACE}*${SHADOW_NUMBER}${SHADOW_SPACE}*,${SHADOW_SPACE}*${SHADOW_NUMBER}(?:${SHADOW_SPACE}*,${SHADOW_SPACE}*${SHADOW_ALPHA})?${SHADOW_SPACE}*\)`,
+  String.raw`rgb\(${SHADOW_SPACE}*from${SHADOW_SPACE}+${SHADOW_HEX}${SHADOW_SPACE}+r${SHADOW_SPACE}+g${SHADOW_SPACE}+b${SHADOW_SPACE}*\/${SHADOW_SPACE}*${SHADOW_ALPHA}${SHADOW_SPACE}*\)`,
+  String.raw`color-mix\(${SHADOW_SPACE}*in${SHADOW_SPACE}+(?:srgb|oklab|oklch)${SHADOW_SPACE}*,${SHADOW_SPACE}*${SHADOW_HEX}${SHADOW_SPACE}+(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?|\.\d+)%${SHADOW_SPACE}*,${SHADOW_SPACE}*transparent${SHADOW_SPACE}*\)`,
+].join("|");
+const SHADOW_LENGTHS = String.raw`(?:0|[+-]?${SHADOW_NUMBER}(?:px|rem|em))${SHADOW_SPACE}+(?:0|[+-]?${SHADOW_NUMBER}(?:px|rem|em))(?:${SHADOW_SPACE}+(?:0|${SHADOW_NUMBER}(?:px|rem|em))(?:${SHADOW_SPACE}+(?:0|[+-]?${SHADOW_NUMBER}(?:px|rem|em)))?)?`;
+const SHADOW_BODY = String.raw`(?:(?:${SHADOW_COLOR})${SHADOW_SPACE}+${SHADOW_LENGTHS}|${SHADOW_LENGTHS}(?:${SHADOW_SPACE}+(?:${SHADOW_COLOR}))?)`;
+const SHADOW_LAYER = String.raw`(?:inset${SHADOW_SPACE}+${SHADOW_BODY}|${SHADOW_BODY}(?:${SHADOW_SPACE}+inset)?)`;
+const SHADOW_LIST = new RegExp(String.raw`^${SHADOW_SPACE}*${SHADOW_LAYER}(?:${SHADOW_SPACE}*,${SHADOW_SPACE}*${SHADOW_LAYER})*${SHADOW_SPACE}*$`, "i");
 
 export function defineTheme(definition) {
   assertThemeDefinition(definition);
@@ -221,8 +239,8 @@ const DENSITY_TOKENS = Object.freeze({
 });
 const ELEVATION_TOKENS = Object.freeze({
   flat: {
-    light: ["none", "none", "0 0 0 1px #00000014", "0 0 0 1px #0000001f", "0 0 0 1px #00000029"],
-    dark: ["none", "none", "0 0 0 1px #ffffff1a", "0 0 0 1px #ffffff24", "0 0 0 1px #ffffff2e"],
+    light: ["0 0 #0000", "0 0 #0000", "0 0 0 1px #00000014", "0 0 0 1px #0000001f", "0 0 0 1px #00000029"],
+    dark: ["0 0 #0000", "0 0 #0000", "0 0 0 1px #ffffff1a", "0 0 0 1px #ffffff24", "0 0 0 1px #ffffff2e"],
   },
   subtle: {
     light: ["0 1px 1px #0000000a", "0 1px 2px #0000000f", "0 4px 12px #00000014", "0 12px 32px #0000001f", "0 6px 16px #0000001a"],
@@ -241,6 +259,8 @@ const FONT_KEYS = new Set(["theme", ...Object.keys(FONT_STACKS)]);
 const RADIUS_KEYS = new Set(["theme", ...Object.keys(RADIUS_TOKENS)]);
 const DENSITY_KEYS = new Set(["theme", ...Object.keys(DENSITY_TOKENS)]);
 const ELEVATION_KEYS = new Set(["theme", ...Object.keys(ELEVATION_TOKENS)]);
+/** The elevation presets a customization can choose instead of its theme's own. */
+export const THEME_ELEVATION_PRESETS = Object.freeze(Object.keys(ELEVATION_TOKENS));
 const LOGO_KEYS = new Set(["theme", "brand", "accent", "mono", "star", "corner"]);
 
 /**
@@ -555,6 +575,7 @@ function assertTokenLayer(layer, owner) {
 }
 
 function isBoundedTokenValue(name, value) {
+  if (name.startsWith("--elevation-") || name === "--ring" || name === "--ring-danger") return isShadowList(value);
   if (name.startsWith("--fw-")) return boundedInteger(value, "", 100, 900);
   if (name.startsWith("--fs-")) return boundedInteger(value, "px", 10, 40);
   if (name.startsWith("--lh-")) return boundedInteger(value, "px", 12, 56);
@@ -568,6 +589,22 @@ function isBoundedTokenValue(name, value) {
   const x1 = Number(points[0]);
   const x2 = Number(points[2]);
   return x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1;
+}
+
+/**
+ * Whether a value is a list of shadows within the contract's bounds, each layer matched whole: an
+ * optional leading or trailing `inset`; two to four lengths, each `0` or a number in `px`, `rem` or
+ * `em`, signed except the third, the blur; and an optional colour before or after them: a hex value,
+ * `transparent`, `currentcolor`, `rgb()`/`rgba()` of three numbers and an optional alpha (modern or
+ * comma form), `rgb(from <hex> r g b / <alpha>)`, or
+ * `color-mix(in srgb|oklab|oklch, <hex> <percentage>, transparent)`. No form holds a `var()`, whose
+ * value is not known here and which, undefined, would void the list. Every elevation,
+ * `--ring` and `--ring-danger` is such a list, since a `shadow-*` utility composes them into one
+ * `box-shadow`, where a layer a browser cannot draw voids the whole list, ring included. "No
+ * elevation" is `0 0 #0000`, as Tailwind's `shadow-none` writes it.
+ */
+export function isShadowList(value) {
+  return SHADOW_LIST.test(value);
 }
 
 function boundedInteger(value, suffix, minimum, maximum) {

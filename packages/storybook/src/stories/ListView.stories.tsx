@@ -79,12 +79,31 @@ const rowActions: readonly RowActionDeclaration<StoryRow>[] = [
   }),
 ];
 
+// A handful of tasks, two pairs of them tied on rank, ordered in the browser by status, rank, then title.
+const tasks = [
+  { id: "task-1", title: "Draft the brief", status: "open", rank: 1 },
+  { id: "task-2", title: "Book the room", status: "open", rank: 1 },
+  { id: "task-3", title: "Collect quotes", status: "open", rank: 2 },
+  { id: "task-4", title: "Send invites", status: "closed", rank: 3 },
+  { id: "task-5", title: "Archive notes", status: "closed", rank: 1 },
+  { id: "task-6", title: "Approve budget", status: "closed", rank: 3 },
+] as const;
+const taskFields = { id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" }, rank: { scalar: "Int" } } as const;
+const taskQuery = ResourceQuery.forRows({ fields: taskFields }).contract;
+const taskResource = testDataResource("notes.Task", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "tasks", aggregate: "tasks_aggregate" }, typeNames: { filter: "TaskFilter", order: "TaskOrder" },
+  fields: Object.entries(taskFields).map(([name, { scalar }]) => ({ name, kind: "scalar", scalar, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: { ...taskQuery, sort: { ...taskQuery.sort, default: (["status", "rank", "title"] as const).map((field) => ({ field, direction: "ASC" as const })) } },
+});
+
 const storySchemas = storySchema({
   notes: () => rows,
   notes_aggregate: () => ({ aggregate: { count: rows.length } }),
-});
-
-storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
+  tasks: () => tasks,
+  tasks_aggregate: () => ({ aggregate: { count: tasks.length } }),
+}, { resources: [testDataResource("notes.Note", {
   schemaName: "public",
   roots: { list: "notes", aggregate: "notes_aggregate" },
   typeNames: { filter: "NoteFilter", order: "NoteOrder" },
@@ -92,7 +111,7 @@ storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.N
     ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
     ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
   ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
-})] } };
+}), taskResource] });
 
 const meta = {
   title: "Views/ListView",
@@ -109,6 +128,25 @@ export const VisibleFieldsChooser: Story = {
 
 export const SearchShortcuts: Story = {
   render: () => <ListFixture withShortcuts />,
+};
+
+/**
+ * Grouped by status and ordered by status, then rank, then title; open both groups to see their
+ * rows. At load the Status header shows no sort (a group's tasks share their status), Rank shows
+ * ascending (each group's rows follow it) and Title shows not sorted (it only breaks rank ties: Book
+ * the room before Draft the brief). Press Title's sort button: Title sorts ascending as the only key,
+ * Rank shows not sorted, and each group's rows follow their titles (Collect quotes moves above Draft
+ * the brief); the status key goes too, so the groups no longer follow it.
+ */
+export const GroupedWithTieBreakers: Story = {
+  name: "Grouped With Tie-breakers",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.Task" defaultGroup={{ field: "status" }} columns={[
+        { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
+      ]} />
+    </div>
+  ),
 };
 
 function ListFixture({ withShortcuts = false }: { withShortcuts?: boolean }) {

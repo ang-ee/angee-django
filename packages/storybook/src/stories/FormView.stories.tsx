@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { storySchema, testDataResource } from "./runtime-fixtures";
+import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -23,6 +23,8 @@ const storyRecord = {
   words: 842,
   body:
     "## Review goals\n\n- Confirm release notes and owner handoff.\n- Verify import smoke tests against the seeded workspace.\n- Close support-facing follow ups before the launch window.\n\n## Open items\n\nThe final permissions review is scheduled after the data import check.",
+  reviewer: { id: "per_grace", name: "Grace Hopper" },
+  approver: { id: "per_alan", name: "Alan Turing" },
 };
 
 const titleField = {
@@ -170,12 +172,41 @@ function readOnlyFieldFor(field: FormField): FormField {
   return readOnlyField;
 }
 
-const patch = (args: Record<string, unknown>) => isRecord(args.data) ? args.data : {};
-const storySchemas = storySchema({
-  note: () => storyRecord,
-  updateNote: (args) => ({ ...storyRecord, ...patch(args) }),
-  createNote: (args) => ({ ...storyRecord, id: "note-new", ...patch(args) }),
+const scalar = (name: string, type: string, editable = true) => ({
+  name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
+  creatable: editable, updatable: editable, requiredOnCreate: false,
 });
+const relation = (name: string, model: string) => ({ ...scalar(name, "ID"), kind: "relation" as const, scalar: null, relationModelLabel: model });
+// The file's resources, once: every story's FormView finds notes.Note in the schema's metadata.
+const personResource = testDataResource("people.Person", {
+  schemaName: "public", recordRepresentation: "name", fields: [scalar("id", "ID", false), scalar("name", "String")],
+  // The relation pickers list people too.
+  roots: { aggregate: "persons_aggregate" }, typeNames: { filter: "PersonFilter", order: "PersonOrder" },
+  query: testResourceQuery({ fields: { id: testQueryField("id", { scalar: "ID" }), name: testQueryField("name", { sort: { field: "name" } }) } }),
+});
+const noteResource = testDataResource("notes.Note", { schemaName: "public", fields: [
+  scalar("id", "ID", false), scalar("title", "String"), scalar("status", "String"), scalar("owner", "String"),
+  scalar("priority", "String"), scalar("visibility", "String"), { ...scalar("tags", "String"), kind: "list" as const },
+  scalar("createdAt", "DateTime", false), scalar("updatedAt", "DateTime", false), scalar("words", "Int", false),
+  scalar("body", "String"), relation("reviewer", personResource.modelLabel), relation("approver", personResource.modelLabel),
+] });
+
+const patch = (args: Record<string, unknown>) => isRecord(args._set) ? args._set : isRecord(args.object) ? args.object : {};
+const people = [storyRecord.reviewer, storyRecord.approver];
+const person = (args: Record<string, unknown>) => {
+  const id = isRecord(args.pk_columns) ? args.pk_columns.id : args.id;
+  return people.find((candidate) => candidate.id === id) ?? null;
+};
+const storySchemas = storySchema({
+  notes_by_pk: () => storyRecord,
+  update_notes_by_pk: (args) => ({ ...storyRecord, ...patch(args) }),
+  insert_notes_one: (args) => ({ ...storyRecord, id: "note-new", ...patch(args) }),
+  // The relation pickers list people; their Edit reads the person it opens and saves its name.
+  persons: () => people,
+  persons_aggregate: () => ({ aggregate: { count: people.length } }),
+  persons_by_pk: person,
+  update_persons_by_pk: (args) => ({ ...person(args), ...patch(args) }),
+}, { resources: [noteResource, personResource] });
 
 const meta = {
   title: "Views/FormView",
@@ -242,17 +273,8 @@ export const FullBleedTab: Story = {
   ),
 };
 
-const railFields = ["title", "owner", "priority"].map((name) => ({
-  name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
-  creatable: true, updatable: true, requiredOnCreate: false,
-}));
-const railSchemas = storySchema({ note: () => storyRecord });
-railSchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
-  schemaName: "public", fields: railFields,
-})] } };
-
 export const RecordRail: Story = {
-  parameters: { angeeFixture: { schemas: railSchemas, runtime: { containers: containersFromChildren(FORM_CONTAINERS, {
+  parameters: { angeeFixture: { schemas: storySchemas, runtime: { containers: containersFromChildren(FORM_CONTAINERS, {
     "notes.Note#rail": { "notes.record-properties": {
       content: <FormView.RailGroup id="properties" label="Properties" hint="Edit values here"
         fields={[{ field: { name: "owner" } }, { field: { name: "priority", widget: "select",
@@ -264,6 +286,18 @@ export const RecordRail: Story = {
       acknowledgedSource={{ record: { ...storyRecord, permissions: ["read", "write"] }, values: storyRecord }} />
   ),
 };
+
+// Both fields hold a person, whose name a person can edit: the reviewer's picker offers Edit,
+// the approver's declines it with `relationEdit: null`.
+const reviewerField = { name: "reviewer", label: "Reviewer" } satisfies FormField;
+const approverField = { name: "approver", label: "Approver", relationEdit: null } satisfies FormField;
+export const RelationWithoutEdit: Story = {
+  render: () => (
+    <FormView resource="notes.Note" id={storyRecord.id} fields={[titleField, reviewerField, approverField]}
+      groups={[{ label: "Review", columns: 2, fields: [reviewerField, approverField], actions: [] }]} />
+  ),
+};
+// A relation field's quick create gets its story here, from the lane that builds it.
 
 export const RecordSectionHeading: Story = {
   render: () => <div className="max-w-3xl">

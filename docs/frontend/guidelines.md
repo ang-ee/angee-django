@@ -461,10 +461,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins, unless the declaration that
-  supplies the theme sets `themeLocked`: then that theme and its options win
-  within the app, the person's color scheme still applies, their saved theme
-  is kept for other apps, and Appearance says why. A lock travels with the theme
+  default, its options ranked as [host and user precedence](appearance.md#host-and-user-precedence)
+  says. The person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked` (what a lock does is
+  [host and user precedence](appearance.md#host-and-user-precedence)). A lock travels with the theme
   it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
@@ -757,7 +757,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **A class composed through a variant is a registered utility.** `styles/index.css`
   declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
   Tailwind gives a variant to a registered utility only, and a plain class in
-  `@layer utilities` compiles to nothing under one, silently
+  `@layer utilities` compiles to nothing under one, silently. The focus ring
+  (`focus-ring`, `focus-ring-danger` on an invalid control) sits under the state
+  variant that shows it, beside a bare `outline-none`, and is Tailwind's ring
+  layer: an elevation is a `shadow-*` utility, never a raw `box-shadow`, so focus
+  keeps both. `ring-0` with `outline-none`, under a selector that outranks the
+  ring's state variant, removes a ring; `shadow-none` does not; an elevation token
+  is a shadow list, never `none` ("no elevation" is `0 0 #0000`; the theme contract
+  holds elevations and the rings to its shadow forms, and a theme stylesheet may not
+  set one, since a layer outside them voids the ring). In forced colours the ring paints a
+  transparent outline the browser colours
   ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
@@ -1346,7 +1355,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `formSubmitError` (VALIDATION and STALE_REVISION). Do not add another in-band
   form transport. Adapt ActionResult wire responses with
   `actionFormSubmitResult(data, root)` and normalized outcomes with
-  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  `actionOutcomeSubmitResult(outcome)`: field reasons stay under their keys, the
+  non-field ones (`__all__`) are the form-level reasons, and the outcome's
+  message, which joins every reason (a refused target's is the verb's summary),
+  stands in only when the outcome carries no reason, the rule `runActionResult`
+  applies. A dialog thus says each reason once: under the field it names when it
+  shows that field ([shownFields](../../packages/ui/src/views/form/form-view-model.ts)),
+  on its banner otherwise; a reason under a name only a `content` editor holds
+  shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
@@ -1358,9 +1374,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
   the line naming the refused fields, so one focused place says everything;
-  with field reasons only, the first shown field takes focus. A surface gives
-  its banner's focus through `useRefusalBannerFocus`, never an effect of its
-  own. Save stays focusable while a save runs.
+  with field reasons only, the first shown field takes focus where it can: the
+  form library focuses it as the answer lands, so a field disabled or replaced
+  while the submit runs (a native input of a schema-driven or definition
+  `ActionFormDialog`, held in a fieldset it disables; a checkbox or switch
+  still takes it) cannot take it, and the banner, which names the field but
+  does not repeat its reason, takes focus instead. A surface gives its
+  banner's focus through `useRefusalBannerFocus`,
+  never an effect of its own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
@@ -2453,16 +2474,37 @@ shell's providers, `AppShellTestProviders` from `@angee/ui/testing/shell`, and
 each root field of a request from the handler named for it, fails loudly on a
 field without a handler or a missing required variable, and reports each parsed
 request; a handler throws `GraphQLError` to answer an error. Stories and addon
-tests wrap it as `storySchema(operations, onRequest)`; framework package tests
+tests wrap it as `storySchema(operations, { schema, resources, onRequest })`:
+the schema it names (`public` unless `schema` says), whose metadata names the
+data resources a story declares once, without which a resource surface finds
+no model, warns and loads no record. `testDataResource` declares `console`
+unless told otherwise, so a `public` story schema names `schemaName: "public"`
+resources; naming a resource of another schema throws. Framework package tests
 pass it as the `fetch` of a real Angee data provider. Tests match requests by
 `fields` or `operationName`, never by query text. A routed fixture
 reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
-has one provider stack — appearance, data, toasts and modals.
+has one provider stack — appearance, data, toasts and modals. The data layer
+tells its notices only to a `notificationProvider` a test passes to record them,
+so such a test records which notices the data layer opens for a surface's calls
+(none for a call passing `SURFACE_RENDERS_FAILURE`), not what the app's
+`useConnectionNotifications` holds back or tells once; a surface's own toast is
+not recorded. The workshop package's
+[story check](../../packages/storybook/src/stories/stories.test.tsx) imports
+each story module of that package and renders each of its stories (but one
+that fetches a missing file on purpose) through the preview's own annotations,
+failing on a model its schema does not name, a crash or an unanswered read; the
+fragments' and products' stories the workshop also loads need generated
+documents, so it does not import them. No story's runtime imports reach a test
+runner, which the [architecture guardrails](../../packages/app/src/architecture-guardrails.test.ts)
+check.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
-fixture transports with live queries disabled. The `@angee/storybook/host` entry
+fixture transports with live queries disabled. The workshop's toolbar is the host's
+appearance, so the fixture leaves the composed addons' run-time `hostAppearance`
+source out and a workshop answers none of its reads; a story about that source
+passes `hostAppearanceSource`. The `@angee/storybook/host` entry
 exposes the stack's emitted addons and schema loader; it adds no product registry.
 `resourceSnapshotOperations` supplies small read-only sample collections through
 metadata-owned filters, relations and grouping. Product packages own their sample

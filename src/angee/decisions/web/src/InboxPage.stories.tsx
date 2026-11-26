@@ -47,7 +47,7 @@ export function DecisionStory({ appearance, multiple = false, closed = false, in
     if (pendingEmpty) current = { ...current, requester: null };
 
     const listed = () => ({ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] });
-    const fixture = storySchema({
+    return storySchema({
       decide: (args) => {
         if (conflicting) { current = { ...current, revision: current.revision + 1 }; conflicting = false; }
         if (args.revision !== current.revision) {
@@ -68,13 +68,12 @@ export function DecisionStory({ appearance, multiple = false, closed = false, in
       notes_by_pk: () => ({ id: "nte_7", display_name: "Review notes" }),
       decisions: () => [listed()],
       decisions_aggregate: () => ({ aggregate: { count: 1 } }),
-    }).public!;
-    return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
+    }, { schema: "console", resources: [
       decisionResourceFixture,
       decisionRecordFixture,
       decisionLinkFixture,
       decisionUserFixture,
-    ] } } } };
+    ] });
   }, [multiple, closed, conflict, invalidAttempt, readOnly, emptyFacts, pendingEmpty ]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/decisions" initialEntry={inbox ? "/decisions" : "/decisions/dcn_review"}
     runtime={runtime} resourceName={DECISION_MODEL} resourceLabel="Decisions" operationDocuments={documents}>
