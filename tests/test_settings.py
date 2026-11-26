@@ -428,17 +428,14 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
     namespace = {
         "INSTALLED_APPS": ("angee.messaging",) if include_messaging else (),
         "COMPOSE_OUTPUT_DIR": tmp_path / "runtime",
-        "MAILERS": {"default": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}},
+        "MAILERS": {"transport": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}},
         "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
     _configure(namespace, tmp_path)
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment"}
-    if include_messaging:
-        assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
-        assert namespace["ANGEE_EMAIL_DELIVERY_CONFIGURED"] is True
-    else:
-        assert "ANGEE_EMAIL_DELIVERY_CONFIGURED" not in namespace
+    assert namespace["MAILERS"]["transport"] == {"BACKEND": "anymail.backends.mailgun.EmailBackend"}
     assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
+    assert "ANGEE_EMAIL_DELIVERY_CONFIGURED" not in namespace
 
 
 def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

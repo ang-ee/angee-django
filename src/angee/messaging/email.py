@@ -6,7 +6,8 @@ import hashlib
 import logging
 import re
 import unicodedata
-from email.utils import formataddr, getaddresses, parseaddr
+from contextvars import ContextVar
+from email.utils import formataddr, getaddresses
 from smtplib import SMTPRecipientsRefused, SMTPResponseException, SMTPServerDisconnected
 from typing import Any
 
@@ -23,7 +24,6 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.mail import mailers
 from django.core.mail.backends.base import BaseEmailBackend
-from django.core.validators import validate_email
 from django.utils.encoding import punycode
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
@@ -32,7 +32,7 @@ from urllib3.exceptions import MaxRetryError, NewConnectionError
 from angee.base.serialization import strip_null_bytes
 from angee.integrate.errors import IntegrationError, is_transient_status
 from angee.messaging.backends import ChannelBackend, DeliveryOutcome, DeliveryUncertain, OutboundEmailNotConfigured
-from angee.messaging.constants import SYSTEM_CHANNEL_BACKEND
+from angee.messaging.constants import SYSTEM_CHANNEL_BACKEND, TRANSPORT_MAILER_ALIAS
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +66,49 @@ def header_text(text: str) -> str:
     return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
-class AnymailEmailChannelBackend(ChannelBackend):
-    """Send an email channel's outbound messages through Django's Anymail backend.
+_DELIVERING: ContextVar[bool] = ContextVar("messaging_email_delivering", default=False)
+"""Whether this context is delivering a recorded message through the transport mailer.
 
-    The deployment selects the concrete ESP with Django's ``MAILERS["default"]`` and supplies
-    its vendor settings through ``ANYMAIL``/``ANYMAIL_*``. This adapter remains
-    provider-neutral and also works with Anymail's deterministic test backend.
+Set by :meth:`AnymailEmailChannelBackend.deliver` around the transport's
+connection; the system mailer refuses to record while it is set, so no mailer
+can hand a delivery back to it. A context variable: it closes re-entry in the
+delivering thread, not a hand-off to another thread or a queue.
+"""
+
+
+def _valid_sender(value: str) -> tuple[str, str]:
+    """Return ``value`` as the ``(name, address)`` email sender it names, or refuse it under ``channel``.
+
+    The one sender rule: ``value`` is one address as written, which the handle
+    owner lands (``MessageManager.clean_recipient``, the check every address
+    ``compose`` lands takes), and which the transport can carry
+    (:func:`carries_address`). A sender accepted here is never refused, nor read
+    as another address, once a message is being written or delivered. It reads nothing.
+    """
+
+    try:
+        name, address = apps.get_model("messaging", "Message").objects.clean_recipient(str(value or ""), key="channel")
+    except ValidationError as error:
+        raise ValidationError({"channel": ValidationError(
+            "Configure a valid sender address for this email channel (its from_email, else DEFAULT_FROM_EMAIL).",
+            code="invalid",
+        )}) from error
+    if not carries_address(address):
+        raise ValidationError({"channel": ValidationError(
+            "This mail transport cannot carry a sender address whose part before the @ is outside ASCII.",
+            code="cannot_carry",
+        )})
+    return name, address
+
+
+class AnymailEmailChannelBackend(ChannelBackend):
+    """Send an email channel's outbound messages through Django's transport mailer.
+
+    The deployment names the mailer that sends as ``MAILERS["transport"]`` (Django's
+    SMTP backend or an Anymail ESP backend, with its ``ANYMAIL``/``ANYMAIL_*``
+    settings); Django's default mailer is messaging's system mailer, which records
+    mail and sends none. This adapter remains provider-neutral and also works with
+    Anymail's deterministic test backend.
     """
 
     key = "email"
@@ -80,27 +117,35 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
     @classmethod
     def outbound_email_configured(cls) -> bool:
-        """Read the deployment's native email transport configuration decision."""
+        """Whether the deployment names a transport mailer, ``MAILERS["transport"]``; read from settings alone."""
 
-        return bool(settings.ANGEE_EMAIL_DELIVERY_CONFIGURED)
+        return TRANSPORT_MAILER_ALIAS in mailers
+
+    @classmethod
+    def default_sender(cls) -> tuple[str, str]:
+        """Return the deployment's default sender, ``DEFAULT_FROM_EMAIL``, from settings alone.
+
+        The sender of a channel that names none of its own. A deployment with no
+        transport mailer raises :class:`OutboundEmailNotConfigured`; an address the
+        sender rule refuses is refused under ``channel`` (:func:`_valid_sender`).
+        """
+
+        if not cls.outbound_email_configured():
+            raise OutboundEmailNotConfigured
+        return _valid_sender(str(settings.DEFAULT_FROM_EMAIL))
 
     def outbound_sender(self) -> tuple[str, str]:
         """Resolve and validate this channel's configured default envelope sender.
 
         The channel's ``from_email`` config wins over ``DEFAULT_FROM_EMAIL``. An
         unconfigured transport raises :class:`OutboundEmailNotConfigured`; an invalid
-        address is refused under ``channel`` too.
+        address is refused under ``channel`` (:func:`_valid_sender`).
         """
 
         if not self.outbound_email_configured():
             raise OutboundEmailNotConfigured
         config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
-        name, address = parseaddr(str(config.get("from_email") or settings.DEFAULT_FROM_EMAIL))
-        try:
-            validate_email(address)
-        except ValidationError as error:
-            raise ValidationError({"channel": "Configure a valid sender address for this email channel."}) from error
-        return name, address
+        return _valid_sender(str(config.get("from_email") or settings.DEFAULT_FROM_EMAIL))
 
     def deliver(self, message: Any) -> DeliveryOutcome:
         """Render and send ``message`` when an email transport is configured."""
@@ -125,7 +170,8 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 message.pk,
             )
             raise IntegrationError("The email envelope is incomplete.")
-        connection = mailers.default
+        connection = mailers[TRANSPORT_MAILER_ALIAS]
+        delivering = _DELIVERING.set(True)
         try:
             try:
                 connection.open()
@@ -143,6 +189,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 connection.close()
             except Exception as error:
                 logger.warning("Closing the email connection failed (%s).", type(error).__name__)
+            _DELIVERING.reset(delivering)
 
     @staticmethod
     def _send(email: Any, connection: BaseEmailBackend) -> DeliveryOutcome:
@@ -315,6 +362,40 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
     label = "System mail"
     offered = False
 
+    @classmethod
+    def system_mail_configured(cls) -> bool:
+        """Whether system mail can be sent, from settings alone: a transport mailer and a valid sender.
+
+        True exactly when :meth:`default_sender` returns, which is when a connected
+        system channel's :meth:`outbound_sender` does. It reads no row, so a
+        projection may ask it per record.
+        """
+
+        try:
+            cls.default_sender()
+        except ValidationError:
+            return False
+        return True
+
+    def outbound_sender(self) -> tuple[str, str]:
+        """The deployment's default sender (:meth:`default_sender`): the system channel names no address of its own."""
+
+        return self.default_sender()
+
+
+def carries_address(address: str) -> bool:
+    """Whether the transports this backend writes for can carry ``address``.
+
+    Its part before the ``@`` must be ASCII: no transport here speaks SMTPUTF8.
+    An internationalised domain is carried, written in its ASCII (IDNA) form
+    (:func:`_mailbox`). The one rule for both the mailbox writer, which fails a
+    delivery it cannot write, and the sender rule, which refuses such a sender
+    before any mail is written (:func:`_valid_sender`).
+    """
+
+    local, _at, _domain = address.rpartition("@")
+    return local.isascii()
+
 
 def _mailbox(name: str, address: str) -> str:
     """One mailbox as this backend writes it into a header; its display name as :func:`header_text` carries it.
@@ -330,7 +411,7 @@ def _mailbox(name: str, address: str) -> str:
     """
 
     local, at, domain = address.rpartition("@")
-    if at and not local.isascii():
+    if not carries_address(address):
         raise IntegrationError(
             f"{address} cannot be delivered: this mail transport cannot carry an address whose part before "
             "the @ is outside ASCII. Send to another address of this contact.",

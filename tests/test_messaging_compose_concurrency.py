@@ -32,7 +32,7 @@ def test_a_thread_is_opened_outside_any_transaction() -> None:
     assert (opened.external_id, opened.display_title) == ("msg:open@example.test", "Open")
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
 def test_a_second_keyed_compose_waits_on_the_first_claim_and_replays_its_message() -> None:
     """The contender has no earlier lock to wait on: it parks on the claim and then returns the first's message."""
 
@@ -59,7 +59,7 @@ def test_a_second_keyed_compose_waits_on_the_first_claim_and_replays_its_message
     assert claims.count() == 1
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
 def test_a_typed_name_waits_on_a_fill_of_the_blank_handle_and_keeps_what_it_wrote() -> None:
     """A name a person types only fills a blank handle, even when another transaction fills it first."""
 

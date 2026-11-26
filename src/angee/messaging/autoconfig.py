@@ -18,7 +18,6 @@ _Settings = TypedDict(
         "ANGEE_GRAPHQL_RELATED_COUNTS:append": list[str],
         "ANGEE_CHANNEL_BACKEND_CLASSES": dict[str, str],
         "ANGEE_IMPL_KEY_REMEDIES.ANGEE_CHANNEL_BACKEND_CLASSES.webform": str,
-        "ANGEE_EMAIL_DELIVERY_CONFIGURED": bool,
         "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": list[str],
         "ANGEE_MESSAGING_MAX_RECIPIENTS": int,
         "ANGEE_MESSAGING_MAX_ATTACHMENTS": int,
@@ -48,9 +47,6 @@ SETTINGS: _Settings = {
     "ANGEE_IMPL_KEY_REMEDIES.ANGEE_CHANNEL_BACKEND_CLASSES.webform": (
         "Install angee.webforms_messaging, which registers the webform channel backend."
     ),
-    # Only an explicitly declared native default mailer configures delivery;
-    # Django's legacy implicit localhost SMTP backend is not a transport choice.
-    "ANGEE_EMAIL_DELIVERY_CONFIGURED": False,
     # Addons append provenance keys written by their trusted local owners.
     "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": [
         "delivery_token", "delivery_conflict", "delivery_error", "delivery_attempts",
@@ -69,9 +65,7 @@ SETTINGS: _Settings = {
 def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     """Derive mail-provider defaults from the host environment and transport."""
 
-    contributed: dict[str, Any] = {
-        "ANGEE_EMAIL_DELIVERY_CONFIGURED": "default" in namespace.get("MAILERS", {}),
-    }
+    contributed: dict[str, Any] = {}
     if "ANYMAIL" in namespace:
         anymail = namespace["ANYMAIL"]
         contributed["ANYMAIL"] = json.loads(anymail) if isinstance(anymail, str) else anymail

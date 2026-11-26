@@ -57,7 +57,7 @@ def desk(db: None, settings: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     """An email channel whose default sender is the desk, delivery configured, sends recorded and never made."""
 
     del db
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     sent: list[str] = []
     monkeypatch.setattr(celery_app, "send_task", lambda name, **options: sent.append(name))
     channel = make_integration("compose-desk", model=Channel, backend_class="email", config={"from_email": DESK})
@@ -294,9 +294,12 @@ def test_a_reply_to_a_title_holding_an_encoded_word_is_written_on_one_line(desk:
 
 MAILERS = {
     "default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"},
+    "transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"},
     "smtp": {"BACKEND": "django.core.mail.backends.smtp.EmailBackend", "OPTIONS": {"host": "localhost"}},
 }
-"""The test mailer delivers; the SMTP one is only asked for the envelope it would send, never connected."""
+"""The test mailer is the transport and delivers; the SMTP one is only asked for the envelope it would send."""
+NO_TRANSPORT = {"default": MAILERS["default"]}
+"""Delivery not configured: no transport mailer is stated."""
 
 
 def _delivered(message: Any) -> EmailMessage:
@@ -458,7 +461,7 @@ def test_an_anchor_is_refused_with_what_it_cannot_take(desk: Any) -> None:
 
 def test_an_email_reply_on_a_channel_that_cannot_send_is_refused_even_held(desk: Any) -> None:
     request = _receive(desk, "unsendable")
-    with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False), _refused(
+    with override_settings(MAILERS=NO_TRANSPORT), _refused(
         OutboundEmailNotConfigured, key="channel", code="OUTBOUND_EMAIL_NOT_CONFIGURED",
     ):
         Message.objects.compose(parent=request, text="Which team?", actor=desk.owner)
@@ -496,7 +499,7 @@ def test_a_refused_reply_writes_no_permission_audit_row(desk: Any) -> None:
     )
     for error, values, configured in refusals:
         before = PermissionAuditEvent.objects.count()
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=configured), pytest.raises(error):
+        with override_settings(MAILERS=MAILERS if configured else NO_TRANSPORT), pytest.raises(error):
             Message.objects.compose(parent=request, text="Which team?", **values)
         assert PermissionAuditEvent.objects.count() == before, values
 
@@ -510,7 +513,7 @@ def test_a_keyed_retry_returns_its_original_after_the_channel_stops_sending(desk
     new = Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hello.", actor=owner,
                                   idempotency_key="retry-new")
     rows = _rows()
-    with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False):
+    with override_settings(MAILERS=NO_TRANSPORT):
         again = Message.objects.compose(parent=request, text="Which team?", actor=owner, idempotency_key="retry-reply")
         repeated = Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hello.", actor=owner,
                                            idempotency_key="retry-new")
@@ -710,7 +713,7 @@ def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: A
     """The channel's sender, a typed recipient and ingest store an address in the handle owner's one form."""
 
     del db
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     channel = make_integration("compose-case", model=Channel, backend_class="email",
                                config={"from_email": "Desk <Desk@Example.TEST>"})
     with system_context(reason="tests.messaging.compose.case"):

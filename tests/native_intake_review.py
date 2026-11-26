@@ -20,6 +20,12 @@ from angee.messaging.tasks import deliver_message
 from angee.work.events import task_woken
 from tests.native_intake_capture import ChannelIntakeCaptureTests, FormCaptureTests, IntakeAccessCase
 
+LOCMEM = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
+TRANSPORT = {"default": LOCMEM, "transport": LOCMEM}
+"""Delivery configured: the test mailer is the transport mailer messaging sends through."""
+NO_TRANSPORT = {"default": LOCMEM}
+"""Delivery not configured: no transport mailer is stated."""
+
 REQUESTER = "requester@example.test"
 CLARIFY = """
 mutation($task: ID!, $question: String!, $revision: Int) {
@@ -269,10 +275,7 @@ class ClarifyTests(IntakeAccessCase):
                 reply = self.Task._base_manager.get(pk=task.pk).with_actor(self.reader).message_post("The 4th.")
         self.assertEqual(events, [(task.pk, "reply", reply.pk)])
 
-    @override_settings(
-        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
-        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
-    )
+    @override_settings(MAILERS=TRANSPORT)
     def test_an_emailed_requester_gets_an_account_and_the_question_and_their_answer_wakes_the_task(self):
         channel = self.channel()
         request = email(channel, "booking@example.test")
@@ -307,10 +310,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
         self.assertEqual(self.Need._base_manager.count(), 1)
 
-    @override_settings(
-        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
-        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
-    )
+    @override_settings(MAILERS=TRANSPORT)
     def test_a_relayed_requester_is_asked_at_their_reply_to_and_only_their_answer_wakes_the_task(self):
         channel = self.channel()
         request = email(
@@ -411,7 +411,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertTrue(data["clarify_task"]["ok"], data)
         self.assertEqual(self.task(need).snoozed_awaiting_id, self.reader.pk)
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS=TRANSPORT)
     def test_a_request_whose_reply_to_names_no_address_is_never_asked_at_its_relay(self):
         request = email(
             self.channel(), "intranet@example.test", sender="relay@example.test",
@@ -430,7 +430,7 @@ class ClarifyTests(IntakeAccessCase):
         channel.with_actor(self.owner).grant_record_access("reader", self.writer)
         return self.writer
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS=TRANSPORT)
     def test_a_reviewer_who_may_not_reply_on_the_channel_is_refused_as_the_one_who_may_not_send(self):
         channel = self.channel()
         need = self.Need._base_manager.get(source_message=email(channel, "no-reply-seat@example.test"))
@@ -442,7 +442,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual((task.revision, task.snoozed_at), (before, None))
         self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS=TRANSPORT)
     def test_a_requester_who_may_post_is_asked_on_chatter_when_the_reviewer_may_not_send_the_email(self):
         channel = self.channel()
         with system_context(reason="tests.intake.review.requester_account"):
@@ -458,7 +458,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertIn(requester.pk, set(notified.values_list("user_id", flat=True)))
         self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS=TRANSPORT)
     def test_the_email_route_asks_what_compose_enforces_for_a_reviewer_who_does_not_own_the_channel(self):
         message_model = apps.get_model("messaging", "Message")
         channel = self.channel()
@@ -477,7 +477,7 @@ class ClarifyTests(IntakeAccessCase):
         for name, (source, configured) in rows.items():
             for user in (replier, stranger):
                 with self.subTest(row=name, user=user.username), override_settings(
-                    ANGEE_EMAIL_DELIVERY_CONFIGURED=configured,
+                    MAILERS=TRANSPORT if configured else NO_TRANSPORT,
                 ), actor_context(user):
                     route, _refused = self.Task._email_reply_route(
                         [SimpleNamespace(source_message=source)], actor=user,
