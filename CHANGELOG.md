@@ -10,6 +10,67 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.workflows`: **Changed behaviour.** A trigger row a resource load re-applies
+  without a change to the trigger's rule keeps its state: enabled or disabled, its
+  reason, the workflow principal's grant, its schedule cursor and its pending
+  occurrences. It was disabled, with an empty reason, its grant released and its
+  pending occurrences skipped. A rule change still disables it, with "Trigger
+  configuration changed; enable it again."; a new row still installs disabled. The
+  rule's fields are named once, `Trigger.rule_fields`, and `Trigger.changes_rule_of`
+  compares them, for `Trigger.clean` and the adapter. The adapter reads the activation
+  it keeps through `TriggerManager.lock_stored`, the trigger's committed row under its
+  workflow's lock, then its own: the one place that order is written, which
+  `Trigger.save`, `enable`, `disable` and `revoke_grant` now call too. An operator's
+  enable or disable and the load serialize; a row the load leaves unchanged is never
+  locked. The workflows
+  README names the open gap: a changed workflow row installs
+  its declared `draft` over a draft staff saved, whatever `publish` says.
+  **Upgrade:** at the next load a re-applied trigger an operator enabled stays
+  enabled; nothing migrates.
+- `angee.provenance`: **Changed behaviour.** A record's Activity history no longer
+  offers a revert the verb refuses for a later change to a row the changeset wrote, or
+  for an earlier state no longer recorded: `ModelHistory.revert_blockers` is the one
+  rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert`) for a whole page
+  in one statement per touched table, two where a merge can originate, and
+  by the verb under its row locks. Both read a row's earlier versions through the
+  historical queryset's `versions_of` and `dated_versions_of` (an MTI descendant's,
+  dated), the builders the verb fetches the restored state with and the history page's
+  deltas read, and a merge's unchanged survivor through `ModelHistory.merge_survivors`.
+  `revert_changeset` first refuses a changeset whose complete write boundary is not
+  the record's, with its message as before, then answers with the verb's refusal in
+  band, now worded for a person and naming no model label or primary
+  key: "A later change to this record prevents this revert." (code `later_change`) or
+  "The state before this change is no longer recorded, so it cannot be reverted."
+  (code `earlier_state_unavailable`); the label and changeset go to the
+  `angee.provenance.contrib.angee.history` logger. The list still offers a revert the
+  verb refuses for its other reasons: a row the reader may not revert, a statement's
+  own write check, a missing retained row or MTI parent, restoration order.
+  **Deliberate cost, for the capability that the list offers only reverts the verb
+  performs:** a history page costs more per touched table, one statement, two for a
+  table whose lineage holds a mergeable model, the same at any page size. A party's page
+  (party and statement tables) goes from 29 statements to 32 at 1 and at 25 entries
+  (`test_history_page_query_count_does_not_grow_per_entry`); a project's page whose
+  changesets each edit the project and a line goes from 18 to 20
+  (`test_a_document_history_page_costs_the_same_at_any_size_for_the_tables_it_touches`).
+  **Removed:** `Changeset.revertable(record, actor=...)`, which only forwarded to the
+  record. **Upgrade:** call `changeset.pk in record.revertable_changesets((changeset,),
+  actor=...)`; code matching the old messages ("a later write prevents revert", "the
+  pre-boundary state is unavailable") matches the codes instead.
+- `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
+  resource adapter names, in `AngeeResource.never_create_only`, the columns whose
+  omission its owner verb does not treat as keeping what is stored (it publishes the
+  stored value or applies a default instead), each with why; a subclass adds to its
+  parents'. The load refuses an entry listing one under `create_only`, by field or
+  column name, before any row of that entry, and rolls back, as for any entry
+  configuration error. Web forms' refusal of
+  `publish` moved there with its message. A workflow entry may no longer list `draft`
+  or `publish`: under `create_only: [draft]` a changed row (a rename, or the entry
+  newly gaining it) published the draft staff held, with no publisher, so a run as
+  the workflow principal was admitted on staff's content, and a stored draft that
+  could not be published failed every load; under `create_only: [publish]` a changed
+  row published although the entry declared `publish: false`. **Upgrade:** remove
+  `draft` and `publish` from a workflow entry's `create_only`; no shipped entry lists
+  either.
 - `@angee/ui`: **Changed API.** A list resolves its group axes once:
   `buildColumns` takes them as `BuildColumnsOptions.axes` from the table state
   (`useResourceViewTableState`), which also gives them to the table's grouping

@@ -1294,8 +1294,10 @@ concrete-table inventory.
 document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
 `HistoryMixin.admitted_reverts(changesets)` owns complete-boundary admission;
-`Changeset.revertable(record, actor=...)` then checks the record's declared
-`history_revert_permission`. An entry may revert from that record only when its
+`HistoryMixin.revertable_changesets(changesets, actor=...)` then checks the record's declared
+`history_revert_permission`, less what `ModelHistory.revert_blockers` refuses for a
+later change or an unavailable earlier state, the one rule the revert verb asks too.
+An entry may revert from that record only when its
 complete write boundary belongs to the document, or it is the record's
 operational merge.
 Changes spanning independent documents require their wider owner. Native FK
@@ -1726,8 +1728,12 @@ retains its native routing contract.
   an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../src/angee/resources/loader.py)
   composes it with native identity loading, validation, row results and the single
   ledger hook. Domain adapters may defer persistence to a manager without
-  inventing another importer or ledger API. A batch preflight may acquire only
-  the complete ordered domain lock set; it must not consume groups or write rows.
+  inventing another importer or ledger API. A batch preflight (`AngeeResource.lock_imports`)
+  may acquire only one owner-level lock taken once in a fixed order; it must not
+  consume groups or write rows. It must not lock every row the batch may touch: held
+  to commit while the import locks re-applied rows in file order, such locks let the
+  load hold a later row and wait for an earlier one a writer taking both in order
+  already holds, a deadlock. A row's lock is taken where the row is saved, by its owner.
   `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
   through the same native instance loader; preflights compose this public owner.
   A row removed from an addon's files keeps its ledger row and its record; its xref
@@ -1767,7 +1773,12 @@ retains its native routing contract.
   when the load found none to adopt. Put such rows in their own entry, so other rows keep their policy: adding
   `create_only` to a shipped entry changes its rows' hashes, so each existing row is
   re-applied once (without the create-only fields). An adoption field cannot be
-  create-only, and grant entries take none.
+  create-only, and grant entries take none. A column whose omission an adapter's owner
+  verb does not treat as keeping what is stored is never create-only: under `create_only`
+  a changed row omits it, and such a verb publishes the stored value or applies a default
+  instead. The adapter names it in `AngeeResource.never_create_only`, which adds to its
+  parents', and the load refuses an entry listing it, by field or column name, before any
+  row of that entry, and rolls back.
 - **Demo resource tiers are additive across installed addons.** A deployment that
   needs demo rows but not one permissive seed must exclude that exact entry with
   `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
