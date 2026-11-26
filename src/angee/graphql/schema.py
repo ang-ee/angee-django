@@ -15,7 +15,7 @@ from typing import Any, ClassVar, cast
 import strawberry
 from django.apps import AppConfig, apps
 from django.conf import settings
-from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
@@ -34,10 +34,12 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
 from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
+from strawberry_django_aggregates import ChoicesValueNotInEnumError
 from strawberry_django_hasura import hasura_config
 
 from angee.base.addons import addon_contribution, addon_facts, is_angee_addon, optional_addon_module
 from angee.base.exceptions import DomainError, classify_error, validation_error
+from angee.base.fields.implementation import ImplClassField
 from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
 from angee.graphql.data.contracts import DataResourceMetadata
@@ -55,13 +57,16 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
 from graphql import (
+    FieldNode,
     GraphQLError,
     GraphQLObjectType,
     GraphQLSchema,
     Undefined,
+    VariableNode,
     assert_input_type,
     coerce_input_value,
     validate_input_value,
+    value_from_ast,
 )
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -163,10 +168,12 @@ class AngeeSchema(strawberry.Schema):
         """Attach GraphQL error codes before Strawberry logs errors."""
 
         errors_to_log: list[GraphQLError] = []
+        variables = execution_context.variables if execution_context is not None else None
         for error in errors:
             refusal = (
                 classify_error(error.original_error).expected
                 or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
+                or isinstance(error.original_error, ChoicesValueNotInEnumError)
             )
             if error.path is None and (error.original_error is None or isinstance(error.original_error, GraphQLError)):
                 # graphql-core's document validation and request coercion errors
@@ -177,17 +184,28 @@ class AngeeSchema(strawberry.Schema):
                 continue
             self._apply_rebac_code(error)
             self._apply_validation_error(error)
-            self._sanitize_unexpected_error(error)
+            self._sanitize_unexpected_error(error, variables)
             if not refusal:
                 errors_to_log.append(error)
         super().process_errors(errors_to_log, execution_context)
 
-    @staticmethod
-    def _sanitize_unexpected_error(error: GraphQLError) -> None:
-        """Keep resolver implementation details out of public GraphQL errors."""
+    def _sanitize_unexpected_error(self, error: GraphQLError, variables: Mapping[str, Any] | None = None) -> None:
+        """Keep resolver implementation details out of public GraphQL errors.
+
+        A grouped read the grouping library refuses because a row holds a value outside a column's
+        choices (``ChoicesValueNotInEnumError``) is a public refusal in Angee's words, naming the
+        column from the request (:meth:`_grouped_choice_columns`); the library's own message, which
+        names the stored value, goes to the operator's log.
+        """
 
         original = error.original_error
         if original is None or isinstance(original, MissingActorError | PermissionDenied):
+            return
+        if isinstance(original, ChoicesValueNotInEnumError):
+            logger.warning("Grouped read refused at path %s: %s", error.path, original)
+            error.message = self._group_key_refusal(self._grouped_choice_columns(error, variables))
+            error.extensions = {"code": "BAD_USER_INPUT"}
+            error.original_error = None
             return
         if isinstance(original, DomainError):
             error.message = original.code
@@ -224,6 +242,69 @@ class AngeeSchema(strawberry.Schema):
         # recording its class, path and frames so secrets in exception values do
         # not merely move from the response into ordinary application logs.
         error.original_error = None
+
+    @staticmethod
+    def _group_key_refusal(columns: Sequence[models.Field[Any, Any]]) -> str:
+        """Say why a list cannot be grouped by ``columns``: one holds a value its choices no longer name."""
+
+        implementations: list[models.Field[Any, Any]] = [
+            field for field in columns if isinstance(field, ImplClassField)
+        ]
+        named = implementations or list(columns)
+        label = " or ".join(str(field.verbose_name) for field in named) or "this field"
+        if implementations:
+            return (
+                "A record holds an implementation that is not registered, "
+                f"so this list cannot be grouped by {label} until that is resolved."
+            )
+        return (
+            f"A record holds a value {label} no longer offers, "
+            "so this list cannot be grouped by it until that is resolved."
+        )
+
+    def _grouped_choice_columns(
+        self, error: GraphQLError, variables: Mapping[str, Any] | None,
+    ) -> list[models.Field[Any, Any]]:
+        """The choices columns a refused groups read groups by, read from the request.
+
+        The read's root names its resource (``roots.group_name``) and so its model; its
+        ``group_by`` argument, a literal or a variable, coerced through this schema, names the
+        columns.
+        """
+
+        node = error.nodes[0] if error.nodes else None
+        query = self._schema.query_type
+        if not isinstance(node, FieldNode) or query is None:
+            return []
+        resource = next((
+            candidate for candidate in self.angee_resources
+            if candidate.roots.group_name == node.name.value and candidate.model is not None
+        ), None)
+        root = query.fields.get(node.name.value)
+        argument = next((candidate for candidate in node.arguments or () if candidate.name.value == "group_by"), None)
+        if resource is None or resource.model is None or root is None or argument is None:
+            return []
+        if "group_by" not in root.args:
+            return []
+        argument_type = root.args["group_by"].type
+        try:
+            specs = (
+                coerce_input_value((variables or {}).get(argument.value.name.value), argument_type)
+                if isinstance(argument.value, VariableNode)
+                else value_from_ast(argument.value, argument_type, dict(variables or {}))
+            )
+        except GraphQLError:
+            return []
+        columns: list[models.Field[Any, Any]] = []
+        for spec in specs if isinstance(specs, list) else ():
+            path = spec.get("field") if isinstance(spec, Mapping) else None
+            try:
+                field = resource.model._meta.get_field(str(getattr(path, "value", path)))
+            except FieldDoesNotExist:
+                continue
+            if isinstance(field, models.Field) and field.choices:
+                columns.append(field)
+        return columns
 
     def _apply_rebac_code(self, error: GraphQLError) -> None:
         """Attach the code owned by a REBAC denial exception."""

@@ -45,12 +45,18 @@ live in code docstrings.
   a valid choice." `AngeeSchema.get_fields` reads each such field through
   `angee.graphql.field_types.ImplementationKeyRead`, so no declaration changes
   (`auto` stays `auto`). The console labels such a value "Not registered" in a
-  list cell and marks the field so on its record. **Not changed:** a group's
-  key is not such a field, so a list grouped, a board laned or a facet counted
-  by the column still fails the whole read for such a row, now masked as an
-  internal error, where it failed with "Value '…' is not a valid choice.":
+  list cell and marks the field so on its record. A group's key is not such a field:
   `strawberry-django-aggregates` refuses a group key outside the column's
-  choices (`ChoicesValueNotInEnumError`). Such a row's other fields save,
+  choices (`ChoicesValueNotInEnumError`), so a list grouped, a board laned or a
+  facet counted by the column still cannot be read for such a row. Every Angee
+  schema answers that as a public refusal (`BAD_USER_INPUT`, which the console
+  does not retry) naming the column: "A record holds an implementation that is
+  not registered, so this list cannot be grouped by backend class until that
+  is resolved."; the library's message, which names the stored value, goes to
+  the server's log. The console shows the words once on the grouped list and
+  the board, and in that facet's own section of the search panel while the
+  other facets keep counting. **Known gap:** no "Not registered" group, lane or
+  facet bucket. Such a row's other fields save,
   through the generic update too (it runs `full_clean()` and saves the whole
   row), and it keeps its key; choosing an unregistered key is refused under the
   key's field with its own message. A `create_only` selector (`Channel`,

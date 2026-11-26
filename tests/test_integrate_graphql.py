@@ -1672,6 +1672,33 @@ def test_an_implementation_key_the_registry_no_longer_names_reads_null_in_a_list
     assert "  backend_class: VcsBackendImpl\n" in schema.as_str()
 
 
+def test_grouping_by_a_column_whose_key_is_retired_is_refused_publicly_in_words_naming_the_column(db: None) -> None:
+    """The grouping library refuses such a group key; the answer names the column, is public and is not retried."""
+
+    del db
+    admin = _platform_admin("retired-key-grouper")
+    bridge = make_integration("retired-key-groups", model=VcsBridge, backend_class="stub")
+    make_integration("registered-key-groups", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    literal = "{ vcs_bridges_groups(group_by: [{field: BACKEND_CLASS}]) { aggregate { count } } }"
+    variable = """
+        query($groupBy: [vcsBridgesgroupbyspec!]!) { vcs_bridges_groups(group_by: $groupBy) { aggregate { count } } }
+    """
+
+    for document, variables in ((literal, {}), (variable, {"groupBy": [{"field": "BACKEND_CLASS"}]})):
+        result = execute_schema(_schema(), document, variables, user=admin)
+        assert result.data is None
+        assert [(error.message, error.extensions) for error in result.errors or []] == [(
+            "A record holds an implementation that is not registered, "
+            "so this list cannot be grouped by backend class until that is resolved.",
+            {"code": "BAD_USER_INPUT"},
+        )]
+    other = _data(execute_schema(
+        _schema(), "{ vcs_bridges_groups(group_by: [{field: LIFECYCLE}]) { aggregate { count } } }", {}, user=admin,
+    ))
+    assert sum(group["aggregate"]["count"] for group in other["vcs_bridges_groups"]) >= 2
+
+
 def test_editing_a_row_whose_implementation_key_is_retired_saves_and_keeps_the_key(db: None) -> None:
     """The generic update saves a rename and keeps the key the row holds; choosing an unregistered one is refused."""
 

@@ -480,9 +480,12 @@ Use these owners instead of maintaining another contract in an addon:
   schema reads such a key as null on a type's field
   ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
   the console labels "Not registered"; a group's key is not such a field, so a
-  list grouped, a board laned or a facet counted by the column fails the whole
-  read, masked as an internal error (`strawberry-django-aggregates` refuses a
-  group key outside the column's choices: `ChoicesValueNotInEnumError`). A
+  list grouped, a board laned or a facet counted by the column cannot be read
+  (`strawberry-django-aggregates` refuses a group key outside the column's
+  choices: `ChoicesValueNotInEnumError`), which every Angee schema answers as a
+  public refusal naming the column
+  ([`AngeeSchema`](../../src/angee/graphql/schema.py)); no "Not registered"
+  group exists yet. A
   `create_only` selector is never chosen again by a save. `angee.E052` and
   `ANGEE_IMPL_KEY_REMEDIES` name the rows and the remedy but move none: the
   key resolves again once the addon that registers it is installed, and only a
