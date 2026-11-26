@@ -30,6 +30,54 @@ live in code docstrings.
   layout, since the library's inline styles override the class it adds); its
   docstring says so, the console layout no longer passes its default, and
   removing the prop waits on callers outside the framework.
+- `@angee/ui`: The Links pane says it is empty when it is. A related group
+  with neither rows nor a verb is left out, and the pane showed its empty
+  state only when no group was eligible; a record whose eligible groups were
+  all left out showed "Links 0" over a blank panel. Each group now tells the
+  pane whether it has rows or a verb, and the pane shows the empty state when
+  none does. A group still counting is taken to show something, so the empty
+  state does not flash while counts load.
+- `@angee/ui`: **Changed API.** A record action bound with
+  `useRecordActionMutation` is toasted by one owner, the action bar. The
+  hook's second path (taken with `settle` or `linkTo`), which handed the
+  outcome to the shared settle owner and toasted it under the server's
+  message, is removed with the `settle` option. For the verbs that took it: a
+  refusal is titled by the verb's label with the server's reasons as the body,
+  as every record action projected through `runActionResult` already was; a
+  transport failure is titled by the label with the error's message as the
+  body; an answer with no outcome reads the shared no-result text under the
+  label (a `noResultTitle` given through `settle` is no longer read); the
+  success toast follows the navigation to the created record, the refresh and
+  `afterSuccess`. For every verb bound with the hook, an answer with no
+  outcome is now a danger toast and neither refreshes nor runs `afterSuccess`
+  (it was silent and did both; with `defaultMessage` it was told as a
+  success), and `useRecordAction` applies `defaultMessage` to an empty success
+  message too, for every runner.
+  `linkTo` still follows the created record, through one implementation shared
+  with `useActionResultRun`. Not changed: a record action whose own `run`
+  calls `useActionResultRun`, `useActionResultMutation` or
+  `useRecordChromeActionMutation` is still toasted there, under the server's
+  message (the proposal ceremony, project lifecycle, task promotion, trash and
+  restore, account access, message delivery, triage, contributed conditional
+  verbs and others); a transport failure still also raises the data layer's
+  own notification. **Upgrade:** remove `settle` from
+  `useRecordActionMutation` options; an inline one is a type error, one passed
+  through a variable still compiles and is ignored.
+- `@angee/refine`, `@angee/ui`: A record action the server refuses tells the
+  person why. For a target refused before the verb runs (not found, not
+  allowed) the server's message is only the verb's summary and the reason
+  arrives in-band; `runActionResult` threw only the message, so the action
+  bar's toast read "Confirm / Confirm failed." and the reason was lost. It now
+  throws the reasons, and the message when there are none. Every record
+  action projected through `runActionResult` shows the reason without an edit;
+  no toast title changes. Other refusals (a transition not allowed, a missing
+  object) still read the verb's summary: the server sends no reason for them.
+  `@angee/refine` exports `actionOutcomeReasons` (a
+  refusal's in-band reasons, each once, as one line), which
+  `useActionResultRun` composes instead of its own copy, as does a refused row
+  of a bulk trash or restore (it showed only the first). **Upgrade:** code
+  that matched the thrown error's text against the outcome's `message` finds
+  the reasons there when the refusal carries any.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
@@ -362,6 +410,112 @@ live in code docstrings.
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and
   expected `0` finds the number's own control.
+- **Message templates render, on Django's template engine.**
+  - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
+    `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
+    Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
+    whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
+    `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
+    anything else fails to compile. A template names its layout in its `layout`
+    column and never writes `extends` or `block`; blocks and parts are included
+    by name with `{% include "…" with … only %}`. A Markdown row goes through
+    markdown-it first, with raw HTML off, its template code kept whole. Each pass
+    runs in the row's language, with `dir` from Django's
+    `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
+    include renders, 200,000 characters of loop output, 500,000 characters of
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
+  - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
+    walks a row and every row it reaches and refuses what may not render safely:
+    oversized sources and lines, literals holding `<`, `>` or `"`, costly or
+    unsafe filter use, template code the Markdown pass would not keep whole, HTML
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    every save, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, counts each level from its rows'
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
+    on a save resolves a level's include targets in one query. A Markdown row's
+    link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
+  - **Preview.** `MessageTemplate.preview(*, kit=None, patch=None)` renders a
+    row's `sample` (a layout around a fixed body, a block or part alone) and
+    returns a `TemplatePreview` with `TemplateWarning`s: the subject or preheader
+    length, unused variables, a missing stop link, an empty plain-text body, the
+    size, or a render error, one for each refusal, naming its column
+    (`TemplateWarning.field`). With a `patch` of edited columns it previews the row
+    as that patch would save: `write` is asked as well as `preview`, and what the
+    save's gates ask of the columns it edits (`write__<field>` included), before
+    anything is copied or walked; the copy is validated as the save validates it,
+    refused for what the save refuses (`save_refused`, apart from the render's
+    `render_error`), and never saved. The console's
+    `message_template_preview(template, brand_kit, patch)` read returns it to
+    callers holding the new `preview` permission (platform admins;
+    `messaging_templates/message_template` revision 2); `patch` is the resource's
+    `message_templates_set_input`, decoded as the update decodes it
+    (`MessageTemplateWriteBackend.patch_values`), and a warning's `field` is the
+    column the update reports a refusal under.
+  - **Shipped rows.** The addon's install tier ships the `base` layout, the
+    `header`, `footer`, `button`, `quote` and `record_card` blocks and the
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
+  - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
+    install tier (`resources load`), and regenerate the console schema and its
+    codegen. No migration: no column changed. Existing rows are walked when they
+    render, and when their source, forms, variables or layout are next edited.
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
     kind for one key and one language: a message template of the kind `template`
@@ -375,19 +529,21 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
-    `sample` holds preview values. The addon renders nothing and ships no rows.
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
+    `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -399,11 +555,41 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
+  - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
+    adds **Message templates** to Settings for whoever holds
+    `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
+    library grouped by kind, each row opening in its registered form, the
+    presets `messaging_templates.default-updated` and
+    `messaging_templates.effective`, New over the four insertable fields,
+    Override and Keep override where the record's `can_override` and
+    `can_keep_override` admit the reader, Delete, a notice saying what the row
+    is, a Preview pane of the saved row in the framework's sandboxed message
+    frame with a brand kit select, and a Backlinks group in the record's Links
+    tab for whoever may preview message templates.
+    `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
+    stack's JS dependencies, which links the new fragment, then regenerate the
+    web codegen.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
@@ -553,9 +739,8 @@ live in code docstrings.
     kit as the default takes the flag from the previous one, and the default can
     be neither unticked nor deleted, on any delete path. A conditional unique
     constraint refuses a second default written past the save.
-    `BrandKit.objects.default()` and the console's `default_brand_kit` query
-    return it, or `None` before any kit exists, after a write past `save()` and
-    `clean()`, and for an actor who reads no kit.
+    `BrandKit.objects.default()` returns it, or `None` before any kit exists,
+    after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
     layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
     `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's

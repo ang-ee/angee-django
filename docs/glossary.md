@@ -519,6 +519,42 @@ intent remain separate facts.
 **posts** — the public-post and engagement overlay on `messaging`. A Feed is a
 Channel child, so posts use the same channel-scoped message identity and access.
 
+## Message templates
+
+**Message template** — one row of outgoing mail's text for one kind, key and
+language (`messaging_templates.MessageTemplate`). A sender renders the row a
+recipient reads; the addon sends nothing. See
+[the message templates README](../src/angee/messaging_templates/README.md).
+
+**Layout / template / block / part** — a message template's four kinds, written
+once. A **template** is the mail itself, with its subject, preheader and the
+**layout** it sits in, the HTML that wraps templates; a **block** (a styled
+piece) and a **part** (a piece of wording) are what rows include by name. What
+differs by kind is the kind's handler. See
+[the rows](../src/angee/messaging_templates/README.md#the-rows).
+
+**Shipped default / override** — a **shipped default** (a baseline) is a row an
+addon ships in its `install` resources, written only by a resource load. The
+deployment's **override** is its own row with the default's kind, key and
+language (`overrides_default`); deleting it resets to the default. A row says
+whether its reader may start or keep an override (`can_override`,
+`can_keep_override`), as the verbs decide. See
+[shipped defaults, overrides and reset](../src/angee/messaging_templates/README.md#shipped-defaults-overrides-and-reset).
+
+**Preview (message templates)** — a row rendered with its sample, with what a
+sender should know about it. A preview with a **patch** renders the open form's
+unsaved edits as Save would write them: it needs `write` as well as `preview`
+and whatever Save's gates ask of the columns it edits, refuses what Save would
+refuse (what Save's validation refuses as `save_refused`, in Save's words and
+under its fields; an edit Save admits but its sample cannot render is a
+`render_error`), and saves nothing. See [rendering](../src/angee/messaging_templates/README.md#rendering).
+
+**Backlinks (message templates)** — the rows, in any language, naming a message
+template's kind and key: a template its layout, any row a block or part it
+includes. It is the Links rule's **Backlinks**, incoming references
+([context aside](frontend/guidelines.md#context-aside)), read for one record's page. See
+[the console](../src/angee/messaging_templates/README.md#console).
+
 ## Frontend
 
 **Files / `storage`** — **Files** is the user-facing product name; `storage` is
