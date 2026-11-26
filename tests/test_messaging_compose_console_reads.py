@@ -363,7 +363,10 @@ def test_whether_a_message_was_written_here_is_read_with_its_row(console: Any, d
 def test_the_console_states_the_recipient_bound_that_composing_enforces(
     console: Any, desk: Any, settings: Any,
 ) -> None:
-    """The root answers the deployment's bound, and a message crossing it is refused under the role that does."""
+    """The root answers the deployment's bound, and a message crossing it is refused under the role that does.
+
+    An answer whose parent's ``Reply-To`` names more addresses is refused by the same bound.
+    """
 
     bound = "query Bound { message_recipient_limit }"
     assert result_data(execute_schema(console, bound, user=desk.owner)) == {"message_recipient_limit": 50}
@@ -375,3 +378,8 @@ def test_the_console_states_the_recipient_bound_that_composing_enforces(
     assert refused.value.payload is not None
     assert refused.value.payload["validation_errors"] == {"cc": ["A message takes at most 2 recipients."]}
     assert _compose(console, desk.owner, **_new(desk, to=two), idempotency_key="at")["ok"]
+    request = _receive(desk, "bound", reply_to="one@example.test, two@example.test, three@example.test")
+    with pytest.raises(_Refusal) as refused:
+        _compose(console, desk.owner, parent=request.public_id, text="Hello.", idempotency_key="answer-over")
+    assert refused.value.payload is not None
+    assert refused.value.payload["message"] == "A message takes at most 2 recipients."

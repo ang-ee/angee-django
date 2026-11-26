@@ -1425,7 +1425,7 @@ class Message(
         which may be a relay; only a message with no ``Reply-To`` is answered at
         its sender (``parent``, ``reply_unaddressed`` when it has none, or one the
         handle owner's predicate does not take as an address). A
-        ``Reply-To`` naming more than ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses
+        ``Reply-To`` naming more than :meth:`MessageManager.recipient_limit` addresses
         is refused (``reply_to``, ``too_many``), as a typed list of as many is. Any other
         kind is answered by its transport's own sender: the envelope is empty.
         ``channel`` is the transport channel when the caller has read it
@@ -1443,7 +1443,7 @@ class Message(
             channel = cast(Channel, self.transport_channel(reason="messaging.reply_envelope"))
         sender = channel.outbound_sender()
         addresses = self.reply_addresses(actor=actor)
-        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("reply_to", tuple(addresses)),))
+        _require_at_most(MessageManager.recipient_limit(), "recipients", (("reply_to", tuple(addresses)),))
         if not addresses and any(value.strip() for value in self.source_header_values("reply-to", actor=actor)):
             raise ValidationError({"reply_to": ValidationError(
                 "The message's Reply-To names no address to answer.", code="reply_to_invalid",

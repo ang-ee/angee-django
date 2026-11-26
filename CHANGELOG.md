@@ -26,9 +26,9 @@ live in code docstrings.
     delivery: a reader showing delivery status also requires an outgoing
     `direction`.
   - **New.** The console root `message_recipient_limit`, the most addresses
-    `compose_message` takes, read with `compose` from
-    `MessageManager.recipient_limit()`, the one reader of
-    `ANGEE_MESSAGING_MAX_RECIPIENTS`.
+    `compose_message` takes, read with `compose` and an answer's `Reply-To`
+    bound (`Message.reply_envelope`) from `MessageManager.recipient_limit()`,
+    the one reader of `ANGEE_MESSAGING_MAX_RECIPIENTS`.
   - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
     `rebac sync`.
 - `angee.parties`: **Changed behaviour.** A person's merge of handles
