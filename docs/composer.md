@@ -143,6 +143,15 @@ An enabled app may contribute `autoconfig.SETTINGS` and a derived
 operators such as `:append`. Keep contributions typed, deterministic and free
 of model imports. The compiler merges them in enabled dependency order.
 
+An addon's `settings(namespace)` may refuse an authored setting only when it
+collides with a setting the addon contributes or owns. It raises Django's
+`ImproperlyConfigured`, naming the exact edit, and every process stops at settings
+load; it never refuses on an environment or deployment fact it cannot own. Each
+refusal is tested, beside a host that makes the edit and starts. Messaging is the
+case: it owns Django's default mailer, so it refuses a deployment's own
+`MAILERS.default`, a transport that is its system mailer, and legacy `EMAIL_*`
+settings ([`angee.messaging.autoconfig`](../src/angee/messaging/autoconfig.py)).
+
 An addon contributes its own implementation registry entries and hooks. It does
 not replace project roots or generated-output identity. Each capability owns
 its callable validation and invocation; [`angee.base.hooks`](../src/angee/base/hooks.py)

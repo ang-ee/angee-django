@@ -381,6 +381,22 @@ addresses, the message's `Recipient` rows, one per handle and envelope role
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
+**Transport mailer** — the one mailer that sends, `MAILERS["transport"]`:
+messaging delivers every email through it, and without it delivery is not
+configured. Not Django's default mailer, which is the **System mailer**. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mailer** — Django's default mailer wherever messaging is installed,
+`SystemMailer`: it records each email Django sends as one queued message on the
+**System channel** and sends nothing itself. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System channel** — messaging's install row `messaging.system_channel`
+(backend `system`), where framework mail is written
+(`MessageManager.compose_as_system`) and from which it is delivered through the
+**Transport mailer**; administrators alone read it, and it is offered to nobody
+to send from or watch. See [messaging's contracts](../src/angee/messaging/README.md).
+
 **Compose (a message)** — write one outgoing message through
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
 hand-off, decided for the caller by read on the message it answers and `reply` on
