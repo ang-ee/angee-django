@@ -1110,26 +1110,31 @@ def test_outcome_configuration_bound_and_entry_errors_share_the_manager_adapter(
     assert "100" in str(result.errors[0].extensions["validationErrors"]["configurations"])
 
 
-def start_on_record(schema, workflow, subject, actor, *, input=None, request_key=None):
-    """Use the public record verb with the client's admission identity."""
-    return result_data(
-        execute_schema(
-            schema,
-            """mutation(
+def execute_start_on_record(schema, workflow, subject, actor, *, input=None, request_key=None):
+    """Execute the public record verb with the client's admission identity."""
+    return execute_schema(
+        schema,
+        """mutation(
       $workflow: ID!, $subject: WorkflowRunSubjectInput!, $input: JSON!, $key: String!
     ) {
       start_workflow_run(workflow_id: $workflow, subject: $subject, input: $input, request_key: $key) {
         ok message id validation_errors
       }
     }""",
-            {
-                "workflow": workflow.sqid,
-                "subject": {"model": subject._meta.label, "id": subject.sqid},
-                "input": {} if input is None else input,
-                "key": request_key or str(uuid4()),
-            },
-            user=actor,
-        )
+        {
+            "workflow": workflow.sqid,
+            "subject": {"model": subject._meta.label, "id": subject.sqid},
+            "input": {} if input is None else input,
+            "key": request_key or str(uuid4()),
+        },
+        user=actor,
+    )
+
+
+def start_on_record(schema, workflow, subject, actor, *, input=None, request_key=None):
+    """Use the public record verb with the client's admission identity."""
+    return result_data(
+        execute_start_on_record(schema, workflow, subject, actor, input=input, request_key=request_key)
     )["start_workflow_run"]
 
 
@@ -1144,8 +1149,9 @@ def test_record_start_as_starter_replays_the_same_request(schema, callers):
     assert start_on_record(schema, workflow, subject, actor, request_key=key) == started
     run = WorkflowRun.objects.with_actor(actor).get()
     assert (run.sqid, run.run_as_id, run.subject_object_id) == (started["id"], actor.pk, subject.pk)
-    refused = start_on_record(schema, workflow, subject, actor, input={"value": 1}, request_key=key)
-    assert not refused["ok"] and "different request" in refused["message"]
+    # A reused key with other content is the keyed creates' conflict, not a validation refusal.
+    conflict = execute_start_on_record(schema, workflow, subject, actor, input={"value": 1}, request_key=key)
+    assert conflict.errors[0].extensions == {"code": "CREATION_KEY_CONFLICT"}
     assert WorkflowRun.system_queryset().count() == 1
 
 

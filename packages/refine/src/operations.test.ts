@@ -299,6 +299,13 @@ describe("Hasura custom operations", () => {
     expect(mutated).toEqual({ ok: true, message: "Confirmed." });
   });
 
+  test("carries a refusal's stable code when the answer has one, and omits an empty one", () => {
+    expect(extractActionOutcome({ start: { ok: false, message: "Refused.", code: "VALIDATION" } }, "start"))
+      .toEqual({ ok: false, message: "Refused.", code: "VALIDATION" });
+    expect(extractActionOutcome({ start: { ok: false, message: "Refused.", code: null } }, "start"))
+      .toEqual({ ok: false, message: "Refused." });
+  });
+
   test("carries the in-band snake_case validation_errors as a camelCase field map", () => {
     const failure = extractActionOutcome(
       {

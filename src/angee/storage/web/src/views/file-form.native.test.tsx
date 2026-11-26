@@ -11,6 +11,8 @@ import { createUiTestProviders } from "@angee/ui/testing";
 import { ChangeFileVisibilityAction } from "./file-form";
 
 const { Provider, clearClients } = createUiTestProviders({
+  // Under a router, as an app page is: a form dialog guards route moves while it holds work.
+  router: true,
   resources: [testDataResource("storage.File", { fields: [{
     name: "visibility", kind: "enum", scalar: "String", readable: true, aggregatable: false,
     creatable: false, updatable: false, requiredOnCreate: false,

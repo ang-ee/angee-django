@@ -10,6 +10,55 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, `@angee/refine`, `@angee/app`: **Changed API.** A write from a
+  dialog or a composer is safe to retry. `useIdempotencyKeys()` (beside
+  `createClientKey`) keeps one idempotency key per draft, named by its scope,
+  for the app runtime: minted at the draft's first attempt and kept, whatever
+  an error says, until a confirmed answer ends it; the server replays the same
+  content, and answers `CREATION_KEY_CONFLICT` for other content under the
+  spent key, after which the draft's next send starts a new draft and the
+  caller only says what happened. A draft with an attempt lost or on its way is
+  never given up. Forgotten on a change of signed-in person, never persisted
+  (a retry writes once from this page only). The record form's create (its ref
+  is gone), chatter's post, knowledge's note and vault clone, the project from
+  a template, the dashboards' create and duplicate (which minted a new key per
+  attempt, so a retried lost answer made two) and the workflow start sit on it;
+  `MutationDialog` and actions take `idempotencyScope`, and a keyed dialog's
+  submission takes its key as a required `string`. One draft scope belongs to
+  one surface at a time (`useIdempotencyDraftOwner`, failing in development
+  when two hold one), and a create form names its draft under the form or
+  relation dialog hosting it (`useDraftScope`), so a create opened from another
+  form never shares its key.
+  `errorFromAuthoredEnvelope` throws an `AuthoredEnvelopeError` with the
+  envelope's `code`, and a bounded transport error keeps `response.errors` only
+  when the server answered with a GraphQL errors list. `DialogForm` takes `pending` (no dismissal while a submission runs) and
+  `dirty` (a dismissal asks first, with the shared unsaved-changes question),
+  and it asks before a route move while it holds either (saying it is still
+  sending while it is), with `holdsWork` saying no once an accepted submit
+  moves on; Close and Cancel stay focusable and say why while it sends.
+  `ActionFormDialog` drops its own guard for it, and every `MutationDialog` and
+  typed-args action dialog behaves so. An answer that lands after a dialog went
+  away is still reported (`useLateAnswerReport`, reading refine's
+  `failedWriteOutcome`, exported for any surface whose answer can land after
+  it is gone). `MessageActions` shows on a coarse pointer. The
+  unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`;
+  every surface the unsaved-changes guard protects (a `DialogForm` given
+  `dirty` as it opens, so both form dialogs; `FormView`; a page guarding its
+  own edits) renders under the app's router and `ModalsHost`, and without the
+  router throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
+  test or a story provides both through the shared providers below;
+  `createUiTestProviders` and `ShellPageTestProviders` render
+  one app shell (`AppShellTestProviders`), which provides `ModalsHost`;
+  `ShellPageTestProviders` renders under a memory router unless one is already
+  above, and `createUiTestProviders` takes `router`; a keyed dialog's
+  submission drops any assertion of its key.
+- `angee.workflows`: a manual start that reuses a request key for a different
+  request raises `CreationKeyConflict`, as the other keyed creates do, rather
+  than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
+  so a client holding the spent key starts a new request. A trigger admission
+  still records the refusal on its event.
 - `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
   JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
   `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
@@ -689,8 +738,8 @@ live in code docstrings.
   takes focus and also carries the line naming the refused fields, which it
   showed only without a form-level reason; with field reasons only, the first
   shown field takes focus, as before. `applyFormErrors` decides which, for a
-  surface that passes it `focus` and a `fieldSummary` (today the record form;
-  the two dialogs pass neither yet and are unchanged). Its `focus` option,
+  surface that passes it `focus` and a `fieldSummary` (the record form,
+  `MutationDialog` and the typed-args action dialog). Its `focus` option,
   added in this release as `true`, is now a function, the surface's way of
   focusing its banner, given by the new `useRefusalBannerFocus`, exported with
   `formErrorsFromForm`; the record form exposes the banner's props as

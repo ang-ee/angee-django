@@ -1,9 +1,9 @@
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { failedWriteOutcome, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import {
-  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, createClientKey, errorMessage, textRoleVariants, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, errorMessage, textRoleVariants, useIdempotencyDraftOwner, useIdempotencyKeys, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
 } from "@angee/ui";
 import {
   StorageUploadTasks,
@@ -224,7 +224,11 @@ export function RecordThreadConversation({
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const postAttempt = React.useRef<{ intent: string; idempotencyKey: string } | null>(null);
+  // The record's chatter box is one draft: every attempt until one is posted carries its key, so
+  // the server writes it once; an edit after an earlier version was written answers a conflict.
+  const keys = useIdempotencyKeys();
+  const postScope = `messaging.record-message:${modelLabel}:${recordId}`;
+  useIdempotencyDraftOwner(canPost && !readOnly ? postScope : null, `the chatter box of ${modelLabel} ${recordId}`);
 
   const recipientOptions = React.useMemo(
     () =>
@@ -394,18 +398,24 @@ export function RecordThreadConversation({
           autofollowRecipients:
             selectedPostKind === "COMMENT" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
         };
-        // Retain identity after a failed response; an edited submission starts a new request.
-        const intent = JSON.stringify(input);
-        if (postAttempt.current?.intent !== intent) {
-          postAttempt.current = { intent, idempotencyKey: createClientKey("message") };
-        }
-        const attempt = postAttempt.current;
-        await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
-        if (postAttempt.current === attempt) postAttempt.current = null;
+        await keys.send(postScope, (idempotencyKey) => postMessage({ ...input, idempotencyKey }));
         setReplyToMessage(null);
         setWindow({ scope, latest: true });
         return true;
       } catch (cause) {
+        const outcome = failedWriteOutcome(cause);
+        // A lost answer: the post may be written, and the draft's kept key makes a resend safe.
+        if (outcome === "unconfirmed") {
+          setError(t("error.postLost"));
+          return false;
+        }
+        if (outcome === "conflict") {
+          // An earlier version of this post was written under the draft's key: show it; the next send is a new post.
+          setWindow({ scope, latest: true });
+          void threadQuery.refetch();
+          setError(t("error.postedEarlier"));
+          return false;
+        }
         setError(
           errorMessage(
             cause,
@@ -415,7 +425,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, scope, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, keys, postScope, postMessage, scope, t, threadQuery],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {
