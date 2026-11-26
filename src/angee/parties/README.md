@@ -359,8 +359,8 @@ second live handle of an address is refused on `value` before it writes
 plus-tag) is a handle of its own, grouped with the others by the person-matching
 key (`Handle.normalize_value`, stored as `normalized_value`) wherever a person is
 looked up; that key still picks the handle an alias lands on at two sites open
-for a ruling, a directory adoption's through-handle and a new claimant's first
-email (`PartyManager.claimant_as_system`). On other platforms, a spelling is a
+for a ruling, a directory adoption's through-handle and a claimant's email handle
+(`PartyManager.claimant_as_system`). On other platforms, a spelling is a
 handle, as before. That is
 one rule, `Handle.normalize_email_domain`, for whoever compares a domain. The
 organization-domain suggestion (`PartyManager.suggest_for`) reads it on both
@@ -376,7 +376,12 @@ key. A handle stores
 the keys its rule gave when it was last saved (`spelling_key`,
 `normalized_value`) and, beside them, the version the rule had then
 (`normalized_version`; 0 for a row stored before the rule had one). The
-handle's save is the one writer of the keys and writes them together. Changing
+handle's save is the one writer of the keys and writes them together. The rules
+`Handle` owns (`value_owner`, `is_spelling_of`, `validate_merge`) compute a row's
+own keys from its value, so a row the key repair has not reached decides as it
+will; `PartyManager`'s readers of the person-matching key (the twins
+`suggest_for` proposes, the holders read, `_land_handles`, the same-person links)
+read the stored column, which is current once provision has run. Changing
 what `Handle.spelling_key_of`, `Handle.normalize_value` or
 `Handle.normalize_email_domain` returns means bumping
 `Handle.NORMALIZATION_VERSION`; a test pins the rule's outputs for a fixed

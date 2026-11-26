@@ -1134,8 +1134,8 @@ class Handle(
         person is looked up or suggested; which handle an address lands on is the
         spelling key's, but for two sites still open for a ruling, where it picks
         the handle a provider's alias lands on: a directory adoption's
-        through-handle (``PartyManager._land_handles``) and a new claimant's first
-        email (``PartyManager.claimant_as_system``).
+        through-handle (``PartyManager._land_handles``) and a claimant's email
+        handle (``PartyManager.claimant_as_system``).
 
         The key is stored: changing what this returns for any value means
         bumping :attr:`NORMALIZATION_VERSION`, so provisioning saves the stored

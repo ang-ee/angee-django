@@ -511,8 +511,8 @@ in one spelling with Gmail's dots and plus-tags dropped, a phone number in E.164
 person is looked up or suggested and decides which spellings or aliases a person
 may merge. Which handle an address lands on is the spelling key's, except at two
 sites still open for a ruling, where it picks the handle a provider's alias lands
-on: a directory adoption's handle that found the person, and a new claimant's
-first email.
+on: a directory adoption's handle that found the person, and a claimant's email
+handle.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

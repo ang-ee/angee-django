@@ -1292,7 +1292,7 @@ class EmailLookup:
 
 @dataclass(frozen=True, slots=True)
 class SameAsPair:
-    """One deterministic pair with its normalized identity and readable evidence rows."""
+    """One deterministic pair with the person-matching key it shares and readable evidence rows."""
 
     left: Any
     right: Any

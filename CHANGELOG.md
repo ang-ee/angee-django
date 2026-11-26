@@ -38,8 +38,8 @@ live in code docstrings.
   (`Handle.normalize_value`, stored as `normalized_value`) finds and suggests a
   person; a provider's alias (a Gmail dot or plus-tag) stays a handle of its
   own, though that key still picks the handle an alias lands on at two sites
-  open for a ruling (a directory adoption's through-handle, a new claimant's
-  first email). Its outputs change only for an email value whose domain carries
+  open for a ruling (a directory adoption's through-handle, a claimant's email
+  handle). Its outputs change only for an email value whose domain carries
   surrounding whitespace (`a.b@ gmail.com` is now `ab@gmail.com`) and for the
   domain spellings above. A person's merge of handles (`Handle.validate_merge`)
   compares that key as the rule computes it from each value, so a row the key
@@ -103,8 +103,9 @@ live in code docstrings.
     and each provision logs one warning naming both handles and reports
     `remaining` above zero. It ends when the resources owner's change for a
     removed row's ledger entry lands; nothing here works around it.
-  - A step skipped: with no migration, every handle save fails, since the
-    column is missing; migrated but not provisioned, an exact spelling still
+  - A step skipped: with no migration, every handle read and save fails, since
+    each selects the missing column, the provision's key repair included; only
+    the count above runs. Migrated but not provisioned, an exact spelling still
     lands on its old row, but a new spelling of an old, unkeyed address makes a
     second, keyed row of its own, which the next provision folds into the old
     one.
@@ -2447,7 +2448,7 @@ live in code docstrings.
   handed none). `UserManager.sign_in_addresses(emails, *, key=None)` also
   compares by a caller's key, read among the person accounts at the given
   addresses' domains in the same one query; parties passes the handle's
-  normalized key, so an account address spelled the provider's other way, which
+  person-matching key, so an account address spelled the provider's other way, which
   neither the contact nor any handle uses, still counts. `Party.CLAIM_CONFIDENCE`
   names the confidence of a claim for review (0.4), and a test holds the
   schema's `stating_directory` threshold to `Party.REVIEW_CONFIDENCE`.
@@ -2708,7 +2709,7 @@ live in code docstrings.
   directory's owner is a platform admin, so `write` admitted everyone), no other
   live link of the directory names them, and no live link of a stream that writes
   back names them. A pull-only contacts page locks every spelling of its contacts'
-  addresses (by normalized value), the people they name and the parties its
+  addresses (by person-matching key), the people they name and the parties its
   links name before any record decides (`DirectoryBackend.prepare_page`), and
   each record checks admission again under those locks. The handle that found the
   person is the evidence of the directory's identity statement
@@ -2921,7 +2922,7 @@ live in code docstrings.
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over
   `same_person_links`). A party is linked when it holds a handle of that
-  normalized value or when a source that states its own record names one for it
+  person-matching key or when a source that states its own record names one for it
   in a standing statement, a claim below review confidence included; before,
   only two holders of two spellings were proposed, so one address claimed by a
   second source's party was never proposed. The linking sources are an
