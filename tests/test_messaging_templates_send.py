@@ -609,6 +609,65 @@ def test_a_refused_link_names_no_part_of_it_past_its_host(plain: Any, settings: 
         assert all("SECRET-marker" not in item.message for item in refusal.error_list), refusal.messages
 
 
+CALLERS_OF_THE_RENDER = ["saved preview", "preview of unsaved edits", "test send", "send_as_system"]
+
+
+def _rendered_or_refused(caller: str, value: str, tester: Any) -> tuple[str, str]:
+    """What one caller of the render answers for a sample whose link is ``value``: the link the plain text shows, or
+    the refusal's words (a send's refusal, a preview's one warning)."""
+
+    sampled = {"link": value}
+    if caller == "preview of unsaved edits":
+        row = _decision(key="tests.decision_patched", sample={"link": "https://app.example.test/saved"})
+        with actor_context(tester):
+            preview = row.preview(patch={"sample": sampled})
+    elif caller == "saved preview":
+        row = _decision(key="tests.decision_saved", sample=sampled)
+        with actor_context(tester):
+            preview = row.preview()
+    else:
+        row = _decision(key=f"tests.decision_{caller.replace(' ', '_')}", sample=sampled)
+        try:
+            message = (MessageTemplate.objects.send_test(row, actor=tester) if caller == "test send"
+                       else _send(row, sampled))
+        except ValidationError as refusal:
+            return "refused", " ".join(refusal.messages)
+        return "rendered", _stored(message)[1]
+    if preview.rendered is None:
+        assert [warning.code for warning in preview.warnings] == [TemplateWarningCode.RENDER_ERROR] * len(
+            preview.warnings)
+        return "refused", " ".join(warning.detail for warning in preview.warnings)
+    return "rendered", preview.rendered.plain_text
+
+
+@pytest.mark.parametrize(
+    ("value", "outcome", "words"),
+    [
+        pytest.param("http://intranet:8080/decisions/1", "refused",
+                     "link is not a link this mail can carry: the mail cannot link to intranet:8080.",
+                     id="a-host-the-rule-refuses"),
+        pytest.param("https://localhost:8000/decisions/1", "rendered", "https://localhost:8000/decisions/1",
+                     id="the-deployments-own-origin"),
+        pytest.param("", "rendered", "Open the decision ()", id="a-blank-optional-link"),
+    ],
+)
+def test_every_caller_of_the_render_answers_one_sample_alike(
+    system_channel: Any, settings: Any, value: str, outcome: str, words: str,
+) -> None:
+    """The saved preview, the preview of unsaved edits, the test send and ``send_as_system`` run one render: a link
+    the rule would empty is the preview's one ``render_error`` warning and a send's refusal, in the same words; the
+    deployment's own origin and a blank optional link render alike."""
+
+    del system_channel
+    settings.ANGEE_PUBLIC_ORIGIN = "https://localhost:8000"
+    tester = create_platform_admin("messaging-templates-render-callers")
+    answers = {caller: _rendered_or_refused(caller, value, tester) for caller in CALLERS_OF_THE_RENDER}
+    assert {caller: answer[0] for caller, answer in answers.items()} == dict.fromkeys(CALLERS_OF_THE_RENDER, outcome)
+    assert all(words in answer[1] for answer in answers.values()), answers
+    if outcome == "refused":
+        assert len({answer[1] for answer in answers.values()}) == 1, answers
+
+
 SECRET = "https://app.example.test/sign-in/SECRET-marker"
 
 
