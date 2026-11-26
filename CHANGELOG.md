@@ -21,6 +21,11 @@ live in code docstrings.
   current patch release's tags, so until the pin lifts the images carry the Debian
   packages of `python:3.14.9-slim`'s last build (2026-10-21).
 
+- CI: a pull request that changes `.python-version` runs the whole SQLite suite on
+  the interpreter it pins. The changed-path selection did not count the pin among
+  the inputs every test reads, so a pin change alone started no SQLite shard,
+  although the pin exists for the SQLite library that suite needs.
+
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.

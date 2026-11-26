@@ -579,8 +579,8 @@ The current tiers are:
   files that import a changed module through the import graph `lint-imports`
   checks; a change under `templates/` selects the template contract tests that
   render or read them. A change to an input every test reads without importing it
-  (dependencies, conftests and the shared test plugins, settings and autoconfig,
-  `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
+  (dependencies, the Python pin, conftests and the shared test plugins, settings and
+  autoconfig, `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
   suite; docs and web code select no Python test, and the shards do not start.
   The `select` job computes the selection once for both lanes. What the app
   registry, signals or composition connect without an import surfaces only in a
