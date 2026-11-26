@@ -63,15 +63,12 @@ def test_handle_upsert_refuses_normalization_that_exceeds_its_field(db: None, ve
     assert not Handle._base_manager.exists()
 
 
-def test_clean_identity_returns_the_person_matching_key_upsert_stores(db: None) -> None:
-    """The check and the write agree on the key, and the check alone writes no row."""
+def test_clean_identity_validates_an_identity_and_writes_nothing(db: None) -> None:
+    """The check upsert runs before it writes, run alone: an identity it would land passes, and no row is written."""
 
     del db
-    key = Handle.objects.clean_identity(platform="email", value="Person@Example.test")
+    assert Handle.objects.clean_identity(platform="email", value="Person@Example.test") is None
     assert not Handle._base_manager.exists()
-    with system_context(reason="test handle person-matching key"):
-        handle = Handle.objects.upsert(platform="email", value="Person@Example.test")
-    assert handle.normalized_value == key
 
 
 def test_a_fill_only_name_fills_a_blank_handle_and_never_renames_a_named_one(db: None) -> None:

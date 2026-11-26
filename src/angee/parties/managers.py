@@ -16,7 +16,6 @@ follows it.
 from __future__ import annotations
 
 import logging
-import operator
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
@@ -24,7 +23,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
-from functools import partial, reduce
+from functools import partial
 from itertools import batched, chain, combinations
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self, TypedDict, cast
 
@@ -436,8 +435,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             ),
         )
 
-    def clean_identity(self, *, platform: str, value: str, external_id: str = "") -> str:
-        """Validate an identity as :meth:`upsert` lands it, without a write; return its person-matching key.
+    def clean_identity(self, *, platform: str, value: str, external_id: str = "") -> None:
+        """Validate an identity as :meth:`upsert` lands it, without a write.
 
         Runs the platform, value, person-matching key, spelling key and
         external-id field validators and raises the ``ValidationError`` keyed by
@@ -446,11 +445,10 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         column included).
         """
 
-        normalized_value = self.model.normalize_value(platform, value)
         for name, identifier in {
             "platform": platform,
             "value": value,
-            "normalized_value": normalized_value,
+            "normalized_value": self.model.normalize_value(platform, value),
             "spelling_key": self.model.spelling_key_of(platform, value),
             "external_id": external_id,
         }.items():
@@ -460,7 +458,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 field.run_validators(identifier)
             except ValidationError as error:
                 raise ValidationError({name: error}) from error
-        return normalized_value
 
     def upsert(
         self,
@@ -659,13 +656,13 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if not values:
             return {}
         email = self.model.Platform.EMAIL
-        arms = [
-            self.filter(self.model.spellings_filter(spelled))
-            if platform == email
-            else self.filter(platform=platform, value__in=sorted(spelled))
-            for platform, spelled in sorted(values.items())
-        ]
-        rows = list(reduce(operator.or_, arms))
+        match = Q()
+        for platform, spelled in sorted(values.items()):
+            if platform == email:
+                match |= self.model.spellings_filter(spelled)
+            else:
+                match |= Q(platform=platform, value__in=sorted(spelled))
+        rows = list(self.filter(match))
         exact: dict[tuple[str, str], Any] = {(str(row.platform), row.value): row for row in rows}
         owners: dict[str, Any] = {}
         # The live owner of a key first, then the oldest merged-away one: a spelling of an address merged away lands
