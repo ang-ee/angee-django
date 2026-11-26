@@ -141,11 +141,13 @@ export function headerSort<TRow extends Row>(
  * breaks ties sorts in its first direction (`getFirstSortDir`), where the toggle would turn it.
  * A press on a key a group shares (a grouping column's) turns that key in place, ascending and
  * descending, and the keys the rows follow go: in the browser it turns the groups; a server's
- * groups read keeps its own group order.
+ * groups read keeps its own group order. Given `desc`, it is the order choosing a column no
+ * group shares in that direction sets (the pane toolbar's Order select, `listOrderChoice`).
  */
 export function pressedSorting<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
   table: TableModel<TRow>,
+  desc?: boolean,
 ): SortingState {
   const sorting = table.getState().sorting;
   const shared = sorting.filter(({ id }) => sharedByGroups(table, id));
@@ -158,6 +160,7 @@ export function pressedSorting<TRow extends Row>(
     const level = (id: string) => axes.findIndex((axis) => axis.shares(id));
     return [...shared, turned].sort((left, right) => level(left.id) - level(right.id));
   }
+  if (desc !== undefined) return [...shared, { id: column.id, desc }];
   if (breaksTies(column, table)) return [...shared, { id: column.id, desc: column.getFirstSortDir() === "desc" }];
   const followed = followedSorting(table);
   const next = column.getNextSortingOrder();
@@ -166,6 +169,43 @@ export function pressedSorting<TRow extends Row>(
     return [...shared, ...(next ? [{ id: column.id, desc: next === "desc" }] : [])];
   }
   return [...shared, { id: column.id, desc: next === "desc" }];
+}
+
+/** A list's order as its pane toolbar's Order select offers it (`listOrderChoice`), by column field. */
+export interface ListOrderChoice {
+  /** The first key the rows follow (`headerSort` shows it on its column, if there is one). */
+  shown?: { field: string; desc: boolean };
+  /**
+   * Whether the select offers `field`: a column its header can sort (`getCanSort`) whose key
+   * no group of the list shares, since no header ever shows such a key as chosen.
+   */
+  offers: (field: string) => boolean;
+  /** Sort by `field` in that direction; nothing when it is what is shown or is not offered. */
+  choose: (field: string, desc: boolean) => void;
+}
+
+/**
+ * The Order select over a list's table: it shows what the headers show, and chooses through
+ * `pressedSorting` with the chosen direction, on the column the header itself presses.
+ */
+export function listOrderChoice<TRow extends Row>(table: TableModel<TRow>): ListOrderChoice {
+  const columns = table.getAllLeafColumns();
+  const fieldOf = (column: TableColumn<TRow, unknown>) => (column.columnDef.meta as { field?: string } | undefined)?.field ?? column.id;
+  const columnOf = (field: string) => columns.find((column) => column.id === field) ?? columns.find((column) => fieldOf(column) === field);
+  const offered = (column: TableColumn<TRow, unknown> | undefined): column is TableColumn<TRow, unknown> =>
+    Boolean(column?.getCanSort() && !sharedByGroups(table, column.id));
+  const [followed] = followedSorting(table);
+  const followedColumn = followed && columns.find((column) => column.id === followed.id);
+  const shown = followed && { field: followedColumn ? fieldOf(followedColumn) : followed.id, desc: followed.desc };
+  return {
+    ...(shown ? { shown } : {}),
+    offers: (field) => offered(columnOf(field)),
+    choose: (field, desc) => {
+      const column = columnOf(field);
+      if (!offered(column) || (shown?.field === field && shown.desc === desc)) return;
+      table.setSorting(pressedSorting(column, table, desc));
+    },
+  };
 }
 
 /** Whether a column only breaks ties: a later key of the order the rows follow (`headerSort`). */

@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed API.** A pane list's Order select shows what the
+  headers show and chooses through the header's press rule. It read the first
+  key of the list's state, so a grouped list's select checked the grouping key
+  and an inherited order checked nothing, and a choice set its column alone.
+  `listOrderChoice` (beside `pressedSorting` in `list-body/cell-utils.tsx`,
+  exported with `ListOrderChoice` from `@angee/ui/views/resource-view-list-body`)
+  gives it the first key the rows follow, chooses through `pressedSorting` with
+  the chosen direction on the column the header presses, offers only columns
+  their header can sort whose key no group shares, and changes nothing when the
+  choice is what it shows. `ResourceToolbarProps.sorting` and `onSortingChange`
+  are replaced by `order` (`order={listOrderChoice(table)}`), which the list
+  view's and the collection tree's panes feed from their table.
+
 - `@angee/ui`: one rule for every press on a list header: it never drops the
   keys a group of the list shares that the order holds. A press on a
   tie-breaker, on the shown key

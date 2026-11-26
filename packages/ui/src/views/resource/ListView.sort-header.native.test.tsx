@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { getCoreRowModel, useReactTable, type SortingState } from "@tanstack/react-table";
@@ -11,11 +11,12 @@ import { OperationDocumentsProvider } from "@angee/refine";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../feedback";
+import { PaneToolbarHost } from "../../layouts/PaneToolbar";
 import { createUiTestProviders } from "../../testing";
 import { ListView } from "./ListView";
 import { RowsListView } from "./RowsListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
-import { buildColumns, ListHeaderCell } from "./resource-view-list-body";
+import { buildColumns, ListHeaderCell, listOrderChoice, type ListOrderChoice } from "./resource-view-list-body";
 import { favoriteFromResourceView, resourceViewFavoriteIsActive, resourceViewFavoritesFromUnknown } from "./model/favorites";
 import type { ResourceViewGroup, ResourceViewInitialState } from "./resource-view-model";
 import { useResourceViewSurface } from "./resource-view-surface";
@@ -60,10 +61,12 @@ function taskResource(order: Order, rowModel: "server" | "client" = "server") {
 
 /**
  * A task list over a resource whose default order is `order`, its view state starting from
- * `initialState`, held by the list (`local`) or by the URL (`route`, opened at `path`).
+ * `initialState`, held by the list (`local`) or by the URL (`route`, opened at `path`), drawn
+ * in a pane, its Order select in the pane's menu, with `pane`.
  */
-function renderList(order: Order, { columns = titleAndRank, initialState = {}, rowModel = "server", scope = "local", path = "/tasks" }: {
+function renderList(order: Order, { columns = titleAndRank, initialState = {}, rowModel = "server", scope = "local", path = "/tasks", pane = false }: {
   columns?: typeof withStatus; initialState?: ResourceViewInitialState; rowModel?: "server" | "client"; scope?: "local" | "route"; path?: string;
+  pane?: boolean;
 } = {}) {
   const resource = taskResource(order, rowModel);
   // A held read answers once `release` runs.
@@ -88,7 +91,9 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
         <ToastProvider>
           <ResourceViewProvider resource={resource.modelLabel} scope={scope} initialState={initialState}>
             <ViewState />
-            <ListView resource={resource.modelLabel} scope="inherit" columns={columns} />
+            {pane
+              ? <PaneToolbarHost><ListView resource={resource.modelLabel} scope="inherit" columns={columns} pane={{ selector: "Tasks" }} /></PaneToolbarHost>
+              : <ListView resource={resource.modelLabel} scope="inherit" columns={columns} />}
           </ResourceViewProvider>
         </ToastProvider>
       </OperationDocumentsProvider>
@@ -401,6 +406,77 @@ test.each((["client", "server"] as const).flatMap((rowModel) => pressCases.map((
     if (rowModel === "server") expect(reloaded.groupRowsOrder()).toEqual(recordsRead);
   },
 );
+
+/** The Order select's checked choice in the pane's menu, opening the menu if it is closed. */
+async function checkedOrder(): Promise<string | undefined> {
+  if (!screen.queryByRole("group", { name: "Order" })) fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const order = within(await screen.findByRole("group", { name: "Order" }));
+  return order.queryAllByRole("menuitemradio").find((item) => item.getAttribute("aria-checked") === "true")?.textContent ?? undefined;
+}
+
+test.each([
+  ["an order of several keys", "rank desc, title asc", [], true, "Rank, descending"],
+  ["a grouping key ahead of the shown one", "status asc, rank asc", [{ field: "status" }], true, "Rank, ascending"],
+  ["a grouping key ahead of the shown one, the order inherited", "status asc, rank asc", [{ field: "status" }], false, "Rank, ascending"],
+] as const)("the pane's Order select checks what the headers show, with %s", async (_name, declared, groupStack, seeded, checked) => {
+  const order: Order = declared.split(", ").map((key) => {
+    const [field, dir] = key.split(" ");
+    return { field: field!, direction: dir === "desc" ? "DESC" : "ASC" };
+  });
+  const sorting = order.map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
+  renderList(order, { pane: true, columns: withStatus, initialState: { groupStack: [...groupStack], ...(seeded ? { sorting } : {}) } });
+  await screen.findByText("Charlie");
+  expect(await checkedOrder()).toBe(checked);
+});
+
+test.each(["server", "client"] as const)("choosing in the Order select of a list grouped by status (%s row model) keeps the grouping key ahead, as a press does", async (rowModel) => {
+  const list = renderList(statusThenRank, { pane: true, scope: "route", rowModel, columns: withStatus,
+    initialState: { groupStack: [{ field: "status" }], sorting: [{ id: "status", desc: false }, { id: "rank", desc: false }] } });
+  await waitFor(() => expect(shown("Rank")).toEqual({ Rank: "ascending" }));
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Title, descending" }));
+  await waitFor(() => expect(list.urlSort()).toBe("status:asc,title:desc"));
+  if (rowModel === "server") await waitFor(() => expect(list.groupRowsOrder()).toEqual(["status asc", "title desc"]));
+  await waitFor(() => expect(shown("Status", "Title", "Rank")).toEqual({ Status: "none", Title: "descending", Rank: "none" }));
+  expect(await checkedOrder()).toBe("Title, descending");
+});
+
+test("the Order select offers only what it can show as chosen, and choosing what it shows changes nothing", async () => {
+  const order: Order = ["status", "rank", "title"].map((field) => ({ field, direction: "ASC" }));
+  const list = renderList(order, { pane: true, rowModel: "client", columns: withStatus,
+    initialState: { groupStack: [{ field: "status" }], sorting: order.map(({ field }) => ({ id: field, desc: false })) } });
+  await waitFor(() => expect(shown("Rank")).toEqual({ Rank: "ascending" }));
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const select = within(await screen.findByRole("group", { name: "Order" }));
+  // The status key is one every group's records share: no header shows it chosen, so it is not offered.
+  expect(select.getAllByRole("menuitemradio").map((item) => item.textContent))
+    .toEqual(["Title, ascending", "Title, descending", "Rank, ascending", "Rank, descending"]);
+  fireEvent.click(select.getByRole("menuitemradio", { name: "Rank, ascending" }));
+  expect(list.view().state.sorting).toEqual(order.map(({ field }) => ({ id: field, desc: false })));
+});
+
+test("the Order select chooses on the column the header presses, and only one its header can sort", () => {
+  const query = ResourceQuery.fromContract(taskContract([]));
+  const choice: { current?: ListOrderChoice } = {};
+  let sorting: SortingState = [{ id: "status", desc: false }, { id: "rank", desc: false }];
+  function Choice() {
+    const [state, setState] = React.useState<SortingState>(sorting);
+    sorting = state;
+    // A rank column under its own id, and a note column the resource cannot sort by.
+    const columns = React.useMemo(() => buildColumns<Row>([{ id: "position", field: "rank", header: "Rank" }, { field: "note", header: "Note" }, ...withStatus.slice(0, 2)], { query }), []);
+    const table = useReactTable<Row>({ data: records as Row[], columns, state: { sorting: state }, onSortingChange: setState,
+      meta: { groupAxes: [query.group({ field: "status" })] }, enableMultiSort: false, manualSorting: true, getCoreRowModel: getCoreRowModel() });
+    choice.current = listOrderChoice(table);
+    return null;
+  }
+  render(<Choice />);
+  expect(["rank", "note", "status", "title"].map((field) => choice.current!.offers(field))).toEqual([true, false, false, true]);
+  act(() => choice.current!.choose("note", true));
+  act(() => choice.current!.choose("status", true));
+  expect(sorting).toEqual([{ id: "status", desc: false }, { id: "rank", desc: false }]);
+  act(() => choice.current!.choose("rank", true));
+  expect(sorting).toEqual([{ id: "status", desc: false }, { id: "position", desc: true }]);
+});
 
 test("rows grouped in the browser by a hidden column still show the sort of the next key", () => {
   renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { grouped: true, initialState: { columnVisibility: { status: false } } });
