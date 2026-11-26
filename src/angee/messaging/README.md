@@ -400,8 +400,8 @@ statement.
 
 The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
-source. `compose` itself decides `reply` alone, which administrators hold there,
-so an administrator's `compose(channel=Channel.objects.system_channel())` is
-admitted today; whether a person may compose on the system channel is pending.
-Its readers find it among channels as "System mail", its threads in the inbox
+source. `compose` decides `reply` on the channel, which administrators alone
+hold there, so an administrator's
+`compose(channel=Channel.objects.system_channel())` is admitted and every other
+person's is refused. Its readers find it among channels as "System mail", its threads in the inbox
 and its messages in timelines.
