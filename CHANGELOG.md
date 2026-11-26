@@ -26,7 +26,10 @@ live in code docstrings.
   the merge wrote the redirect after resolving the merged handle's party, which
   had cleared the party the administrator's write on that handle came through.
   The redirect is now written first; the rows a merge ends in are unchanged, and
-  only the merged handle's history between differs. **Upgrade:** a person who
+  only the merged handle's history between differs. A contact administrator's
+  merge leaves the merged handle on no contact, so that administrator cannot
+  revert it: a platform administrator can, as can the handles' creator when they
+  may also write the contact. **Upgrade:** a person who
   merged two addresses of one contact merges the contacts, or is granted the
   contact administrator role.
 - `angee.base`: **Changed behaviour.** A refused write of a write-once field
