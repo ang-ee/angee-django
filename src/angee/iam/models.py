@@ -871,31 +871,19 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     def account_action_blockers(
         cls, action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
     ) -> tuple[tuple[Q, str], ...]:
-        """Return the target conditions refusing ``action``, each with its refusal.
+        """Return the target conditions refusing ``action`` beyond IAM's own, each with its refusal.
 
         The conditions come from the acting subject's ``protection_condition``,
-        ``inactive_condition`` and ``own_account_condition``. The locked actions and
-        the batched ``account_actions`` projection share these conditions, so a
-        control is offered exactly when its action admits it. Only ``actor is None``
-        denotes system work, which retains the full protected-account refusal.
-        Other subjects without a concrete user cannot set passwords. An action IAM
-        does not declare meets the person-kind and protected-account blockers;
-        its donor adds its own after them.
+        ``inactive_condition`` and ``own_account_condition``. Every account action
+        first meets IAM's person-kind and protected-account blockers, which no
+        override can drop (:func:`account_action_refusals`); this hook adds what
+        one action refuses besides, and a donor extends it through ``super()``.
+        The locked actions and the batched ``account_actions`` projection share
+        the conditions, so a control is offered exactly when its action admits it.
         """
 
         usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
-        blockers = [
-            (~Q(kind=UserKind.PERSON), "Only person accounts can be managed."),
-        ]
-        if action == UserAccountAction.SET_PASSWORD and not system:
-            # Its sealed permission caps the audience at platform admins, with both write gates.
-            if own is None:
-                blockers.append((Q(pk__isnull=False), "Only a concrete user can set another person's password."))
-            else:
-                blockers.append((own, "Use Change password for your own account; it requires your current password "
-                                 "and keeps this session signed in."))
-        else:
-            blockers.append((protection, PROTECTED_ACCOUNT_MESSAGE))
+        blockers: list[tuple[Q, str]] = []
         if action in {UserAccountAction.RESET_PASSWORD, UserAccountAction.ISSUE_PASSWORD}:
             blockers.append((inactive, "Only active accounts can receive a password."))
         if action == UserAccountAction.RESET_PASSWORD:
@@ -919,7 +907,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         annotations: dict[str, models.expressions.BaseExpression] = {}
         for action in cls.account_actions():
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
-            for condition, _error in cls.account_action_blockers(action, protection, inactive, own, system=False):
+            for condition, _error in account_action_refusals(cls, action, protection, inactive, own, system=False):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
         return annotations
@@ -956,7 +944,8 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
         users = type(self).objects
         rows = users.system_context(reason="iam.account.eligibility").filter(pk=self.pk)
-        blockers = type(self).account_action_blockers(
+        blockers = account_action_refusals(
+            type(self),
             action,
             users.protection_condition(actor),
             users.inactive_condition(actor),
@@ -973,7 +962,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
         Every account action, a donor's included, runs under this: the locked row
         must pass ``action``'s Zed permission, the expected revision and
-        :meth:`account_action_blockers`. Actor presence is required before
+        :func:`account_action_refusals`. Actor presence is required before
         locking. System callers bypass the permission by the REBAC library's
         contract but still meet eligibility; protection then excludes staff,
         superusers and elevated accounts only.
@@ -1212,6 +1201,33 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Return the user's short display name."""
 
         return self.first_name
+
+
+def account_action_refusals(
+    model: Any, action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
+) -> tuple[tuple[Q, str], ...]:
+    """Return every condition refusing account action ``action``, IAM's mandatory ones first.
+
+    Every action meets the person-kind blocker and then the protected-account
+    blocker before ``model.account_action_blockers`` adds its own, so a donor
+    that drops ``super()`` or filters its result still refuses protected
+    accounts. Set password is the one exception: outside system work it refuses
+    the actor's own account instead, and other subjects without a concrete user,
+    since its sealed permission caps the audience at platform admins with both
+    write gates. Only ``actor is None`` denotes system work, which retains the
+    full protected-account refusal.
+    """
+
+    mandatory = [(~Q(kind=UserKind.PERSON), "Only person accounts can be managed.")]
+    if action == UserAccountAction.SET_PASSWORD and not system:
+        if own is None:
+            mandatory.append((Q(pk__isnull=False), "Only a concrete user can set another person's password."))
+        else:
+            mandatory.append((own, "Use Change password for your own account; it requires your current password "
+                              "and keeps this session signed in."))
+    else:
+        mandatory.append((protection, PROTECTED_ACCOUNT_MESSAGE))
+    return (*mandatory, *model.account_action_blockers(action, protection, inactive, own, system=system))
 
 
 class ServiceUserMixin(PublicIdentity, models.Model):

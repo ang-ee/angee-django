@@ -67,7 +67,9 @@ live in code docstrings.
   `User.account_action_blockers` (now a classmethod) are extended through
   `super()`; a contributed action runs under `User.lock_for_account_action`, the
   private `_lock_for_account_action` made public, and meets IAM's person-kind
-  and protected-account blockers before its own. `account_actions` is
+  and protected-account blockers before its own, whatever its hook returns:
+  `angee.iam.models.account_action_refusals` puts them first, and no override
+  drops them. `account_actions` is
   typed by one enum of the composed actions, built when the schema is by the
   permissions builder (`angee.graphql.capabilities.permission_enum`, now public)
   and named after its members (`Permissions_10_set_active_…`): its values are the

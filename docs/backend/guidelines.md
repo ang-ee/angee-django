@@ -817,8 +817,10 @@ data through REBAC, never a queryset bypass.
 - **Managed accounts change through IAM's account actions.** `User.set_active`,
   `rename`, `issue_password`, `reset_password` and `set_account_password` lock
   the row through `User.lock_for_account_action`, which checks the action's own Zed
-  permission, the expected revision and the shared
-  `User.account_action_blockers`, then write elevated; the `account_actions`
+  permission, the expected revision and the shared refusals
+  (`account_action_refusals`: IAM's person-kind and protected-account blockers,
+  which no override drops, then the action's own `User.account_action_blockers`),
+  then write elevated; the `account_actions`
   projection batches the same conditions and names each action by its permission.
   The actions are an open set: a donor adds its action by extending
   `User.account_actions` and `account_action_blockers` through `super()`, as

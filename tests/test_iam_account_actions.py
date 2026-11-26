@@ -35,7 +35,7 @@ from angee.base.build import extension_source_map
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam.checks import check_account_disclosures
-from angee.iam.models import PROTECTED_ACCOUNT_MESSAGE
+from angee.iam.models import PROTECTED_ACCOUNT_MESSAGE, UserAccountAction
 from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import create_platform_admin
@@ -510,3 +510,34 @@ def test_account_actions_are_one_enum_of_the_composed_actions_spelled_as_zed_per
     assert {row["username"]: row["account_actions"] for row in rows}["enum-person"] == [
         "set_active", "rename", "issue_password", "set_password",
     ]
+
+
+def test_no_donor_override_drops_iams_person_and_protection_blockers(db, monkeypatch):
+    """Every action but Set password refuses protected and non-person accounts whatever its hook returns.
+
+    The hook is replaced by one returning nothing, as a donor that drops ``super()`` would; the refusals,
+    the users list's projection and the locked action all still refuse.
+    """
+
+    monkeypatch.setattr(User, "account_action_blockers", classmethod(lambda cls, *args, **kwargs: ()))
+    admin = create_platform_admin("structural-admin", password=None)
+    actor = to_subject_ref(admin)
+    targets = {
+        "staff": User.objects.create_user("structural-staff", is_staff=True),
+        "peer admin": create_platform_admin("structural-peer", password=None),
+        "own": admin,
+        "service": User.objects.create_user("structural-service", kind="service"),
+    }
+    refusals = {"staff": PROTECTED_ACCOUNT_MESSAGE, "peer admin": PROTECTED_ACCOUNT_MESSAGE,
+                "own": PROTECTED_ACCOUNT_MESSAGE, "service": "Only person accounts can be managed."}
+    actions = [action for action in User.account_actions() if action != UserAccountAction.SET_PASSWORD]
+    assert "issue_sign_in_link" in actions
+    for name, target in targets.items():
+        assert {action: target.account_action_error(action, actor) for action in actions} == {
+            action: refusals[name] for action in actions
+        }, name
+        assert target.account_actions_for(actor) == ([] if name in {"own", "service"} else ["set_password"])
+    with actor_context(admin), pytest.raises(ValidationError, match="protected"):
+        User.objects.with_actor(admin).get(pk=targets["staff"].pk).lock_for_account_action(
+            "rename", expected_revision=None,
+        )

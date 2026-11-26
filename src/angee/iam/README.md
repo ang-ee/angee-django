@@ -64,7 +64,9 @@ password confirms the new password locally; the other changing actions take an
 explicit confirmation. The actions are an open set: `User.account_actions` names
 them, and an addon contributes its own by extending it and
 `User.account_action_blockers` through `super()`, running its action under
-`User.lock_for_account_action` and adding its `iam.User#actions-menu` child
+`User.lock_for_account_action`. Whatever its hook returns, the action first
+meets IAM's person-kind and protected-account blockers
+(`account_action_refusals`), which no override drops. It adds its `iam.User#actions-menu` child
 (`AccountActionBar`, `offersAccountAction`), as
 [`iam_messaging`](../iam_messaging/README.md)'s Send sign-in link does. Its
 permission unions into `active_account_granted` or `nonstaff_account_granted`
