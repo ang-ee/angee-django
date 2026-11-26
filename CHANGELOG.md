@@ -10,7 +10,7 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.iam`: **Fixed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
+- `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
   answers for `user`. It checked the ambient REBAC actor instead, so asking about
   someone else returned the current actor's answer, and asking outside any actor
   (a worker, a mail bridge) returned `False` even for an administrator. It now
