@@ -20,6 +20,7 @@ from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.querysets import row_lock_queryset
+from angee.brandkit.models import DEFAULT_UNTICK_MESSAGE
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema
 from angee.provenance.context import changeset
@@ -277,6 +278,36 @@ def test_a_resource_load_that_changes_a_kit_and_then_states_the_default_takes_th
     ])
     _contend_with_a_change_of_default_part_way_through_its_lock(default, load)
     assert _default_names() == ["Stated"]
+
+
+def test_an_edit_cleaned_before_its_kit_became_the_default_cannot_untick_it() -> None:
+    """``full_clean`` then ``save`` read the kit before its promotion committed; the save judges it under the lock.
+
+    The edit's instance says the kit is not the default and ``clean`` agreed when it
+    ran. Writing that flag after the promotion would leave no default kit, so the
+    save rereads the stored flag under the kit's row lock and refuses as ``clean``
+    does.
+    """
+
+    _kit("Default")
+    kit = _kit("Kit")
+
+    def edit() -> None:
+        with system_context(reason="tests.brandkit.concurrency.edit"):
+            stored = BrandKit.objects.get(pk=kit.pk)
+            stored.voice = "Edited."
+            stored.full_clean()
+            stored.save()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            _promote(kit)
+            contender, pid = submit(pool, edit)
+            wait_for_lock(pid, contender)
+        with pytest.raises(ValidationError) as refused:
+            contender.result(timeout=30)
+    assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
+    assert _default_names() == ["Kit"]
 
 
 def test_a_delete_waits_for_a_change_of_default_and_refuses_the_new_default() -> None:

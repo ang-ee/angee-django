@@ -438,15 +438,23 @@ class BrandKit(ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
 
         The first kit saved while no kit is the default takes the flag; a kit saved
         as the default takes it from the previous one
-        (:meth:`BrandKitManager.demote_defaults`).
+        (:meth:`BrandKitManager.demote_defaults`). A stored kit saved as not the
+        default is refused if, read under its row lock, it is the default, as
+        :meth:`clean` refuses it before the save: an edit cleaned before the kit
+        became the default never unticks it.
         """
 
         update_fields = kwargs.get("update_fields")
+        writes_default = update_fields is None or "is_default" in update_fields
         with transaction.atomic():
             if self._state.adding and not self.is_default:
                 self.is_default = not type(self).system_queryset().filter(is_default=True).exists()
-            if self.is_default and (update_fields is None or "is_default" in update_fields):
+            if self.is_default and writes_default:
                 type(self).objects.demote_defaults(self)
+            elif writes_default and not self._state.adding and (
+                row_lock_queryset(type(self)).filter(pk=self.pk).values_list("is_default", flat=True).first()
+            ):
+                raise ValidationError({"is_default": DEFAULT_UNTICK_MESSAGE})
             super().save(*args, **kwargs)
 
     def mail_palette(self) -> dict[str, dict[str, str]]:

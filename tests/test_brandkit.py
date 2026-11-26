@@ -454,6 +454,25 @@ def test_the_default_cannot_be_unticked(db: None) -> None:
     assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
 
 
+def test_a_save_of_a_kit_read_before_it_became_the_default_cannot_untick_it(db: None) -> None:
+    """``save`` rereads the stored flag under the row lock and refuses as ``clean`` does; saving other columns goes."""
+
+    del db
+    _kit("Default")
+    kit = _kit("Kit")
+    with system_context(reason="tests.brandkit.untick"):
+        stale = BrandKit.objects.get(pk=kit.pk)
+        promoted = BrandKit.objects.get(pk=kit.pk)
+        promoted.is_default = True
+        promoted.save()
+        stale.voice = "Edited."
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stale.save()
+        stale.save(update_fields=["voice"])
+    assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
+    assert _default_names() == ["Kit"]
+
+
 def test_the_default_cannot_be_deleted_on_any_delete_path(db: None) -> None:
     """An instance delete, a queryset delete and the console delete all refuse; another kit may go."""
 
