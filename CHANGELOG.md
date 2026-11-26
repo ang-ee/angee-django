@@ -46,6 +46,51 @@ live in code docstrings.
   render and before anything is written; a path through a list stays held to
   the text, and an empty list passes. `must_print` given as one bare string is a
   `TypeError`, no longer read letter by letter.
+- `angee.workflows`: **Runs read the records they are about.**
+  - **New.** `WorkflowRunQuerySet.concerns(model, *, descendants=True)` is the
+    inverse of `about`. It returns the `model` records the selected runs and their
+    readable child runs are about: each run's subject, the declared input relations
+    admission linked with no step, and the records its steps recorded, whatever the
+    operation.
+    - **Descendants.** `about(record)` walks up to a run's ancestors, so `concerns`
+      walks down to every readable descendant: children, grandchildren and so on,
+      owned and continuation alike. `descendants=False` keeps to the selected runs.
+      `concerns` reads the child runs that exist when it is evaluated.
+  - **Changed.** `about`'s ancestor walk and `concerns`' descendant walk are one
+    recursive common table expression (`django-cte`) over the run's parent step,
+    inside the read's one statement, REBAC's revision reads aside. No run id is
+    loaded or bound, whatever the depth or the number of runs: `about` with
+    ancestors no longer fails past the database's parameter limit (SQLite's 32,766),
+    and its one query per generation is gone. `UNION` drops a run the walk reaches
+    again, so even a cycle that admission never writes ends. The walk reads
+    structure through the base manager; `about` and `concerns` scope its result to
+    their reader once. That selects the same runs as scoping each step would,
+    because a run's read includes its parent's, so an unreadable run has no
+    readable ancestor. The queryset's own filters also select from everything the
+    walk reaches rather than limiting the walk: for a chain `R0` (running) → `R1`
+    (succeeded) → `R2` (running), `exclude(status__in=terminal).about(R2's record)`
+    now returns `R0` and `R2`, where the earlier loop stopped at `R1` and returned
+    `R2` alone.
+    - **Reads.** It reads the records as the runs' reader may read them. A run the
+      reader cannot read adds nothing, and a record the reader cannot read is
+      absent. The records do not inherit a `system_queryset()` run set's scope:
+      build and evaluate the result inside `system_context(...)`, since outside it
+      such a run set raises `MissingActorError`.
+    - **Shapes.** An MTI child model (a `Person` under its `Party`) reads the links
+      its canonical parent keys. A sliced run set keeps its slice. A merged record
+      answers as itself; `about(record.canonical())` reads back from its survivor.
+    - **Subjects.** The subject column still counts beside the links, for runs
+      admitted before run-input evidence (`32d9da84c8`) linked their subject.
+  - **Unchanged, now stated.** Admission links each relation the workflow's input
+    schema declares (`json_schema_extra={"relation": {"resource": ...}}`) in the
+    admission transaction, so `about(record)` covers a run from admission,
+    whatever step it waits on. Input links are reads: `working_on`, and so what a
+    record's deletion cancels and what a merge guard refuses, still counts only
+    the subject and created or changed records.
+  - **Upgrade:** nothing. There is no migration (`makemigrations` finds no
+    change) and no backfill, since admission has written these links for every
+    run since run-input evidence landed.
+
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None, must_print=())` renders one effective template (the caller picks it for its

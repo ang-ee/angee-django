@@ -15,24 +15,27 @@ from uuid import uuid4
 
 from django.apps import apps
 from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, Sum, Value
+from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, Model, OuterRef, Q, QuerySet, Sum, Value
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.db.models.functions import Concat, Least, Now
+from django_cte import CTE, with_cte
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import actor_context, generic_target, system_context, to_subject_ref
 from rebac.errors import MissingActorError, NoActorResolvedError
+from rebac.managers import RebacQuerySet
 
 from angee.base.fields.text import ModelLabelField
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
-from angee.base.permissions import actor_user_id
+from angee.base.permissions import actor_user_id, relation_read_queryset
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
-from angee.base.refs import RecordRef, record_view_refs
+from angee.base.refs import RecordRef, generic_pointer_model, record_view_refs
 from angee.base.serialization import canonical_json_sha256
 from angee.base.signals import changes_muted, mute_changes, send_bulk_update
 from angee.jobs.enqueue import enqueue_task
@@ -437,19 +440,71 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
 
     def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
               limit: int | None = None) -> Any:
-        """Runs that worked on readable records and all readable ancestors, oldest first."""
+        """Runs that worked on readable records and all readable ancestors, oldest first.
+
+        A run is about a record from its admission when the record is its subject or
+        a declared relation of its input, and from a step's settlement when the step
+        records it. :meth:`concerns` is the inverse. The ancestors come from one
+        recursive walk inside the same statement, whatever their depth or number; this
+        queryset's filters and read scope select from what the walk reaches.
+        """
 
         rows = self.filter(self.about_filter(records, operations=operations, limit=limit))
-        if not ancestors:
-            return rows.order_by("created_at", "pk").distinct()
-        ids = set(rows.values_list("pk", flat=True))
-        frontier = ids.copy()
-        while frontier:
-            parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
-                          .values_list("parent_step__run_id", flat=True))
-            frontier = set(self.filter(pk__in=parents).values_list("pk", flat=True)) - ids
-            ids.update(frontier)
-        return self.filter(pk__in=ids).order_by("created_at", "pk").distinct()
+        if ancestors:
+            # An unreadable run's ancestors are unreadable (run read includes parent->read),
+            # so scoping the whole walk once drops nothing a scoped walk would keep.
+            rows = self.filter(pk__in=rows._tree_ids(ancestors=True))
+        return rows.order_by("created_at", "pk").distinct()
+
+    def concerns[M: Model](self, model: type[M], *, descendants: bool = True) -> RebacQuerySet[M]:
+        """The ``model`` records these runs and their readable descendants are about: the inverse of :meth:`about`.
+
+        A run is about its subject and every record it links: each declared input
+        relation admission linked, with no step, and each record its steps recorded,
+        whatever the operation. ``descendants`` walks down to every readable child run
+        and theirs in turn, as ``about``'s ``ancestors`` walks up; without it only these
+        runs count. Either way the read is one data statement, REBAC's revision reads
+        aside: the walk is a recursive common table expression inside it, so no run id is
+        loaded or bound, however deep or wide the runs reach. The statement reads the
+        child runs that exist when it is evaluated. A slice keeps its runs.
+
+        Records are read as these runs read (``relation_read_queryset``): a run this
+        queryset cannot read contributes nothing, and a record its reader cannot read
+        is absent. Records do not inherit the runs' system scope: build and evaluate the
+        result inside ``system_context(...)``; a ``system_queryset()`` run set read
+        outside it raises ``MissingActorError``. Links keep the identity they retained,
+        so a merged record answers as itself; ``about(record.canonical())`` reads back
+        from its survivor. The subject column still counts because runs admitted before
+        admission linked the subject are about it only through that column.
+        """
+        rows = self if self.query.is_sliced else self.order_by()
+        runs: Any = rows.values("pk")
+        if descendants:
+            runs = relation_read_queryset(self.model, self).filter(pk__in=rows._tree_ids(ancestors=False)).values("pk")
+        content_type = ContentType.objects.get_for_model(generic_pointer_model(model))
+        links = apps.get_model("workflows", "StepRecord")._base_manager.filter(run__in=runs, content_type=content_type)
+        subjects = self.model._base_manager.filter(pk__in=runs, subject_content_type=content_type)
+        return relation_read_queryset(model, self).filter(pk__in=links.order_by().values("object_id").union(
+            subjects.order_by().values("subject_object_id"), all=True,
+        ))
+
+    def _tree_ids(self, *, ancestors: bool) -> QuerySet[T, dict[str, Any]]:
+        """Ids of these runs and every ancestor, or every descendant, as one recursive walk.
+
+        Structural, through the base manager: the caller scopes the result. ``UNION``
+        drops a run the walk reaches again, so even a cycle written past admission ends.
+        """
+        base = self.model._base_manager.order_by()
+        parent = F("parent_step__run_id")
+
+        def walk(tree: CTE) -> QuerySet[T, dict[str, Any]]:
+            start = base.filter(pk__in=self.values("pk")).values("pk", parent=parent)
+            reached = (tree.join(base, pk=tree.col.parent) if ancestors
+                       else tree.join(base, parent_step__run_id=tree.col.pk))
+            return start.union(reached.values("pk", parent=parent))
+
+        tree = CTE.recursive(walk, name="workflows_run_tree")
+        return with_cte(tree, select=tree.join(base, pk=tree.col.pk).values("pk"))
 
     def working_on(self, record: Any) -> Any:
         """Unfinished runs whose subject is ``record`` or that created or changed it.
