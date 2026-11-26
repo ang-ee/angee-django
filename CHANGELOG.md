@@ -67,12 +67,12 @@ live in code docstrings.
     transport that hands a delivery back to the system mailer fails that delivery
     instead of recording it again. Administrators alone read, send on, write,
     annotate and delete the system channel (schema revision 31): no channel,
-    integration, team, project or ownership grant reaches it, and a system
-    thread's reads keep only the administrator arm whatever its own grants,
-    bindings or fragments give. Nobody shares a system thread or grants on a system
-    message, administrators included (the thread's `share` and the message's
-    `write` admit nobody); a message's own `reader` and `editor` tuples and the
-    identity rule still read it. `messaging.E003` refuses a fragment arm on the
+    integration, team, project or ownership grant reaches it. Nobody shares a
+    system thread or grants on a system message, administrators included (the
+    thread's `share` and the message's `write` admit nobody); their reads are not
+    subtracted, so a tuple no verb wrote, the identity rule, a group an
+    administrator binds to the thread and another addon's thread fragment still
+    read it (messaging's README lists them). `messaging.E003` refuses a fragment arm on the
     channel's `read`, `reply`, `write`, `annotate` or `delete`, the thread's
     `share`, `delete` or `annotate`, or the message's `write`, `delete` or
     `annotate`. Its threads show in administrators' inbox lists. A channel whose

@@ -21,7 +21,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import MissingActorError, actor_context, system_context
 from rebac.evaluator import evaluator_scope
 from rebac.models import SchemaOverride, SchemaPermission
-from rebac.schema import PermArrow, PermBinOp, PermRef, permission_sources
+from rebac.schema import PermBinOp, PermRef, permission_sources
 
 from angee.base.build import extension_source_map, merged_schemas
 from angee.base.permissions import contextual_action_holds, purpose_read_holds
@@ -84,13 +84,9 @@ def test_composed_reads_derive_from_the_declared_extension_points() -> None:
     """The thread's inbox read is its ordinary access; the message's follows the thread's purpose."""
 
     schema = _composed_messaging()
-    # Both keep only the administrator arm on a system thread (its channel's seal).
-    sealed, admin = PermArrow("channel", "sealed"), PermArrow("admin", "member")
-    assert _expression(schema, "messaging/thread", "read_inbox") == PermBinOp(
-        "+", PermBinOp("-", PermRef("read_granted"), sealed), admin,
-    )
+    assert _expression(schema, "messaging/thread", "read_inbox") == PermRef("read_granted")
     assert _expression(schema, "messaging/thread", "read") == PermBinOp(
-        "+", PermBinOp("-", PermBinOp("+", PermRef("read_granted"), PermRef("chatter_read")), sealed), admin,
+        "+", PermRef("read_granted"), PermRef("chatter_read"),
     )
     message_read = permission_sources(schema, "messaging/message", "read")
     message_inbox = permission_sources(schema, "messaging/message", "read_inbox")

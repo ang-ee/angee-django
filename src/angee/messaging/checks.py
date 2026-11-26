@@ -33,12 +33,13 @@ SEALED = {
 }
 """The permissions that subtract the system channel's seal, which fragments never extend.
 
-On the system channel (backend ``system``) and its threads each admits
-administrators alone, and a system message's ``write`` admits nobody, so an arm
-unioned into one would reach system mail past the seal. Fragments widen
-``integrate/integration#read`` and ``#write`` and the thread's ``read_granted``
-instead, which the thread's sealed reads subtract. The thread's ``write``, which
-fragments extend, subtracts the seal from its own arms only.
+On the system channel (backend ``system``) each admits administrators alone; a
+system thread's ``share`` and a system message's ``write`` admit nobody, so nobody
+grants on either; their deletes keep the administrator arm. An arm unioned into
+one would reach system mail past the seal. Fragments widen
+``integrate/integration#read`` and ``#write`` instead, which the channel's seal
+subtracts. The thread's ``write``, which fragments extend, subtracts the seal from
+its own arms only.
 """
 
 check_messaging_seals = partial(check_sealed_permissions, "messaging", {

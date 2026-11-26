@@ -236,11 +236,12 @@ def test_an_administrators_share_of_system_mail_is_refused_and_the_member_reads_
     ])
 
 
-def test_a_system_threads_own_grants_and_the_identity_rule_hold_nothing_on_it(sealed: SimpleNamespace) -> None:
-    """Tuples no verb writes on a system thread or message: the thread's admit nothing; a message's write admits nobody.
+def test_tuples_no_verb_writes_on_system_mail_read_it_but_never_write_or_share_it(sealed: SimpleNamespace) -> None:
+    """A tuple on a system thread or message, which no verb writes, and the identity rule: what each holds.
 
-    A message's own ``reader`` and ``editor`` tuples and the identity rule still read it: its reads are
-    not subtracted, because the inbox's planned reads cannot afford it.
+    Their reads are not subtracted (the inbox's planned reads cannot afford it); nobody but an
+    administrator writes the thread, nobody writes the message or shares the thread, and only an
+    administrator deletes either.
     """
 
     seats = sealed.seats
@@ -257,16 +258,12 @@ def test_a_system_threads_own_grants_and_the_identity_rule_hold_nothing_on_it(se
         write_relationships([RelationshipTuple(
             ObjectRef("provenance/role", "messaging_identity_source"), "member", identity,
         )])
-    thread_seats = (holders["thread_reader"], holders["thread_editor"], identity)
-    message_holders = (holders["message_reader"], holders["message_editor"], identity)
+    seated = (*holders.values(), identity)
     assert_decisions(checks=[
-        *((seat, action, thread, False) for seat in thread_seats
-          for action in ("read", "read_inbox", "write", "annotate", "share", "delete")),
-        *((seat, action, message, False) for seat in (*thread_seats, *message_holders, seats.admin)
-          for action in ("write",)),
-        (seats.admin, "share", thread, False),
-        (seats.admin, "read", thread, True), (seats.admin, "delete", message, True),
-        # The residual on a message's own arms.
-        *((seat, "read", message, True) for seat in message_holders),
-        *((seat, "read", part, True) for seat in message_holders),
+        *((seat, "read", message, True) for seat in seated),
+        *((seat, "read", part, True) for seat in seated),
+        *((seat, action, thread, False) for seat in seated for action in ("write", "share", "delete")),
+        *((seat, action, message, False) for seat in seated for action in ("write", "delete")),
+        (seats.admin, "share", thread, False), (seats.admin, "write", message, False),
+        (seats.admin, "write", thread, True), (seats.admin, "delete", message, True),
     ])

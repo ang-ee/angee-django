@@ -56,10 +56,12 @@ definition messaging/thread {
     // The inbox lists no record chatter, where `chatter_read` holds for nobody,
     // so its read leaves the chatter arms out of the statement. Overrides that must
     // govern both reads target `read_granted`. A system thread (on the system channel)
-    // keeps only the administrator arm of both reads, whatever its own grants,
-    // bindings or fragments give, and nobody shares it.
-    permission read_inbox = (read_granted - channel->sealed) + admin->member
-    permission read = ((read_granted + chatter_read) - channel->sealed) + admin->member
+    // reads through its sealed channel; nobody shares it, administrators included,
+    // and its own write and delete arms subtract the seal. Its own grants and the
+    // fragments' arms are not subtracted from its reads: the inbox's planned reads
+    // cannot afford it.
+    permission read_inbox = read_granted
+    permission read = read_granted + chatter_read
     permission write  = ((channel->write + owner + editor + identity_source) - channel->sealed) + admin->member
     // Messages inherit the authority, then apply their own read gate.
     permission annotate_granted = write + channel->annotate
@@ -98,10 +100,10 @@ definition messaging/message {
     // Who keeps reading a withheld message: its channel's managers, the identity
     // rule and admins.
     permission withheld_keeper = channel->write + identity_source + admin->member
-    // A system message (on the system channel) is read through its sealed thread and
-    // channel. Nobody writes it, administrators included, so nobody grants on it.
-    // Its own `editor` and `reader` arms and the identity rule are not subtracted
-    // here; the inbox's planned reads cannot afford that subtraction.
+    // A system message (on the system channel) is read through its thread and its
+    // sealed channel. Nobody writes it, administrators included, so nobody grants on
+    // it. Its own `editor` and `reader` arms and the identity rule are not subtracted
+    // from its reads; the inbox's planned reads cannot afford that subtraction.
     permission read = ((thread->read + read_granted) - withheld) + withheld_keeper
     permission read_inbox = ((thread->read_inbox + read_granted) - withheld) + withheld_keeper
     permission send_held = channel->write + admin->member
