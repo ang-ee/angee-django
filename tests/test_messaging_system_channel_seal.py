@@ -133,6 +133,8 @@ def test_administrators_alone_read_send_on_and_write_the_system_channel(sealed: 
         targets = (
             *((channel, action) for action in _CHECKED),
             (thread, "read"), (message, "read"), (message, "read_inbox"), (part, "read"),
+            # ``delete`` is the shared trash verb's permission (``TRASH_PERMISSION``).
+            (message, "delete"),
         )
         return [
             (getattr(seats, seat), action, target, seat in allowed_on and (seat, action) not in _CONTROL_GAPS)
@@ -146,9 +148,20 @@ def test_administrators_alone_read_send_on_and_write_the_system_channel(sealed: 
 _CONTROL_GAPS = {
     # On an ordinary channel these seats read but do not send or manage: the table states each.
     *((seat, action) for seat in ("channel_reader", "integration_reader", "team_member", "project_reader")
-      for action in ("reply", "write")),
-    ("channel_replier", "write"),
+      for action in ("reply", "write", "delete")),
+    ("channel_replier", "write"), ("channel_replier", "delete"),
 }
+
+
+def test_a_system_message_is_never_trashed_through_a_records_moderation(sealed: SimpleNamespace) -> None:
+    """System mail sits in the system channel's own thread: a record's moderator never takes it off.
+
+    The shared trash verb decides ``delete`` on it, which the table gives administrators alone.
+    """
+
+    message = sealed.rows["system"][2]
+    assert message.trash_error() is not None
+    assert not message.can_trash(moderate_access=True)
 
 
 def test_the_system_channel_is_offered_to_nobody_yet_an_administrator_may_compose_on_it(
