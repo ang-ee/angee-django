@@ -33,8 +33,11 @@ pending write and typed values.
   `useDraftScope(own)` names a surface's scope under the one its host provides
   (`DraftScopeProvider`): the record form provides its own
   (`record.create:<provider>:<resource>`, or `record.edit:…:<id>`), and a
-  relation field's dialog its `relation` slot, so a create form opened from
-  another form, down any chain, never shares its draft.
+  relation field's dialog its `relation:<field>` slot (`fieldName` on
+  `RelationPicker`, `RelationFieldWidget` and `RelationMultiFieldWidget`;
+  every form passes it), so a create form opened from another form, down any
+  chain, or from another relation field to the same resource, never shares its
+  draft.
 - `MutationDialog` with `idempotencyScope` (`KeyedMutationDialogProps`) calls
   its submission with the draft's key as a required `string` third argument;
   without one (`MutationDialogProps`, as before) it is called with none.

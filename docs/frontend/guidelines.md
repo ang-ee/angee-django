@@ -1556,8 +1556,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   do), and development fails at once, naming the scope, when two hold it. A
   create form names its draft under the surface hosting it (`useDraftScope`):
   the record form provides its own scope, and a relation field's dialog its
-  `relation` slot, so a create opened from another form never shares a draft
-  with it. Name a scope after its target, never after a component.
+  `relation:<field>` slot, so a create opened from another form, or from
+  another relation field to the same resource, never shares a draft with it. Name a scope after its target, never after a component.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:

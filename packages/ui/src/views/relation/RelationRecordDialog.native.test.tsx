@@ -45,10 +45,10 @@ const resources = [party, organization, person, tag];
 const node = testDataResource("tree.Node", {
   recordRepresentation: "name",
   createArguments: [{ name: "idempotency_key", type: "String" }],
-  fields: [id, text("name"), {
-    name: "parent", kind: "relation", scalar: "ID", relationModelLabel: "tree.Node", relationObject: true, readable: true,
+  fields: [id, text("name"), ...["parent", "sibling"].map((name): DataResourceFieldMetadata => ({
+    name, kind: "relation", scalar: "ID", relationModelLabel: "tree.Node", relationObject: true, readable: true,
     aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false,
-  }],
+  }))],
 });
 
 const partyRelation = { resource: "parties.Party", labelField: "display_name", canCreate: false };
@@ -223,3 +223,34 @@ test("a relation field's create outside any form is a draft of its own beside a 
   expect((create.mock.calls[0]?.[0] as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key)
     .toEqual(expect.any(String));
 });
+
+test("two relation fields to one resource keep their drafts apart: a lost create in one is retried under its own key after the other creates", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  render(<Wrapper><FormView resource="tree.Node" id={null}
+    fields={[{ name: "name" }, { name: "parent", kind: "relation", widget: "many2one" }, { name: "sibling", kind: "relation", widget: "many2one" }]} /></Wrapper>);
+  const createFrom = async (field: string, query: string) => {
+    fireEvent.click(screen.getByRole("combobox", { name: field }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: query } });
+    fireEvent.click(await screen.findByText(`Create “${query}”`));
+    const dialog = await screen.findByRole("dialog", { name: "New node" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    return dialog;
+  };
+  // Field A's create loses its answer (it may have been written); the person closes the dialog.
+  const lost = await createFrom("Parent", "Alpha");
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  fireEvent.click(within(lost).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  // Field B creates something else, then field A's create is retried.
+  await createFrom("Sibling", "Beta");
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  await createFrom("Parent", "Alpha");
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys[1]).not.toBe(keys[0]);
+  // A's retry carries A's key: the server replays the record it may have written, so it is written once.
+  expect(keys[2]).toBe(keys[0]);
+}, 20_000);

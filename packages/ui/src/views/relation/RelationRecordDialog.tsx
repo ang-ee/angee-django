@@ -140,6 +140,7 @@ function dialogTitle(
  */
 export function RelationRecordDialog({
   dialog,
+  fieldName,
   create,
   edit,
   onClose,
@@ -147,6 +148,8 @@ export function RelationRecordDialog({
   onEdited,
 }: {
   dialog: RelationDialogState | null;
+  /** The relation field the dialog opens from: its form names its draft `relation:<field>`. */
+  fieldName?: string;
   create?: RelationCreateConfig;
   edit?: RelationEditConfig;
   onClose: () => void;
@@ -156,9 +159,10 @@ export function RelationRecordDialog({
   onEdited?: (id: string) => void;
 }): ReactElement {
   const t = useUiT();
-  // The form it opens names its draft in the relation slot of the surface hosting the field, so it
-  // never shares one with a create form of the same resource open beside it.
-  const draftScope = useDraftScope("relation");
+  // The form it opens names its draft in the field's relation slot of the surface hosting the
+  // field, so it never shares one with a create form of the same resource open beside it, nor
+  // with another relation field's to that resource.
+  const draftScope = useDraftScope(fieldName ? `relation:${fieldName}` : "relation");
   return (
     <Dialog.Root
       open={dialog !== null}

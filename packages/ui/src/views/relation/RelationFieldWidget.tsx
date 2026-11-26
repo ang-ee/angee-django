@@ -31,6 +31,8 @@ export interface RelationFieldWidgetProps {
    * explicitly.
    */
   create?: RelationCreateConfig | null;
+  /** The field it edits, which names its create form's draft (`RelationPicker`'s `fieldName`). */
+  fieldName?: string;
   searchFields?: readonly string[];
   /** Related-row field rendered as secondary picker-option text. */
   optionDescriptionField?: string;
@@ -81,6 +83,7 @@ function EditableRelationFieldWidget(
   filters,
   where,
   create,
+  fieldName,
   searchFields,
   optionDescriptionField,
   optionStatusField,
@@ -135,6 +138,7 @@ function EditableRelationFieldWidget(
       searchState={picker.searchState}
       create={forms.create}
       onCreated={refreshOptions}
+      fieldName={fieldName}
       // Edit is offered whenever the resource has editable fields — intentionally
       // UX-only, not gated on a `canEdit` flag (resource metadata exposes no
       // per-relation edit capability). The server is the authorization boundary: a denied

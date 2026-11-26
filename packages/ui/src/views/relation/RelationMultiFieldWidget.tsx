@@ -58,6 +58,8 @@ export interface RelationMultiFieldWidgetProps {
    * joins the selection.
    */
   create?: RelationCreateConfig | null;
+  /** The field it edits, which names its create form's draft (`RelationPicker`'s `fieldName`). */
+  fieldName?: string;
   "aria-label"?: string;
   controlRef?: (target: WidgetFocusTarget | null) => void;
 }
@@ -84,6 +86,7 @@ export function RelationMultiFieldWidget({
   optionGroupField,
   optionGroupOrderField,
   create,
+  fieldName,
   "aria-label": ariaLabel,
   controlRef,
 }: RelationMultiFieldWidgetProps): ReactElement {
@@ -173,6 +176,7 @@ export function RelationMultiFieldWidget({
       </div> : control}
       <RelationRecordDialog
         dialog={dialog}
+        fieldName={fieldName}
         create={forms.create}
         onClose={() => setDialog(null)}
         onCreated={created}

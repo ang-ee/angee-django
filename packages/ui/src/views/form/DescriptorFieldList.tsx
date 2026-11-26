@@ -432,6 +432,7 @@ function DescriptorRelationControl({
     relation: optionInfo,
     filters: field.filters ?? relation.filters,
     create: create ?? null,
+    fieldName: field.name,
     readOnly,
     onChange,
     onCommit,
