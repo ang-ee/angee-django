@@ -1361,6 +1361,8 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
+  The guard holds for instance saves: a collection write (a queryset `update`,
+  `bulk_update`) does not pass it.
 - **Archive and trash are different facts.** `ArchiveMixin` soft-hides a row
   from default pickers. `TrashMixin` removes it: who, when and an optional reason
   are stamped and restore re-grants nothing. The model's Zed withholds a trashed

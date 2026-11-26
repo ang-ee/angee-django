@@ -144,18 +144,7 @@ def test_who_may_change_what_on_a_handle(seats: tuple[Any, dict[str, Any]], seat
     assert Handle._base_manager.values(*FIELDS).get(pk=handle.pk) == before
 
 
-@pytest.mark.parametrize(
-    "field",
-    [
-        "platform",
-        "value",
-        pytest.param("external_id", marks=pytest.mark.xfail(
-            strict=True,
-            reason="ImmutableFieldsMixin keys a refusal by the attname less a trailing _id, so a plain field named "
-            "external_id is refused under 'external'; the fix belongs to its owner, angee.base.models.locks",
-        )),
-    ],
-)
+@pytest.mark.parametrize("field", list(CHANGES))
 def test_a_refused_write_is_keyed_to_the_field_it_refuses(seats: tuple[Any, dict[str, Any]], field: str) -> None:
     """The refusal names the field, so a form shows it beside the field it refuses."""
 

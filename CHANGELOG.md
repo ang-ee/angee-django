@@ -10,6 +10,15 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: **Changed behaviour.** A refused write of a write-once field
+  (`ImmutableFieldsMixin`) is keyed by the field's name, as model validation and
+  `form.add_error` key a field: a relation changed through its attname is refused
+  under the relation as before (`recipient` for `recipient_id`), and any other
+  field under its own name. A plain field whose name ends in `_id` was keyed by
+  that name less the suffix, which names no field, so no form showed the refusal
+  beside it: `Handle.external_id` was refused under `external` and portfolio's
+  `Update.object_id` under `object`. **Upgrade:** a consumer that matched the old
+  key for a plain `..._id` field reads the field's own name.
 - `angee.parties`: **Changed behaviour.** A handle's ingestion keys, `platform`,
   `value` and `external_id`, are written once (`Handle.immutable_fields`, through
   the foundation's `ImmutableFieldsMixin`). A message reads its addresses from its
