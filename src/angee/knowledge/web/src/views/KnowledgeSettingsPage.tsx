@@ -10,8 +10,16 @@ import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
 const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
-/** The clone dialog of one template is one draft: its key lasts from the first attempt until a vault is created. */
-const cloneScope = (context: ActionFormContext) => `knowledge.vault-from-template:${String(context.record?.id ?? "")}`;
+/** The template a clone copies: the record the action is invoked on. */
+const templateOf = (context: ActionFormContext): string | null => {
+  const template = context.record?.id;
+  return typeof template === "string" && template ? template : null;
+};
+/** The clone dialog of one template is one draft: its key lasts from the first attempt until a vault is created. Without a template there is no draft. */
+const cloneScope = (context: ActionFormContext) => {
+  const template = templateOf(context);
+  return template === null ? null : `knowledge.vault-from-template:${template}`;
+};
 
 /**
  * The knowledge admin console: a managed list of vaults whose record form opens
@@ -26,14 +34,16 @@ export function KnowledgeSettingsPage(): ReactElement {
   });
   const cloneSubmit = useCallback<NonNullable<ActionDescriptor["submit"]>>(
     async (values, context, options) => {
-      const template = context.record?.id;
-      if (typeof template !== "string" || !template || typeof values.name !== "string") {
+      // The action dialog holds the draft's key (`idempotencyScope`): every attempt until a vault is
+      // created carries it, and without a template there is neither a draft nor a clone to send.
+      const template = templateOf(context);
+      const key = context.idempotencyKey;
+      if (template === null || !key || typeof values.name !== "string") {
         return { ok: false, message: t("vault.cloneFailed") };
       }
       const name = values.name.trim();
       try {
-        // The action dialog holds the draft's key (`idempotencyScope`): every attempt until a vault is created carries it.
-        const data = await createFrom({ template, name, owned: true, idempotency_key: context.idempotencyKey }, options);
+        const data = await createFrom({ template, name, owned: true, idempotency_key: key }, options);
         return extractActionOutcome(data, "create_vault_from");
       } catch (cause) {
         if (failedWriteOutcome(cause) !== "conflict") throw cause;

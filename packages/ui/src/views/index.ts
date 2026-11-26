@@ -85,6 +85,7 @@ export {
 } from "./relation/RelationPicker";
 export {
   MutationDialog,
+  type KeyedMutationDialogProps,
   type MutationDialogParseValues,
   type MutationDialogProps,
   type MutationDialogValues,

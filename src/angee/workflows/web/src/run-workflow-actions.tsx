@@ -36,7 +36,7 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
       const schema = parseFormSpec(published.input_schema);
       // Starting one workflow on one record is one draft: every attempt until a run starts carries its key.
       const scope = `workflows.start:${workflow.id}:${chrome.resource}:${chrome.recordId}`;
-      const startWith = async (values: Record<string, unknown>, requestKey: string | undefined) => {
+      const startWith = async (values: Record<string, unknown>, requestKey: string) => {
         let outcome;
         try {
           outcome = await start(workflow.id, {
@@ -58,7 +58,9 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
       return [{ id: workflow.id, label: workflow.name,
         ...(Object.keys(schema.properties ?? {}).length ? {
           args: () => jsonSchemaActionArgs(published.input_schema, widgets),
-          submit: (values: Record<string, unknown>, context: ActionFormContext) => startWith(values, context.idempotencyKey),
+          // The dialog holds the draft's key (`idempotencyScope`); without one there is nothing to send.
+          submit: (values: Record<string, unknown>, context: ActionFormContext) => context.idempotencyKey
+            ? startWith(values, context.idempotencyKey) : { ok: false, message: t("action.startFailed") },
           idempotencyScope: () => scope,
         } : { run: async () => {
           await settle(() => keys.send(scope, (key) => startWith({}, key), (outcome) => outcome?.ok === true));

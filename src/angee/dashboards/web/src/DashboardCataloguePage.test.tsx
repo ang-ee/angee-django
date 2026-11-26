@@ -3,10 +3,10 @@
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { MutationDialogProps } from "@angee/ui";
+import type { KeyedMutationDialogProps } from "@angee/ui";
 
 const mocks = vi.hoisted(() => ({
-  dialog: null as MutationDialogProps<{ name: string }> | null,
+  dialog: null as KeyedMutationDialogProps<{ name: string }> | null,
   createPersonal: vi.fn(),
 }));
 
@@ -23,7 +23,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Page: ({ children }: { children: React.ReactNode }) => children,
   PageBody: () => null,
   PageHeader: ({ actions }: { actions: React.ReactNode }) => actions,
-  MutationDialog: (props: MutationDialogProps<{ name: string }>) => {
+  MutationDialog: (props: KeyedMutationDialogProps<{ name: string }>) => {
     mocks.dialog = props;
     return null;
   },

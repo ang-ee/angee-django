@@ -61,7 +61,7 @@ beforeEach(() => {
 
 async function submit(name = "Copy", template = "vlt_template") {
   if (!mocks.submit) throw new Error("Clone action was not registered");
-  return mocks.submit({ name }, { record: { id: template }, selectedIds: [] }, { errorNotification: false });
+  return mocks.submit({ name }, { record: { id: template }, selectedIds: [], idempotencyKey: "draft-key" }, { errorNotification: false });
 }
 
 test("the clone dialog of one template is one draft: it declares its scope, and each attempt sends the dialog's key", async () => {
@@ -81,6 +81,16 @@ test("an earlier attempt that already created the vault says so, and stays the c
   expect(refusal).toBeInstanceOf(AuthoredEnvelopeError);
   expect(refusal).toMatchObject({ message: "An earlier attempt already created a vault from this template.", code: "CREATION_KEY_CONFLICT" });
   expect(failedWriteOutcome(refusal)).toBe("conflict");
+});
+
+test("without a template there is no draft and nothing to send, nor without the dialog's key", async () => {
+  render(<KnowledgeSettingsPage />, { wrapper: AppRuntime });
+  expect(mocks.action?.idempotencyScope?.({ record: null, selectedIds: [] })).toBeNull();
+  expect(await mocks.submit!({ name: "Copy" }, { record: null, selectedIds: [] }, { errorNotification: false }))
+    .toEqual({ ok: false, message: "Could not create the vault from this template." });
+  expect(await mocks.submit!({ name: "Copy" }, { record: { id: "vlt_template" }, selectedIds: [] }, { errorNotification: false }))
+    .toEqual({ ok: false, message: "Could not create the vault from this template." });
+  expect(mocks.mutation).not.toHaveBeenCalled();
 });
 
 test("successful clones invalidate metadata-canonical model names", () => {

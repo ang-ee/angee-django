@@ -21,6 +21,7 @@ import {
 
 import { ModalsHost } from "./feedback/ModalsHost";
 import { AppRuntimeProvider } from "./runtime/runtime";
+import { createClientKey } from "./lib/client-key";
 import { InAppLinkProvider, type InAppNavigator } from "./lib/in-app-link";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -210,7 +211,9 @@ export function createMutationDialogTestDouble({
           void Promise.resolve(props.validate?.(parsed, SURFACE_RENDERS_FAILURE))
             .then(async (validation) => {
               if (validation) return;
-              const result = await submitMutationDialog(props, parsed, String(props.errorFallback ?? ""));
+              // A keyed dialog's submission gets a key, as the dialog's draft gives it one.
+              const key = props.idempotencyScope === undefined ? undefined : createClientKey(props.idempotencyScope);
+              const result = await submitMutationDialog(props, parsed, String(props.errorFallback ?? ""), key);
               if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
             });
         }}

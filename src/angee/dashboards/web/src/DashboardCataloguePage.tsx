@@ -150,7 +150,7 @@ function DashboardCatalogue({ store, registry }: {
             idempotencyScope="dashboards.create-personal"
             mutation={({ name }, options, idempotencyKey) => catalogue.createPersonal({
               name,
-              idempotencyKey: mutationDialogValueCodecs.requiredString(idempotencyKey, "idempotencyKey"),
+              idempotencyKey,
             }, options)}
             onSubmitted={(result: DashboardSaveResult) => {
               void navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });

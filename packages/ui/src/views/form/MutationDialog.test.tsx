@@ -16,6 +16,8 @@ import {
   MutationDialog,
   mutationDialogValueCodecs,
   submitMutationDialog,
+  type KeyedMutationDialogProps,
+  type MutationDialogProps,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
 import { MEMBER_ERRORS, type FormSubmitResult } from "./validation-errors";
@@ -536,6 +538,17 @@ describe("MutationDialog", () => {
     expect(sent[0]).toEqual(expect.any(String));
     expect(sent.slice(0, 3)).toEqual([sent[0], sent[0], sent[0]]);
     expect(sent[3]).not.toBe(sent[0]);
+  });
+
+  test("a keyed dialog's submission is typed with its draft's key; an unkeyed one is called with none", () => {
+    const keyed: KeyedMutationDialogProps<Record<string, unknown>> = {
+      title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues, idempotencyScope: "scope",
+      mutation: async (_values, _options, idempotencyKey) => ({ key: idempotencyKey.toUpperCase() }),
+    };
+    const unkeyed: MutationDialogProps<Record<string, unknown>> = { title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues,
+      // @ts-expect-error a submission taking a key is a keyed one: without `idempotencyScope` there is none to take.
+      mutation: async (_values: Record<string, unknown>, _options: unknown, idempotencyKey: string) => ({ key: idempotencyKey }) };
+    expect([keyed.idempotencyScope, unkeyed.idempotencyScope]).toEqual(["scope", undefined]);
   });
 
   test("a draft given up with nothing possibly written ends with its dialog: the next opening sends a new key", async () => {
