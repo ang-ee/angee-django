@@ -41,6 +41,7 @@ function recordPanelContext(recordId: string): RecordPanelContext {
     reload: vi.fn(),
     form: {} as RecordPanelContext["form"],
     focusField: vi.fn(),
+    fieldLabel: () => undefined,
   };
 }
 

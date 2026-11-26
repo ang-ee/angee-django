@@ -228,6 +228,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "retryAppQuery",
+    "source": "packages/app/src/create-app.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "safeRedirectPath",
     "source": "packages/app/src/auth/safe-redirect.ts",
     "kind": null,
@@ -4096,6 +4105,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "SURFACE_RENDERS_FAILURE",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Transport infrastructure: the one quiet-call value form surfaces hand their callers.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "SaveDiscardActions",
     "source": "packages/ui/src/views/form/SaveDiscardActions.tsx",
     "kind": "fragment",
@@ -6196,6 +6214,15 @@
     "package": "@angee/ui",
     "name": "firstDashboardSlot",
     "source": "packages/ui/src/dashboard/layout.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "formErrorsFromForm",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
@@ -8599,6 +8626,15 @@
     "source": "packages/ui/src/feedback/refine-notification.ts",
     "kind": null,
     "reason": "Provider infrastructure: adapts Toast to Refine notifications.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRefusalBannerFocus",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

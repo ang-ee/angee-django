@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from django.core.exceptions import ValidationError
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -215,8 +216,10 @@ def test_notes_and_tracked_messages_stay_out_of_the_trash(discussion: Any) -> No
     with system_context(reason="test.messaging.trash.note"):
         attachment = ThreadAttachment.objects.ensure_for_record(case.record)
         note = Message.objects.create(thread=attachment.thread, message_type="notification", direction="internal")
-    with actor_context(case.writer), pytest.raises(ValueError, match="Only comment messages can be removed"):
+    retained = pytest.raises(ValidationError, match="Only comments and received messages")
+    with actor_context(case.writer), retained as kept:
         case.record.message_trash(note)
+    assert kept.value.code == "retained"
 
 
 def test_restore_never_regrants_access_revoked_while_trashed(discussion: Any) -> None:

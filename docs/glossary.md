@@ -44,7 +44,8 @@ built on top of the framework and its reusable addons.
 selection, emits concrete models, and publishes and verifies artifacts supplied
 by capability integrations. It also owns explicit database preparation and
 readiness for the verified composition. Permission, resource and web semantics
-stay with those integrations. See [The Composer](composer.md).
+stay with those integrations. Not **Compose (a message)**. See
+[The Composer](composer.md).
 
 **Project settings** — the authored Python module selected by Django's
 `DJANGO_SETTINGS_MODULE`, with optional terse `settings.yaml` loaded through
@@ -226,6 +227,19 @@ users; agents and workflows link one service user each by composing
 [`ServiceUserMixin`](../src/angee/iam/models.py), whose sync and deactivation
 verbs their saves and delete receivers call.
 
+**Account action** — an action on a person's account (rename, deactivate, give
+or reset access, set a password, send a sign-in link), named by its Zed
+permission on `auth/user`. IAM owns the set and its shared refusals
+([`User.account_actions`](../src/angee/iam/models.py),
+`account_action_blockers`); an addon adds its own action through them, and the
+`account_actions` projection offers each action exactly where it acts.
+
+**Sign-in link** — a single-use link an administrator emails a person so they
+sign in once without a password; it expires, a newer link retires it, and it
+is never sent to a protected account. Owned by
+[`angee.iam_messaging`](../src/angee/iam_messaging/README.md); a host without
+that addon has none.
+
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,
 and triggered runs act as it; the user who enables a trigger only authorizes
@@ -355,8 +369,9 @@ integrate's shared stream engine; activity and history classify each record
 against the feed's live horizon. See [public feeds](../src/angee/posts/README.md).
 
 **Delivery settlement** — messaging's reflection of provider acceptance or refusal
-into the outbound message's status, provider identity and retry schedule. See
-[the delivery owner](../src/angee/messaging/delivery.py).
+into the outbound message's status, provider identity and retry schedule, with
+its attempts (`delivery_attempts`) and, for whoever may act on it, why it last
+failed (`delivery_error`). See [the delivery owner](../src/angee/messaging/delivery.py).
 
 **Chatter** — a record's own conversation: the thread a `ThreadAttachment` with
 the `chatter` role binds to one record, read through that record's read
@@ -378,6 +393,18 @@ a sender is read; the message's source keeps its `From` header. See
 addresses, the message's `Recipient` rows, one per handle and envelope role
 (`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**Compose (a message)** — write one outgoing message through
+`MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
+hand-off, decided for the caller by read on the message it answers and `reply` on
+its channel, or by `reply` on the channel and post on the record it is sent on.
+The console composes through the `compose_message` mutation, offers a new email
+on the channels its `sendable` filter keeps (`reply` on a channel
+`ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
+`MessageManager.recipient_limit`, as `message_recipient_limit`. A message
+messaging wrote, rather than synced, is `Message.is_locally_written`.
+Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
 **Workflow version** — an immutable published definition, including the
@@ -475,6 +502,10 @@ documents, facts and revisions against an explicit file or message target.
 that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
+Its ingestion keys (`platform`, `value`, `external_id`) are written once: only
+the handle owner's verbs change one, and history's revert restores earlier keys
+unless the restored row would be a second live handle of an address; never a
+field write.
 The Handle's controller records the **control** fact (who may act through it), while
 **PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
 member); neither fact implies the other. A **suggestion** is an asserted
@@ -484,6 +515,23 @@ preferred no-value dismisses it durably. Applied directory/person statements
 and confirmations publish to a card. Other sources remain inferences even at
 full confidence. Reads follow Party authorization, with separate Handle and
 evidence gates.
+
+**Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
+for an email address, the address lower-cased (not case-folded) with its domain
+in the one spelling the email backend sends it in (IDNA 2003); none for a value
+with no `@`, which is no address, nor on any other platform, where the value
+itself is the address. A live email handle is unique by it.
+
+**Person-matching key** — what groups the handles of probably one person
+(`Handle.normalize_value`), stored as a handle's `normalized_value`: derived from
+its value, trimmed and lower-cased on every platform, an email address's domain
+in one spelling with Gmail's dots and plus-tags dropped, a phone number in E.164
+(else its bare digits, a fallback that names no one number). It is read where a
+person is looked up or suggested and decides which spellings or aliases a person
+may merge. Which handle an address lands on is the spelling key's, except at two
+sites still open for a ruling, where it picks the handle a provider's alias lands
+on: a directory adoption's handle that found the person, and a claimant's email
+handle.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
@@ -595,7 +643,8 @@ source ([host and user precedence](frontend/appearance.md#host-and-user-preceden
 
 **Brand kit** — a deployment's brand facts, one `angee.brandkit` row per kit; once
 any exists, exactly one is the **default kit**. A theme owns structure and applies a
-kit (see the [brand kit README](../src/angee/brandkit/README.md)).
+kit, unless its options decline the host appearance source (see the
+[brand kit README](../src/angee/brandkit/README.md)).
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.

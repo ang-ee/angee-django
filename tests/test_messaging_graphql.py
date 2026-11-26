@@ -484,7 +484,6 @@ def test_message_sender_and_recipient_expose_resolved_party(db: None) -> None:
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
         messaging_models.Recipient.objects.create(
-            thread=thread,
             message=message,
             handle=handle,
             role=messaging_models.Recipient.RecipientRole.TO,
@@ -3342,7 +3341,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
         messaging_models.MessageEdge._base_manager.create(src=msg1, dst=msg2, created_by_id=owner_id)
         messaging_models.Recipient._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
         messaging_models.Recipient._base_manager.create(
-            message=msg2, thread=thread2, handle=handle, created_by_id=owner_id,
+            message=msg2, handle=handle, created_by_id=owner_id,
         )
         # Thread-rooted CASCADE children: a bare follower and a delivery notification.
         messaging_models.ThreadFollower._base_manager.create(
@@ -3373,20 +3372,23 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
 
 
 @pytest.mark.parametrize("purged", ("survivor", "copy"))
-def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, purged: str) -> None:
+def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, settings: Any, purged: str) -> None:
     """The preview and the confirmed totals count every recipient row the purge deletes.
 
     A recipient row cascades from its message and from its thread, and a thread's delete
     takes its messages too; the inventory counts messages and recipients by the message's
     channel. That is exact on two premises every writer keeps. A recipient's thread is
     its message's: ingest, a re-sync that moves a message to the thread its References
-    name, a source-thread correction, an email reply's envelope, and a merge of one
+    name, a source-thread correction, an answer ``compose`` addresses, and a merge of one
     channel's thread and message into another's, which moves no row. A message in a
     channel's thread belongs to that channel: a reply received through another account
     answering this channel's message lands in a thread of its own channel.
     """
 
-    channel = make_integration("purge-recipients", model=Channel, backend_class="email")
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    channel = make_integration(
+        "purge-recipients", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
+    )
     other = make_integration("purge-recipients-copy", model=Channel, backend_class="email", owner=channel.owner)
     parsed = messaging_models._parsed
     late = parsed("late@example.test", subject="Late", references=("parent@example.test",))
@@ -3411,12 +3413,9 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, pu
         messaging_models.Message.objects.ingest(
             [corrected], channel=channel, explicit_thread=second, expected_thread=first, historical=True,
         )
-        desk = messaging_models.Handle.objects.upsert(platform="email", value="desk@example.test")
     request.thread.with_actor(channel.owner).merge(records=[copy.thread.public_id])
     request.with_actor(channel.owner).merge(records=[copy.public_id])
-    reply = messaging_models.Message.objects.compose_reply(
-        request, body="Which team?", sender=desk, actor=channel.owner,
-    )
+    reply = messaging_models.Message.objects.compose(parent=request, text="Which team?", actor=channel.owner)
     recipients = messaging_models.Recipient._base_manager
     assert messages.get(external_id="late@example.test").thread_id == messages.get(
         external_id="parent@example.test"

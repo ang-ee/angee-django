@@ -50,7 +50,9 @@ export function queryReadsLiveChange(meta: unknown, change: LiveChange): boolean
 
 /**
  * Refetch every active authored read registered against one of the models a
- * caller's own write moved: a read that started before the write never commits,
+ * caller's own write moved: a read that started before the write never commits
+ * (except a read an enabled observer marks `staleTime: "static"`: native
+ * invalidation never refetches it, so a refetch asked of it by hand still commits),
  * and no render sees an active first read idle between its cancellation and its
  * resend, which happen in one synchronous call (a reader that waits for a first
  * answer takes an idle read for an answer that will not come).
@@ -69,10 +71,13 @@ export async function invalidateAuthoredQueries(
   // synchronously, so the invalidation below sends a new request in this same
   // call (`fetch` never joins a rejected request) and no render sees the read
   // idle in between.
+  // A refetch no enabled observer watches (its last observer left, or every observer is disabled)
+  // is cancelled too: native invalidation refetches only active reads, so that request would
+  // commit its pre-write answer and clear the invalid mark. A refetch an enabled observer watches
+  // is left to native invalidation, which replaces it silently, so whoever awaits it receives the
+  // resend's answer.
   void queryClient.cancelQueries({
-    predicate: (query) => predicate(query)
-      && query.state.data === undefined
-      && query.state.fetchStatus !== "idle",
+    predicate: (query) => predicate(query) && (query.state.data === undefined || !query.isActive()),
   });
   return queryClient.invalidateQueries({ predicate, type: "all", refetchType: "active" });
 }

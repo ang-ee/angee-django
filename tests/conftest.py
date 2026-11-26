@@ -32,6 +32,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
 from angee.iam_integrate_oidc.models import OAuthClientOidc as AbstractOAuthClientOidc
+from angee.iam_messaging.testing import models as iam_messaging_models  # noqa: F401 -- register sign-in links
 from angee.intake.models import Need as AbstractNeed
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.models import Credential as AbstractCredential

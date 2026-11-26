@@ -3,12 +3,36 @@
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.forms import modelform_factory
 from django.test.utils import CaptureQueriesContext
 
 from tests.conftest import create_user
 from tests.core_persistence import ReceiptRow
 
 pytestmark = pytest.mark.django_db
+
+REFUSAL = "This identity or receipt is immutable."
+
+
+@pytest.mark.parametrize(
+    ("attname", "key"),
+    [
+        pytest.param("recipient_id", "recipient", id="a-relation-under-its-name"),
+        pytest.param("external_id", "external_id", id="a-plain-field-named-like-an-attname-under-its-own"),
+    ],
+)
+def test_a_refusal_is_keyed_by_the_field_a_form_binds(attname, key):
+    """A relation changed through its attname is refused under the relation; a plain ``..._id`` field under itself."""
+
+    row = ReceiptRow.objects.create(identity="original")
+    setattr(row, attname, create_user("receipt-recipient").pk if attname == "recipient_id" else "another")
+    with pytest.raises(ValidationError) as caught:
+        row.save()
+    assert caught.value.message_dict == {key: [REFUSAL]}
+    form = modelform_factory(ReceiptRow, fields=("identity", "recipient", "external_id"))(data={"identity": "original"})
+    form.is_valid()
+    form.add_error(None, caught.value)  # Raises for a key that names no field of the form.
+    assert REFUSAL in form.errors[key]
 
 
 def test_direct_save_cannot_change_an_immutable_field():

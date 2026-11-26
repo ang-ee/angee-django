@@ -9,6 +9,8 @@ from graphql import GraphQLError
 from rebac import actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
+from angee.jobs.enqueue import celery_app
+from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart, ParsedRecipient
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_transcript import InboxTranscript
 from angee.messaging.testing.models import (
@@ -19,8 +21,9 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
+from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import make_integration
-from tests.messaging_campaign import grant
+from tests.messaging_campaign import grant, make_user
 from tests.test_messaging import ThreadedTicket, _ingest, _parsed
 from tests.test_messaging import channel as channel
 from tests.test_nexus import _schema
@@ -149,6 +152,60 @@ def test_email_copies_fold_into_the_oldest_and_a_reader_without_it_still_reads_t
         local = Message.objects.inbox().filter(channel=other).canonical()
         assert list(local.values_list("pk", flat=True)) == [right.pk]
         assert Message.objects.inbox().for_feed(all_copies=True).count() == 2
+
+
+def _copied(external_id, *, sender, cc, in_reply_to=""):
+    """One email as each mailbox it reached parses it: from ``sender``, to the desk, copied to ``cc``."""
+
+    return ParsedMessage(
+        external_id=external_id, platform="email", subject="Re: Quote 7", in_reply_to=in_reply_to,
+        references=(in_reply_to,) if in_reply_to else (),
+        sender=ParsedHandle(platform="email", value=sender),
+        recipients=(
+            ParsedRecipient(handle=ParsedHandle(platform="email", value="desk@example.test"), role="to"),
+            ParsedRecipient(handle=ParsedHandle(platform="email", value=cc), role="cc"),
+        ),
+        body=ParsedPart(text="Thanks, agreed."),
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_records_chatter_thread_is_never_folded_with_a_mailbox_thread(settings, monkeypatch):
+    """A copy of chatter mail in a colleague's own mailbox folds as a message; their thread stays theirs."""
+
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    desk = make_integration(
+        "fold-desk", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
+    )
+    sales = make_user("fold-sales")
+    personal = make_integration("fold-personal", model=Channel, backend_class="manual", owner=sales)
+    with system_context(reason="tests.messaging.source_copies.chatter"):
+        doc = ChatterDoc.objects.create(title="Quote 7")
+    grant(doc, "manager", desk.owner)
+    sent = Message.objects.compose(
+        channel=desk, record=doc, to=["client@example.test"], cc=["sales@example.test"], subject="Quote 7",
+        text="Here is the quote.", actor=desk.owner,
+    )
+    copy = _copied(sent.external_id, sender="desk@example.test", cc="sales@example.test")
+    reply = _copied("r1@example.test", sender="client@example.test", cc="sales@example.test",
+                    in_reply_to=sent.external_id)
+    _ingest([copy, reply], channel=personal)
+    _ingest([reply], channel=desk)
+    with system_context(reason="tests.messaging.source_copies.chatter"):
+        chatter = doc.message_thread(create=False)
+        for external_id in (sent.external_id, "r1@example.test"):
+            mine, desks = (
+                Message._base_manager.get(channel=channel_, external_id__contains=external_id.strip("<>"))
+                for channel_ in (personal, desk)
+            )
+            assert desks.thread.member_threads().filter(pk=chatter.pk).exists()
+            # One message still: the newer occurrence folds into the oldest.
+            assert {mine.merged_into_id, desks.merged_into_id} == {None, min(mine.pk, desks.pk)}
+            own = Thread._base_manager.get(pk=mine.thread_id)
+            assert (own.merged_into_id, own.is_record_attached()) == (None, False)
+    with actor_context(sales):
+        assert own.pk in set(Thread.objects.with_actor(sales).inbox().values_list("pk", flat=True))
 
 
 @pytest.mark.django_db(transaction=True)

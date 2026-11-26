@@ -48,7 +48,7 @@ def test_message_only_reader_gets_null_for_every_private_to_one_relation_except_
         parent = Message.objects.create(thread=thread, channel=channel)
         sender = Handle.objects.create(platform="email", value="hidden@example.com", created_by=owner)
         message = Message.objects.create(thread=thread, channel=channel, parent=parent, sender=sender)
-        Recipient.objects.create(message=message, thread=thread, handle=sender)
+        Recipient.objects.create(message=message, handle=sender)
         hidden_parent = Part.objects.create(message=parent, position=0)
         _storage_drive(tmp_path, owner=owner)
         private_file, _created = StorageFile.objects.ingest_bytes(b"Private attachment", filename="private.txt")
