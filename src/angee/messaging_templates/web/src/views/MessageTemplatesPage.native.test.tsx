@@ -699,14 +699,15 @@ function editsKey(patch: unknown): string {
 
 /**
  * Replace the whole text of a code editor the form labels, as a person does: select all, then paste. The paste
- * lands once focus has left the editor, which then writes no selection into the page while it updates: the test
- * document announces a selection change at once, inside the editor's own update, where a browser waits.
+ * lands once focus has left the editor and the page holds no selection: the test document announces a selection
+ * change at once, inside the editor's own update, where a browser waits, and the editor would log a nested update.
  */
 function pasteInto(editor: HTMLElement, text: string): void {
   act(() => editor.focus());
   const mac = /Mac/.test(navigator.platform);
   fireEvent.keyDown(editor, { key: "a", code: "KeyA", metaKey: mac, ctrlKey: !mac });
   act(() => editor.blur());
+  act(() => document.getSelection()?.removeAllRanges());
   fireEvent.paste(editor, { clipboardData: { getData: (type: string) => (type === "text/plain" ? text : "") } });
 }
 
