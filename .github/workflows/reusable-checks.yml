@@ -34,8 +34,8 @@ on:
       pr-checks-enabled:
         description: >-
           Run the lanes a pull request's own run already ran on the tree a merge commit gives main
-          (the SQLite shards, the packages and the composed stack). A caller passes false on a push
-          to main, where only the PostgreSQL selection is new work.
+          (the packages and the composed stack). A caller passes false on a push to main, where the
+          SQLite suite and the PostgreSQL selection, which a pull request runs in part, run whole.
         required: false
         type: boolean
         default: true
@@ -144,9 +144,8 @@ jobs:
   # (scripts/changed_path_selection.py), and do not start when those reach no
   # Python test; its PostgreSQL groups run the planner gate and the PostgreSQL
   # selection's entries those paths reach (scripts/postgres_selection.py), in as
-  # many groups as their stored time needs. Every other event runs the whole
-  # PostgreSQL selection in six groups, and the whole suite unless the caller turned
-  # the pull-request lanes off (pr-checks-enabled, false on a push to main).
+  # many groups as their stored time needs. Every other event runs the whole suite
+  # and the whole PostgreSQL selection in six groups.
   select:
     if: ${{ inputs.uv-enabled }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
@@ -169,7 +168,6 @@ jobs:
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
-          PR_CHECKS: ${{ inputs.pr-checks-enabled }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             # A moved file as its old path too: a removed module selects the whole suite.
@@ -179,10 +177,7 @@ jobs:
             reached=
             postgres=(scripts/postgres_selection.py --all)
           fi
-          if [ "$PR_CHECKS" != true ]; then
-            sqlite=false
-            echo "SQLite: not run, as pr-checks-enabled is false"
-          elif [ "$EVENT" = pull_request ] && [ -z "$reached" ]; then
+          if [ "$EVENT" = pull_request ] && [ -z "$reached" ]; then
             sqlite=false
             echo "SQLite: not run, as the changed paths reach no Python test"
           else
@@ -335,8 +330,8 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.select.result }}" = success
-          # The shards are skipped where select turned them off: the caller turned the
-          # pull-request lanes off, or the changed paths reach no Python test.
+          # The shards are skipped where select turned them off: the changed paths reach
+          # no Python test.
           test "${{ needs.uv-shard.result }}" = success || {
             test "${{ needs.select.outputs.sqlite }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
