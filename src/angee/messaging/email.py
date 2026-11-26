@@ -83,7 +83,7 @@ def _valid_sender(value: str) -> tuple[str, str]:
     The one sender rule: ``value`` is one address as written, which the handle
     owner lands (``MessageManager.clean_recipient``, the check every address
     ``compose`` lands takes), and which the transport can carry
-    (:func:`carries_address`). A sender accepted here is never refused, nor read
+    (:func:`require_carried`). A sender accepted here is never refused, nor read
     as another address, once a message is being written or delivered. It reads nothing.
     """
 
@@ -94,11 +94,7 @@ def _valid_sender(value: str) -> tuple[str, str]:
             "Configure a valid sender address for this email channel (its from_email, else DEFAULT_FROM_EMAIL).",
             code="invalid",
         )}) from error
-    if not carries_address(address):
-        raise ValidationError({"channel": ValidationError(
-            "This mail transport cannot carry a sender address whose part before the @ is outside ASCII.",
-            code="cannot_carry",
-        )})
+    require_carried(address, key="channel")
     return name, address
 
 
@@ -386,13 +382,26 @@ def carries_address(address: str) -> bool:
 
     Its part before the ``@`` must be ASCII: no transport here speaks SMTPUTF8.
     An internationalised domain is carried, written in its ASCII (IDNA) form
-    (:func:`_mailbox`). The one rule for both the mailbox writer, which fails a
-    delivery it cannot write, and the sender rule, which refuses such a sender
-    before any mail is written (:func:`_valid_sender`).
+    (:func:`_mailbox`). :func:`require_carried` refuses what it does not carry.
     """
 
     local, _at, _domain = address.rpartition("@")
     return local.isascii()
+
+
+def require_carried(address: str, *, key: str) -> None:
+    """Refuse ``address`` under ``key``, code ``cannot_carry``, unless :func:`carries_address` holds for it.
+
+    The one refusal for every address messaging writes for the transport: a
+    sender before any mail is written (under ``channel``), a recipient of system
+    mail (under its role), and a mailbox the delivery writes, whose failure says it.
+    """
+
+    if not carries_address(address):
+        raise ValidationError({key: ValidationError(
+            "This mail transport cannot carry %(address)s: its part before the @ is outside ASCII.",
+            code="cannot_carry", params={"address": address},
+        )})
 
 
 class SystemMailer(BaseEmailBackend):
@@ -504,11 +513,11 @@ def _mailbox(name: str, address: str) -> str:
     """
 
     local, at, domain = address.rpartition("@")
-    if not carries_address(address):
-        raise IntegrationError(
-            f"{address} cannot be delivered: this mail transport cannot carry an address whose part before "
-            "the @ is outside ASCII. Send to another address of this contact.",
-        )
+    try:
+        require_carried(address, key="address")
+    except ValidationError as refused:
+        # A delivery fails with the refusal's reason; it is never a form error.
+        raise IntegrationError(f"{' '.join(refused.messages)} Send to another address of this contact.") from refused
     if at and not domain.isascii():
         address = f"{local}@{punycode(domain)}"
     return formataddr((header_text(name), address))

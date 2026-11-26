@@ -104,7 +104,7 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import carries_address, header_text
+from angee.messaging.email import header_text, require_carried
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -3258,7 +3258,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``ValueError``); compose's checks of the arguments (more recipients than
         ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
         ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
-        carry (``carries_address``), under its role with code ``cannot_carry``,
+        carry (``require_carried``), under its role with code ``cannot_carry``,
         so a mail that could never leave is never recorded as sent; system mail not configured,
         from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
         ``channel``), none of which writes a permission audit row; then, after
@@ -3275,11 +3275,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
         for addressee in outgoing.recipients:
-            if not carries_address(addressee.address):
-                raise ValidationError({addressee.role: ValidationError(
-                    "%(address)s cannot be delivered: this mail transport cannot carry an address whose part before "
-                    "the @ is outside ASCII.", code="cannot_carry", params={"address": addressee.address},
-                )})
+            require_carried(addressee.address, key=addressee.role)
         channel_model = apps.get_model("messaging", "Channel")
         system_backend = cast("type[AnymailEmailChannelBackend]",
                               channel_model.backend_class.field.resolve_class(SYSTEM_CHANNEL_BACKEND))
