@@ -325,6 +325,79 @@ def test_an_answer_to_a_sender_named_with_an_encoded_word_is_delivered_to_that_s
     assert mail.mailers["smtp"].prep_address(str(to)) == stored[1]
 
 
+def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, settings: Any) -> None:
+    """Typed or taken from an inbound sender, the address is stored as written and sent with its domain in IDNA form."""
+
+    settings.MAILERS = MAILERS
+    raw = (
+        "From: Ada <ada@exämple.test>\r\nTo: desk@example.test\r\nMessage-ID: <idn@example.test>\r\n"
+        "Subject: Hello\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.idn"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+    typed = Message.objects.compose(
+        channel=desk, to=["Ada <ada@exämple.test>"], text="Hi.", actor=desk.owner, queued=True,
+    )
+    answer = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner, queued=True)
+    for message in (typed, answer):
+        with system_context(reason="tests.messaging.compose.idn"):
+            assert Recipient._base_manager.get(message=message).handle.value == "ada@exämple.test"
+        (to,) = _delivered(message)["To"].addresses
+        assert (to.display_name, to.addr_spec) == ("Ada", "ada@xn--exmple-cua.test")
+        assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
+
+
+def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_so(desk: Any, settings: Any) -> None:
+    """Admitted, as inbound mail stores such senders, and refused at delivery with the reason a person can act on."""
+
+    settings.MAILERS = MAILERS
+    typed = Message.objects.compose(channel=desk, to=["jörg@example.test"], text="Hi.", actor=desk.owner, queued=True)
+    answer = Message.objects.compose(
+        parent=_receive(desk, "utf8-local", sender="jörg@example.test"), text="Answer.", actor=desk.owner, queued=True,
+    )
+    for message in (typed, answer):
+        assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["status"] == "failed"
+        with system_context(reason="tests.messaging.compose.utf8_local"):
+            message.refresh_from_db()
+            assert message.local_metadata["delivery_error"] == (
+                "jörg@example.test cannot be delivered: this mail transport cannot carry an address whose part "
+                "before the @ is outside ASCII. Send to another address of this contact."
+            )
+    assert not mail.outbox
+
+
+def test_a_mail_sent_from_a_records_chatter_is_answered_and_its_answer_answered_by_email(
+    desk: Any, settings: Any,
+) -> None:
+    """Send, receive and reply: the customer's answer lands on the chatter as an email, and is answered as one."""
+
+    settings.MAILERS = MAILERS
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.round_trip"):
+        doc = ChatterDoc.objects.create(title="Invoice 42")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(
+        channel=desk, record=doc, to=["Client <client@example.test>"], subject="Invoice 42",
+        text="Please find the invoice attached.", actor=owner, queued=True,
+    )
+    wire = _delivered(sent)
+    raw = (
+        f"From: Client <client@example.test>\r\nTo: {wire['From']}\r\nMessage-ID: <paid@example.test>\r\n"
+        f"In-Reply-To: {wire['Message-ID']}\r\nReferences: {wire['Message-ID']}\r\nSubject: Re: Invoice 42\r\n"
+        "\r\nThanks, paid.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.round_trip"):
+        (received,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        chatter = doc.message_thread(create=False).pk
+    assert (received.message_type, received.thread_id, received.parent_id) == ("email", chatter, sent.pk)
+    answer = Message.objects.compose(parent=received, text="Receipt attached.", actor=owner, queued=True)
+    assert (answer.message_type, answer.thread_id) == ("email", chatter)
+    out = _delivered(answer)
+    assert ([address.addr_spec for address in out["To"].addresses], out["In-Reply-To"]) == (
+        ["client@example.test"], "<paid@example.test>",
+    )
+
+
 @pytest.mark.parametrize(
     ("values", "key", "code"),
     [

@@ -26,7 +26,11 @@ live in code docstrings.
     header would not carry as read (a NUL byte, which failed the write on
     PostgreSQL after it began, a control character, or an encoded-word opener,
     which a mail library decodes into another address or name), is refused,
-    never re-read; a caller
+    never re-read. **Known limit:** `compose` lands every address in lower
+    case, as inbound mail does, and finds its handle by that exact value, so a
+    contact another writer stored with a capital is a handle row of its own,
+    grouped with the lower-case one by the handle owner's comparison key
+    wherever a person is looked up; ending that split is the handle owner's. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
     (default 50, the strictest common provider's per-message limit; each new
@@ -50,12 +54,18 @@ live in code docstrings.
     name of the channel permission to send, which `require_reply` and `compose`
     decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
-    fields it only fills while blank, and `Handle.email_value` is the one form an
+    fields it only fills while blank (a fill locks and reads the row again, so
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
     email address is stored in on a handle. `PartManager.attach_files` attaches
     several files under one message lock. `HandleManager.find_identities` (and so
     `find_identity`, `upsert` and every compose lookup) names the platform in each
     arm of its one statement, so the `(platform, value)` key's index serves it; it
     was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Changed.** An inbound email that its own threading headers place on a
+    record's chatter (the customer's answer to a mail sent from the record) is
+    ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
+    answers it by email; before, the answer was refused for want of a sender.
+    Like every email it is a retained record: a moderator no longer trashes it.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
@@ -83,8 +93,15 @@ live in code docstrings.
     stored, sent and read back are one string (`angee.messaging.email.header_text`,
     the one rule for text a mail header carries, which every display name the
     email backend writes also takes, so a sender name inbound mail stored with a
-    literal encoded word no longer makes an answer to that sender fail); a typed line
-    break is still refused. A channel's own sender handle is landed with no
+    literal encoded word no longer makes an answer to that sender fail); a typed
+    line break is still refused. An address with an internationalised domain,
+    typed or taken from inbound mail, is now delivered: the backend writes its
+    domain in ASCII (IDNA) form and the stored address keeps what was typed.
+    **Known limit:** an address whose local part is outside ASCII is still
+    admitted and written, and its delivery fails, as no transport here speaks
+    SMTPUTF8; the stored reason names the address and says so, where it said
+    "The email could not be rendered.". A rendering failure the backend states
+    itself (an attachment that is unavailable) keeps its own reason too. A channel's own sender handle is landed with no
     creator, under a non-user attribution (`messaging/system:outgoing`): the
     first person to compose on a channel no longer holds read, write and delete
     on it, so cannot rename, re-address or delete the desk's sender. A recipient

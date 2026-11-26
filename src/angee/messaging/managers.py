@@ -4369,9 +4369,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
         The functional :class:`~angee.messaging.models.Message.MessageKind` is decided
         here, from the structural facts, never by the producer: content in a
-        record-attached thread or ``PUBLIC_THREAD`` is a ``COMMENT``, a message whose
-        source names its conversation (``ParsedThread`` or ``explicit_thread``) is
-        ``CHAT``, and everything else is ``EMAIL``. The same act keeps its kind across
+        ``PUBLIC_THREAD`` is a ``COMMENT``, and so is content in a record-attached
+        thread except an email its own threading headers placed there (an answer to
+        a mail sent from the record's chatter), which stays an ``EMAIL`` and is
+        answered by email; a message whose source names its conversation
+        (``ParsedThread`` or ``explicit_thread``) is ``CHAT``, and everything else is
+        ``EMAIL``. The same act keeps its kind across
         backends. ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
@@ -4596,6 +4599,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
+        # An email whose own threading headers placed it: an answer to a mail sent
+        # from a record's chatter is still an email, which is answered by email.
+        threaded_email = (
+            parsed.platform == handle_model.Platform.EMAIL and parsed.thread is None and explicit_thread is None
+        )
         defaults = {
             "thread_id": prior.thread_id if expected_thread is not None else thread.pk if thread is not None else None,
             "channel_id": channel.pk if channel is not None else None,
@@ -4608,7 +4616,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             "message_type": (
                 self.model.MessageKind.COMMENT
                 if thread is not None and (
-                    thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
+                    thread.modality == thread_model.Modality.PUBLIC_THREAD
+                    or (thread.is_record_attached() and not threaded_email)
                 )
                 else self.model.MessageKind.CHAT
                 if parsed.thread is not None or explicit_thread is not None

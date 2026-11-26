@@ -65,9 +65,17 @@ would read as another address or as several, or whose name or address a mail
 header would not carry as read (a NUL byte, a control character, an
 encoded-word opener: [`header_text`](email.py), the rule every subject and
 display name the email backend writes takes), is refused (`invalid`) under its
-role, never re-read. A name inbound mail stored with a literal encoded word is
+role, never re-read. `compose` lands every address in lower case, as inbound
+mail does, and finds its handle by that exact value: a contact another writer
+stored with a capital is a handle row of its own, grouped with the lower-case
+one by the handle owner's comparison key wherever a person is looked up; ending
+that split is the handle owner's. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
-still reaches that sender. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
+still reaches that sender. An address with an internationalised domain is
+stored as typed and written on the wire with its domain in ASCII (IDNA) form;
+one whose local part is outside ASCII is admitted but cannot be delivered, as
+no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
+naming the address. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
 addresses across `to`, `cc`
 and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
@@ -82,7 +90,9 @@ the parent's as `In-Reply-To` and `References`, so an answer arriving on the
 channel it was sent from threads back onto its conversation. A message a person
 starts opens a thread of its own; inbound mail joins it only through those
 threading headers, never by its subject, which groups inbound mail with inbound
-mail alone ([`ThreadManager.resolve`](managers.py)).
+mail alone ([`ThreadManager.resolve`](managers.py)). An answer to a mail sent
+from a record's chatter lands on that chatter as an email, not a comment, so it
+is answered by email in turn.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
