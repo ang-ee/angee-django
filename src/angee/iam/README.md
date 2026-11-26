@@ -66,7 +66,11 @@ them, and an addon contributes its own by extending it and
 `User.account_action_blockers` through `super()`, running its action under
 `User.lock_for_account_action`. Whatever its hook returns, the action first
 meets IAM's person-kind and protected-account blockers
-(`account_action_refusals`), which no override drops. It adds its `iam.User#actions-menu` child
+(`account_action_refusals`), which no override of that hook drops.
+`account_action_blockers` is the one extension point: `account_action_error`,
+`account_action_annotations`, `lock_for_account_action` and `account_actions_for`
+are IAM's own, and a donor that overrode one would remove protection unreported.
+The addon adds its `iam.User#actions-menu` child
 (`AccountActionBar`, `offersAccountAction`), as
 [`iam_messaging`](../iam_messaging/README.md)'s Send sign-in link does. Its
 permission unions into `active_account_granted` or `nonstaff_account_granted`

@@ -897,6 +897,9 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Batch every account action's permission and eligibility for one actor's rows.
 
         Keys are the actions :meth:`account_actions` names. Without an actor nothing is allowed.
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
         """
 
         if actor is None:
@@ -913,7 +916,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         return annotations
 
     def account_actions_for(self, actor: Any) -> list[str]:
-        """Return the account actions ``actor`` may run on this row, in :meth:`account_actions` order."""
+        """Return the account actions ``actor`` may run on this row, in :meth:`account_actions` order.
+
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
+        """
 
         if actor is None:
             return []
@@ -940,7 +948,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         )
 
     def account_action_error(self, action: str, actor: Any) -> str | None:
-        """Return the first refusal of ``action`` on this stored row for ``actor``, or None."""
+        """Return the first refusal of ``action`` on this stored row for ``actor``, or None.
+
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
+        """
 
         users = type(self).objects
         rows = users.system_context(reason="iam.account.eligibility").filter(pk=self.pk)
@@ -966,6 +979,10 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         locking. System callers bypass the permission by the REBAC library's
         contract but still meet eligibility; protection then excludes staff,
         superusers and elevated accounts only.
+
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
         """
 
         actor, bypass = self.effective_actor(strict=True)
