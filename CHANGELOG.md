@@ -12,17 +12,22 @@ live in code docstrings.
 
 - `angee.base`: **Changed behaviour.** A `DATABASE_URL` whose libpq `options`
   carry other server settings now connects with JIT off too:
-  `angee.base.conf.disable_jit` appends `-c jit=off` to those options, where
+  `angee.base.conf.disable_jit` puts `-c jit=off` before those options, where
   the URL's options used to replace it and leave JIT at the server's default.
-  For example, `-c statement_timeout=5000` becomes
-  `-c statement_timeout=5000 -c jit=off`. A URL that sets `jit` itself
-  (`-c jit=on`, `-cjit=on`, `--jit=on`) keeps it, and a URL with no options
-  still connects with `-c jit=off`. The test settings compose the same rule, so
-  the PostgreSQL CI lane's sessions now run with JIT off, as deployed ones do. A
-  direct client such as psql or `dbshell` still gets the server's default; a
-  diagnostic runs `SET jit = off` first to match. **Upgrade:** nothing, unless
-  a deployment relied on URL options to leave JIT on; it now adds `-c jit=on`
-  to them.
+  For example, `-c lock_timeout=1234` becomes `-c jit=off -c lock_timeout=1234`.
+  PostgreSQL applies the last setting, so a `jit` the URL sets itself still
+  wins, and a URL with no options still connects with `-c jit=off`. PostGIS URLs
+  (`postgis://`, `prometheus_postgis://`) now get the JIT setting and
+  `ANGEE_DB_POOL` too: one set of the PostgreSQL engines django-environ selects
+  replaces two `"postgresql" in ENGINE` checks. The test settings compose the
+  same rule, so the PostgreSQL CI lane's sessions now run with JIT off, as
+  deployed ones do. A hand-written `DATABASES` entry opts in by calling
+  `disable_jit`. `PGOPTIONS` stays ignored on Django connections, because they
+  always pass `options`. A direct client such as psql or `dbshell` still gets
+  the server's default; a diagnostic runs `SET jit = off` first, or
+  `PGOPTIONS='-c jit=off' manage.py dbshell`. **Upgrade:** nothing, unless a
+  deployment relied on URL options to leave JIT on; it now adds `-c jit=on` to
+  them. A PostGIS deployment with `ANGEE_DB_POOL` set now gets the pool.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the

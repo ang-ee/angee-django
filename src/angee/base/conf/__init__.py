@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import MutableMapping
 from copy import deepcopy
 from types import ModuleType
@@ -81,24 +80,32 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         _start_error_reporting(namespace, env)
 
 
-# A server switch PostgreSQL reads from libpq options: `-c jit=on`, `-cjit=on`, `--jit=on`.
-_JIT_SWITCH = re.compile(r"(?:^|\s)(?:-c\s*|--)jit=", re.IGNORECASE)
+# The PostgreSQL engines django-environ's URL schemes select. Naming them keeps the
+# backends (PostGIS imports GDAL) unloaded at settings time; a test holds this set to
+# django-environ's own scheme mapping.
+_POSTGRESQL_ENGINES = frozenset({
+    "django.db.backends.postgresql",
+    "django.contrib.gis.db.backends.postgis",
+    "django_prometheus.db.backends.postgresql",
+    "django_prometheus.db.backends.postgis",
+})
 
 
 def disable_jit(database: MutableMapping[str, Any]) -> None:
     """Run a PostgreSQL database's Django sessions with JIT off.
 
     On permission-scoped reads JIT compiles thousands of functions per
-    statement for no plan change. The libpq ``options`` the configuration
-    already carries are kept, and a ``jit`` they set (``-c jit=…`` or
-    ``--jit=…``) wins. Other engines are left unchanged.
+    statement for no plan change. ``configure`` applies this to the database
+    ``DATABASE_URL`` selects; a hand-written ``DATABASES`` entry opts in by
+    calling it. ``-c jit=off`` goes before the libpq ``options`` the entry
+    already carries, so a ``jit`` set in them wins: PostgreSQL applies the
+    last setting. Other engines are left unchanged.
     """
-    if "postgresql" not in database.get("ENGINE", ""):
+    if database.get("ENGINE") not in _POSTGRESQL_ENGINES:
         return
     options = database.setdefault("OPTIONS", {})
-    libpq = options.get("options", "")
-    if not _JIT_SWITCH.search(libpq):
-        options["options"] = f"{libpq} -c jit=off".lstrip()
+    carried = options.get("options")
+    options["options"] = f"-c jit=off {carried}" if carried else "-c jit=off"
 
 
 def _deployment_urls(namespace: MutableMapping[str, Any], env: environ.Env) -> None:
@@ -106,7 +113,7 @@ def _deployment_urls(namespace: MutableMapping[str, Any], env: environ.Env) -> N
     if "DATABASE_URL" in os.environ:
         database = env.db()
         disable_jit(database)
-        if "postgresql" in database.get("ENGINE", ""):
+        if database.get("ENGINE") in _POSTGRESQL_ENGINES:
             options = database.setdefault("OPTIONS", {})
             if env.bool("ANGEE_DB_POOL", default=environ.Env.parse_value(namespace.get("ANGEE_DB_POOL", False), bool)):
                 if database.get("CONN_MAX_AGE"):

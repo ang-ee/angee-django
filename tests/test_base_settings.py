@@ -83,14 +83,19 @@ assert namespace['CSRF_TRUSTED_ORIGINS'] == []
 
 
 def test_postgresql_sessions_run_without_jit_unless_the_url_sets_it(tmp_path: Path) -> None:
+    # PostgreSQL applies the last setting it is given, so a URL's own options follow
+    # `-c jit=off` untouched: an explicit `jit` wins, and any other setting (one whose
+    # name holds "jit", a value ending in a backslash) leaves JIT off.
     _probe(_SEAM + r'''
 url = 'postgres://user:pass@localhost:5432/example'
 cases = {
     url: '-c jit=off',
-    url + '?options=-c%20statement_timeout%3D5000': '-c statement_timeout=5000 -c jit=off',
-    url + '?options=-c%20jit%3Don': '-c jit=on',
-    url + '?options=-c%20statement_timeout%3D5000%20-cJIT%3Don': '-c statement_timeout=5000 -cJIT=on',
-    url + '?options=--jit%3Don': '--jit=on',
+    url + '?options=-c%20lock_timeout%3D1234': '-c jit=off -c lock_timeout=1234',
+    url + '?options=-c%20jit%3Don': '-c jit=off -c jit=on',
+    url + '?options=--jit%3Don': '-c jit=off --jit=on',
+    url + '?options=-c%20jit_above_cost%3D100000': '-c jit=off -c jit_above_cost=100000',
+    url + '?options=-c%20application_name%3Dfoo%5C': '-c jit=off -c application_name=foo\\',
+    'postgis://user:pass@localhost:5432/example': '-c jit=off',
 }
 for database_url, expected in cases.items():
     os.environ['DATABASE_URL'] = database_url
@@ -102,6 +107,14 @@ namespace = {'__name__':'settings', '__file__':str(root/'settings.py')}
 configure(namespace)
 assert 'OPTIONS' not in namespace['DATABASES']['default'], namespace['DATABASES']
 ''', tmp_path)
+
+
+def test_postgresql_engines_are_the_ones_django_environ_selects_for_its_postgresql_schemes() -> None:
+    import environ
+
+    from angee.base.conf import _POSTGRESQL_ENGINES
+
+    assert _POSTGRESQL_ENGINES == {environ.Env.DB_SCHEMES[scheme] for scheme in environ.Env.POSTGRES_FAMILY}
 
 
 def test_explicit_databases_and_caches_win_over_urls(tmp_path: Path) -> None:
