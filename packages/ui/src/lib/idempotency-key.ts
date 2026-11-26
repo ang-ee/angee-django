@@ -58,7 +58,7 @@ const SETTLED_DRAFTS = 100;
  * by its provider: a second app on the page has its own, and a change of signed-in person forgets
  * every draft. In memory only, so "sending again writes once" holds from this page.
  */
-export class IdempotencyKeyStore {
+export class IdempotencyKeyStore implements IdempotencyKeys {
   private actor: string | null = null;
   private readonly drafts = new Map<string, Draft>();
   private readonly listeners = new Map<string, Set<() => void>>();
@@ -90,8 +90,24 @@ export class IdempotencyKeyStore {
     };
   }
 
+  async send<T>(scope: string, fire: (key: string) => Promise<T>, outcome: (answer: T) => FailedWriteOutcome | null = () => null): Promise<T> {
+    const draft = this.draft(scope);
+    draft.inFlight += 1;
+    let answer: T;
+    try {
+      answer = await fire(draft.key);
+    } catch (error) {
+      draft.inFlight -= 1;
+      this.settle(scope, draft, failedWriteOutcome(error));
+      throw error;
+    }
+    draft.inFlight -= 1;
+    this.settle(scope, draft, outcome(answer));
+    return answer;
+  }
+
   /** The draft `scope` names, minted when it has none or when its key is spent on a conflict. */
-  draft(scope: string): Draft {
+  private draft(scope: string): Draft {
     const held = this.drafts.get(scope);
     if (held && held.state?.outcome !== "conflict") return held;
     if (held) this.drafts.delete(scope);
@@ -103,7 +119,7 @@ export class IdempotencyKeyStore {
   }
 
   /** Keep `draft` with `outcome`, or end it on null; a draft replaced meanwhile is left alone. */
-  settle(scope: string, draft: Draft, outcome: FailedWriteOutcome | null): void {
+  private settle(scope: string, draft: Draft, outcome: FailedWriteOutcome | null): void {
     if (this.drafts.get(scope) !== draft) return;
     if (outcome === null) this.drafts.delete(scope);
     else draft.state = { outcome, uncertain: Boolean(draft.state?.uncertain) || outcome === "unconfirmed" };
@@ -181,22 +197,7 @@ function requireStore(store: IdempotencyKeyStore | null): IdempotencyKeyStore {
 export function useIdempotencyKeys(): IdempotencyKeys {
   const held = React.useContext(IdempotencyKeyStoreContext);
   return React.useMemo<IdempotencyKeys>(() => ({
-    send: async (scope, fire, outcome = () => null) => {
-      const store = requireStore(held);
-      const draft = store.draft(scope);
-      draft.inFlight += 1;
-      let answer;
-      try {
-        answer = await fire(draft.key);
-      } catch (error) {
-        draft.inFlight -= 1;
-        store.settle(scope, draft, failedWriteOutcome(error));
-        throw error;
-      }
-      draft.inFlight -= 1;
-      store.settle(scope, draft, outcome(answer));
-      return answer;
-    },
+    send: async (scope, fire, outcome) => requireStore(held).send(scope, fire, outcome),
     discard: (scope) => requireStore(held).discard(scope),
   }), [held]);
 }

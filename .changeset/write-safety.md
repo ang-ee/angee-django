@@ -142,9 +142,10 @@ Upgrade:
   `createUiTestProviders` renders under one when given `router: true` (or
   `{ initialEntries }`, kept in `routers`): a component test that opens a real
   dialog passes `router`.
-- `createMutationDialogTestDouble` sends a keyed dialog's submission one key
-  per draft, kept through refusals until an accepted answer or a spent key, as
-  the dialog does; it minted one per submit.
+- `createMutationDialogTestDouble` sends a keyed dialog's submission its
+  draft's key through the dialog's own key owner, one per double: kept through
+  refusals and lost answers until an accepted answer or a spent key; it minted
+  one per submit.
 - A keyed `MutationDialog` submission reads its third argument as a `string`;
   one that asserted it drops the assertion, and one that called `restart`
   after a conflict drops the call: a conflict, thrown or returned with its
