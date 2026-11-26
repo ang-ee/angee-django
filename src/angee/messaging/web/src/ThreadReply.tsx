@@ -27,6 +27,8 @@ import { StreamComposer } from "./StreamComposer";
 const BOX_RENDERS_FAILURE = { errorNotification: false } as const;
 
 export interface ThreadReplyProps {
+  /** The box's id, which the Reply that opened it controls. */
+  id: string;
   /** The conversation the box writes in: its draft (`replyScope`) whichever of its emails it answers. */
   threadId: string;
   /** The email answered; the answer goes on its thread, to its Reply-To, from its channel. */
@@ -50,7 +52,7 @@ export interface ThreadReplyProps {
  * have been sent in the box's live note, a refusal in a toast, an unsent request by the
  * connection boundary alone. Under a preview the box is read-only and sends nothing.
  */
-export function ThreadReply({ threadId, parent, leaves, onSent, onShowLatest, onClose }: ThreadReplyProps): React.ReactElement {
+export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest, onClose }: ThreadReplyProps): React.ReactElement {
   const t = useMessagingT();
   const uiT = useUiT();
   const toast = useToast();
@@ -127,7 +129,7 @@ export function ThreadReply({ threadId, parent, leaves, onSent, onShowLatest, on
     : state?.outcome === "conflict" ? t("compose.sentEarlier")
       : mayAlreadyBeSent(state) ? t("compose.replyMayAlreadyBeSent") : null;
   return (
-    <section aria-label={t("compose.replyBox", { author })} className="border-t border-border-subtle p-3">
+    <section id={id} aria-label={t("compose.replyBox", { author })} className="border-t border-border-subtle p-3">
       <StreamComposer
         value={text}
         onChange={setText}

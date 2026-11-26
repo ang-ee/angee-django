@@ -134,6 +134,8 @@ export function ThreadTranscript({
   const replying = reply && target?.threadId === threadId ? target.parent : null;
   // Raised after a send: the body shows its last row (an anchored transcript returns to the latest instead).
   const [revealLatest, setRevealLatest] = React.useState(0);
+  // The box each Reply opens and controls.
+  const replyBoxId = React.useId();
   // Where focus goes once the box closes: a row's Reply, else the list, once the rows of the
   // window it asks for have rendered (an anchored send returns to the latest, a new set of rows).
   const [focusAfter, setFocusAfter] = React.useState<PendingFocus | null>(null);
@@ -178,6 +180,7 @@ export function ThreadTranscript({
         reply={reply}
         onReply={(parent) => setTarget({ threadId, parent })}
         replyingTo={replying?.id}
+        replyBoxId={replyBoxId}
         revealLatest={revealLatest}
         focusAfter={focusAfter}
         onFocused={clearFocus}
@@ -186,6 +189,7 @@ export function ThreadTranscript({
       {reply && replying ? (
         <ThreadReply
           key={threadId}
+          id={replyBoxId}
           threadId={threadId}
           parent={replying}
           leaves={reply.leaves}
@@ -220,6 +224,8 @@ interface TranscriptBodyProps extends ThreadTranscriptProps {
   onReply: (parent: ThreadTranscriptRow) => void;
   /** The email the reply box answers now, if any. */
   replyingTo?: string;
+  /** The reply box's id, which each Reply controls. */
+  replyBoxId: string;
   /** Show the last row when it rises. */
   revealLatest: number;
 }
@@ -238,6 +244,7 @@ function TranscriptBody({
   reply,
   onReply,
   replyingTo,
+  replyBoxId,
   revealLatest,
   focusAfter,
   onFocused,
@@ -407,7 +414,7 @@ function TranscriptBody({
                     status={status}
                     reply={reply && message.message_type === "EMAIL" && message.channel ? {
                       channel: message.channel.id, channels: emailChannels,
-                      pressed: replyingTo === message.id, onReply: () => onReply(message),
+                      expanded: replyingTo === message.id, controls: replyBoxId, onReply: () => onReply(message),
                     } : undefined}
                     timezone={timezone}
                     onPreviewFile={onPreviewFile}
@@ -500,7 +507,10 @@ interface ReplyButtonProps {
   channel: string;
   /** Every channel the loaded email rows are on: one gate read for the whole window. */
   channels: readonly string[];
-  pressed: boolean;
+  /** The box is open on this email. */
+  expanded: boolean;
+  /** The box's id: Reply opens it, never toggles it. */
+  controls: string;
   onReply: () => void;
 }
 
@@ -509,7 +519,7 @@ interface ReplyButtonProps {
  * Every row asks the one read over the window's channels, so only a host that offers Reply reads
  * the gate, once per window; until it answers, no Reply shows.
  */
-function ReplyButton({ channel, channels, pressed, onReply, message, label }: ReplyButtonProps & {
+function ReplyButton({ channel, channels, expanded, controls, onReply, message, label }: ReplyButtonProps & {
   message: string;
   label: string;
 }): React.ReactElement | null {
@@ -517,7 +527,8 @@ function ReplyButton({ channel, channels, pressed, onReply, message, label }: Re
   const gate = useAuthoredQuery(MessagingSendableChannelIds, { ids: [...channels] }, { models: CHANNEL_MODELS });
   if (!gate.data?.channels.some((row) => row.id === channel)) return null;
   return (
-    <Button size="sm" variant="ghost" data-reply-for={message} aria-pressed={pressed} aria-label={label} onClick={onReply}>
+    <Button size="sm" variant="ghost" data-reply-for={message} aria-expanded={expanded}
+      aria-controls={expanded ? controls : undefined} aria-label={label} onClick={onReply}>
       <Glyph decorative name="reply" />
       {t("compose.reply")}
     </Button>
@@ -528,7 +539,7 @@ interface TranscriptMessageProps {
   message: ThreadTranscriptRow;
   t: MessagingT;
   status: StatusPresentation;
-  /** Reply on this email, on its `channel`, shown when the gate admits it, pressed while the box answers it. */
+  /** Reply on this email, on its `channel`, shown when the gate admits it, expanded while the box answers it. */
   reply?: ReplyButtonProps;
   timezone?: string;
   onPreviewFile?: ThreadTranscriptProps["onPreviewFile"];

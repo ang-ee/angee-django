@@ -351,6 +351,12 @@ function submitReply(input: HTMLTextAreaElement): void {
 test("Reply answers an email from the box docked under the conversation, sends only what an answer takes, and shows it Queued", async () => {
   const { sends } = mount({ surface: "transcript", seat: "ana" });
   const box = await openReply("Please add me.");
+  // Reply opens the box it controls; pressed again it stays open, so it is no toggle.
+  const reply = within(await row("Please add me.")).getByRole("button", { name: /^Reply to / });
+  expect(reply.getAttribute("aria-expanded")).toBe("true");
+  expect(reply.getAttribute("aria-controls")).toBe(box.id);
+  expect(reply.hasAttribute("aria-pressed")).toBe(false);
+  expect(within(await row("Who can see this?")).getByRole("button", { name: /^Reply to / }).getAttribute("aria-expanded")).toBe("false");
   expect(within(box).getByText(word("compose.sentFrom", { channel: "Support desk" }))).toBeTruthy();
   const input = typeReply(box, "Thanks, adding you now.");
   await waitFor(() => expect(document.activeElement).toBe(input));
