@@ -347,6 +347,33 @@ def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, s
         assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
 
 
+def test_a_stored_message_keeps_the_kind_it_was_ingested_with_through_every_re_sync(desk: Any) -> None:
+    """An answer stored as a comment before email answers landed as email stays one, edited or not."""
+
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.kept_kind"):
+        doc = ChatterDoc.objects.create(title="Invoice 10")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(channel=desk, record=doc, to=["client@example.test"], subject="Invoice 10",
+                                   text="Your invoice.", actor=owner)
+
+    def answer(text: str) -> Any:
+        raw = (
+            f"From: client@example.test\r\nTo: desk@example.test\r\nMessage-ID: <earlier@example.test>\r\n"
+            f"In-Reply-To: <{sent.external_id}>\r\nSubject: Re: Invoice 10\r\n\r\n{text}\r\n"
+        ).encode()
+        return parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)
+
+    with system_context(reason="tests.messaging.compose.kept_kind"):
+        (earlier,) = Message.objects.ingest([answer("Thanks.")], channel=desk)
+        Message._base_manager.filter(pk=earlier.pk).update(message_type="comment")  # as ingested before
+        kinds = []
+        for text in ("Thanks.", "Thanks, corrected."):
+            Message.objects.ingest([answer(text)], channel=desk)
+            kinds.append(Message._base_manager.get(pk=earlier.pk).message_type)
+    assert kinds == ["comment", "comment"]
+
+
 def test_mail_a_stranger_sends_onto_a_records_chatter_is_removable_and_mail_sent_from_it_is_retained(
     desk: Any,
 ) -> None:

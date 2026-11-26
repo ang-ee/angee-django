@@ -4371,7 +4371,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         a mail sent from the record's chatter), which stays an ``EMAIL`` and is
         answered by email; a message whose source names its conversation
         (``ParsedThread`` or ``explicit_thread``) is ``CHAT``, and everything else is
-        ``EMAIL``. The same act keeps its kind across
+        ``EMAIL``. The kind is decided once, when the message is first stored: a
+        re-sync, identical or edited, keeps it. The same act keeps its kind across
         backends. ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
@@ -4636,11 +4637,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             defaults["metadata"] = _bounded_message_metadata(
                 self.model.ingest_metadata(metadata, previous=message.metadata),
             )
+            # A stored message keeps the kind it was ingested with: a re-sync never reclassifies it.
+            defaults["message_type"] = message.message_type
             if message.is_locally_written:
                 # Provider echoes cannot change locally authored envelope identity.
                 defaults["direction"] = message.direction
                 defaults["sender_id"] = message.sender_id
-                defaults["message_type"] = message.message_type
                 defaults["status"] = message.status
                 for field in ("thread_id", "parent_id", "platform", "preview", "sent_at"):
                     defaults[field] = getattr(message, field)

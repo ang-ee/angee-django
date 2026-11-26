@@ -65,6 +65,9 @@ live in code docstrings.
     record's chatter (the customer's answer to a mail sent from the record) is
     ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
     answers it by email; before, the answer was refused for want of a sender.
+    A stored message keeps the kind it was ingested with through every re-sync,
+    identical or edited, so replies received before the upgrade stay comments
+    and cannot be answered by email; new ones can. No data migration.
     Anyone who has seen a chatter mail's Message-ID can answer onto the record,
     so a message received on a record's chatter, email or comment, is one its
     moderator may trash; mail sent from the record and system notes stay
