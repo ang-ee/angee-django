@@ -291,22 +291,38 @@ instruction.
 
 Error mail goes through the transport, never the system channel, which lives in
 the database the error may be about. Messaging contributes `LOGGING` as Django's
-`DEFAULT_LOGGING` with two changes: the `mail_admins` handler names
-`using: transport` (with no transport, Django drops the report), and the
-`django.server` handler has no formatter, because the settings loader would
-expand its `{server_time}` as a reference, so Django's development server logs
-its request lines without the time. A host that authors its own `LOGGING` keeps
-it, and with it Django's default `mail_admins`, which sends through the system
-mailer; it names the transport on the handler that reports errors:
+`DEFAULT_LOGGING` with one change, the `mail_admins` handler naming
+`using: transport` (with no transport, Django drops the report). It is contributed
+raw, so the settings loader keeps the `django.server` formatter's `{server_time}`
+as text. A host that states its own `LOGGING` keeps it; `messaging.W001` reports
+an `AdminEmailHandler` in it that names no `using`, which would send through the
+system mailer. A host's own block keeps Django's loggers and names the transport
+on the handler that reports errors:
 
 ```yaml
+LOGGING:raw: true
 LOGGING:
   version: 1
   disable_existing_loggers: false
   filters:
     require_debug_false:
       (): django.utils.log.RequireDebugFalse
+    require_debug_true:
+      (): django.utils.log.RequireDebugTrue
+  formatters:
+    django.server:
+      (): django.utils.log.ServerFormatter
+      format: "[{server_time}] {message}"
+      style: "{"
   handlers:
+    console:
+      level: INFO
+      filters: [require_debug_true]
+      class: logging.StreamHandler
+    django.server:
+      level: INFO
+      class: logging.StreamHandler
+      formatter: django.server
     mail_admins:
       level: ERROR
       filters: [require_debug_false]
@@ -314,8 +330,12 @@ LOGGING:
       using: transport
   loggers:
     django:
-      handlers: [mail_admins]
-      level: ERROR
+      handlers: [console, mail_admins]
+      level: INFO
+    django.server:
+      handlers: [django.server]
+      level: INFO
+      propagate: false
 ```
 
 ## System mail

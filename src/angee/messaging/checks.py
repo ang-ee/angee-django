@@ -1,4 +1,4 @@
-"""Messaging's system checks: its sealed permissions (``messaging.E003``) and its transport (``messaging.E004``)."""
+"""Messaging's system checks: its seals (``messaging.E003``), its transport (``E004``) and its error mail (``W001``)."""
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ from collections.abc import Sequence
 from functools import partial
 
 from django.apps import AppConfig
+from django.conf import settings
 from django.core import checks
 from django.core.checks.mail import NON_PRODUCTION_EMAIL_BACKENDS
 from django.core.mail import mailers
-from django.core.mail.handler import DEFAULT_MAILER_BACKEND
+from django.core.mail.handler import DEFAULT_MAILER_ALIAS, DEFAULT_MAILER_BACKEND
 
 from angee.base.checks import check_sealed_permissions
-from angee.messaging.constants import TRANSPORT_MAILER_ALIAS
+from angee.messaging.constants import SYSTEM_MAILER_BACKEND, TRANSPORT_MAILER_ALIAS
 
 DERIVED_READS = {"messaging/thread": ("read", "read_inbox"), "messaging/message": ("read", "read_inbox")}
 """The reads messaging derives from its extension points, which fragments never extend.
@@ -59,4 +60,36 @@ def check_transport_mailer(
         f'MAILERS["transport"] is a development-only email backend ({backend}), so messaging\'s mail is not sent.',
         hint="Point MAILERS.transport at a production backend, such as Django's SMTP backend or an Anymail backend.",
         id="messaging.E004",
+    )]
+
+
+_ADMIN_EMAIL_HANDLER = "django.utils.log.AdminEmailHandler"
+
+
+def check_error_mail(app_configs: Sequence[AppConfig] | None = None, **kwargs: object) -> list[checks.CheckMessage]:
+    """``messaging.W001``: a configured error-mail handler sends through the system mailer.
+
+    Where messaging's system mailer is Django's default mailer, an ``AdminEmailHandler``
+    in ``LOGGING`` that names no ``using`` (or the default) records each error report in
+    the database the error may be about. Messaging's own ``LOGGING`` names the
+    transport; a host that states its own names it too.
+    """
+
+    del app_configs, kwargs
+    default = mailers.settings.get(DEFAULT_MAILER_ALIAS) or {}
+    if default.get("BACKEND") != SYSTEM_MAILER_BACKEND:
+        return []
+    handlers = (getattr(settings, "LOGGING", None) or {}).get("handlers", {})
+    recorded = sorted(
+        name for name, handler in handlers.items()
+        if _ADMIN_EMAIL_HANDLER in (handler.get("class"), handler.get("()"))
+        and handler.get("using") in (None, "", DEFAULT_MAILER_ALIAS)
+    )
+    if not recorded:
+        return []
+    return [checks.Warning(
+        f"LOGGING's {', '.join(recorded)} handler sends error mail through Django's default mailer, messaging's "
+        "system mailer, which records it in the database the error may be about.",
+        hint='Name "using: transport" on it (messaging\'s README, Mailers).',
+        id="messaging.W001",
     )]

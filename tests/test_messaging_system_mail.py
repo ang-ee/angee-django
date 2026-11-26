@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from anymail.message import AnymailMessage
 from django.core import mail
+from django.core.checks import Tags, run_checks
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.core.mail.backends.base import BaseEmailBackend
@@ -462,6 +463,7 @@ def test_error_mail_goes_through_the_transport_never_the_system_channel(system_m
 
     settings.ADMINS = ["ops@example.test"]
     settings.DEBUG = False
+    assert settings.LOGGING["formatters"]["django.server"]["format"] == "[{server_time}] {message}"
     logging.config.dictConfig(settings.LOGGING)
     (handler,) = [item for item in logging.getLogger("django").handlers if isinstance(item, AdminEmailHandler)]
     record = logging.LogRecord("django.request", logging.ERROR, __file__, 1, "Boom", None, None)
@@ -472,3 +474,27 @@ def test_error_mail_goes_through_the_transport_never_the_system_channel(system_m
     # Django's own handler sends through the default mailer, which records the report on the system channel.
     AdminEmailHandler().emit(record)
     assert len(_recorded(system_mailer)) == 1
+
+
+@pytest.mark.parametrize(
+    ("default", "handler", "warned"),
+    [
+        pytest.param(SYSTEM, {}, True, id="no-using"),
+        pytest.param(SYSTEM, {"using": "default"}, True, id="using-default"),
+        pytest.param(SYSTEM, {"using": "transport"}, False, id="using-transport"),
+        pytest.param(LOCMEM, {}, False, id="default-is-not-the-system-mailer"),
+    ],
+)
+def test_a_logging_handler_that_would_record_error_mail_is_reported(
+    settings: Any, default: dict[str, str], handler: dict[str, str], warned: bool,
+) -> None:
+    settings.MAILERS = {"default": default, "transport": LOCMEM}
+    settings.LOGGING = {"version": 1, "handlers": {
+        "ops": {"class": "django.utils.log.AdminEmailHandler", "level": "ERROR", **handler},
+    }}
+    assert ("messaging.W001" in {message.id for message in run_checks(tags=[Tags.mail])}) is warned
+
+
+def test_messagings_own_logging_is_not_reported(settings: Any) -> None:
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    assert "messaging.W001" not in {message.id for message in run_checks(tags=[Tags.mail])}

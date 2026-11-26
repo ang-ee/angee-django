@@ -47,8 +47,9 @@ live in code docstrings.
     rule for what the transport can carry. `ChannelBackend.offered` declares
     whether people choose a backend to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
-    contributes `LOGGING`: Django's `DEFAULT_LOGGING` with `mail_admins` sending
-    through `transport` and no formatter on the `django.server` handler.
+    contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
+    with `mail_admins` sending through `transport`. `messaging.W001` reports a
+    host's `AdminEmailHandler` that would send through the system mailer.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
     default mailer; delivery is configured exactly when it is stated. Django mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
@@ -66,8 +67,7 @@ live in code docstrings.
     default sender is checked by `MessageManager.clean_recipient`, the check every
     address messaging lands takes, and must be an address the transport carries,
     where it was Django's `validate_email`. Error mail goes through the transport,
-    never the system channel; Django's development server logs its request lines
-    without the time. The sign-in link's mail is recorded on the system channel
+    never the system channel. The sign-in link's mail is recorded on the system channel
     with the rest of Django's mail.
   - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
     reads `MAILERS["transport"]` itself.

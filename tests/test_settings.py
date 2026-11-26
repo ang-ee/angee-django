@@ -609,16 +609,13 @@ def _mailers(*aliases: str) -> str:
 
 
 def test_a_host_stating_no_mailer_gets_the_system_mailer_and_error_mail_through_the_transport(tmp_path: Path) -> None:
-    from copy import deepcopy
-
-    from django.utils.log import DEFAULT_LOGGING
-
     namespace = _mail_host(tmp_path, "SECRET_KEY: mail-host\n")
     assert namespace["MAILERS"] == {"default": SYSTEM_MAILER}
-    expected = deepcopy(DEFAULT_LOGGING)
-    expected["handlers"]["mail_admins"]["using"] = "transport"
-    del expected["formatters"], expected["handlers"]["django.server"]["formatter"]
-    assert namespace["LOGGING"] == expected
+    logging = namespace["LOGGING"]
+    assert logging["handlers"]["mail_admins"]["using"] == "transport"
+    assert logging["loggers"]["django"]["handlers"] == ["console", "mail_admins"]
+    # Kept as text: the settings loader does not read Django's server-log formatter as a reference.
+    assert logging["formatters"]["django.server"]["format"] == "[{server_time}] {message}"
 
 
 @pytest.mark.parametrize("stated", ["transport", "default-and-transport"])

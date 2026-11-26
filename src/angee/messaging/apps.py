@@ -15,12 +15,13 @@ class MessagingConfig(AppConfig):
 
     def ready(self) -> None:
         from angee.base.signals import connect_for_models, record_access_revoked
-        from angee.messaging.checks import check_derived_reads, check_transport_mailer
+        from angee.messaging.checks import check_derived_reads, check_error_mail, check_transport_mailer
         from angee.messaging.events import end_unreadable_follows
         from angee.messaging.models import ThreadedModelMixin
 
         checks.register(check_derived_reads, checks.Tags.security)
         checks.register(check_transport_mailer, checks.Tags.mail, deploy=True)
+        checks.register(check_error_mail, checks.Tags.mail)
 
         connect_for_models(
             record_access_revoked,
