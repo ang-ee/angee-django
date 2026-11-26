@@ -10,6 +10,16 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: an implementation key, the value an `ImplClassField` holds,
+  pickles. Its choices enum is built at run time, so no module holds it by name
+  and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
+  query pickling failed for any filter on such a field, and so did a REBAC
+  permission whose compiled statement filters on one; so did any row loaded from
+  the database, which holds its key as that member. A key now pickles as its
+  registry setting, its key set and its value, and unpickles without reading
+  settings: as that very member in any process with the same key set; elsewhere
+  as a member that equals its key, which the field maps onto its own. Upgrade:
+  nothing.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
