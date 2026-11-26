@@ -30,12 +30,18 @@ from django.test import override_settings
 from django.utils import timezone
 from django.utils.log import AdminEmailHandler, configure_logging
 from django.views.debug import ExceptionReporter
+from kombu.exceptions import OperationalError
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
-from angee.messaging.constants import DELIVER_MESSAGE_TASK, SYSTEM_CHANNEL_BACKEND, SYSTEM_MAILER_BACKEND
+from angee.messaging.constants import (
+    DELIVER_MESSAGE_TASK,
+    DELIVERY_TASK_EXPIRES,
+    SYSTEM_CHANNEL_BACKEND,
+    SYSTEM_MAILER_BACKEND,
+)
 from angee.messaging.email import SystemChannelBackend, SystemMailer
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
@@ -462,6 +468,49 @@ def test_mail_sent_in_a_transaction_that_rolls_back_is_never_sent(
     with django_capture_on_commit_callbacks(execute=True):
         send_mail("Committed", "Body.", None, ["reader@example.test"])
     assert sent == [DELIVER_MESSAGE_TASK]
+
+
+
+def test_a_system_mail_whose_hand_off_fails_waits_queued_and_the_release_sends_it_once(
+    system_mailer: Any, monkeypatch: pytest.MonkeyPatch, django_capture_on_commit_callbacks: Any, caplog: Any,
+) -> None:
+    """The broker is down when the mail is recorded: the caller's send returns, the row waits queued with its lease.
+
+    The release (``messaging.release_held_messages``, every minute) takes it once its dispatch lease has passed
+    (``DELIVERY_TASK_EXPIRES`` seconds after recording), hands it off again, and it is delivered once, no delivery
+    attempt spent on the failed hand-off.
+    """
+
+    def refused(name: str, **options: Any) -> None:
+        raise OperationalError("[Errno 61] Connection refused")
+
+    monkeypatch.setattr(celery_app, "send_task", refused)
+    caplog.set_level(logging.ERROR, logger="django.db.backends.base")
+    with django_capture_on_commit_callbacks(execute=True):
+        assert send_mail("While the broker is down", "Body.", None, ["reader@example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    assert (message.status, message.delivery_claim, message.delivery_attempts) == ("queued", None, 0)
+    assert message.delivery_lease_until is not None
+    assert [record.levelname for record in caplog.records if "on_commit()" in record.getMessage()] == ["ERROR"]
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: sent.append(options["kwargs"]))
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 0
+    assert sent == []
+    with system_context(reason="tests.messaging.system_mail.lease_passed"):
+        Message._base_manager.filter(pk=message.pk).update(
+            delivery_lease_until=message.delivery_lease_until - timedelta(seconds=DELIVERY_TASK_EXPIRES),
+        )
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 1
+    assert len(sent) == 1
+    assert deliver_message(**sent[0])["delivered"]
+    assert [sent_mail.subject for sent_mail in mail.outbox] == ["While the broker is down"]
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 0
+    with system_context(reason="tests.messaging.system_mail.lease_passed"):
+        delivered = Message._base_manager.get(pk=message.pk)
+    assert (delivered.status, delivered.delivery_attempts, len(sent), len(mail.outbox)) == ("sent", 1, 1, 1)
 
 
 def test_with_no_transport_django_mail_is_refused_and_nothing_is_recorded(system_mailer: Any, settings: Any) -> None:

@@ -132,7 +132,12 @@ permanently. Lock contention defers work without consuming an attempt.
 locks the row, decides eligibility and sets a bounded delivery lease; the dispatch
 publishes the reserved identifiers through the jobs owner's on-commit hook. The periodic
 `release_held_messages` task releases due drafts/retries and recovers expired
-unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. Retry
+unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. A
+message recorded while the broker is unreachable is not lost: the failed hand-off is logged at
+`ERROR` (`django.db.backends.base`) without failing the caller, the row stays queued, and the
+release (every 60 seconds, from the jobs beat scheduler) hands it off again once its dispatch
+lease has passed, `DELIVERY_TASK_EXPIRES` (300 seconds) after it was reserved, spending no
+delivery attempt. Retry
 settlement retains the enqueue-owned lease through the next scheduled attempt;
 terminal settlement clears it. Queued rows without a lease are never released
 automatically, even if they carry a due schedule.
