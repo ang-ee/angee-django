@@ -3245,9 +3245,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     ) -> MessageT:
         """Write one email on the system channel as named system work, queued for delivery; return the row unbound.
 
-        System mail: mail the framework sends on no person's behalf (each email Django sends,
-        through the system mailer): the caller's gate authorized it, and no grant
-        is consulted. It runs in the caller's context and transaction, through
+        The system channel's one writer, as nobody sends on that channel as a person.
+        System mail is named system work (each email Django sends, through the system
+        mailer, among it): the caller's own gate authorized it, so a caller with its own
+        permission (an emailed sign-in link's action, a template's test send) may be a
+        person's button, and no grant is consulted here. The causing actor is recorded
+        in the caller's changeset. It runs in the caller's context and transaction, through
         the writer :meth:`compose` uses: the rows record the causing actor as
         ``created_by`` (empty with none), which grants nothing on them, and join
         the caller's changeset; a handle it creates, the system sender's or a

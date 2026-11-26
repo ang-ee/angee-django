@@ -20,7 +20,7 @@ live in code docstrings.
     reloads before the edit stops at settings load. Django itself refuses legacy
     `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
     `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
-    rows and runs `rebac sync` for schema revision 33. Without that load, every
+    rows and runs `rebac sync` for schema revision 34. Without that load, every
     email Django sends raises `SystemChannelMissing` at the sender (a password
     reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
     channel backend enums gain `SYSTEM`.
@@ -68,8 +68,10 @@ live in code docstrings.
     carry (`cannot_carry`, under its role) are refused, so such a mail is never
     recorded as sent. A
     transport that hands a delivery back to the system mailer fails that delivery
-    instead of recording it again. Administrators alone read, send on, write,
-    annotate and delete the system channel (schema revision 33): no channel,
+    instead of recording it again. Administrators alone read, write, annotate
+    and delete the system channel (schema revision 34), and nobody sends on it
+    as a person, administrators included: `compose` and answering refuse it, as
+    the framework writes it as named system work (`compose_as_system`). No channel,
     integration, team, project or ownership grant reaches it. No verb shares its
     threads or grants on its messages: nobody shares a system thread or writes a
     system message, administrators included, and none of messaging's own arms

@@ -399,10 +399,11 @@ messaging delivers every email through it, and without it delivery is not
 configured. Not Django's default mailer, which is the **System mailer**. See
 [messaging's contracts](../src/angee/messaging/README.md).
 
-**System mail** — mail the framework sends on no person's behalf, each email
+**System mail** — mail the framework writes as named system work, each email
 Django sends among it: one queued message written on the **System channel** by
-`MessageManager.compose_as_system` and delivered through the **Transport mailer**.
-Not a person's mail on a channel they send from. See
+`MessageManager.compose_as_system`, its causing actor recorded in the changeset,
+and delivered through the **Transport mailer**. Nobody sends it as a person on a
+channel they send from. See
 [messaging's contracts](../src/angee/messaging/README.md).
 
 **System mailer** — Django's default mailer wherever messaging is installed,
