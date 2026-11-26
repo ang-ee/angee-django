@@ -18,8 +18,9 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.checks import Tags, run_checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models.signals import pre_save
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.relationships import delete_relationships
@@ -749,6 +750,24 @@ def test_a_digest_lists_at_most_its_limit_due_first_and_counts_the_rest(world: A
     assert all(link(question) in text for question in undated[:-1]) and link(undated[-1]) not in text
     assert text.count("Check 1: passed") == DIGEST_QUESTION_LIMIT and "And 1 more fact in the app." in text
     assert f"Check 15: passed {'x' * (DIGEST_FACT_TEXT_LIMIT - len('passed ') - 1)}…" in text
+
+
+def test_a_digest_reads_its_questions_labels_contexts_and_askers_in_one_batch_each(world: Any) -> None:
+    """A digest costs the same statements for three listed questions, six or ten: no read per question.
+
+    The first run also reads what every later one keeps, and the message a longer body
+    makes writes a few more of messaging's stored fragments, so the pin starts at three.
+    """
+
+    facts = full_facts(3, world.subject)
+    costs = []
+    for day, count in enumerate((1, 3, 6, DIGEST_QUESTION_LIMIT), start=1):
+        while Decision.system_queryset().open().count() < count:
+            ask(world, world.reviewer, context=facts)
+        with CaptureQueriesContext(connection) as captured:
+            assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2 * day)) == 2
+        costs.append(len(captured))
+    assert costs[1] == costs[2] == costs[3], costs
 
 
 def test_the_beat_runs_the_digest_task_and_its_timestamp_names_the_day(world: Any, settings: Any) -> None:

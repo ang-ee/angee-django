@@ -39,7 +39,7 @@ from angee.base.models.audit import retained_set_null
 from angee.base.models.base import AngeeModel
 from angee.base.origins import public_origin
 from angee.base.querysets import AngeeQuerySet
-from angee.decisions.contracts import DecisionContext, DecisionProposal
+from angee.decisions.contracts import DecisionProposal
 from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
 from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
 
@@ -196,18 +196,15 @@ def decision_link_origin() -> str:
     return origin
 
 
-def shared_values(decision: Any, *, origin: str, reason_limit: int) -> dict[str, Any]:
-    """What every person mailed about ``decision`` reads alike: its kind, reason, due time, choices and link.
+def shared_values(decision: Any, *, origin: str) -> dict[str, Any]:
+    """What every person mailed about ``decision`` reads alike: its kind, due time, choices and link.
 
-    Each recipient may read the question, so these come from the question itself. The
-    reason is cut to ``reason_limit`` (:data:`REASON_TEXT_LIMIT` or
-    :data:`DIGEST_REASON_TEXT_LIMIT`).
+    Each recipient may read the question, so these come from the question itself.
     """
 
     proposal = DecisionProposal.model_validate(decision.proposal)
     return {
         "title": decision.kind_label,
-        "reason": Truncator(DecisionContext.model_validate(decision.context).reason).chars(reason_limit),
         "due_at": decision.due_at,
         "url": f"{origin}{decision.get_absolute_url()}",
         "choices": [alternative.label for alternative in proposal.alternatives],
@@ -229,14 +226,18 @@ def fact_values(fact: Any, *, text_limit: int) -> dict[str, Any]:
     }
 
 
-def question_values(row: Any, reader: Any, shared: dict[str, Any], *, text_limit: int) -> dict[str, Any]:
+def question_values(
+    row: Any, reader: Any, shared: dict[str, Any], *, text_limit: int, reason_limit: int,
+) -> dict[str, Any]:
     """The ``question`` argument of ``parts/decisions_messaging.question`` for ``reader``: ``shared`` and their reads.
 
     ``row`` is the question as ``reader`` reads it. The concerned records are named by
     ``Decision.concern_labels(reader)``, the first :data:`QUESTION_RECORD_LIMIT` of
     them with a count of the rest, its facts by ``Decision.facts_for(reader)``, at most
-    :data:`QUESTION_FACT_LIMIT`, each cut to ``text_limit`` (:func:`fact_values`), and
-    who asked by ``Decision.requester_name(reader)``,
+    :data:`QUESTION_FACT_LIMIT`, each cut to ``text_limit`` (:func:`fact_values`), its
+    reason by ``Decision.context_for(reader)``, cut to ``reason_limit``
+    (:data:`REASON_TEXT_LIMIT` or :data:`DIGEST_REASON_TEXT_LIMIT`), and who asked by
+    ``Decision.requester_name(reader)``,
     so a person never reads a label, a fact or a name in a mail they could not read
     in the app. Nothing here is secret: the values are kept with the message, which
     administrators read.
@@ -246,6 +247,7 @@ def question_values(row: Any, reader: Any, shared: dict[str, Any], *, text_limit
     facts = row.facts_for(reader)
     return {
         **shared,
+        "reason": Truncator(row.context_for(reader).reason).chars(reason_limit),
         "records": labels[:QUESTION_RECORD_LIMIT],
         "more_records": max(len(labels) - QUESTION_RECORD_LIMIT, 0),
         "facts": [fact_values(fact, text_limit=text_limit) for fact in facts[:QUESTION_FACT_LIMIT]],
@@ -506,14 +508,16 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
         if not people:
             return 0
         run = _Run.start(people, [key])
-        shared = shared_values(decision, origin=run.origin, reason_limit=REASON_TEXT_LIMIT)
+        shared = shared_values(decision, origin=run.origin)
 
         def values_for(user: Any) -> dict[str, Any] | None:
             row = (
                 questions.objects.with_actor(user).open().filter(pk=decision.pk)
-                .prefetch_related(questions.concern_records_prefetch(user)).first()
+                .prefetch_related(*questions.reader_prefetches(user), questions.requester_names_prefetch(user)).first()
             )
-            return None if row is None else {"question": question_values(row, user, shared, text_limit=FACT_TEXT_LIMIT)}
+            return None if row is None else {"question": question_values(
+                row, user, shared, text_limit=FACT_TEXT_LIMIT, reason_limit=REASON_TEXT_LIMIT,
+            )}
 
         outcomes = _mail_each(
             people,
@@ -583,17 +587,23 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
             if all((user.pk, row.pk) in recent for row in listed):
                 return "skipped"
             shown = listed[:DIGEST_QUESTION_LIMIT]
-            prefetch_related_objects(shown, questions.concern_records_prefetch(user))
+            prefetch_related_objects(
+                shown, *questions.reader_prefetches(user), questions.requester_names_prefetch(user),
+            )
             for row in shown:
                 if row.pk not in shared:
-                    shared[row.pk] = shared_values(row, origin=run.origin, reason_limit=DIGEST_REASON_TEXT_LIMIT)
+                    shared[row.pk] = shared_values(row, origin=run.origin)
             return _mail_one(
                 self, user, key=DIGEST_TEMPLATE_KEY, run=run, day=day,
                 values=lambda: {
                     "count": len(listed),
                     "more": len(listed) - len(shown),
                     "questions": [
-                        question_values(row, user, shared[row.pk], text_limit=DIGEST_FACT_TEXT_LIMIT) for row in shown
+                        question_values(
+                            row, user, shared[row.pk],
+                            text_limit=DIGEST_FACT_TEXT_LIMIT, reason_limit=DIGEST_REASON_TEXT_LIMIT,
+                        )
+                        for row in shown
                     ],
                 },
             )
