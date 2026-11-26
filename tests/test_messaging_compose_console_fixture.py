@@ -74,6 +74,9 @@ CHANNELS: dict[str, dict[str, Any]] = {
 }
 """The email channels beside Support (the compose tests' desk); Archive is disconnected. A feed stands beside them."""
 
+SENDER_REFUSAL = "Configure a valid sender address for this email channel."
+"""What a sender reads when Billing's configured address is no address, word for word."""
+
 _MESSAGE_ROW = (
     "id display_name title status revision platform direction message_type delivery_actions delivery_error "
     "delivery_attempts scheduled_at sent_at created_at is_held is_locally_written preview starred permissions "
@@ -422,6 +425,9 @@ def test_the_composer_fixture_is_what_the_server_says(  # noqa: PLR0915 -- one r
                              "text": "Hello, everyone.", "queued": True})
     send("dana", "refused-sender", {"channel": billing, "to": ["client@example.test"], "text": "Your invoice.",
                                     "queued": True})
+    # The sentence a sender reads names no field and no setting: where the address comes from is the operator's.
+    refused = sends[-1]["answer"]["data"]["compose_message"]
+    assert (refused["message"], refused["validation_errors"]) == (SENDER_REFUSAL, {"channel": [SENDER_REFUSAL]})
     with _rolled_back():
         compose(seats["ana"], "conflict", channel=support, to=["client@example.test"], text="First version.",
                 queued=True)

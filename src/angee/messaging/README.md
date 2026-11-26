@@ -277,6 +277,13 @@ MAILERS:
       use_tls: true
 ```
 
+An email channel sends from the address its own config names (`from_email`), else
+from the deployment's `DEFAULT_FROM_EMAIL` (`AnymailEmailChannelBackend.outbound_sender`).
+While that address is not one valid address the transport can carry, a send on the
+channel is refused under `channel`: the person sending reads only that the channel
+needs a valid sender address, and an operator fixes the channel's `from_email`, or
+`DEFAULT_FROM_EMAIL` when the channel names none.
+
 Settings load refuses, naming the edit, a mailer setting that collides with the
 one messaging owns: a deployment's own `MAILERS.default` (rename it to
 `MAILERS.transport`, or remove it when a transport is stated), and a transport
