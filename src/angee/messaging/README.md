@@ -65,11 +65,12 @@ would read as another address or as several, or whose name or address a mail
 header would not carry as read (a NUL byte, a control character, an
 encoded-word opener: [`header_text`](email.py), the rule every subject and
 display name the email backend writes takes), is refused (`invalid`) under its
-role, never re-read. `compose` lands every address in lower case, as inbound
-mail does, and finds its handle by that exact value: a contact another writer
-stored with a capital is a handle row of its own, grouped with the lower-case
-one by the handle owner's comparison key wherever a person is looked up; ending
-that split is the handle owner's. A name inbound mail stored with a literal encoded word is
+role, never re-read. `compose` lands every address as typed, the channel's
+sender as configured, on the handle the handle owner finds for it
+(`HandleManager.find_identities`): any letter case or domain spelling of a
+stored address is that handle, and a message to it is addressed as the handle
+stores it, so an address with no handle yet is stored, shown and addressed as
+typed; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
@@ -169,27 +170,6 @@ its idempotency key and provenance survive without a second visible row or count
 Advisory task locks reduce contention; the row claim is authoritative. This is
 at-most-once recovery of an uncertain effect, not an exactly-once provider guarantee.
 
-Configure outbound email through Django's native default mailer, for example
-`MAILERS = {"default": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}}`,
-with the provider's `ANYMAIL` settings. A missing default mailer leaves delivery
-unconfigured. The sender opens, sends through, and closes the same native backend;
-it never contacts an implicit localhost SMTP transport.
-
-Django 6.1 configuration cutoff: the host no longer consumes `EMAIL_URL` or
-`EMAIL_BACKEND` environment inputs. Migrate deployment mail configuration and old
-project `EMAIL_*` settings to the native `MAILERS` mapping in `settings.yaml`;
-existing django-yamlconf overlays own secret values. No legacy adapter is retained.
-
-```yaml
-MAILERS:
-  default:
-    BACKEND: django.core.mail.backends.smtp.EmailBackend
-    OPTIONS:
-      host: smtp.example.test
-      port: 587
-      use_tls: true
-```
-
 Email uses the provider's definite refusal evidence: SMTP 4xx retries and SMTP
 5xx fails; connection failure before SMTP sending retries. Once sending begins,
 lost acknowledgements remain uncertain. For HTTP ESPs, Anymail-wrapped connect
@@ -273,3 +253,221 @@ A channel held a public form in columns of its own until web forms took forms
 over. [`webforms.py`](webforms.py) keeps `default_webform_schema` alone, the
 default that `Channel.form_schema` named, because every initial messaging
 migration authored while those columns existed imports it.
+
+## Mailers
+
+Messaging delivers every email through one mailer, `MAILERS["transport"]`:
+Django's SMTP backend, or an Anymail ESP backend with its `ANYMAIL`/`ANYMAIL_*`
+settings. Without one, delivery is not configured: nothing is sent, and a send
+is refused (`OUTBOUND_EMAIL_NOT_CONFIGURED`). The sender opens, sends through,
+and closes that mailer; it never contacts an implicit localhost SMTP transport.
+Django's default mailer, `MAILERS["default"]`, is messaging's
+[`SystemMailer`](email.py), contributed by [`autoconfig.py`](autoconfig.py): it
+records each email Django sends (a password reset, `sendtestemail`, a link an
+addon mails) on the system channel, and messaging delivers it through the
+transport. A deployment states only the transport:
+
+```yaml
+MAILERS:
+  transport:
+    BACKEND: django.core.mail.backends.smtp.EmailBackend
+    OPTIONS:
+      host: smtp.example.test
+      port: 587
+      use_tls: true
+```
+
+Settings load refuses, naming the edit, a mailer setting that collides with the
+one messaging owns: a deployment's own `MAILERS.default` (rename it to
+`MAILERS.transport`, or remove it when a transport is stated), and a transport
+that is the system mailer, which would deliver nothing. Django itself refuses its
+legacy `EMAIL_*` settings beside `MAILERS`, which messaging always states: move
+them into `MAILERS.transport` `OPTIONS`. The host no longer consumes `EMAIL_URL` or `EMAIL_BACKEND`
+environment inputs; existing django-yamlconf overlays own secret values. One
+limit belongs to the settings loader: a `MAILERS` written as a Python literal in
+`settings.py` loses its raw marker once messaging contributes the default beside
+it, so a `{...}` in one of its values is expanded as a settings reference;
+`MAILERS` stated in `settings.yaml` or an overlay is unaffected.
+
+| The deployment states | Result |
+|---|---|
+| nothing | the system mailer is the default; delivery is not configured |
+| `transport` | the default is contributed; delivery is configured |
+| `default: angee.messaging.email.SystemMailer`, with or without `transport` | accepted; configured exactly when `transport` is stated |
+| its own `default` | refused: rename it to `transport` |
+| its own `default` and `transport` | refused: remove `default` |
+| `transport` as the system mailer | refused |
+| a legacy `EMAIL_*` setting | refused by Django: move it into `MAILERS.transport` `OPTIONS` |
+| `transport` as Django's locmem, console, file or dummy backend | starts; `check --deploy` reports `messaging.E004` |
+
+Delivering a recorded message marks its context, and the system mailer refuses
+to record while the mark is set: a transport that hands delivery back to Django's
+default mailer (a subclass of the system mailer, or a wrapper that sends through
+`mailers.default`) fails that delivery, and nothing is recorded again. The mark
+closes re-entry in the delivering thread; a wrapper that hands off to another
+thread or a queue is not seen by it, so the settings-load refusal is the early
+instruction.
+
+Error mail goes through the transport, never the system channel, which lives in
+the database the error may be about. Messaging contributes `LOGGING` as Django's
+`DEFAULT_LOGGING` with one change, the `mail_admins` handler naming
+`using: transport` (with no transport, Django drops the report). It is contributed
+raw, so the settings loader keeps the `django.server` formatter's `{server_time}`
+as text. A host that states its own `LOGGING` keeps it, and Django applies its
+`DEFAULT_LOGGING` first and the host's block over it: a block that does not name
+the `django` logger keeps Django's own `mail_admins` there, which sends through
+the system mailer. `messaging.W001` reports an `AdminEmailHandler` on any
+configured logger that names no `using`, or the default. A host's own block
+keeps Django's loggers and names the transport on the handler that reports
+errors:
+
+```yaml
+LOGGING:raw: true
+LOGGING:
+  version: 1
+  disable_existing_loggers: false
+  filters:
+    require_debug_false:
+      (): django.utils.log.RequireDebugFalse
+    require_debug_true:
+      (): django.utils.log.RequireDebugTrue
+  formatters:
+    django.server:
+      (): django.utils.log.ServerFormatter
+      format: "[{server_time}] {message}"
+      style: "{"
+  handlers:
+    console:
+      level: INFO
+      filters: [require_debug_true]
+      class: logging.StreamHandler
+    django.server:
+      level: INFO
+      class: logging.StreamHandler
+      formatter: django.server
+    mail_admins:
+      level: ERROR
+      filters: [require_debug_false]
+      class: django.utils.log.AdminEmailHandler
+      using: transport
+  loggers:
+    django:
+      handlers: [console, mail_admins]
+      level: INFO
+    django.server:
+      handlers: [django.server]
+      level: INFO
+      propagate: false
+```
+
+## System mail
+
+The system channel is messaging's install row `messaging.system_channel`
+(backend `system`, `SystemChannelBackend`; vendor `messaging.email`), loaded by
+provision and recreated by the next load if deleted. It is ownerless and carries
+no grant. `ChannelManager.system_channel()` is its one lookup, read as named
+system work; absent, it refuses with `SystemChannelMissing`
+(`SYSTEM_CHANNEL_MISSING`, under `channel`).
+
+[`MessageManager.compose_as_system`](managers.py) writes system mail there:
+one queued email per call, through `compose`'s own writer, in the caller's
+transaction, from the deployment's `DEFAULT_FROM_EMAIL`
+(`AnymailEmailChannelBackend.default_sender`; the channel names no sender of its own).
+It takes a named `reason` and `to`, `cc`, `bcc`, `subject`, `text` and `html`,
+never a channel. Its rows record the causing actor as `created_by`, which grants
+nothing on messaging rows, and its conversation is recorded in the caller's
+changeset, under the causing user. A handle it creates, the sender's or a
+recipient's, has no creator: the handles are written under messaging's non-user
+attribution (`messaging/system:outgoing`), so their history is a changeset of
+its own beside the caller's, with the caller's change reason, naming no user.
+Each call mints its own Message-ID.
+`Channel.objects.system_mail_configured()` (`ChannelManager`) is the one
+answer callers ask, from settings alone, whether system mail can be sent: the
+backend the registry binds to the system key decides (a transport and a default
+sender the sender rule accepts, for messaging's own), and `compose_as_system`
+refuses exactly when it is false. `SystemChannelBackend.system_mail_configured()`
+is that backend's own contract, which callers do not name. The sender rule is
+`MessageManager.clean_recipient`, the one check every address messaging lands
+takes, plus `carries_address`: a sender whose part before the `@` is outside
+ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
+`Message.objects.clean_system_recipient(entry, key=...)`, which
+`compose_as_system` applies to each recipient and a caller asks before offering
+a send; both read nothing.
+
+An error report hides every local of every frame of the system write, from the
+system mailer and `compose_as_system` down to the ORM's and the SQL's, and of
+the shared writer `_write_outgoing` down for any mail (`sensitive_variables`).
+The delivery path is hidden the same way for any mail, as a message's string
+form is its preview: `Message.deliver` down, the worker's
+`run_message_delivery` down to the transport library's own frames, the release
+task's `release_held_messages` down, and the operator's `retry_delivery` and
+`acknowledge_delivery` down. Django's filter applies only with `DEBUG` off, so a
+debug page shows them all, and it never filters an exception's own message: a
+transport's or a database's error text can carry what the server echoed (an
+address, a line of the mail). An ordinary `compose`'s report
+therefore shows hidden frames below the writer, while `compose`'s own frame is
+not marked. Frames above the system mailer are the caller's: Django's
+`send_mail` holds the message it was given, so a caller that mails a credential
+through Django's mail API marks its own frame with a bare `@sensitive_variables()`:
+a named list still shows `send_mail`'s `message` and the wrapper's arguments. The delivery path logs a
+message's id and an error's type, never the message, and the recorded
+`delivery_error` keeps a transport's own text private. Nobody retries or
+acknowledges a system mail whose delivery failed or is uncertain, as its sealed
+`write` refuses both; the release task sends a lost one again. A failed or
+uncertain system mail stays so: once its transient retries are spent, nothing
+tries it again and no person can retry or acknowledge it; the feature that sent
+it sends a new one.
+
+The system mailer carries what a Django email can mean on the system channel:
+`to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.
+It drops `Message-ID` and `Date`, and does not carry `from_email`: system mail
+goes from the default sender, which replaces `SERVER_EMAIL` on a direct
+`mail_admins` too. It refuses attachments, `reply_to`, any other header, any
+other body or alternative type, an `AnymailMessage`, an empty body (which Django
+itself would send), and a recipient the transport cannot carry (`cannot_carry`,
+under its role), so a mail that could never leave is never recorded as sent. A batch is recorded whole or not at all; built with
+`fail_silently`, it logs a refusal and reports none sent.
+
+The system channel holds system mail, live sign-in links among it,
+so administrators alone read it, write, annotate or delete it, and nobody sends
+on it as a person, administrators included: the framework writes it as named
+system work (`MessageManager.compose_as_system`). These are messaging's
+`permissions.zed`, the channel's system seal; `messaging.E003` refuses a
+fragment arm on any of those permissions. Every other way a channel is read is
+closed on it:
+
+| Path | On the system channel |
+|---|---|
+| administrators | read, write, annotate, delete; never send (`reply`) |
+| a channel `reader`, `replier` or `annotator` grant | grants nothing |
+| an integration `reader` on its parent integration | lists the integration row, which holds no mail |
+| a spaces team bound to the channel | grants nothing |
+| a project bound to its integration | grants nothing |
+| its integration's owner, after an administrator transfers it | grants nothing |
+| a workflow trigger's principal | enabling a trigger on it is refused before any grant (`system_only`) |
+
+A system message is trashed only through the shared trash verb, which decides
+`delete` on it: administrators alone. A record's moderation never takes one off
+(`Message.trash_error`): it sits in the system channel's own thread.
+
+No verb shares a system thread or grants on a system message. Nobody shares a
+system thread or writes a system message, administrators included, and none of
+messaging's own arms writes a system thread, so the share verbs and a group or
+project binding of the thread are refused; administrators keep their deletes.
+What still reaches system mail without any verb: a `reader` or `editor` tuple
+written directly and the source-identity rule's principal, which read it, and
+another addon's arm on the thread's `read_granted`, `chatter_read` or `write`,
+which holds whenever a system thread carries what that arm keys on (a group, a
+project binding, a record's chatter edge), which only system code can give it.
+Their reads are not subtracted because the inbox's planned reads cannot afford
+it, and the composer appends the fragments' `write` arms after the seal.
+
+The system channel is system-only (`ChannelBackend.system_only`): it is never
+selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
+source. `compose` and `Message.require_reply` decide `reply` on the channel,
+which nobody holds there, so `compose(channel=Channel.objects.system_channel())`
+and an answer to a system message are refused for every person, administrators
+included, with no branch of their own. On the system channel the selection and
+the send agree: neither admits it. Its readers, administrators alone, find it
+among channels as "System mail", its threads in the inbox and its messages in
+timelines.

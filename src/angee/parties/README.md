@@ -151,7 +151,7 @@ person, which only claims an address someone else is linked to and is proposed
 as their same person (below), so a person who writes both joins them by a merge.
 The ingest verb refuses any other person a caller hands it
 (`PartyManager.ingest_contact`). A page locks, in one call and in the identity
-order, every spelling of its contacts' addresses and every handle stated on a
+order, every spelling or alias of its contacts' addresses and every handle stated on a
 party its links (its tombstones' included) or those addresses name, or on the
 person of an account one of them signs in with (`PartyManager.account_people`),
 then those parties, and only then reads who its addresses name, once
@@ -183,7 +183,7 @@ one of its emails names (the preferred email first), read from the page's
 lookup. Adoption is an access change, so the binding owner admits it:
 `PartyManager.adoption_blocker` refuses unless the stream is pull-only, the
 person, loaded under the locks, is live and no account's own, no address the
-contact carries is a person account's sign-in address in any spelling, whether
+contact carries is a person account's sign-in address in any spelling or alias, whether
 or not the account has a person, the directory's owner holds `adopt` on them
 (their owner, or an editor of their party or of the person, with no
 platform-admin arm, since every directory's owner is a platform admin; checked
@@ -200,7 +200,8 @@ own choosing is trusted code; moving the admission to the link's own binding
 owner is open with the architect. Otherwise the contact mints its own person.
 The handle an adoption found the person by is the evidence of the directory's
 identity statement on them, restated on every later record, and the contact's
-spelling of that address lands on the same handle row; a link keeps its adopted
+spelling or alias of that address lands on the same handle row (for an alias, the
+person-matching key picks it, one of the two sites still open for a ruling); a link keeps its adopted
 person if the option is turned off. Known limit of the option, open with the
 architect and pinned by a strict expected failure in the directory tests: a
 source states whole aspects, so on an adopted person a field no statement holds
@@ -227,7 +228,7 @@ stance that wins a handle moves the address: confirming a claim, taking control
 of an address (`HandleManager.claim_control`) and a confirmation a history revert
 restores all end in the handle's resolution (`Party.apply_handle`), where its
 author needs write on every other holder of the address as the page lookup reads
-them (`PartyManager.holding_blocker`): each live party any spelling of it
+them (`PartyManager.holding_blocker`): each live party any spelling or alias of it
 resolves to, a lapsed holder, and an account's person when it is an account's
 sign-in address. An account takes its own sign-in address whoever holds it, and
 nobody may while the account has no person. The refusal is one message whoever
@@ -307,7 +308,7 @@ Who an email address names is one verb,
 preference order, it answers the people they name, each with its basis (the
 account with that address, the live person holding it, else, whenever no live
 person holds it, the one person a current contact claim proposes it for),
-comparing handles by their normalized value. A trashed person, an organization
+comparing handles by their person-matching key. A trashed person, an organization
 and a merged-away row are nobody's answer, and a holder that is no live person
 does not stop the claims: a person minted earlier for an organization's address
 is found again by their claim. An account names only its existing person: the
@@ -327,7 +328,7 @@ The email decides, and a contact without one is decided by its number. The
 person found again is one whose standing claim on a handle of that address has
 a row of `own` behind it, never one a column names: a person a record of the
 source merely points at (one it adopted from someone else) is not its own.
-Another spelling is the same address, a trashed person is nobody's answer, a
+Another spelling or alias is the same address, a trashed person is nobody's answer, a
 merged one is found as its survivor, and of several the earliest. Nobody else's
 person is taken, whoever holds or claims the address, an account's own person
 included; the verb makes a new person instead, named as given and created by
@@ -341,19 +342,47 @@ part in any script (`jörg@`, `peña@`) with no whitespace, control or format
 character (a zero-width space, a direction mark), a domain that passes the
 domain rule of Django's `EmailValidator` (an internationalised one as typed or
 punycoded), and no longer than an address may be or the handle's value holds.
-Both spellings of an internationalised domain are one address: the handle keeps
-its `value` as typed, and `Handle.normalize_value` reads the punycode labels of
-a domain as Unicode in the comparison key (`normalized_value`), the column
-every lookup of an address reads. A label the standard library's `idna` codec
-cannot read stays as typed. That is one rule, `Handle.normalize_email_domain`,
-for whoever compares a domain: the organization-domain suggestion
-(`PartyManager.suggest_for`) reads the handle's domain and
-`Organization.domain`, which is stored as typed, through it on both sides, so
-either spelling of either suggests the organization. A handle stores the key
-its rule gave when it was last saved (`normalized_value`) and, beside it, the
-version the rule had then (`normalized_version`; 0 for a row stored before the
-rule had one). The handle's save is the one writer of the key and writes the
-two together. Changing what `Handle.normalize_value` or
+An email handle is one address whatever its letter case or domain spelling.
+`upsert` and `find_identities` land any such spelling on the one live handle,
+which keeps the spelling first written as its `value`, what a message to it is
+addressed to; its spelling key (`Handle.spelling_key_of`) is what a live email
+handle is unique by (`uq_handle_spelling_key`). One address, by that key, is
+every letter case of it (lower-cased, not case-folded: `Straße@` and `STRASSE@`
+are two) and every spelling of its domain that the email backend sends as one
+domain (IDNA 2003, as Django's `punycode` writes it): a punycode label and its
+Unicode, NFD and NFC, full-width letters and their ASCII, `ß` and `ss`. A label
+the standard library's `idna` codec cannot read or write stays as typed, so
+`xn--strae-oqa` (IDNA 2008's spelling of `straße`) is a domain of its own. A
+value with no `@` is no address and has no spelling key. A save that would keep a
+second live handle of an address is refused on `value` before it writes
+(`ValueOwned`, `Handle.value_owner`). A provider's alias (a Gmail dot or
+plus-tag) is a handle of its own, grouped with the others by the person-matching
+key (`Handle.normalize_value`, stored as `normalized_value`) wherever a person is
+looked up; that key still picks the handle an alias lands on at two sites open
+for a ruling, a directory adoption's through-handle and a claimant's email handle
+(`PartyManager.claimant_as_system`). On other platforms, a spelling is a
+handle, as before. That is
+one rule, `Handle.normalize_email_domain`, for whoever compares a domain. The
+organization-domain suggestion (`PartyManager.suggest_for`) reads it on both
+sides, but `Organization.domain` is stored as typed, so it first finds
+organizations whose domain is the handle's in the rule's spelling, its punycode,
+or the address's own spelling, ASCII letter case aside: from `ada@bücher.example`
+or `ada@xn--bcher-kva.example` it finds `bücher.example` and
+`xn--bcher-kva.example`, and from `ada@straße.example` it finds `straße.example`
+and `strasse.example`. It does not find an organization typed in another
+spelling the rule joins (`straße.example` from `ada@strasse.example`, an NFD or
+full-width spelling from the plain one), since organizations store no domain
+key. A handle stores
+the keys its rule gave when it was last saved (`spelling_key`,
+`normalized_value`) and, beside them, the version the rule had then
+(`normalized_version`; 0 for a row stored before the rule had one). The
+handle's save is the one writer of the keys and writes them together. The rules
+`Handle` owns (`value_owner`, `is_spelling_of`, `validate_merge`) compute a row's
+own keys from its value, so a row the key repair has not reached decides as it
+will; `PartyManager`'s readers of the person-matching key (the twins
+`suggest_for` proposes, the holders read, `_land_handles`, the same-person links)
+read the stored column, which is current once provision has run. Changing
+what `Handle.spelling_key_of`, `Handle.normalize_value` or
 `Handle.normalize_email_domain` returns means bumping
 `Handle.NORMALIZATION_VERSION`; a test pins the rule's outputs for a fixed
 sample beside the number, so an output that changes under one number fails.
@@ -362,17 +391,33 @@ every provision runs (`PartiesConfig.compose_provision`), selects the handles
 of every platform whose version is not the rule's, by that column's index, and
 saves each again through the handle's own save, under its row lock: an earlier
 version, 0, or a later one that newer code wrote before a rollback. A row
-whose key is already what the rule gives has it written again unchanged beside
-its version, and leaves the selection. With no row behind, the repair is that
-one indexed query. A run takes the whole backlog, because a row left with a
+whose keys are already what the rule gives has them written again unchanged
+beside its version, and leaves the selection. With no row behind, the repair is
+that one indexed query. A run takes the whole backlog, because a row left with a
 stale key is one the lookups that read keys miss, and a writer that misses it
 makes a second row. It saves in batches of `HandleManager.REPAIR_LIMIT` (500)
 rows, each in its own transaction, so an interrupted provision keeps what it
 saved and the next one resumes. Every batch starts after the last key the run
 selected, so a run selects no row twice and ends: a row deleted or already
 saved by another process is passed, and a row whose save raises is rolled
-back alone, logged, counted ("The comparison key of N handle(s) could not be
-saved; ...") and left for the next run while the rest are saved.
+back alone, logged, counted ("The keys of N handle(s) could not be saved;
+...") and left for the next run while the rest are saved. A live email handle
+that spells the address of another live one (two rows an earlier rule kept
+apart) is deferred from its batch and, after the batch commits, folded in a
+transaction of its own: the two rows are locked in the identity order, the
+older one (`_age`) survives and the other is folded into it, kept as a
+redirect ("Folded N handle(s) into the older handle of the same address; each
+is kept as a redirect."). What refers to the folded row moves or stays by its
+merge policy: a contact's statements (with their decisions and evidence),
+calendar attendees and reactions move to the survivor, while a message keeps
+the handle it was sent from or to, so a held message keeps its spelling; where
+two contacts held the two spellings, one now holds the address and the
+same-person review proposes the two. A fold the merge refuses (a seeded row, a
+row under an unfinished workflow run) is logged once per run without a
+traceback, naming both handles and why ("N handle(s) spell an address another
+handle owns and could not be folded; the log names each and why."): the row
+stays live and unkeyed, its exact value still finds it, every save that would
+key it is refused, and the next provision tries again.
 `renormalize_handles --limit N` saves a share instead, and only then ends
 with "Stopped at the cap of N handle(s); M more await the next provision or
 renormalize_handles run". Nothing is stated in full:
@@ -442,14 +487,18 @@ fallback is derived for reading and never stored or written to a card. Avatars
 live on storage's image drive, which every signed-in user reads; which avatar a
 party or handle shows stays with that record's readers.
 
-A handle that proves to be another's spelling folds through the shared
-`MergeableMixin` into the contact point on the same platform. Handle owns missing
+A handle that proves to be another's alias, or one address another rule kept
+apart, folds through the shared `MergeableMixin` into the contact point on the
+same platform. Handle owns missing
 value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
 Every later message to a merged handle's address goes to the kept one, so a
-person's merge (`merge_records`) admits only another spelling of the kept
-address, the same platform and comparison key, unless that person is a contact
+person's merge (`merge_records`) admits only another spelling or alias of the
+kept address, the same platform and person-matching key as the rule computes it
+from each value (never the stored column, which the key repair may not have
+reached; a number the phone rule reads only as its digits, `Handle.is_fallback_key`,
+is no one address), unless that person is a contact
 administrator: an effective member of `parties/role:contact_admin`, as platform
 administrators are. Anyone else is refused and merges the contacts instead,
 which says two addresses reach one person and moves no address. Messages already
@@ -472,12 +521,19 @@ system work included. Only the handle owner's verbs change a key, each holding
 the allowance for its own save: `HandleManager.upsert` rewrites `value` when a
 source's `external_id` matched and the account behind it moved, and
 `HandleManager.reidentify` rewrites `value` (a WhatsApp `@lid` resolved to its
-number) or folds the handle into the row that owns the new value. A fold changes
-neither row's keys, and history's revert restores a changeset's earlier keys as
-they were. Each saves through `Handle.save`, which derives `normalized_value`
-from the value it writes, so none leaves the comparison key behind. A resource
+number) or folds the handle into the row that owns the new value; another
+letter case or domain spelling of an email address reported behind the same
+`external_id` rewrites nothing. A fold changes neither row's keys, and history's
+revert restores a changeset's earlier keys as they were, unless the restored row
+would be a second live handle of an address another handle now owns: that revert
+is refused on `value` (`ValueOwned`), and nothing is written. Each saves through
+`Handle.save`, which derives the keys from the value it writes, so none leaves a
+key behind. A resource
 row that names another address under an xref a load already wrote is refused:
-a new address is a row of its own. The guard is the instance save: queryset
+a new address is a row of its own. A seed row that would keep a second live
+handle of an email address is refused too, and its load stops
+(`ResourceLoadError`) with nothing written, as a seed repeating an exact value
+does. The guard is the instance save: queryset
 `update`, `bulk_update` and a `bulk_create` that updates on conflict bypass it,
 and no path writes the keys that way.
 
@@ -598,13 +654,13 @@ Integration and observed links; parties binds targets in the application transac
 Identity matching (`PartyManager.reconcile_same_as`) writes normal RULE same_as
 statements on the ordered Party pair for every two live parties of one kind linked
 to one address (`PartyManager.same_person_links`). A party is linked when it holds
-a handle of that normalized value, or when a source that states its own record (a
+a handle of that person-matching key, or when a source that states its own record (a
 person, a system of record, a directory, an import, a source's claim) names one for
 it in a standing statement, a claim below review confidence included, whatever
 its evidence names (the handle, or the source's record link); a claim re-stated
 with more evidence is the same link and changes no pair. Any other
 rule or extraction, parties' own suggesters among them (a shared name, a domain, a
-twin spelling, a signature), links nobody until it is named, so a shared name alone
+twin spelling or alias, a signature), links nobody until it is named, so a shared name alone
 proposes no one. Only an address that names one account links: an email address, a
 phone number, or a handle with a platform id, never a name-only handle. A person is
 never paired with an organization, nor two accounts' own persons with each other,

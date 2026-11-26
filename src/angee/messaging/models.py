@@ -183,6 +183,12 @@ class Channel(Bridge, inherits="integrate.Integration"):
 
         return self.get_backend_class_impl().source_kind
 
+    @property
+    def system_only(self) -> bool:
+        """Whether this channel's protocol serves the system channel alone (``ChannelBackend.system_only``)."""
+
+        return self.get_backend_class_impl().system_only
+
     def can_reconcile_delivery(self) -> bool:
         """Read the concrete capability's backend declaration without opening it."""
 
@@ -1383,17 +1389,24 @@ class Message(
         """Return the addresses this message's ``Reply-To`` names, each with its display name.
 
         The header is read through :meth:`source_header_values` with the caller's
-        access, in header order. Each address is in the form a handle stores it
-        (``Handle.email_value``); a repeated address keeps its first display name,
-        and an entry the handle owner's predicate (``Handle.is_email_address``)
-        rejects is no address. Without a ``Reply-To`` the mapping is empty.
+        access, in header order. Which entries are one address is the spelling
+        key's (``Handle.spelling_key_of``); each is returned as the header first
+        spells it, with that entry's display name: what an answer is landed on
+        (``MessageManager.compose``). An address no handle holds yet is stored and
+        sent in that spelling; an address a handle holds is sent as that handle
+        stores it, with its display name, as every recipient is. An entry the
+        handle owner's predicate (``Handle.is_email_address``) rejects is no
+        address. Without a ``Reply-To`` the mapping is empty.
         """
 
         addresses: dict[str, str] = {}
+        named: set[str] = set()
         for name, address in getaddresses(self.source_header_values("reply-to", actor=actor)):
-            address = Handle.email_value(address)
-            if Handle.is_email_address(address):
-                addresses.setdefault(address, name.strip())
+            address = address.strip()
+            key = Handle.spelling_key_of(Handle.Platform.EMAIL, address)
+            if Handle.is_email_address(address) and key not in named:
+                named.add(key)
+                addresses[address] = name.strip()
         return addresses
 
     def require_reply(self, actor: Any) -> Channel:
@@ -1822,6 +1835,8 @@ class Message(
         self.revision = row.revision
         return row
 
+    # A row's str is its preview, so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.
 
@@ -1830,6 +1845,9 @@ class Message(
 
         return queue_message_delivery(self)
 
+    # The operator's verbs hold the row, whose str is its preview: an error report (DEBUG off)
+    # hides every local from here down, the manager's resolution and Django's save included.
+    @sensitive_variables()
     def acknowledge_delivery(self, *, actor: Any, expected_revision: int) -> Any:
         """Confirm an uncertain provider effect as sent without making another call."""
 
@@ -1837,6 +1855,7 @@ class Message(
             self, actor=actor, expected_revision=expected_revision, retry=False,
         )
 
+    @sensitive_variables()
     def retry_delivery(self, *, actor: Any, expected_revision: int) -> Any:
         """Retry FAILED, or explicitly accept repeat-effect risk for UNCERTAIN."""
 

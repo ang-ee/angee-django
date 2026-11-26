@@ -3,7 +3,7 @@
 A held message reads its addresses from its handles when it is sent, so a field
 write of one of them would send another person's message somewhere else. A merge
 sends every later message to the merged address to the kept one, so a person
-merges another spelling only, unless they are a contact administrator.
+merges another spelling or alias only, unless they are a contact administrator.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from tests.conftest import addon_schema, create_platform_admin, create_user, mak
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_compose import DESK, _wire, desk  # noqa: F401 -- the desk fixture
 
-KEYS = ("platform", "value", "external_id", "normalized_value")
+KEYS = ("platform", "value", "external_id", "spelling_key", "normalized_value")
 REFUSAL = "This identity or receipt is immutable."
 CHANGES = {"platform": Handle.Platform.OTHER, "value": "elsewhere@example.net", "external_id": "another-account"}
 
@@ -42,9 +42,10 @@ def _keys(handle: Any) -> tuple[Any, ...]:
 
 
 def _keyed(platform: str, value: str, external_id: str = "") -> tuple[Any, ...]:
-    """The keys a handle naming ``value`` stores, its comparison key as the rule gives it."""
+    """The keys a handle naming ``value`` stores, its spelling and person-matching keys as the rule gives them."""
 
-    return platform, value, external_id, Handle.normalize_value(platform, value)
+    keys = Handle.spelling_key_of(platform, value), Handle.normalize_value(platform, value)
+    return platform, value, external_id, *keys
 
 
 def _write(handle: Any, actor: Any, *, partial: bool = False, **changes: Any) -> None:
@@ -163,7 +164,7 @@ def test_a_refused_write_is_keyed_to_the_field_it_refuses(seats: tuple[Any, dict
     assert refused.value.message_dict == {field: [REFUSAL]}
 
 
-def test_the_handle_owners_verbs_change_its_keys_and_the_comparison_key_follows(
+def test_the_handle_owners_verbs_change_its_keys_and_the_derived_keys_follow(
     db: None, django_capture_on_commit_callbacks: Any,
 ) -> None:
     """``upsert`` behind a matched external id and ``reidentify`` change what a handle names; a fold changes no row's
@@ -284,6 +285,7 @@ def test_an_upsert_with_nothing_to_change_runs_one_statement_and_only_a_moved_ad
 
 
 HANDLE_SEED = "- _xref: client\n  platform: email\n  value: client@example.test\n"
+SPELLED_SEED = "- _xref: client_again\n  platform: email\n  value: Client@Example.test\n"
 
 
 def test_a_seed_creates_the_handle_it_names_and_cannot_readdress_it(db: None, tmp_path: Path) -> None:
@@ -308,9 +310,79 @@ def test_a_seed_creates_the_handle_it_names_and_cannot_readdress_it(db: None, tm
     assert not Handle._base_manager.filter(value="elsewhere@example.test").exists()
 
 
+@pytest.mark.parametrize(
+    ("numbers", "lands"),
+    [(("+1 787 555 0100", "+17875550100"), True), (("1-800-FLOWERS", "1-800-COLLECT"), False)],
+    ids=["two spellings of one number", "two numbers the rule reads only as digits"],
+)
+def test_a_person_merges_two_spellings_of_a_number_and_never_two_numbers_that_share_only_their_digits(
+    db: None, numbers: tuple[str, str], lands: bool,
+) -> None:
+    """The phone rule's fallback key, a value's digits (both of these are ``1800``), names no one address."""
+
+    del db
+    creator = create_user("merge-number-creator")
+    with system_context(reason="tests.parties.write_once.numbers"):
+        kept, merged = (
+            Handle.objects.upsert(platform="phone", value=number, created_by_id=creator.pk) for number in numbers
+        )
+    assert Handle.normalize_value("phone", kept.value) == Handle.normalize_value("phone", merged.value)
+    with actor_context(creator):
+        merge = Handle._base_manager.get(pk=kept.pk).with_actor(creator)
+        if lands:
+            merge.merge(records=[public_id_of(merged)])
+        else:
+            with pytest.raises(ValidationError) as refused:
+                merge.merge(records=[public_id_of(merged)])
+            assert refused.value.messages == [MERGE_REFUSAL]
+    assert Handle._base_manager.get(pk=merged.pk).merged_into_id == (kept.pk if lands else None)
+
+
+def test_a_seed_that_would_keep_a_second_live_handle_of_an_address_stops_its_load_and_writes_nothing(
+    db: None, tmp_path: Path,
+) -> None:
+    """Another spelling of a seeded address under its own xref is refused as a repeated exact value is."""
+
+    del db
+    (tmp_path / "resources").mkdir()
+    seed = tmp_path / "resources" / "020_parties.handle.yaml"
+    seed.write_text(HANDLE_SEED + SPELLED_SEED)
+    addon = make_addon(
+        name="tests.write_once_spelling", label="write_once_spelling", path=tmp_path,
+        resources={"install": [seed.name]},
+    )
+    with pytest.raises(ResourceLoadError, match="is this address; a second live handle of it is not kept"):
+        Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
+    with system_context(reason="tests.parties.write_once.seed_spelling"):
+        assert not Handle._base_manager.exists()
+
+    # The row loaded alone; then a second spelling joins the file, to apply over what the first load wrote.
+    seed.write_text(HANDLE_SEED)
+    Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
+    seed.write_text(HANDLE_SEED + SPELLED_SEED)
+    with pytest.raises(ResourceLoadError, match="is this address; a second live handle of it is not kept"):
+        Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
+    with system_context(reason="tests.parties.write_once.seed_spelling"):
+        assert list(Handle._base_manager.values_list("value", flat=True)) == ["client@example.test"]
+
+    # A re-apply: the seeded row as the repair has not reached it yet, beside a keyed spelling of its address; its
+    # seed then changes, so the load saves it again.
+    seed.write_text(HANDLE_SEED)
+    with system_context(reason="tests.parties.write_once.seed_spelling"):
+        seeded = Handle._base_manager.get(value="client@example.test")
+        Handle._base_manager.filter(pk=seeded.pk).update(spelling_key="", normalized_version=1)
+        keyed = Handle.objects.upsert(platform="email", value="CLIENT@example.test")
+    seed.write_text(HANDLE_SEED + "  label: work\n")
+    with pytest.raises(ResourceLoadError, match="is this address; a second live handle of it is not kept"):
+        Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
+    with system_context(reason="tests.parties.write_once.seed_spelling"):
+        assert Handle._base_manager.values_list("label", "spelling_key").get(pk=seeded.pk) == ("", "")
+        assert keyed.pk != seeded.pk
+
+
 MERGE_REFUSAL = "Only a contact administrator merges two different addresses; merge their contacts instead."
 MERGES = {
-    # seat: whether its merge of a handle into the kept one lands, for (another spelling, another address)
+    # seat: whether its merge of a handle into the kept one lands, for (an alias, another address)
     "creator": (True, False),
     "contact manager": (False, False),
     "contact administrator": (True, True),
@@ -318,12 +390,16 @@ MERGES = {
     "outsider": (False, False),
     "system fold": (True, True),
 }
-PAIRS = ("another spelling", "another address")
+PAIRS = ("an alias", "another address")
 
 
 @pytest.fixture
 def merging(db: None) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Three handles one contact holds, its creator's: the kept address, another spelling of it and another address."""
+    """Three handles one contact holds, its creator's: the kept address, an alias of it and another address.
+
+    The alias is a provider's (a Gmail dot), the same person-matching key: another letter case of the kept address
+    is the kept handle itself.
+    """
 
     del db
     creator = create_user("merge-creator")
@@ -334,8 +410,8 @@ def merging(db: None) -> tuple[dict[str, Any], dict[str, Any]]:
         handles = {
             name: Handle.objects.upsert(platform="email", value=value, created_by_id=creator.pk)
             for name, value in (
-                ("kept", "client@example.test"),
-                ("another spelling", "Client@Example.test"),
+                ("kept", "client.example@gmail.com"),
+                ("an alias", "clientexample@gmail.com"),
                 ("another address", "other@example.test"),
             )
         }
@@ -353,13 +429,27 @@ def merging(db: None) -> tuple[dict[str, Any], dict[str, Any]]:
     return handles, actors
 
 
+@pytest.mark.parametrize("keys", ["keyed", "behind the repair"])
 @pytest.mark.parametrize("pair", PAIRS)
 @pytest.mark.parametrize("seat", list(MERGES))
-def test_who_may_merge_which_handles(merging: tuple[dict[str, Any], dict[str, Any]], seat: str, pair: str) -> None:
-    """A person merges another spelling into a handle; only a contact administrator merges another address."""
+def test_who_may_merge_which_handles(
+    merging: tuple[dict[str, Any], dict[str, Any]], seat: str, pair: str, keys: str,
+) -> None:
+    """A person merges another spelling or alias into a handle; only a contact administrator merges another address.
+
+    The rule computes each person-matching key from the value, so rows whose stored keys the repair has not reached
+    yet (stale, each its own) decide as they will once it has.
+    """
 
     handles, actors = merging
     kept, merged = handles["kept"], handles[pair]
+    if keys == "behind the repair":
+        with system_context(reason="tests.parties.write_once.behind"):
+            for handle in (kept, merged):
+                Handle._base_manager.filter(pk=handle.pk).update(
+                    normalized_value=f"stale-{handle.pk}", spelling_key="", normalized_version=1,
+                )
+    stored = (_keys(kept), _keys(merged))
 
     def merge() -> None:
         if seat == "system fold":
@@ -379,9 +469,7 @@ def test_who_may_merge_which_handles(merging: tuple[dict[str, Any], dict[str, An
         if seat == "creator":
             assert isinstance(refused.value, ValidationError) and refused.value.messages == [MERGE_REFUSAL]
         assert Handle._base_manager.get(pk=merged.pk).merged_into_id is None
-    assert (_keys(kept), _keys(merged)) == (
-        _keyed("email", kept.value), _keyed("email", merged.value),
-    )
+    assert (_keys(kept), _keys(merged)) == stored
 
 
 def _resolve_first(self: Any, merged: Any) -> None:
@@ -400,7 +488,7 @@ def test_a_handle_merge_ends_in_the_same_rows_whichever_order_and_only_the_histo
     """Redirecting before resolving changes only the merged handle's version between: the rows it ends in agree."""
 
     handles, actors = merging
-    kept, merged = handles["kept"], handles["another spelling"]
+    kept, merged = handles["kept"], handles["an alias"]
     party = Handle._base_manager.get(pk=kept.pk).party_id
     confirmed = Handle._base_manager.get(pk=kept.pk).party_link_confirmed
     if order == "resolve first":
@@ -438,16 +526,18 @@ def _merge_records(user: Any, kept: Any, merged: Any) -> dict[str, Any]:
     return cast(dict[str, Any], result_data(execute_schema(schema, _MERGE, variables, user=user))["merge_records"])
 
 
-def _two_contacts_one_replier_typed(channel: Any) -> tuple[Any, Any, Any, Any]:
+def _two_contacts_one_replier_typed(
+    channel: Any, client_address: str = "client@example.test",
+) -> tuple[Any, Any, Any, Any]:
     """Two repliers; the first typed both the client's address and their own, so created both handles."""
 
     first, second = make_user("merge-redirect-first"), make_user("merge-redirect-second")
     for replier in (first, second):
         grant(channel, "replier", replier)
-    Message.objects.compose(channel=channel, to=["client@example.test"], text="Hi.", actor=first)
+    Message.objects.compose(channel=channel, to=[client_address], text="Hi.", actor=first)
     Message.objects.compose(channel=channel, to=["mine@example.net"], text="Mine.", actor=first)
     with system_context(reason="tests.parties.write_once.redirect"):
-        client = Handle._base_manager.get(value="client@example.test")
+        client = Handle._base_manager.get(value=client_address)
         mine = Handle._base_manager.get(value="mine@example.net")
     assert client.created_by_id == mine.created_by_id == first.pk
     return first, second, client, mine
@@ -467,14 +557,16 @@ def test_a_creator_cannot_merge_a_contact_into_their_own_address_and_the_next_pe
 
 
 @pytest.mark.parametrize(
-    "kept_address", ["Client@Example.test", "mine@example.net"], ids=["another spelling", "another address"],
+    ("client_address", "kept_address"),
+    [("client.example@gmail.com", "clientexample@gmail.com"), ("client@example.test", "mine@example.net")],
+    ids=["an alias", "another address"],
 )
 def test_a_contact_administrator_merges_through_the_mutation_and_only_later_mail_follows_the_kept_handle(
-    desk: Any, kept_address: str,  # noqa: F811 -- the compose desk fixture
+    desk: Any, client_address: str, kept_address: str,  # noqa: F811 -- the compose desk fixture
 ) -> None:
     """A contact administrator merges the client into a handle they did not create; mail already written stays."""
 
-    _first, second, client, mine = _two_contacts_one_replier_typed(desk)
+    _first, second, client, mine = _two_contacts_one_replier_typed(desk, client_address)
     contact_admin = create_user("merge-redirect-contact-administrator")
     with system_context(reason="tests.parties.write_once.redirect"):
         kept = mine if kept_address == mine.value else Handle.objects.upsert(platform="email", value=kept_address)
@@ -482,14 +574,14 @@ def test_a_contact_administrator_merges_through_the_mutation_and_only_later_mail
         party = Party._base_manager.create(display_name="Client Example", created_by=contact_admin)
         for handle in (client, kept):
             Party.objects.assert_handle(party, handle, asserted_by=contact_admin)
-    held = Message.objects.compose(channel=desk, to=["client@example.test"], text="For approval.", actor=second)
+    held = Message.objects.compose(channel=desk, to=[client_address], text="For approval.", actor=second)
 
     assert _merge_records(contact_admin, kept, client)["ok"] is True
-    later = Message.objects.compose(channel=desk, to=["client@example.test"], text="Later.", actor=second)
-    assert _wire(desk, held)["To"] == "client@example.test"
+    later = Message.objects.compose(channel=desk, to=[client_address], text="Later.", actor=second)
+    assert _wire(desk, held)["To"] == client_address
     assert _wire(desk, later)["To"] == kept_address
     assert Handle._base_manager.get(pk=client.pk).merged_into_id == kept.pk
-    assert _keys(client) == _keyed("email", "client@example.test")
+    assert _keys(client) == _keyed("email", client_address)
 
 
 def test_merging_two_contacts_leaves_each_of_their_addresses_as_it_is(
