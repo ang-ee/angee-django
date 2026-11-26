@@ -50,6 +50,7 @@ from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import AngeeQuerySet, by_key, row_lock_paths
 from angee.base.signals import connect_for_models
 from angee.iam.identity import group_subject_type, user_label
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
 if TYPE_CHECKING:
     from angee.workflows.models import Trigger, TriggerEvent
@@ -841,7 +842,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
                     evaluated_at=F("changed_at"), rejection=reason,
                 )
                 return False
-            except (ValidationError, PermissionDenied) as error:
+            except (ValidationError, PermissionDenied, CreationKeyConflict) as error:
                 events.system_queryset().filter(pk=current.pk).update(
                     evaluated_at=F("changed_at"), rejection=exception_text(error),
                 )

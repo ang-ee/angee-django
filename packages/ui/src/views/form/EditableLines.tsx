@@ -25,7 +25,7 @@ import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
 import {
-  CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig, lineLockedFields,
+  CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig, lineLockedFields, lineRowKey,
 } from "./editable-lines";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormHistory } from "./use-form-history";
@@ -91,7 +91,7 @@ export interface EditableLinesProps {
 /** Authored presentation of one line field, keyed by its name. */
 export interface EditableLineField extends Pick<
   FieldDescriptor,
-  "name" | "currencyField" | "description" | "options" | "statusDisplay" | "widget"
+  "name" | "currencyField" | "description" | "options" | "relationEdit" | "statusDisplay" | "widget"
 > {
   /** Column header and the cells' accessible name. */
   label?: string;
@@ -224,6 +224,7 @@ export function EditableLines({
       name: field.name, label: header, widget, options: authored?.options ?? enumOptions(field),
       ...(currencyField ? { currencyField } : {}),
       ...(statusDisplay ? { statusDisplay } : {}),
+      ...(authored?.relationEdit === null ? { relationEdit: null } : {}),
     };
     const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
     return {
@@ -245,6 +246,8 @@ export function EditableLines({
           "aria-invalid": messages.length > 0 || undefined,
         };
         const path = `${name}.${index}.${field.name}`;
+        // A relation cell's draft slot names its row by identity, so two rows never share one.
+        const slot = `${name}.${lineRowKey(value, config) ?? id}.${field.name}`;
         return <div className="min-w-0">
           <Controller control={control} name={path}
             render={({ field: controller }) => {
@@ -259,6 +262,7 @@ export function EditableLines({
                   value={Array.isArray(controller.value) ? controller.value : []}
                   onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relationMulti}
                   filters={relationFilters?.(field.name, parentRow ?? null)}
+                  fieldName={slot}
                   aria-label={header}
                 />
               ) : relation ? (
@@ -268,6 +272,8 @@ export function EditableLines({
                   onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relation}
                   filters={relationFilters?.(field.name, parentRow ?? null)}
                   selectedOption={relationSelectedOption(controller.value, relation.labelField)}
+                  fieldName={slot}
+                  edit={authored?.relationEdit}
                   aria-label={header}
                 />
               ) : (

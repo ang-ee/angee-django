@@ -627,6 +627,14 @@ whether its reader may start or keep an override (`can_override`,
 `can_keep_override`), as the verbs decide. See
 [shipped defaults, overrides and reset](../src/angee/messaging_templates/README.md#shipped-defaults-overrides-and-reset).
 
+**Preview (message templates)** — a row rendered with its sample, with what a
+sender should know about it. A preview with a **patch** renders the open form's
+unsaved edits as Save would write them: it needs `write` as well as `preview`
+and whatever Save's gates ask of the columns it edits, refuses what Save would
+refuse (what Save's validation refuses as `save_refused`, in Save's words and
+under its fields; an edit Save admits but its sample cannot render is a
+`render_error`), and saves nothing. See [rendering](../src/angee/messaging_templates/README.md#rendering).
+
 **Backlinks (message templates)** — the rows, in any language, naming a message
 template's kind and key: a template its layout, any row a block or part it
 includes. It is the Links rule's **Backlinks**, incoming references
@@ -704,6 +712,12 @@ activate a theme.
 
 **Appearance** — the effective presentation and the user or host settings that
 select it: a theme, a color-scheme preference and that theme's supported options.
+The host's options may come at run time from one installed **host appearance**
+source ([host and user precedence](frontend/appearance.md#host-and-user-precedence)).
+
+**Brand kit** — a deployment's brand facts, one `angee.brandkit` row per kit; once
+any exists, exactly one is the **default kit**. A theme owns structure and applies a
+kit (see the [brand kit README](../src/angee/brandkit/README.md)).
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.
@@ -714,6 +728,15 @@ a theme rather than a template.
 
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
+
+**Idempotency key (client)** — the request identity a keyed write carries, one
+per **draft**: what one surface writes to one target (a record's chatter box,
+the dialog for one action on one record, a new-record form), named by its
+**draft scope**, which one surface holds at a time; a create form's scope
+names the surface hosting it. `useIdempotencyKeys` mints the key at the
+draft's first attempt and keeps it for the app runtime until a confirmed
+answer ends the draft, so every retry of it, edited or not, is written once by
+the server; a conflict (the key spent on other content) starts a new draft.
 
 **Settings place** — the one synthetic destination in every console that groups
 every menu node declared with `group:"platform"`, at any depth. Its rail entry

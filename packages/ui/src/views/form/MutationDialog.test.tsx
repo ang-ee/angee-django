@@ -1,10 +1,12 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from "@testing-library/react";
+import { useNavigate } from "@tanstack/react-router";
+import { boundedGraphQLTransportError } from "@angee/refine";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 
-import type { ReactElement } from "react";
+import { Component, useState, type ReactElement, type ReactNode } from "react";
 import { ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type WidgetMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
@@ -14,9 +16,11 @@ import {
   MutationDialog,
   mutationDialogValueCodecs,
   submitMutationDialog,
+  type KeyedMutationDialogProps,
+  type MutationDialogProps,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
-import { MEMBER_ERRORS, type FormSubmitResult } from "./validation-errors";
+import { MEMBER_ERRORS, actionOutcomeSubmitResult, formSubmitError, type FormSubmitResult } from "./validation-errors";
 import type { DescriptorField } from "./DescriptorFieldList";
 import { createUiTestProviders } from "../../testing";
 
@@ -24,7 +28,23 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false } } },
 });
 
-const render = (ui: ReactElement) => testingRender(ui, { wrapper: ToastProvider });
+// The app's providers a form dialog renders under: the router it guards and the ModalsHost it asks through.
+const app = createUiTestProviders({ router: true });
+
+/** Catch what a surface throws as it renders, as an app's error boundary does. */
+class Caught extends Component<{ children?: ReactNode; caught: (error: Error) => void }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  override componentDidCatch(error: Error) { this.props.caught(error); }
+  override render() { return this.state.failed ? null : this.props.children; }
+}
+const AppProviders = ({ children }: { children?: ReactNode }) => <app.Provider><ToastProvider>{children}</ToastProvider></app.Provider>;
+const render = (ui: ReactElement) => testingRender(ui, { wrapper: AppProviders });
+const router = () => app.routers.at(-1)!;
+const DISCARD = "Unsaved changes - leave without saving?";
+const STILL_SENDING = "Still sending - leave before the answer arrives?";
+/** Let the form publish what a keystroke changed (its dirty state lands a render after the value), as the next event a person makes finds it. */
+const settle = () => act(async () => { await Promise.resolve(); });
 
 const ok = { status: "ok", data: undefined } as const;
 const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
@@ -54,6 +74,7 @@ describe("MutationDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText("Try again")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Leave" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     fireEvent.click(trigger);
@@ -61,7 +82,7 @@ describe("MutationDialog", () => {
     expect(screen.queryByText("Try again")).toBeNull();
   });
 
-  test("a dismissed trigger session ignores its pending submission", async () => {
+  test("Escape, Close and Cancel while a submission is pending keep the dialog open, and its answer then shows", async () => {
     let resolve!: (value: FormSubmitResult<string>) => void;
     const onSubmitted = vi.fn();
     const submit = vi.fn(() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; }));
@@ -69,7 +90,7 @@ describe("MutationDialog", () => {
       <MutationDialog
         trigger={<button type="button">Open request</button>}
         title="Request"
-        fields={[]}
+        fields={[{ name: "note", label: "Note" }]}
         submitLabel="Send"
         parseValues={parseRawValues}
         onSubmit={submit}
@@ -77,18 +98,63 @@ describe("MutationDialog", () => {
       />
     </AppRuntimeProvider>);
 
-    const trigger = screen.getByRole("button", { name: "Open request" });
-    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: "Open request" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Note" }), { target: { value: "Ship it" } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    fireEvent.click(trigger);
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    resolve({ status: "ok", data: "old result" });
-    await Promise.resolve();
-    expect(onSubmitted).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => { await new Promise((done) => setTimeout(done, 0)); });
     expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await act(async () => { resolve({ status: "ok", data: "sent", message: "Request sent." }); });
+    expect(await screen.findByText("Request sent.")).toBeTruthy();
+    expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("sent", { note: "Ship it" });
+    // The accepted close is the dialog's own: it asks nothing, though the values were typed.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("dismissing typed values asks first; Stay keeps them, and an untouched dialog closes at once", async () => {
+    const close = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={close} title="Connect" fields={[{ name: "name", label: "Name" }]}
+        submitLabel="Connect" parseValues={parseRawValues} onSubmit={vi.fn()} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(close).toHaveBeenCalledExactlyOnceWith(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    close.mockClear();
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Long message" } });
+    await settle();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(close).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Long message");
+  });
+
+  test("an accepted submission whose dialog went away while it ran still toasts its message; only onSubmitted is skipped", async () => {
+    let resolve!: (value: FormSubmitResult<string>) => void;
+    const onSubmitted = vi.fn();
+    function Host(): ReactElement {
+      const [shown, setShown] = useState(true);
+      return <>
+        <button type="button" onClick={() => setShown(false)}>Leave the pane</button>
+        {shown ? <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[]} submitLabel="Send" parseValues={parseRawValues}
+          onSubmit={() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; })} onSubmitted={onSubmitted} /> : null}
+      </>;
+    }
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><Host /></AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    fireEvent.click(screen.getByRole("button", { name: "Leave the pane", hidden: true }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => { resolve({ status: "ok", data: "msg_1", message: "Message queued for delivery." }); });
+    expect(await screen.findByText("Message queued for delivery.")).toBeTruthy();
+    expect(onSubmitted).not.toHaveBeenCalled();
   });
 
   test("allows an optional-only dialog to submit its initial omitted value", async () => {
@@ -142,6 +208,23 @@ describe("MutationDialog", () => {
     expect(screen.getByRole("textbox", { name: "Size" }).getAttribute("aria-invalid")).toBeNull();
     expect(parse).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  // A field declared by a number widget alone has no kind, so the seed rule does not leave it out and it is seeded
+  // null; a bound makes it a field the rule check reads, and the check takes that seed for the field holding nothing.
+  test.each(["integer", "float", "percent", "progressBar"])("an optional bounded field declared by the %s widget alone, left untouched, keeps the submit enabled beside a required sibling, and the dialog submits", async (widget) => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Quota" fields={[
+        { name: "host", label: "Host", required: true },
+        { name: "limit", label: "Limit", widget, maximum: 100 },
+      ]} initialValues={{ host: "h" }} submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+    const button = await screen.findByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("This field is required.")).toBeNull();
   });
 
   test("guard: a nullable field is seeded with null, not with its empty value", async () => {
@@ -317,15 +400,16 @@ describe("MutationDialog", () => {
     const message = await screen.findByText("Choose a title Use a unique value");
     const input = screen.getByRole("textbox", { name: "Title" });
     expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(message.id);
-    // The form-level message and each message no rendered field claims are separate items of the banner.
+    // The form-level message, the line naming the refused fields the form shows, and each message no
+    // rendered field claims are separate items of the banner.
     const banner = screen.getByText("Review the values").closest<HTMLElement>('[role="alert"]')!;
     expect(within(banner).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      "Review the values", "missing: The entry changed", "token: Refresh the entry",
+      "Review the values", "Please fix the highlighted fields: details.title.", "missing: The entry changed", "token: Refresh the entry",
     ]);
     expect(submit).not.toHaveBeenCalled();
   });
 
-  test("a dismissed session ignores pending validation before firing the mutation", async () => {
+  test("a dismissal while validation is pending is refused, and the submission goes on once it passes", async () => {
     let finish!: (value: null) => void;
     const submit = vi.fn().mockResolvedValue(ok);
     const validate = vi.fn(() => new Promise<null>((resolve) => { finish = resolve; }));
@@ -338,10 +422,316 @@ describe("MutationDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(validate).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await act(async () => { finish(null); });
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+  });
+
+  test("a route move while values are typed asks first, about unsaved changes; at rest it asks nothing", async () => {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[{ name: "text", label: "Message" }]} submitLabel="Send"
+        parseValues={parseRawValues} onSubmit={vi.fn()} />
+    </AppRuntimeProvider>);
+    const moveAway = () => act(() => { void router().history.push("/elsewhere"); });
+    moveAway();
+    await waitFor(() => expect(router().history.location.pathname).toBe("/elsewhere"));
+    act(() => { void router().history.push("/"); });
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Hello" } });
+    await settle();
+    moveAway();
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router().history.location.pathname).toBe("/");
+  });
+
+  test("a route move while a submission of untouched values runs asks first, saying it is still sending, not that changes are unsaved", async () => {
+    let resolve!: (value: FormSubmitResult<string>) => void;
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[{ name: "text", label: "Message" }]} initialValues={{ text: "Hello" }}
+        submitLabel="Send" parseValues={parseRawValues} onSubmit={() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; })} />
+    </AppRuntimeProvider>);
+    await waitFor(() => expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    act(() => { void router().history.push("/elsewhere"); });
+    const question = await screen.findByRole("alertdialog", { name: STILL_SENDING });
+    expect(question.textContent).toContain("Leaving does not stop it");
+    expect(screen.queryByRole("alertdialog", { name: DISCARD })).toBeNull();
+    fireEvent.click(within(question).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router().history.location.pathname).toBe("/");
+  });
+
+  test.each(["controlled", "trigger-owned"] as const)("a %s create whose onSubmitted navigates through the router moves on, asking nothing, though its values were typed", async (owner) => {
+    function Catalogue(): ReactElement {
+      const navigate = useNavigate();
+      const [open, setOpen] = useState(true);
+      const shared = {
+        title: "Create", fields: [{ name: "name", label: "Name", required: true }], submitLabel: "Save", parseValues: parseRawValues,
+        onSubmit: async () => ({ status: "ok", data: "d1", message: "Created." }) as FormSubmitResult<string>,
+        onSubmitted: () => { void navigate({ to: "/dashboards/d1" }); },
+      };
+      return owner === "controlled"
+        ? <MutationDialog {...shared} open={open} onOpenChange={setOpen} />
+        : <MutationDialog {...shared} trigger={<button type="button">New dashboard</button>} />;
+    }
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><Catalogue /></AppRuntimeProvider>);
+    if (owner === "trigger-owned") fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Q4" } });
+    await settle();
+    await waitFor(() => expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(router().history.location.pathname).toBe("/dashboards/d1"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByText("Created.")).toBeTruthy();
+  });
+
+  test("while a submission runs the dialog is busy, Close and Cancel stay focusable and give their reason, and a refused Escape is announced", async () => {
+    let resolve!: (value: FormSubmitResult<string>) => void;
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[]} submitLabel="Send" parseValues={parseRawValues}
+        onSubmit={() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; })} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.getAttribute("aria-busy")).toBe("true");
+    const reason = "Still sending: the dialog can close once the answer arrives.";
+    for (const name of ["Close", "Cancel"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.getAttribute("aria-disabled")).toBe("true");
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      expect(document.getElementById(button.getAttribute("aria-describedby")!.split(" ").at(-1)!)?.textContent).toBe(reason);
+    }
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => expect(within(dialog).getByRole("status").textContent).toBe(reason));
+    await act(async () => { resolve({ status: "ok", data: "sent" }); });
+    expect(dialog.getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" }).getAttribute("aria-disabled")).toBeNull();
+  });
+
+  test.each<[string, () => unknown, string | null]>([
+    ["a lost answer says it may not have been sent", () => boundedGraphQLTransportError(new TypeError("Failed to fetch")),
+      "The answer was lost, so it may not have been sent. Check before you send it again."],
+    ["a refusal says the server's reason", () => boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+      message: "Name is taken.", extensions: { code: "VALIDATION", validationErrors: {}, formErrors: ["Name is taken."] } }] } }), "Name is taken."],
+  ])("a failed send whose dialog went away while it ran is still reported: %s", async (_name, failure, description) => {
+    let fail!: (error: unknown) => void;
+    function Host(): ReactElement {
+      const [shown, setShown] = useState(true);
+      return <>
+        <button type="button" onClick={() => setShown(false)}>Leave the pane</button>
+        {shown ? <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[]} submitLabel="Send" parseValues={parseRawValues}
+          errorFallback="Message not sent." mutation={() => new Promise((_resolve, reject) => { fail = reject; })} /> : null}
+      </>;
+    }
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><Host /></AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(fail).toBeTypeOf("function"));
+    fireEvent.click(screen.getByRole("button", { name: "Leave the pane", hidden: true }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    finish(null);
-    await Promise.resolve();
-    expect(submit).not.toHaveBeenCalled();
+    await act(async () => { fail(failure()); });
+    expect((await screen.findAllByText("Message not sent.")).length).toBeGreaterThan(0);
+    if (description) expect(screen.getAllByText(description).length).toBeGreaterThan(0);
+  });
+
+  test("a dialog given a draft scope sends one key for it: across a lost answer, a close and a reopening, until one is accepted", async () => {
+    const sent: Array<string | undefined> = [];
+    const answers: Array<() => Promise<{ id: string }>> = [
+      async () => { throw new TypeError("Failed to fetch"); },
+      async () => { throw new TypeError("Failed to fetch"); },
+      async () => ({ id: "dsh_1" }),
+      async () => ({ id: "dsh_2" }),
+    ];
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New dashboard</button>} title="Create" fields={[]} submitLabel="Create"
+        parseValues={parseRawValues} idempotencyScope="dashboards.create-personal"
+        mutation={(_values, _options, idempotencyKey) => { sent.push(idempotencyKey); return answers.shift()!(); }} />
+    </AppRuntimeProvider>);
+    const create = async () => {
+      if (!screen.queryByRole("dialog")) fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+      const count = sent.length;
+      fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+      await waitFor(() => expect(sent).toHaveLength(count + 1));
+    };
+    await create();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await create();
+    await create();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await create();
+    expect(sent[0]).toEqual(expect.any(String));
+    expect(sent.slice(0, 3)).toEqual([sent[0], sent[0], sent[0]]);
+    expect(sent[3]).not.toBe(sent[0]);
+  });
+
+  test.each([
+    ["a keyed dialog says it may have been sent and that sending again sends it once", "dashboards.create-personal",
+      "No answer came back, so it may have been sent. Sending again from this page sends it once."],
+    ["an unkeyed one, whose resend could write twice, says only what failed", undefined, "Request failed."],
+  ])("while open, a lost answer is told as one: %s", async (_name, scope, told) => {
+    const lost = boundedGraphQLTransportError(new TypeError("Failed to fetch"));
+    const props = { title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues, open: true, onOpenChange: vi.fn() };
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      {scope ? <MutationDialog {...props} idempotencyScope={scope} mutation={async () => { throw lost; }} />
+        : <MutationDialog {...props} mutation={async () => { throw lost; }} />}
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText(told)).toBeTruthy();
+  });
+
+  test.each([
+    ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field", ["Could not rename."], "banner"],
+    ["a refusal of a field only brings the person to that field", [], "field"],
+  ] as const)("%s", async (_name, formErrors, focused) => {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Rename" fields={[{ name: "name", label: "Display name" }]}
+        initialValues={{ name: "Ada" }} submitLabel="Save" parseValues={parseRawValues}
+        onSubmit={async () => ({ status: "invalid", issues: { fieldErrors: { name: ["Taken."] }, formErrors: [...formErrors] } })} />
+    </AppRuntimeProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const field = screen.getByRole("textbox", { name: "Display name" });
+    await screen.findByText("Taken.");
+    if (focused === "field") {
+      await waitFor(() => expect(document.activeElement).toBe(field));
+    } else {
+      const banner = (await screen.findByText("Could not rename.")).closest("[tabindex='-1']");
+      await waitFor(() => expect(document.activeElement).toBe(banner));
+      expect(banner?.textContent).toContain("Display name");
+    }
+  });
+
+  test("a keyed dialog whose submission returns its failures as results ends a spent key's draft: lost, then conflict, then a new key", async () => {
+    const sent: string[] = [];
+    const conflict = boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+      message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] } });
+    const answers: unknown[] = [boundedGraphQLTransportError(new TypeError("Failed to fetch")), conflict];
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New dashboard</button>} title="Create" fields={[]} submitLabel="Create"
+        parseValues={parseRawValues} idempotencyScope="dashboards.create-personal" closeOnSubmit={false}
+        onSubmit={(_values, _options, idempotencyKey) => {
+          sent.push(idempotencyKey);
+          const cause = answers.shift();
+          // The dialog's own result type for a failure, returned rather than thrown.
+          return cause === undefined ? { status: "ok", data: null } : formSubmitError(cause, "Could not create.");
+        }} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+      await waitFor(() => expect(sent).toHaveLength(attempt));
+    }
+    expect(sent[1]).toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[0]);
+  });
+
+  test("a lost answer returned as a result keeps its draft past a dismissal: the same content sent after reopening carries the same key", async () => {
+    const sent: string[] = [];
+    const resend = "No answer came back, so it may have been sent. Sending again from this page sends it once.";
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New quarter</button>} title="Create" fields={[{ name: "name", label: "Name" }]}
+        submitLabel="Create" parseValues={parseRawValues} idempotencyScope="quarters.create"
+        onSubmit={(_values, _options, idempotencyKey) => {
+          sent.push(idempotencyKey);
+          return sent.length === 1
+            ? formSubmitError(boundedGraphQLTransportError(new TypeError("Failed to fetch")), "Could not create.", resend)
+            : { status: "ok", data: null };
+        }} />
+    </AppRuntimeProvider>);
+    const typeAndCreate = async () => {
+      fireEvent.click(screen.getByRole("button", { name: "New quarter" }));
+      fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Q4" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    };
+    await typeAndCreate();
+    expect(await screen.findByText(resend)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Leave" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await typeAndCreate();
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toBe(sent[0]);
+  });
+
+  test("one draft scope belongs to one open dialog: two open at once fail in development, naming it; a closed one holds none", async () => {
+    const caught: Error[] = [];
+    // A trigger-owned dialog stays mounted while closed: it holds its scope only once opened.
+    const dialog = (open: boolean | "closed") => <MutationDialog
+      {...(open === "closed" ? { trigger: <button type="button">New dashboard</button> } : { open, onOpenChange: vi.fn() })}
+      title="Create" fields={[]} submitLabel="Create"
+      parseValues={parseRawValues} idempotencyScope="dashboards.create-personal" onSubmit={() => ({ status: "ok", data: null })} />;
+    const page = (second: boolean) => <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <Caught caught={(error) => caught.push(error)}>{dialog(true)}{dialog(second ? true : "closed")}</Caught>
+    </AppRuntimeProvider>;
+    const spied = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      let view!: ReturnType<typeof render>;
+      await act(async () => { view = render(page(false)); await Promise.resolve(); });
+      expect(screen.getByRole("dialog", { name: "Create" })).toBeTruthy();
+      expect(caught).toEqual([]);
+      await act(async () => { view.rerender(page(true)); await Promise.resolve(); });
+    } finally {
+      spied.mockRestore();
+    }
+    expect(caught[0]?.message).toContain('Two mounted surfaces hold the idempotency draft scope "dashboards.create-personal"');
+  });
+
+  test("a keyed dialog's submission is typed with its draft's key; an unkeyed one is called with none", () => {
+    const keyed: KeyedMutationDialogProps<Record<string, unknown>> = {
+      title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues, idempotencyScope: "scope",
+      mutation: async (_values, _options, idempotencyKey) => ({ key: idempotencyKey.toUpperCase() }),
+    };
+    const unkeyed: MutationDialogProps<Record<string, unknown>> = { title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues,
+      // @ts-expect-error a submission taking a key is a keyed one: without `idempotencyScope` there is none to take.
+      mutation: async (_values: Record<string, unknown>, _options: unknown, idempotencyKey: string) => ({ key: idempotencyKey }) };
+    expect([keyed.idempotencyScope, unkeyed.idempotencyScope]).toEqual(["scope", undefined]);
+  });
+
+  test("a draft given up with nothing possibly written ends with its dialog: the next opening sends a new key", async () => {
+    const sent: Array<string | undefined> = [];
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New dashboard</button>} title="Create" fields={[]} submitLabel="Create"
+        parseValues={parseRawValues} idempotencyScope="dashboards.create-personal"
+        onSubmit={(_values, _options, idempotencyKey) => {
+          sent.push(idempotencyKey);
+          return { status: "invalid", issues: { fieldErrors: {}, formErrors: ["Name is taken."] } };
+        }} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    await screen.findByText("Name is taken.");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).not.toBe(sent[0]);
+  });
+
+  test("a trigger-owned dialog whose owner stops offering the trigger while it is open stays open, and reports its answer", async () => {
+    let resolve!: (value: FormSubmitResult<string>) => void;
+    const onSubmitted = vi.fn();
+    function Host(): ReactElement {
+      const [offered, setOffered] = useState(true);
+      return <>
+        <button type="button" onClick={() => setOffered(false)}>Read changed</button>
+        <MutationDialog trigger={offered ? <button type="button">New message</button> : undefined} title="Send" fields={[]}
+          submitLabel="Send" parseValues={parseRawValues} onSubmitted={onSubmitted}
+          onSubmit={() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; })} />
+      </>;
+    }
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><Host /></AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "New message" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Send" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    fireEvent.click(screen.getByRole("button", { name: "Read changed", hidden: true }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await act(async () => { resolve({ status: "ok", data: "msg_1", message: "Message queued for delivery." }); });
+    expect(await screen.findByText("Message queued for delivery.")).toBeTruthy();
+    expect(onSubmitted).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Send" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "New message" })).toBeNull();
   });
 
   test("resolves dependent descriptor options from current values without replacing an unknown value", async () => {
@@ -760,10 +1150,8 @@ describe("MutationDialog", () => {
           .getAttribute("aria-busy"),
       ).toBe("true"),
     );
-    expect(
-      (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    // Locked but focusable, so a keyboard user keeps their place; its reason is its description.
+    expect(screen.getByRole("button", { name: "Cancel" }).getAttribute("aria-disabled")).toBe("true");
 
     finishSubmit?.();
     await pendingSubmit;
@@ -802,6 +1190,80 @@ test("a refusal bound to a field is reported once: under the field, with no bann
   expect(screen.queryByText("Could not subscribe to the calendar feed.")).toBeNull();
   // The dialog runs the call with refine's generic error notification off: no toast repeats it.
   expect(mutation).toHaveBeenCalledExactlyOnceWith({ url: "webcal://127.0.0.1/feed.ics" }, { errorNotification: false });
+});
+
+describe("an action's refusal, as the server answers it, says each reason once and lands where the reason is", () => {
+  // The server's `message` joins every reason (`ActionResult.from_error`); non-field ones sit under
+  // `__all__`, and a refused target's message is the verb's summary. A text field stays enabled
+  // while the submit runs, so focus can reach it.
+  const TO = "Enter one email address.";
+  const SUBJECT = "Write a subject.";
+  const CHANNEL = "The channel cannot send now.";
+  const TOKEN = "The token has expired.";
+  const DENIED = "You are not allowed to modify this task.";
+  const fields: readonly DescriptorField[] = [
+    { name: "to", label: "To", widget: "text" },
+    { name: "subject", label: "Subject", widget: "text" },
+    { name: "token", label: "Token", hidden: true },
+  ];
+  async function refuse(refusal: { message: string; validationErrors: Record<string, string[]> }) {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={() => undefined} title="New message" fields={fields}
+        initialValues={{ to: "ana", subject: "", token: "t" }} submitLabel="Send" parseValues={parseRawValues}
+        mutation={async () => ({ ok: false, ...refusal })} mutationResult={actionOutcomeSubmitResult} />
+    </AppRuntimeProvider>);
+    const send = screen.getByRole<HTMLButtonElement>("button", { name: "Send" });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    // A real click puts focus on the button; the dialog opened with it on its first field, so
+    // without this a row that expects focus there passes with nothing moving it.
+    send.focus();
+    fireEvent.click(send);
+  }
+  const banner = () => screen.getByRole("dialog", { name: "New message" }).querySelector<HTMLElement>("[role='alert']");
+  /** The banner's lines: one message is its body, several a list. */
+  const bannerLines = () => {
+    const node = banner();
+    const items = [...node?.querySelectorAll("li") ?? []];
+    return items.length ? items.map((item) => item.textContent) : node ? [node.textContent] : [];
+  };
+
+  test("one refused field: its reason once, under it; the banner names the field without repeating it, and focus is on the field", async () => {
+    await refuse({ message: TO, validationErrors: { to: [TO] } });
+    expect(await screen.findAllByText(TO)).toHaveLength(1);
+    const to = screen.getByRole("textbox", { name: "To" });
+    expect(to.getAttribute("aria-invalid")).toBe("true");
+    expect(to.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText(TO).id);
+    expect(bannerLines()).toEqual(["Please fix the highlighted fields: To."]);
+    await waitFor(() => expect(document.activeElement).toBe(to));
+  });
+
+  test("two refused fields: focus on the first in the dialog's order, not the server's", async () => {
+    await refuse({ message: `${SUBJECT}; ${TO}`, validationErrors: { subject: [SUBJECT], to: [TO] } });
+    expect(await screen.findAllByText(TO)).toHaveLength(1);
+    expect(screen.getAllByText(SUBJECT)).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "To" })));
+  });
+
+  test("a refused field and a non-field reason: that reason on the banner, beside the line naming the field, and focus on the banner", async () => {
+    await refuse({ message: `${TO}; ${CHANNEL}`, validationErrors: { to: [TO], __all__: [CHANNEL] } });
+    expect(await screen.findAllByText(TO)).toHaveLength(1);
+    expect(bannerLines()).toEqual([CHANNEL, "Please fix the highlighted fields: To."]);
+    await waitFor(() => expect(document.activeElement).toBe(banner()));
+  });
+
+  test("a reason under a hidden field, which the dialog does not render, shows once on the banner, by its key, and the banner takes focus", async () => {
+    await refuse({ message: TOKEN, validationErrors: { token: [TOKEN] } });
+    await waitFor(() => expect(bannerLines()).toEqual([`token: ${TOKEN}`]));
+    expect(screen.getAllByText(TOKEN, { exact: false })).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(banner()));
+  });
+
+  test("a refused target: its reason on the banner, not the verb's summary", async () => {
+    await refuse({ message: "Send failed.", validationErrors: { __all__: [DENIED] } });
+    expect(await screen.findByText(DENIED)).toBeTruthy();
+    expect(bannerLines()).toEqual([DENIED]);
+    expect(screen.queryByText("Send failed.", { exact: false })).toBeNull();
+  });
 });
 
 test("validate and onSubmit get the call options that keep refine from toasting what the dialog renders", async () => {

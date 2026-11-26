@@ -585,12 +585,23 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
 }
 
 /**
+ * The fields a form shows a control of for `values`, in its order: those visible for them,
+ * resolved against them (`visibleFields`, which applies `showWhen` once), that are not hidden:
+ * `isFieldControlVisible` for a whole list, each field resolved first. A refusal's binder claims
+ * the reasons of these (the record form's save and both form dialogs), and the rule checks ask
+ * only these.
+ */
+export function shownFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
+  return visibleFields(fields, values).filter((field) => !field.hidden);
+}
+
+/**
  * A record form's errors for the rules its `fields` fail (the fields its save can write,
  * `pathWritable`, and the record does not redact, `fieldIsRedacted`, of those the form displays
  * for the record, `displayedFormFields`, and the rail rows `displayedRailGroups` holds), each
  * field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a dialog's check
  * (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for `values`
- * (`isFieldControlVisible`: neither hidden nor conditionally excluded) and not read-only, and
+ * (`shownFields`: neither hidden nor conditionally excluded) and not read-only, and
  * leaves the others to the server; a field only a group the record does not display declares, one
  * the save cannot write and one the record redacts are not among `fields`, so they are not asked,
  * whatever their widget.
@@ -608,8 +619,8 @@ export function formRuleErrors(
   requiredFieldNames: ReadonlySet<string>,
   t: UiTranslate,
 ): FieldErrors<FormValues> {
-  return fieldErrorsFromRules(visibleFields(fields, values)
-    .filter((field) => isFieldControlVisible(field, values) && !field.readOnly)
+  return fieldErrorsFromRules(shownFields(fields, values)
+    .filter((field) => !field.readOnly)
     .flatMap((field) => fieldRuleErrors(
       field,
       { value: dottedValue(values, field.name), present: hasDottedValue(values, field.name) },
@@ -620,7 +631,7 @@ export function formRuleErrors(
 /**
  * `sections`, each with the fields it shows for `values`: those visible for them, resolved against
  * them (`visibleFields`), that `displays` keeps (a record form's `displaysField`). A section keeps
- * its key and place whatever fields it is left with (`isEmptySection` says when it has none).
+ * its key and place whatever fields it is left with (`isEmptySection` says when none of them shows).
  */
 export function visibleSections(
   sections: readonly FormSectionModel[],
@@ -631,11 +642,12 @@ export function visibleSections(
 }
 
 /**
- * Whether a section has nothing to show: no field and no content of its own. The sheet renders
- * nothing for it, and the pane strip lists no pane for it.
+ * Whether a section has nothing to show: no field that renders a control (a `hidden` field keeps
+ * its value in the form and renders none) and no content of its own. The sheet renders nothing for
+ * it, its heading included, and the pane strip lists no pane for it.
  */
 export function isEmptySection(section: Pick<FormSectionModel, "fields" | "render">): boolean {
-  return section.fields.length === 0 && section.render === undefined;
+  return section.fields.every((field) => field.hidden) && section.render === undefined;
 }
 
 /** What decides whether a save writes a field at all. */
@@ -980,13 +992,21 @@ function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: stri
   }));
 }
 
+/**
+ * The text of the label a form shows for its field `name`: undefined for a field the form does
+ * not hold, one it shows without a label, or one whose label is not text (`textValue`).
+ */
+export function formFieldLabel(fieldByName: ReadonlyMap<string, FieldDescriptor>, name: string): string | undefined {
+  return textValue(fieldByName.get(name)?.label) || undefined;
+}
+
 export function fieldValidationSummary(
   fieldErrors: Record<string, readonly string[]>,
   fieldByName: ReadonlyMap<string, FieldDescriptor>,
   t: UiTranslate,
 ): string {
   const fields = Object.keys(fieldErrors).map(
-    (name) => fieldByName.get(name)?.label || name,
+    (name) => formFieldLabel(fieldByName, name) ?? name,
   );
   return fields.length > 0
     ? t("form.fixHighlightedFieldsNamed", { fields: fields.join(", ") })

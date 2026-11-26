@@ -2,14 +2,16 @@ import * as React from "react";
 import {
   FormRoot,
   RelationFieldWidget,
+  relationSelectedOption,
   relationValueId,
+  type RelationFieldWidgetProps,
   type WidgetDefinition,
   type WidgetRenderProps,
 } from "@angee/ui";
 
 import { usePartiesT } from "./i18n";
 
-export interface PartyPickerProps {
+export interface PartyPickerProps extends Pick<RelationFieldWidgetProps, "edit" | "selectedOption"> {
   value?: string | null;
   onChange: (value: string) => void;
   label?: React.ReactNode;
@@ -17,7 +19,8 @@ export interface PartyPickerProps {
 }
 
 function PartyPickerWidget({ value, onChange, onCommit, readOnly, field }: WidgetRenderProps<unknown>): React.ReactElement {
-  return <PartyPicker value={relationValueId(value)}
+  return <PartyPicker value={relationValueId(value)} selectedOption={relationSelectedOption(value, PARTY.labelField)}
+    edit={field?.relationEdit}
     label={field?.label} readOnly={readOnly} onChange={(next) => { onChange?.(next); onCommit?.(); }} />;
 }
 
@@ -29,10 +32,11 @@ export const partyPickerWidget = {
 const PARTY = { resource: "parties.Party", labelField: "display_name", canCreate: false };
 
 /** Canonical Party selection; its create makes one of the Party kinds through the shared kind switcher. */
-export function PartyPicker({ value, onChange, label, readOnly }: PartyPickerProps): React.ReactElement {
+export function PartyPicker({ value, onChange, label, readOnly, edit, selectedOption }: PartyPickerProps): React.ReactElement {
   const t = usePartiesT();
   const labelId = React.useId();
   return <FormRoot.Field label={label ?? t("partyPicker.label")} labelProps={{ id: labelId }}>
-    <RelationFieldWidget aria-labelledby={labelId} relation={PARTY} value={value} readOnly={readOnly} onChange={onChange} />
+    <RelationFieldWidget aria-labelledby={labelId} relation={PARTY} value={value} selectedOption={selectedOption} edit={edit}
+      readOnly={readOnly} onChange={onChange} />
   </FormRoot.Field>;
 }

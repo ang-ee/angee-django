@@ -25,12 +25,12 @@ function renderActions({ record, stage = null, readOnly = false, start }: {
   record: WorkTaskRow | null; stage?: Stage; readOnly?: boolean; start?: GraphQLWireOperation;
 }): GraphQLWireRequest[] {
   const requests: GraphQLWireRequest[] = [];
-  const schemas = { console: { ...storySchema({
+  const schemas = storySchema({
     project_tasks_by_pk: (args) => ({ id: args.id, stage }),
     start_task: start ?? ((args) => ({ ok: true, message: "Started.", id: args.id, validation_errors: null })),
     return_task_to_triage: (args) => ({ ok: true, message: "Returned to triage.", id: args.id, validation_errors: null }),
     wake_task: (args) => ({ ok: true, message: "Task woken.", id: args.task, validation_errors: null }),
-  }, (request) => requests.push(request)).public!, metadata: { angee: { resources } } } };
+  }, { schema: "console", resources, onRequest: (request) => requests.push(request) });
   render(<RuntimeFixture activeSchema="console" schemas={schemas} operationDocuments={{ console: operationDocuments }}>
     <RecordChromeProvider value={{ resource: "projects.Task", canonicalResource: "projects.Task", dataProviderName: "console",
       recordId: "tsk_toolbar", record, formReadOnly: readOnly }}>

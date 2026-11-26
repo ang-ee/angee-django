@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createUiTestProviders } from "@angee/ui/testing";
 import { composeAddons } from "@angee/app";
 import type { TypedDocumentNode } from "@angee/refine";
 import type { ComposedContainers, ContainerChild } from "@angee/ui";
@@ -179,6 +180,9 @@ function connectEntry(vendor: string, sequence: number): ContainerChild {
   };
 }
 
+// The app's providers a form dialog renders under: the router it guards and the ModalsHost it asks through.
+const { Provider } = createUiTestProviders({ router: true });
+
 function renderPage(): void {
   const messaging = Object.fromEntries(vendors.flatMap((vendor) => [
     [`channel.${vendor}.button`, `Connect ${vendor}`],
@@ -190,5 +194,6 @@ function renderPage(): void {
       i18n: createAngeeI18nInstance({ messaging }) }}>
       <ToastProvider><ChannelsPage /></ToastProvider>
     </AppRuntimeProvider>,
+    { wrapper: Provider },
   );
 }

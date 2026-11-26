@@ -24,13 +24,24 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-/** Remote images wait behind the frame's control; the inline image loads and the script stays inert. */
+/** Remote images wait behind the frame's control; the inline image loads and the script stays inert. Tab stops on the "Load remote images" control, then on the mail, then on its link, and the frame's ring stays on while the link has focus. */
 export const Default: Story = {
   render: (args) => <div className="max-w-2xl"><MessageHtmlFrame {...args} /></div>,
 };
 
 export const RemoteImagesLoaded: Story = {
   args: { remoteImages: true },
+  render: (args) => <div className="max-w-2xl"><MessageHtmlFrame {...args} /></div>,
+};
+
+const MINUTES = `
+  <h2 style="margin:0 0 8px">Minutes of the reading circle</h2>
+  ${Array.from({ length: 14 }, (_, index) => `<p>Point ${index + 1}: the circle read the marked passage aloud and kept the questions for next week.</p>`).join("")}
+`;
+
+/** A mail with no link, taller than its frame: Tab stops on the mail itself, and the ring stays on the frame's edges while the arrow, page and space keys scroll it. */
+export const TallMailWithoutLinks: Story = {
+  args: { html: MINUTES },
   render: (args) => <div className="max-w-2xl"><MessageHtmlFrame {...args} /></div>,
 };
 

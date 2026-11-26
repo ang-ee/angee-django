@@ -10,7 +10,7 @@ import {
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { invalidateAuthoredQueries, publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
+import { invalidateAuthoredQueries, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -26,10 +26,11 @@ import {
 } from "@refinedev/core";
 import { get, set, useForm } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
+import { deepEqual } from "@tanstack/react-router";
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
-import { createClientKey } from "../../lib/client-key";
+import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { asWidgetDefinition, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
@@ -54,25 +55,26 @@ import {
   formWritablePaths,
   hiddenDraftPaths,
   hiddenResetWrites,
-  isFieldControlVisible,
   missingDraftValues,
   mutationData,
   pathWritable,
   recordToValues,
   resolveField,
   seedPreset,
+  shownFields,
   visibleFields,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, formErrorsFromForm, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult,
+  applyFormErrors, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalBannerFocus, type FormSubmitResult,
 } from "./validation-errors";
-import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
+import { useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
 import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
 import { useAppRuntime, useRuntimeViewAs } from "../../runtime";
+import { RECORD_TAB_SEARCH_KEY } from "../../runtime/route-href";
 import { useLatestRef } from "../../lib/use-latest-ref";
 
 type RowRecord = BaseRecord & Row;
@@ -194,6 +196,11 @@ export interface UseFormViewSaveProps {
 export interface FormViewSaveSurface {
   form: FormViewForm;
   history: FormHistory;
+  /**
+   * The form's draft scope (`useDraftScope`): the new record it creates, or the record it edits,
+   * under the scope of the surface hosting it. The form names it to the drafts below it.
+   */
+  draftScope: string;
   displayRecord: Row | null;
   loading: boolean;
   /** Native detail-query failure; cached record data remains available during refresh failures. */
@@ -210,7 +217,14 @@ export interface FormViewSaveSurface {
   pending: boolean;
   /** The form-level messages of the last refused or failed save, each its own entry; empty when there is none. */
   saveErrors: readonly string[];
+  /** Spread on the banner that renders `saveErrors`: a refused save brings the person to it or to its first refused field. */
+  saveBanner: ReturnType<typeof useRefusalBannerFocus>["banner"];
   saveConflict: boolean;
+  /**
+   * The last create was refused because an earlier attempt from this form already wrote a record
+   * under its key (`CREATION_KEY_CONFLICT`); the next save is a new draft. The form's banner words it.
+   */
+  saveKeyConflict: boolean;
   serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
   requiredFieldNames: ReadonlySet<string>;
@@ -269,6 +283,19 @@ export interface FormViewSaveSurface {
   requestLeave: () => Promise<boolean>;
 }
 
+/**
+ * Whether a route move leaves a record form: its pathname changes, or any search key but the
+ * record's tab does. A tab switch keeps the form mounted; the search's other keys (a list's view,
+ * filter, sort or page beside the record) are not each known to.
+ */
+function leavesRecordForm({ current, next }: UnsavedChangesMove): boolean {
+  if (current.pathname !== next.pathname) return true;
+  const before: Record<string, unknown> = current.search ?? {};
+  const after: Record<string, unknown> = next.search ?? {};
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .some((key) => key !== RECORD_TAB_SEARCH_KEY && !deepEqual(before[key], after[key]));
+}
+
 /** RHF owns values/baselines/errors; Refine owns resource reads and mutations. */
 export function useFormViewSave({
   resource,
@@ -306,8 +333,13 @@ export function useFormViewSave({
     && Boolean(dataResource?.fields?.some(({ name }) => name === "revision"));
   const mutationFields = React.useMemo(() => selectRevision && !refineFields.includes("revision")
     ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
-  const idempotencyKey = React.useRef<string | null>(null);
-  React.useEffect(() => { idempotencyKey.current = null; }, [resource, id, isCreate]);
+  // A new record of this resource is one draft: its key is minted at the first create attempt and
+  // lasts until one is accepted, so a retry, edited or not, is written once. The form names its
+  // draft under the surface hosting it (a relation field's create of another form), and holds it.
+  const idempotencyKeys = useIdempotencyKeys();
+  const provider = dataResource?.schemaName ?? "default";
+  const draftScope = useDraftScope(isCreate ? `record.create:${provider}:${resource}` : `record.edit:${provider}:${resource}:${String(id)}`);
+  useIdempotencyDraftOwner(isCreate ? draftScope : null, `the create form of ${resource}`);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -552,15 +584,17 @@ export function useFormViewSave({
   }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveErrors = formErrorsFromForm(form.formState.errors);
+  const { banner: saveBanner, focusBanner: focusSaveBanner } = useRefusalBannerFocus(saveErrors);
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
+  const saveKeyConflict = form.formState.errors.root?.server?.type === "creationKeyConflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
   const customSubmit = useMutation({
-    mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) => {
+    mutationFn: async ({ data, lines, submitted, baseline, idempotencyKey }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues; idempotencyKey: string | null }) => {
       if (!submitOwner) throw new Error("No custom form submission is configured.");
       return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
         baselineRecord: editBasisRecordRef.current, lines,
-        idempotencyKey: idempotencyKey.current,
+        idempotencyKey,
         values: submitted, baselineValues: baseline,
       });
     },
@@ -579,21 +613,25 @@ export function useFormViewSave({
     isDirty: formIsDirty,
     isDirtyNow,
     readOnly: formReadOnly,
+    leaves: leavesRecordForm,
   });
 
+  // A create carries its draft's key when its writer takes one: a custom owner always receives it,
+  // but only the form's own create root, when it takes the key, is known to send it, so only there
+  // does a lost answer promise that sending again sends it once.
+  const sendsKey = isCreate && !submitOwner && Boolean(dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"));
+  const keyed = sendsKey || (isCreate && Boolean(submitOwner));
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
-      try {
-        if (isCreate && (submitOwner || dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"))) {
-          idempotencyKey.current ??= createClientKey("create");
-        }
-        let result: FormSubmitResult<Row | FormSubmitAcknowledgement>;
+      // One keyed write per attempt, lines included: the draft's key goes with it.
+      const write = async (idempotencyKey: string | null): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
         if (submitOwner) {
-          result = await customSubmit.mutateAsync({
+          return customSubmit.mutateAsync({
             data,
             lines,
             submitted,
             baseline: (form.formState.defaultValues ?? {}) as FormValues,
+            idempotencyKey,
           });
         } else {
           const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
@@ -605,8 +643,8 @@ export function useFormViewSave({
             }
             rootArguments.expected_revision = revision;
           }
-          if (isCreate && idempotencyKey.current) {
-            rootArguments.idempotency_key = idempotencyKey.current;
+          if (isCreate && idempotencyKey) {
+            rootArguments.idempotency_key = idempotencyKey;
           }
           let saved: Row | null;
           if (useSave) {
@@ -625,26 +663,22 @@ export function useFormViewSave({
               : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
             saved = response?.data ?? null;
           }
-          result = savedFormSubmitResult(saved, t("form.genericSaveError"));
+          return savedFormSubmitResult(saved, t("form.genericSaveError"));
         }
-        if (result.status === "ok") {
-          if (isCreate) idempotencyKey.current = null;
-          // Started, not awaited: the form shows its own record, which the write's answer carries. A read
-          // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
-          // answers must not hold the confirmation back or keep Save from the next write; its failure is
-          // its own query's to report.
-          void Promise.all([
-            ...dependentInvalidations.map((target) => invalidate(target)),
-            ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
-          ]).catch(() => undefined);
-        }
-        return result;
-      } catch (error) {
-        if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
-          idempotencyKey.current = null;
-        }
-        throw error;
+      };
+      // A refused create keeps the draft and its key; an accepted one ends it.
+      const result = keyed ? await idempotencyKeys.send(draftScope, write, formSubmitOutcome) : await write(null);
+      if (result.status === "ok") {
+        // Started, not awaited: the form shows its own record, which the write's answer carries. A read
+        // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
+        // answers must not hold the confirmation back or keep Save from the next write; its failure is
+        // its own query's to report.
+        void Promise.all([
+          ...dependentInvalidations.map((target) => invalidate(target)),
+          ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
+        ]).catch(() => undefined);
       }
+      return result;
     },
     [
       customSubmit.mutateAsync,
@@ -668,6 +702,9 @@ export function useFormViewSave({
       resourceSave,
       saveOperation.target,
       submitOwner,
+      idempotencyKeys,
+      draftScope,
+      keyed,
     ],
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
@@ -678,14 +715,14 @@ export function useFormViewSave({
     // record does not display declares, one the save cannot write and one the record redacts
     // among them.
     const values = form.getValues();
-    const shown = visibleFields(checkFields, values).filter((field) => isFieldControlVisible(field, values));
+    const shown = shownFields(checkFields, values);
     return applyFormErrors(form, result, {
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
-      focus: true,
+      focus: focusSaveBanner,
     }) ? null : result;
-  }, [checkFields, fieldByName, form, linesField, t]);
+  }, [checkFields, fieldByName, focusSaveBanner, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -847,7 +884,8 @@ export function useFormViewSave({
       submittingRef.current = true;
       try {
         const result = readSubmitResult(await runSubmit(data, linesDiff, value)
-          .catch((cause) => formSubmitError(cause, t("form.genericSaveError"))));
+          .catch((cause) => formSubmitError(cause, t("form.genericSaveError"),
+            sendsKey ? t("form.answerLostResend") : keyed ? t("form.answerLostMaybeSent") : undefined)));
         if (result) {
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
@@ -875,7 +913,9 @@ export function useFormViewSave({
       dataResource,
       formReadOnly,
       isCreate,
+      keyed,
       previewBlockedRef,
+      sendsKey,
       commitSavedRecord,
       linesConfig,
       linesField,
@@ -987,7 +1027,11 @@ export function useFormViewSave({
     [fieldReadOnly, isCreate, writableFieldNames],
   );
   const discardChanges = React.useCallback(() => {
-    if (isCreate) localAcknowledgementRef.current = null;
+    if (isCreate) {
+      localAcknowledgementRef.current = null;
+      // The person gives the new record up: its draft ends, unless an attempt may have created it.
+      idempotencyKeys.discard(draftScope);
+    }
     presetMemory.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
@@ -995,7 +1039,7 @@ export function useFormViewSave({
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [displayRecord, emptyValues, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
+  }, [draftScope, displayRecord, emptyValues, idempotencyKeys, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
       startHistory(path);
@@ -1016,6 +1060,7 @@ export function useFormViewSave({
   return {
     form: { ...form, registerFieldValidation },
     history,
+    draftScope,
     displayRecord,
     loading,
     loadError,
@@ -1024,7 +1069,9 @@ export function useFormViewSave({
     formIsDirty,
     pending,
     saveErrors,
+    saveBanner,
     saveConflict,
+    saveKeyConflict,
     serverFieldErrors,
     clearServerFieldError,
     requiredFieldNames,

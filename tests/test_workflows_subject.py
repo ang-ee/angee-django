@@ -18,6 +18,7 @@ from rebac import (
 
 from angee.base.querysets import row_lock_paths
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus
@@ -112,7 +113,7 @@ def test_mti_subject_lookup_and_replay_share_canonical_identity(execution):
         assert not WorkflowRun.objects.with_actor(outsider).for_subject(subject).exists()
     replay = WorkflowRun.objects.start(workflow, actor=actor, subject=child, request_key="subject-replay")
     assert replay.pk == run.pk
-    with pytest.raises(ValidationError, match="different request"):
+    with pytest.raises(CreationKeyConflict, match="different request"):
         WorkflowRun.objects.start(workflow, actor=actor, subject=other, request_key="subject-replay")
     with pytest.raises(ValidationError, match="wrong model"):
         WorkflowRun.objects.start(workflow, actor=actor, subject=parent, request_key="subject-replay")

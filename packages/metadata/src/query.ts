@@ -498,6 +498,9 @@ function executableTextSearchFields(
   return fields.filter((name) => contract.fields[name]?.filter?.operators.includes("iContains"));
 }
 
+/** A `Date`'s extractions whose groups are single days, so single values of the date (`dateGroup`). */
+const SINGLE_DAY_EXTRACTIONS: ReadonlySet<string> = new Set(["day", "hour", "minute", "second"]);
+
 /** Resolved group semantics shared by client lanes, server buckets and facets. */
 export class GroupAxis {
   readonly id: string;
@@ -510,6 +513,27 @@ export class GroupAxis {
   }
   get field(): string { return this.spec.field; }
   get granularity(): string | undefined { return this.spec.granularity; }
+  /**
+   * Whether the records of one group of this axis share the value of the query field
+   * `field` (a sort key, `QuerySort.field`), so ordering by it orders nothing within a group.
+   * They share the axis's own field when the axis groups by that field's whole value: with no
+   * extraction, or with one whose groups are single values of the field's scalar (`day`, or a
+   * finer unit, on a `Date`; never on a `DateTime`, whose day holds many instants, and never a
+   * coarser unit or a calendar part such as `day_of_month`). A relation axis's group is one
+   * related record, so they also share each of its members: a field whose row paths all lie
+   * under the related record, its identity path without the last segment (`owner.name` beside
+   * `owner.id`); a relation whose identity path has one segment or none names no members. Its kind (column,
+   * enum, Boolean, JSON, authored) changes nothing else, and `repeated` only lists fewer
+   * groups, each still one value.
+   */
+  shares(field: string): boolean {
+    const scalar = this.query.fields[this.declaration.field]?.scalar;
+    if (this.extraction && !(scalar === "Date" && SINGLE_DAY_EXTRACTIONS.has(this.extraction.name))) return false;
+    if (field === this.declaration.field) return true;
+    const record = this.declaration.kind === "relation" ? this.declaration.identityPath?.split(".").slice(0, -1).join(".") : undefined;
+    const paths = this.query.fields[field]?.row?.paths;
+    return Boolean(record && paths?.length && paths.every((path) => path.startsWith(`${record}.`)));
+  }
   /** Whether a server group read can list only this axis's repeated values (`GroupSpec.repeated`). */
   get repeatable(): boolean { return this.valued() !== undefined; }
   /**

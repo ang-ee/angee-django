@@ -1,8 +1,8 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
-import { useAuthoredQuery } from "@angee/refine";
-import { createClientKey, useAuthoredResourceMutation, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
-import { useMemo, useRef, type ReactElement } from "react";
+import { failedWriteOutcome, useAuthoredQuery } from "@angee/refine";
+import { useAuthoredResourceMutation, useIdempotencyDraftOwner, useIdempotencyKeys, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { useMemo, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
 import {
@@ -54,7 +54,12 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
   const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
-  const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
+  const canCompose = canBind && writableVault && holdsPermission(writableVault, "write");
+  // The record's note box is one draft: every attempt until one is saved carries its key, so the
+  // server inserts the note once; an edit after an earlier version was saved answers a conflict.
+  const keys = useIdempotencyKeys();
+  const noteScope = `knowledge.record-note:${target.modelLabel}:${target.recordId}:${role}`;
+  useIdempotencyDraftOwner(canCompose ? noteScope : null, `the ${role} box of ${target.modelLabel} ${target.recordId}`);
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
@@ -74,7 +79,6 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
     }] : [])
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
 
-  const canCompose = canBind && writableVault && holdsPermission(writableVault, "write");
   const createAction: StreamCreateAction | undefined = canCompose ? {
     id: "knowledge.add-note",
     label: composer?.submitLabel ?? t("notes.add"),
@@ -86,10 +90,17 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       if (!body) throw new Error(t("notes.bodyRequired"));
       if (!writableVault) throw new Error(t("notes.createError"));
       const input = { model_label: target.modelLabel, record_id: target.recordId, vault: writableVault.id, body, role };
-      const fingerprint = JSON.stringify(input);
-      if (pendingNote.current?.fingerprint !== fingerprint) pendingNote.current = { fingerprint, key: createClientKey() };
-      await createNote({ ...input, idempotency_key: pendingNote.current.key }, options);
-      pendingNote.current = null;
+      try {
+        await keys.send(noteScope, (key) => createNote({ ...input, idempotency_key: key }, options));
+      } catch (cause) {
+        const outcome = failedWriteOutcome(cause);
+        // A lost answer: the note may be written, and the draft's kept key makes a resend safe.
+        if (outcome === "unconfirmed") return { ok: false, message: t("notes.saveLost") };
+        if (outcome !== "conflict") throw cause;
+        // An earlier version of this note was saved under the draft's key: show it; the next send is a new note.
+        void bindings.refetch();
+        return { ok: false, message: t("notes.savedEarlier") };
+      }
       return { ok: true, message: t("notes.added") };
     },
   } : undefined;

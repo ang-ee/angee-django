@@ -41,6 +41,7 @@ from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient
+from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_LINKABLE, VALUE_NOT_PRINTED
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
@@ -243,7 +244,7 @@ def test_a_render_refusal_reads_no_system_channel_and_leaves_the_bypass_entry_al
     with _refused(ValidationError) as refusal:
         _send(row, {"title": "Welcome"})
     ((code, message),) = [(item.code, item.message) for item in refusal.value.error_list]
-    assert code == "invalid_values" and message.startswith("name ")
+    assert code == INVALID_VALUES and message.startswith("name ")
     assert looked_up == []
     assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, REASON)]
 
@@ -319,7 +320,7 @@ def test_an_override_that_no_longer_prints_the_value_its_sender_needs_is_refused
         with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
             _send(row, LINK, must_print=["link"])
         assert [(item.code, item.message) for item in refusal.value.error_list] == [
-            ("value_not_printed", message) for message in expected], row.key
+            (VALUE_NOT_PRINTED, message) for message in expected], row.key
         assert (callbacks, sent) == ([], [])
     assert "sign-in/once" not in _stored(_send(override, LINK))[1]
     shipped = _mail("Hello. [Sign in]({{ link }})", LINKED, key="tests.signin_shipped")
@@ -360,7 +361,7 @@ def test_a_required_value_must_be_printed_by_each_body_through_any_include(
     with _refused(ValidationError) as refusal:
         _send(row, {"link": values["link"]}, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_printed", f"The {body} body does not print {must_print[0]}, which this mail is sent for.")
+        (VALUE_NOT_PRINTED, f"The {body} body does not print {must_print[0]}, which this mail is sent for.")
         for body in unprinted]
 
 
@@ -411,7 +412,7 @@ def test_must_print_holds_a_plain_path_to_what_this_mail_shows_and_a_list_path_t
     with _refused(ValidationError) as refusal:
         _send(row, values, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_printed", message) for message in refusals]
+        (VALUE_NOT_PRINTED, message) for message in refusals]
     assert sent == []
 
 
@@ -465,7 +466,7 @@ def test_a_link_the_mail_cannot_carry_is_refused_before_anything_is_written_not_
     with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
         _send(row, {"link": DECISION}, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_linkable", "link is not a link this mail can carry: the mail cannot link to localhost:8000."),
+        (VALUE_NOT_LINKABLE, "link is not a link this mail can carry: the mail cannot link to localhost:8000."),
     ]
     assert (callbacks, sent) == ([], [])
 
@@ -486,7 +487,7 @@ def test_a_keyed_test_send_whose_sample_the_mail_cannot_link_is_refused_with_no_
     row = _decision(sample={"link": DECISION})
     with pytest.raises(ValidationError) as refusal:
         MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="unlinkable-1")
-    assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"]
+    assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE]
     assert (_claim("unlinkable-1", tester), Message._base_manager.count(), sent) == (None, 0, [])
 
 
@@ -537,7 +538,7 @@ def test_the_public_link_check_answers_as_the_render_does(plain: Any, settings: 
             with pytest.raises(ValidationError) as rendered_refusal:
                 row.render({"link": value})
             assert [(item.code, item.message) for item in rendered_refusal.value.error_list] == expected
-            assert [code for code, _ in expected] == ["value_not_linkable"]
+            assert [code for code, _ in expected] == [VALUE_NOT_LINKABLE]
             return
         rendered = row.render({"link": value})
     assert link is not None
@@ -576,7 +577,7 @@ def test_the_deployments_own_public_origin_is_linked_in_both_bodies_and_no_other
         with _refused(ValidationError) as refusal:
             _send(row, {"link": value}, must_print=["link"])
         assert refusal.value.error_list[0].message == checked.value.error_list[0].message
-        assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"]
+        assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE]
         return
     link = MessageTemplate.objects.clean_link(value)
     subject, text, html = _stored(_send(row, {"link": value}, must_print=["link"]))
@@ -605,8 +606,67 @@ def test_a_refused_link_names_no_part_of_it_past_its_host(plain: Any, settings: 
     with system_context(reason="tests.messaging_templates.send.echo"), pytest.raises(ValidationError) as rendered:
         _decision(key="tests.decision_echo").render({"link": value})
     for refusal in (checked.value, rendered.value):
-        assert [item.code for item in refusal.error_list] == ["value_not_linkable"]
+        assert [item.code for item in refusal.error_list] == [VALUE_NOT_LINKABLE]
         assert all("SECRET-marker" not in item.message for item in refusal.error_list), refusal.messages
+
+
+CALLERS_OF_THE_RENDER = ["saved preview", "preview of unsaved edits", "test send", "send_as_system"]
+
+
+def _rendered_or_refused(caller: str, value: str, tester: Any) -> tuple[str, str]:
+    """What one caller of the render answers for a sample whose link is ``value``: the link the plain text shows, or
+    the refusal's words (a send's refusal, a preview's one warning)."""
+
+    sampled = {"link": value}
+    if caller == "preview of unsaved edits":
+        row = _decision(key="tests.decision_patched", sample={"link": "https://app.example.test/saved"})
+        with actor_context(tester):
+            preview = row.preview(patch={"sample": sampled})
+    elif caller == "saved preview":
+        row = _decision(key="tests.decision_saved", sample=sampled)
+        with actor_context(tester):
+            preview = row.preview()
+    else:
+        row = _decision(key=f"tests.decision_{caller.replace(' ', '_')}", sample=sampled)
+        try:
+            message = (MessageTemplate.objects.send_test(row, actor=tester) if caller == "test send"
+                       else _send(row, sampled))
+        except ValidationError as refusal:
+            return "refused", " ".join(refusal.messages)
+        return "rendered", _stored(message)[1]
+    if preview.rendered is None:
+        assert [warning.code for warning in preview.warnings] == [TemplateWarningCode.RENDER_ERROR] * len(
+            preview.warnings)
+        return "refused", " ".join(warning.detail for warning in preview.warnings)
+    return "rendered", preview.rendered.plain_text
+
+
+@pytest.mark.parametrize(
+    ("value", "outcome", "words"),
+    [
+        pytest.param("http://intranet:8080/decisions/1", "refused",
+                     "link is not a link this mail can carry: the mail cannot link to intranet:8080.",
+                     id="a-host-the-rule-refuses"),
+        pytest.param("https://localhost:8000/decisions/1", "rendered", "https://localhost:8000/decisions/1",
+                     id="the-deployments-own-origin"),
+        pytest.param("", "rendered", "Open the decision ()", id="a-blank-optional-link"),
+    ],
+)
+def test_every_caller_of_the_render_answers_one_sample_alike(
+    system_channel: Any, settings: Any, value: str, outcome: str, words: str,
+) -> None:
+    """The saved preview, the preview of unsaved edits, the test send and ``send_as_system`` run one render: a link
+    the rule would empty is the preview's one ``render_error`` warning and a send's refusal, in the same words; the
+    deployment's own origin and a blank optional link render alike."""
+
+    del system_channel
+    settings.ANGEE_PUBLIC_ORIGIN = "https://localhost:8000"
+    tester = create_platform_admin("messaging-templates-render-callers")
+    answers = {caller: _rendered_or_refused(caller, value, tester) for caller in CALLERS_OF_THE_RENDER}
+    assert {caller: answer[0] for caller, answer in answers.items()} == dict.fromkeys(CALLERS_OF_THE_RENDER, outcome)
+    assert all(words in answer[1] for answer in answers.values()), answers
+    if outcome == "refused":
+        assert len({answer[1] for answer in answers.values()}) == 1, answers
 
 
 SECRET = "https://app.example.test/sign-in/SECRET-marker"
@@ -690,6 +750,30 @@ def test_an_exception_inside_compose_reports_no_recipient_address(
             tester.save(update_fields=["email"])
         MessageTemplate.objects.send_test(_sampled(), actor=tester)
     assert "_render_and_record" in [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
+    assert _leaks(raised.value) == []
+
+
+@pytest.mark.parametrize("failure", ["an unknown column", "the save check raising"])
+def test_a_failure_out_of_a_preview_of_unsaved_edits_reports_no_sample_or_patch(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    """A failure that propagates out of the preview, a caller's column outside the edited ones or an unexpected
+    exception from the save's check, with the marker in the saved sample and in the patch: no frame shows it."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-preview-reporter")
+    row = _decision(key="tests.decision_reported", sample={"link": "https://app.example.test/x?SECRET-marker=saved"})
+    patch: dict[str, Any] = {"sample": {"link": "https://app.example.test/x?token=SECRET-marker"}}
+    if failure == "an unknown column":
+        patch["key"] = "elsewhere"
+    else:
+        def raising(self: Any, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("The save check failed.")
+
+        monkeypatch.setattr(MessageTemplate, "full_clean", raising)
+    with actor_context(tester), pytest.raises((ValueError, RuntimeError)) as raised:
+        row.preview(patch=patch)
+    assert "preview" in [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
     assert _leaks(raised.value) == []
 
 
@@ -959,7 +1043,7 @@ def test_an_account_with_no_address_writes_nothing_and_a_refused_render_leaves_t
     assert (refusal.value.code, walked, _audits()) == ("no_test_address", [], audits)
     with _refused(ValidationError) as refusal:
         MessageTemplate.objects.send_test(unrenderable, actor=tester)
-    assert [item.code for item in refusal.value.error_list] == ["invalid_values"]
+    assert [item.code for item in refusal.value.error_list] == [INVALID_VALUES]
     assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, TEST_SEND_REASON)]
 
 

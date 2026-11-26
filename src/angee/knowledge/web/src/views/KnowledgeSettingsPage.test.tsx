@@ -2,6 +2,7 @@
 
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { boundedGraphQLTransportError, type ActionOutcome } from "@angee/refine";
 import type { ActionDescriptor } from "@angee/ui";
 import type { AuthoredMutationOptions } from "@angee/refine";
 import type { DocumentType } from "@angee/gql/console";
@@ -15,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   action: null as ActionDescriptor | null,
   options: null as AuthoredMutationOptions<CloneData> | null,
   mutation: vi.fn(),
-  key: vi.fn(),
   canonicalize: vi.fn(),
   invalidates: vi.fn(),
 }));
@@ -42,17 +42,18 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Form: ({ children }: { children?: ReactNode }) => <>{children}</>,
   List: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DrawerResourceList: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  createClientKey: mocks.key,
 }));
 
+import { AppRuntimeProvider, actionOutcomeSubmitResult, formSubmitOutcome } from "@angee/ui";
 import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
+
+/** Under an app runtime, as a page is: it holds the clone draft's idempotency key. */
+const AppRuntime = ({ children }: { children?: ReactNode }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>;
 
 beforeEach(() => {
   mocks.submit = null;
   mocks.action = null;
   mocks.options = null;
-  let sequence = 0;
-  mocks.key.mockReset().mockImplementation(() => `clone-key-${++sequence}`);
   mocks.mutation.mockReset().mockResolvedValue({ create_vault_from: { ok: false, message: "Try again" } });
   mocks.canonicalize.mockReset().mockReturnValue(["knowledge.vault", "knowledge.page", "knowledge.markdownpage"]);
   mocks.invalidates.mockReset().mockReturnValue([]);
@@ -60,41 +61,35 @@ beforeEach(() => {
 
 async function submit(name = "Copy", template = "vlt_template") {
   if (!mocks.submit) throw new Error("Clone action was not registered");
-  return mocks.submit({ name }, { record: { id: template }, selectedIds: [] }, { errorNotification: false });
+  return mocks.submit({ name }, { record: { id: template }, selectedIds: [], idempotencyKey: "draft-key" }, { errorNotification: false });
 }
 
-test("failed responses and transport retries retain the same idempotency key", async () => {
-  render(<KnowledgeSettingsPage />);
+test("the clone dialog of one template is one draft: it declares its scope, and each attempt sends the dialog's key", async () => {
+  render(<KnowledgeSettingsPage />, { wrapper: AppRuntime });
   expect(mocks.action).toMatchObject({ id: "create-from-template", placement: "menu" });
-  const rejected = await submit(" Copy ");
-  expect(rejected).toMatchObject({ ok: false });
-  mocks.mutation.mockRejectedValueOnce(new Error("Offline"));
-  await expect(submit()).rejects.toThrow("Offline");
-  await submit();
-  expect(mocks.key).toHaveBeenCalledTimes(1);
-  for (const [variables] of mocks.mutation.mock.calls) {
-    expect(variables).toEqual({ template: "vlt_template", name: "Copy", owned: true, idempotency_key: "clone-key-1" });
-  }
+  expect(mocks.action?.idempotencyScope?.({ record: { id: "vlt_template" }, selectedIds: [] })).toBe("knowledge.vault-from-template:vlt_template");
+  await mocks.submit!({ name: " Copy " }, { record: { id: "vlt_template" }, selectedIds: [], idempotencyKey: "draft-key" }, { errorNotification: false });
+  expect(mocks.mutation).toHaveBeenCalledExactlyOnceWith(
+    { template: "vlt_template", name: "Copy", owned: true, idempotency_key: "draft-key" }, { errorNotification: false });
 });
 
-test("success clears the retry identity so another clone gets a new key", async () => {
-  mocks.mutation.mockResolvedValue({ create_vault_from: { ok: true, id: "vlt_created", message: "Created" } });
-  render(<KnowledgeSettingsPage />);
-  expect(await submit()).toEqual({ ok: true, id: "vlt_created", message: "Created" });
-  await submit();
-  expect(mocks.mutation).toHaveBeenNthCalledWith(1, expect.objectContaining({ idempotency_key: "clone-key-1" }), { errorNotification: false });
-  expect(mocks.mutation).toHaveBeenNthCalledWith(2, expect.objectContaining({ idempotency_key: "clone-key-2" }), { errorNotification: false });
+test("an earlier attempt that already created the vault says so, returned as the conflict the dialog's draft ends on", async () => {
+  mocks.mutation.mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+    message: "Already created.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }));
+  render(<KnowledgeSettingsPage />, { wrapper: AppRuntime });
+  const refusal = await submit("Copy");
+  expect(refusal).toEqual({ ok: false, code: "CREATION_KEY_CONFLICT", message: "An earlier attempt already created a vault from this template." });
+  expect(formSubmitOutcome(actionOutcomeSubmitResult(refusal as ActionOutcome))).toBe("conflict");
 });
 
-test("changing the name or template starts a new creation request", async () => {
-  render(<KnowledgeSettingsPage />);
-  await submit();
-  await submit("Changed");
-  await submit("Changed", "vlt_other");
-  expect(mocks.key).toHaveBeenCalledTimes(3);
-  expect(mocks.mutation).toHaveBeenLastCalledWith({
-    template: "vlt_other", name: "Changed", owned: true, idempotency_key: "clone-key-3",
-  }, { errorNotification: false });
+test("without a template there is no draft and nothing to send, nor without the dialog's key", async () => {
+  render(<KnowledgeSettingsPage />, { wrapper: AppRuntime });
+  expect(mocks.action?.idempotencyScope?.({ record: null, selectedIds: [] })).toBeNull();
+  expect(await mocks.submit!({ name: "Copy" }, { record: null, selectedIds: [] }, { errorNotification: false }))
+    .toEqual({ ok: false, message: "Could not create the vault from this template." });
+  expect(await mocks.submit!({ name: "Copy" }, { record: { id: "vlt_template" }, selectedIds: [] }, { errorNotification: false }))
+    .toEqual({ ok: false, message: "Could not create the vault from this template." });
+  expect(mocks.mutation).not.toHaveBeenCalled();
 });
 
 test("successful clones invalidate metadata-canonical model names", () => {

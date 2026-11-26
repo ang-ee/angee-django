@@ -15,6 +15,27 @@ import { ToastProvider, useToast } from "./Toast";
 import { useRefineNotificationProvider } from "./refine-notification";
 
 describe("ToastProvider", () => {
+  test("the toast region is named in the app's language, and in English without one", () => {
+    const view = render(
+      <AppRuntimeProvider runtime={{ icons: baseIcons }}>
+        <ToastProvider><ToastButton /></ToastProvider>
+      </AppRuntimeProvider>,
+    );
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeTruthy();
+    view.unmount();
+
+    // A host translator that answers every key of the `ui` namespace with its own words.
+    const translated = (key: string, options?: { defaultValue?: string }) =>
+      key === "toast.region" ? "Meldungen" : options?.defaultValue ?? key;
+    render(
+      <AppRuntimeProvider runtime={{ icons: baseIcons, i18n: { language: "de", getFixedT: () => translated } }}>
+        <ToastProvider><ToastButton /></ToastProvider>
+      </AppRuntimeProvider>,
+    );
+    expect(screen.getByRole("region", { name: "Meldungen" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
+  });
+
   test("renders a toast fired from a component hook", async () => {
     render(
       <AppRuntimeProvider runtime={{ icons: baseIcons }}>

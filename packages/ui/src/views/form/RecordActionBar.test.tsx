@@ -31,6 +31,8 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: {
     mutations: { retry: false }, queries: { retry: false },
   } },
+  // Under a router, as an app page is: a typed-args dialog guards route moves while it holds work.
+  router: true,
 });
 
 describe("RecordActionBar", () => {

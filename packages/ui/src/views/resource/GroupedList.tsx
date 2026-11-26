@@ -314,7 +314,7 @@ interface GroupedListHeaderProps<TRow extends Row> {
   headerVisibility: ResourceTableHeaderVisibility;
   /** `table.getHeaderGroups()`, which the table keeps until a column is shown, hidden, moved or pinned. */
   headerGroups: readonly HeaderGroup<TRow>[];
-  /** The table's sorting, which each header's sort button and `aria-sort` show through its column. */
+  /** The table's sorting: a change renders the memoised header again, and each header reads its sort from the table (`headerSort`). */
   sorting: SortingState;
   selectable: boolean;
   /** The groups that open and close, which the header's chevron opens or closes together. */

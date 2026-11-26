@@ -1287,6 +1287,7 @@ dependencies = [
     { name = "angee-parties" },
     { name = "angee-provenance" },
     { name = "angee-resources" },
+    { name = "angee-web" },
     { name = "markdown-it-py" },
 ]
 
@@ -1300,6 +1301,7 @@ requires-dist = [
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
     { name = "markdown-it-py", specifier = ">=4.2,<5" },
 ]
 
