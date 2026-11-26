@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -102,6 +101,7 @@ from angee.messaging.constants import (
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
 )
+from angee.messaging.email import header_text
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -178,30 +178,6 @@ def normalize_subject(subject: str) -> str:
     # normalized subject still reads naturally and two subjects differing only in
     # case stay distinct conversations.
     return text.strip()
-
-
-_ENCODED_WORD_OPENER = re.compile(r"=(?=\?[^?]*\?[bq]\?)", re.IGNORECASE)
-"""The ``=`` that opens an RFC 2047 encoded word: a mail library decodes one with any or no charset, either
-encoding letter in either case, terminated or not, and inside a word too."""
-
-
-def outgoing_subject(subject: str) -> str:
-    """Return ``subject`` as an outgoing message carries it: one line, with no control character and no encoded word.
-
-    Each control character and line break becomes a space, and every encoded-word
-    opener (``=?charset?q?`` or ``?b?``) is broken with a space after its ``=``, so
-    neither a mail library nor a reader's client decodes anything out of it, and no
-    provider that receives the subject as a string can either: the subject written,
-    the one on the wire and the one a reader sees are the same string. Text that
-    opens no word (``2+2=?``) is kept. Every outgoing subject takes it, a typed one
-    and one derived from a conversation's title.
-    """
-
-    text = "".join(
-        " " if unicodedata.category(character) in ("Cc", "Zl", "Zp") else character
-        for character in strip_null_bytes(subject or "")
-    )
-    return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
 # One rule for naming a message part that arrived without its own filename. It lives
@@ -3239,8 +3215,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         An entry is one recipient: a bare address, read as itself, or one explicit
         ``Name <address>``. An entry a mail library would read as another address,
         or as several (a comment, a group, a list, trailing text, ``address
-        (Name)``), is refused rather than re-read, and so is one carrying a NUL
-        byte, which no messaging write stores. The handle owner then decides
+        (Name)``), is refused rather than re-read, and so is one whose name or
+        address a mail header would not carry as read
+        (:func:`~angee.messaging.email.header_text`): a NUL byte, which no messaging
+        write stores, a control character, or an encoded-word opener, which a mail
+        library decodes into another address or name. The handle owner then decides
         whether the address can be one and can be stored on a handle
         (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
         nothing, so a caller can ask it before expensive work, and ``compose``
@@ -3252,15 +3231,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         text = str(entry or "").strip()
         parsed = getaddresses([text])
         name, address = parsed[0] if len(parsed) == 1 else ("", "")
+        name = name.strip()
         explicit = text.endswith(f"<{address}>") and text.count("<") == text.count(">") == 1
-        landable = "\x00" not in text and handle_model.is_email_address(address)
+        as_written = header_text(name) == name and header_text(address) == address
+        landable = as_written and handle_model.is_email_address(address)
         if not address or not (text == address or explicit) or not landable:
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})
         address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
-        return name.strip(), address
+        return name, address
 
     def _validate_outgoing(
         self,
@@ -3309,7 +3290,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({"text": ValidationError("Write the message.", code="required")})
         if "\r" in subject or "\n" in subject:
             raise ValidationError({"subject": ValidationError("A subject is one line.", code="invalid")})
-        subject = outgoing_subject(subject)
+        subject = header_text(subject)
         recipients: tuple[_Addressee, ...] = ()
         if parent is not None:
             kind, platform = parent.message_type, parent.platform
@@ -3473,12 +3454,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
     @staticmethod
     def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
-        """Return each recipient's ``(handle id, role)``, its addresses resolved in one read.
+        """Return each recipient's ``(handle id, role)`` in the order given, its addresses resolved in one read.
 
         Known handles resolve through the handle owner's batch lookup
         (``HandleManager.find_identities``); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
-        only a handle that has none and never renames a shared one.
+        only a handle that has none and never renames a shared one. Those writes
+        take the handles in one order, by their identity key, so two composes
+        naming the same addresses in different orders take their row locks in the
+        same order and do not deadlock each other; another writer that takes the
+        same handles in its own order still can.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3486,19 +3471,15 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         found = handle_model.objects.find_identities(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        rows: list[tuple[Any, str]] = []
-        for addressee in recipients:
-            handle_id = addressee.handle_id
-            if handle_id is None:
-                handle = found.get((email, addressee.address))
-                if handle is None or addressee.name:
-                    handle = found[(email, addressee.address)] = handle_model.objects.upsert(
-                        platform=email, value=addressee.address, display_name=addressee.name,
-                        fill_only=("display_name",), created_by_id=created_by_id,
-                    )
-                handle_id = handle.pk
-            rows.append((handle_id, addressee.role))
-        return rows
+        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+            if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
+                found[(email, addressee.address)] = handle_model.objects.upsert(
+                    platform=email, value=addressee.address, display_name=addressee.name,
+                    fill_only=("display_name",), created_by_id=created_by_id,
+                )
+        return [
+            (addressee.handle_id or found[(email, addressee.address)].pk, addressee.role) for addressee in recipients
+        ]
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
@@ -4244,7 +4225,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if not thread.member_threads().filter(pk=message.thread_id).exists():
                 raise ValueError("Message does not belong to this record thread.")
             if trash and (error := message.trash_error()):
-                raise ValueError(error)
+                raise ValidationError(error, code="retained")
             record = message.threaded_record()
             if record is None or not record.can_moderate():
                 raise PermissionDenied("Removing or restoring comments requires moderator access to the record.")
@@ -4385,9 +4366,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         ``PUBLIC_THREAD``/``PUBLIC``); each defaults to the private email-thread shape.
         The functional :class:`~angee.messaging.models.Message.MessageKind` is decided
         here, from the structural facts, never by the producer: content in a
-        record-attached thread or ``PUBLIC_THREAD`` is a ``COMMENT``, a message whose
-        source names its conversation (``ParsedThread`` or ``explicit_thread``) is
-        ``CHAT``, and everything else is ``EMAIL``. The same act keeps its kind across
+        ``PUBLIC_THREAD`` is a ``COMMENT``, and so is content in a record-attached
+        thread except an email its own threading headers placed there (an answer to
+        a mail sent from the record's chatter), which stays an ``EMAIL`` and is
+        answered by email; a message whose source names its conversation
+        (``ParsedThread`` or ``explicit_thread``) is ``CHAT``, and everything else is
+        ``EMAIL``. The kind is decided once, when the message is first stored: a
+        re-sync, identical or edited, keeps it. The same act keeps its kind across
         backends. ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
@@ -4612,6 +4597,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             return message, ()
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
+        # An email whose own threading headers placed it: an answer to a mail sent
+        # from a record's chatter is still an email, which is answered by email.
+        threaded_email = (
+            parsed.platform == handle_model.Platform.EMAIL and parsed.thread is None and explicit_thread is None
+        )
         defaults = {
             "thread_id": prior.thread_id if expected_thread is not None else thread.pk if thread is not None else None,
             "channel_id": channel.pk if channel is not None else None,
@@ -4620,11 +4610,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
-            # Record chatter and public posts share the native COMMENT kind.
+            # Public posts and record chatter are COMMENTs, except an email its own threading
+            # headers placed on a record's chatter; the kind is decided here once (a re-sync keeps it).
             "message_type": (
                 self.model.MessageKind.COMMENT
                 if thread is not None and (
-                    thread.modality == thread_model.Modality.PUBLIC_THREAD or thread.is_record_attached()
+                    thread.modality == thread_model.Modality.PUBLIC_THREAD
+                    or (thread.is_record_attached() and not threaded_email)
                 )
                 else self.model.MessageKind.CHAT
                 if parsed.thread is not None or explicit_thread is not None
@@ -4646,11 +4638,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             defaults["metadata"] = _bounded_message_metadata(
                 self.model.ingest_metadata(metadata, previous=message.metadata),
             )
+            # A stored message keeps the kind it was ingested with: a re-sync never reclassifies it.
+            defaults["message_type"] = message.message_type
             if message.is_locally_written:
                 # Provider echoes cannot change locally authored envelope identity.
                 defaults["direction"] = message.direction
                 defaults["sender_id"] = message.sender_id
-                defaults["message_type"] = message.message_type
                 defaults["status"] = message.status
                 for field in ("thread_id", "parent_id", "platform", "preview", "sent_at"):
                     defaults[field] = getattr(message, field)

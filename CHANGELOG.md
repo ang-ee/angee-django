@@ -10,6 +10,59 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: **Changed behaviour.** A person's merge of handles
+  (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
+  addresses only for a contact administrator, an effective member of
+  `parties/role:contact_admin` (platform administrators are). Every later message
+  to a merged handle's address goes to the kept one, so whoever had created two
+  handles (the person who first typed each address) could merge a contact into
+  their own address and receive other people's later mail to it. Anyone else
+  merging two different addresses is refused with a `ValidationError` that names
+  who can and says to merge their contacts instead, which moves no address.
+  Merging another spelling of an address (the same platform and comparison key)
+  is unchanged for whoever holds the merge's permissions, messages already
+  written keep their addresses, and the system's `fold` (`HandleManager.reidentify`)
+  is unchanged. A contact administrator can now complete a handle merge at all:
+  the merge wrote the redirect after resolving the merged handle's party, which
+  had cleared the party the administrator's write on that handle came through.
+  The redirect is now written first; the rows a merge ends in are unchanged, and
+  only the merged handle's history between differs. A contact administrator's
+  merge leaves the merged handle on no contact, so that administrator cannot
+  revert it: a platform administrator can, as can the handles' creator when they
+  may also write the contact. **Upgrade:** a person who
+  merged two addresses of one contact merges the contacts, or is granted the
+  contact administrator role.
+- `angee.base`: **Changed behaviour.** A refused write of a write-once field
+  (`ImmutableFieldsMixin`) is keyed by the field's name, as model validation and
+  `form.add_error` key a field: a relation changed through its attname is refused
+  under the relation as before (`recipient` for `recipient_id`), and any other
+  field under its own name. A plain field whose name ends in `_id` was keyed by
+  that name less the suffix, which names no field, so no form showed the refusal
+  beside it: `Handle.external_id` was refused under `external` and portfolio's
+  `Update.object_id` under `object`. **Upgrade:** a consumer that matched the old
+  key for a plain `..._id` field reads the field's own name.
+- `angee.parties`: **Changed behaviour.** A handle's ingestion keys, `platform`,
+  `value` and `external_id`, are written once (`Handle.immutable_fields`, through
+  the foundation's `ImmutableFieldsMixin`). A message reads its addresses from its
+  handles when it is sent, and whoever held `write` on a handle (the person who
+  first typed a contact's address holds it) could re-address it with a field
+  write: another person's held message to that contact was then sent to the new
+  address. A save that changes a key is now refused with the foundation's
+  write-once refusal, whoever saves it, system work included. Only the handle
+  owner's verbs change one: `HandleManager.upsert` rewrites `value` when a
+  source's `external_id` matched and the account behind it moved, and
+  `HandleManager.reidentify` rewrites or folds a handle; history's revert restores
+  earlier keys as they were. `upsert` no longer rewrites the value onto an address
+  another row holds (a spelling merged into the row the account id names), which
+  raised `IntegrityError` on every later message from that account: the call lands
+  on that row, which keeps its address. An `external_id` given as a number is
+  matched and stored as its text. Display fields stay writable as before. A resource
+  row that names another address under an xref a load already wrote is refused
+  (`ResourceLoadError`). **Upgrade:** a caller that set `platform`, `value` or
+  `external_id` on an existing handle and saved it lands the new address as its
+  own handle (`HandleManager.upsert`), or, as admitted system work, rewrites the
+  handle with `HandleManager.reidentify`; a seed gives a new address its own row.
+  No migration and no `rebac sync`.
 - `angee.messaging`: **The console composes a message and reads back its
   delivery.**
   - **New.** The console mutation `compose_message`, a keyed verb over
@@ -35,15 +88,24 @@ live in code docstrings.
     address read as itself or one explicit `Name <address>`, returned as
     `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
     entry a mail library would read as another address or as several (a
-    comment, a group, a list, trailing text), or carrying a NUL byte (which
-    failed the write on PostgreSQL after it began), is refused, never re-read; a caller
+    comment, a group, a list, trailing text), or whose name or address a mail
+    header would not carry as read (a NUL byte, which failed the write on
+    PostgreSQL after it began, a control character, or an encoded-word opener,
+    which a mail library decodes into another address or name), is refused,
+    never re-read. **Known limit:** `compose` lands every address in lower
+    case, as inbound mail does, and finds its handle by that exact value, so a
+    contact another writer stored with a capital is a handle row of its own,
+    grouped with the lower-case one by the handle owner's comparison key
+    wherever a person is looked up; ending that split is the handle owner's. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
     (default 50, the strictest common provider's per-message limit; each new
     address costs a call about 34 statements) and
     `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
     statements each); more is refused (`too_many`) under the argument that
-    crosses the bound, before anything is read. A `scheduled_at` without an
+    crosses the bound, before anything is read. An answer is bound the same way
+    by the addresses its parent's `Reply-To` names: over the bound it is refused
+    under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
     offset is refused (`naive_datetime`, as scheduling, calendar and workflows
     refuse one) instead of being read in the server's zone. A new message also
     takes a one-line `subject`,
@@ -58,12 +120,35 @@ live in code docstrings.
     name of the channel permission to send, which `require_reply` and `compose`
     decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
-    fields it only fills while blank, and `Handle.email_value` is the one form an
+    fields it only fills while blank (a fill locks and reads the row again, so
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
     email address is stored in on a handle. `PartManager.attach_files` attaches
     several files under one message lock. `HandleManager.find_identities` (and so
     `find_identity`, `upsert` and every compose lookup) names the platform in each
     arm of its one statement, so the `(platform, value)` key's index serves it; it
     was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Changed.** An inbound email that its own threading headers place on a
+    record's chatter (the customer's answer to a mail sent from the record) is
+    ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
+    answers it by email; before, the answer was refused for want of a sender.
+    A stored message keeps the kind it was ingested with through every re-sync,
+    identical or edited, so replies received before the upgrade stay comments
+    and cannot be answered by email; new ones can. No data migration.
+    Anyone who has seen a chatter mail's Message-ID can answer onto the record,
+    so a message received on a record's chatter, email or comment, is one its
+    moderator may trash; mail sent from the record, system notes, and mail in a
+    mailbox conversation an earlier version merged into the record (a
+    colleague's own thread, still in the chatter's group) stay retained, that
+    last its owner's to remove, and that refusal is now a coded `ValidationError` (`retained`,
+    "Only comments and received messages can be removed.") where it was a bare
+    `ValueError`. Whether such mail should land on the record at all is open.
+  - **Changed.** A record's chatter thread is never folded with a mailbox thread.
+    The copy of a chatter mail (or of an answer to one) that reaches a
+    colleague's own connected mailbox still folds as a message, but the
+    colleague's thread stays theirs: it was merged into the chatter, dropped out
+    of their inbox, and took their later mail on that conversation onto the
+    record. Threads already folded this way are left as they are; a person
+    keeps them separate through the source-copy decision.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
@@ -77,7 +162,10 @@ live in code docstrings.
     default sender is invalid is refused; a keyed retry still returns its
     original. A reply to a message whose `Reply-To` names no address the handle
     owner accepts is refused (`reply_to`) rather than sent to the sender, which
-    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    may be a relay; the sender an answer falls back to is checked the same way,
+    so one stored with an address the handle owner does not take (a control or
+    an invisible character in it) is refused (`parent`, `reply_unaddressed`)
+    instead of being written and failing at delivery. Idempotency keys claimed through `compose_reply` (scope
     `messaging.reply:`) do not replay through `compose` (scope
     `messaging.compose:`): a posts workflow reply retried across the upgrade
     does not replay, and if its original was trashed or failed, which the
@@ -88,8 +176,18 @@ live in code docstrings.
     or derived from a conversation's title, has each control character and line
     break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
     so no mail library, client or provider decodes anything out of it: the subject
-    stored, sent and read back are one string (`outgoing_subject`); a typed line
-    break is still refused. A channel's own sender handle is landed with no
+    stored, sent and read back are one string (`angee.messaging.email.header_text`,
+    the one rule for text a mail header carries, which every display name the
+    email backend writes also takes, so a sender name inbound mail stored with a
+    literal encoded word no longer makes an answer to that sender fail); a typed
+    line break is still refused. An address with an internationalised domain,
+    typed or taken from inbound mail, is now delivered: the backend writes its
+    domain in ASCII (IDNA) form and the stored address keeps what was typed.
+    **Known limit:** an address whose local part is outside ASCII is still
+    admitted and written, and its delivery fails, as no transport here speaks
+    SMTPUTF8; the stored reason names the address and says so, where it said
+    "The email could not be rendered.". A rendering failure the backend states
+    itself (an attachment that is unavailable) keeps its own reason too. A channel's own sender handle is landed with no
     creator, under a non-user attribution (`messaging/system:outgoing`): the
     first person to compose on a channel no longer holds read, write and delete
     on it, so cannot rename, re-address or delete the desk's sender. A recipient
@@ -114,6 +212,44 @@ live in code docstrings.
     administrators (schema revision 29); every framework and consumer writer of
     both runs as system work.
   - **Upgrade:** `rebac sync` (provision runs it). No migration.
+- `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
+  a value held as text: `FieldDescriptor.format`, one of `"date"`,
+  `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
+  value's type, never its presentation, which stays the widget's. The
+  backend's form spec (`config_form_spec`) keeps a `date` or `date-time`
+  member's `format` beside the widget that presents it, the date widget it
+  selects or the one its author declared (an authored `json` widget renders
+  raw JSON, with no `format`); what it does with every other format is
+  unchanged (refused, or under `json_fields` the untyped JSON member, with no
+  `format`). Nothing asserts the `format` on that projected spec, which no
+  validator is handed: a record form and a `MutationDialog` check a
+  descriptor's own rules, and typed parsing validates the value and may accept
+  a date and time with no offset, which the format's grammar refuses. A schema
+  that is itself handed to a validator (a workflow's input, at admission and
+  in its schema dialog) has its formats asserted as before. The form spec's
+  parser carries the three formats on a `string` and no other, and an action
+  argument carries it.
+  `emptyValueForField` reads it first: a field that declares a format holds
+  `null` when it holds nothing, whatever its kind and widget, and an explicit
+  `string` kind without one still holds `""`. That removes the step back of
+  the entry below for a date that declares its format. For a member as the
+  backend emits it: "Set value" no longer writes `""` on a nullable one, and
+  "Add item" on a list of them keeps a `MutationDialog`'s submit disabled with
+  "This field is required." under the item, while a schema dialog treats the
+  list as it treats a list of integers. For a member a hand-written or raw
+  schema declares without the backend's presence marks: a record form's edit
+  that changed a sibling member sends `null`, and a create draft holds `null`
+  for a nullable one with no default and leaves out one that is neither
+  required nor nullable (the backend's members are unchanged there: a nullable
+  one already seeded its `null` default, and one the record lacks is neither
+  seeded nor sent). A `string`
+  with only a date or time widget and no declared format keeps `""`, and a
+  date drawn as a text input (a raw schema's with no authored widget, or one
+  under an authored `text` widget) still writes `""` when cleared. No declared
+  form has such a member, and no composed
+  artifact changes. **Upgrade:** a hand-written descriptor that
+  carries a date, a date and time or a time as text declares its `format`; a
+  test that pins a projected date member whole finds `format` beside `widget`.
 - `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
   `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
   `angee.calendar`: **Changed behaviour.**
@@ -219,7 +355,8 @@ live in code docstrings.
   record form's draft and seeds, `ActionFormDialog`'s arguments,
   `MutationDialog`'s and a schema dialog's seeds and the presence control; the
   record form's own rule is deleted. A lines editor's new cell keeps its own
-  rule (`emptyCellValue`). First match wins: an explicit `string` kind holds
+  rule (`emptyCellValue`). First match wins, after a declared `format` (the
+  entry above): an explicit `string` kind holds
   `""` whatever its widget; the `integer` and `float` widgets and the date and
   time widgets hold `null`; the list widgets and a relation list `[]`; the
   `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
@@ -245,12 +382,11 @@ live in code docstrings.
   policies otherwise keep their differences. Of the declared forms measured,
   one payload changes: an action that passes an untouched optional date on as
   it is sends `null`, which a date parameter accepts, where it sent `""`. A
-  step back, recorded as expected failures until the descriptor carries a
-  declared format: a date, a time or a date and time carried as text (a
+  date, a time or a date and time carried as text with no declared `format` (a
   `string` kind with only its widget to tell it from text) seeds `""`, so a
   record form's edit that changed a sibling member sends `""` for it where it
-  sent `null`, and "Set value" on a nullable one writes `""`; no form declares
-  such a member today. Not changed, and known: the other boolean widgets
+  sent `null`; one that declares its format holds `null` (the entry above),
+  and no form declares such a member today. Not changed, and known: the other boolean widgets
   (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
   `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
   `submit` or a `parseValues` that tested an untouched date, time or number

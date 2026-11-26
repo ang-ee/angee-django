@@ -585,7 +585,7 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
         return cast(Any, self).can_delete(**_message_access(self, info))
 
     @strawberry_django.field(
-        only=["thread_id", "message_type", "is_trashed"],
+        only=["thread_id", "message_type", "direction", "is_trashed"],
     )
     def can_trash(self, info: strawberry.Info) -> bool:
         """Return whether the reader moderates this record and may trash this comment."""

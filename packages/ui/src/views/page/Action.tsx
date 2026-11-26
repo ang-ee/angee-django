@@ -72,8 +72,9 @@ export type ActionSubmitResult = ActionOutcome | FormSubmitResult<ActionOutcome>
 /**
  * Base shape of one typed action argument: the slice of the `FieldDescriptor`
  * vocabulary an action form actually renders (widget resolution, options,
- * label/placeholder/description) — form-lifecycle fields (`showWhen`, `prefill`,
- * `createOnly`, …) have no meaning for an action arg and are excluded.
+ * label/placeholder/description), and the declared `format` its seed reads —
+ * form-lifecycle fields (`showWhen`, `prefill`, `createOnly`, …) have no meaning
+ * for an action arg and are excluded.
  */
 interface ActionArgBase extends Pick<
   FieldDescriptor,
@@ -81,6 +82,7 @@ interface ActionArgBase extends Pick<
   | "label"
   | "widget"
   | "kind"
+  | "format"
   | "options"
   | "placeholder"
   | "autoComplete"

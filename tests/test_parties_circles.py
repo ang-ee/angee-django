@@ -870,8 +870,10 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
         assert handle.normalized_value == "alice@gmail.com"
         assert Handle._meta.get_field("normalized_value").db_index is True
 
-        handle.value = " Alice.Smith+work@googlemail.com "
-        handle.save(update_fields=["value"])
+        # The value is write-once: the handle owner's rewrite changes it, and the key follows.
+        Handle.objects.reidentify(
+            handle, expected_value="  A.Lice+News@GMail.Com  ", value=" Alice.Smith+work@googlemail.com ",
+        )
 
     handle.refresh_from_db()
     assert handle.normalized_value == "alicesmith@googlemail.com"

@@ -447,6 +447,39 @@ A handle that proves to be another's spelling folds through the shared
 value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
+Every later message to a merged handle's address goes to the kept one, so a
+person's merge (`merge_records`) admits only another spelling of the kept
+address, the same platform and comparison key, unless that person is a contact
+administrator: an effective member of `parties/role:contact_admin`, as platform
+administrators are. Anyone else is refused and merges the contacts instead,
+which says two addresses reach one person and moves no address. Messages already
+written keep the handle they were written to. A system fold (`reidentify`
+folding an `@lid` into its number) merges any two handles on one platform. The
+merge writes the redirect before it resolves both handles' parties, so a contact
+administrator, who writes a handle only through the party it reaches, completes
+it. That merge leaves the merged handle on no contact, so the administrator
+cannot revert it: a platform administrator can, and so can the handles' creator
+when the contact is also theirs to write.
+
+A handle's ingestion keys, `platform`, `value` and `external_id`, are written
+once (`Handle.immutable_fields`, through the foundation's `ImmutableFieldsMixin`).
+A message reads its addresses from its handles when it is sent, so a field write
+of one would send messages already written, a held one included, somewhere
+else. Whoever holds `write` on a handle (its creator, a contact manager through
+its party, an administrator) changes its display fields, and a save that changes
+a key is refused with the foundation's write-once refusal, whoever saves it,
+system work included. Only the handle owner's verbs change a key, each holding
+the allowance for its own save: `HandleManager.upsert` rewrites `value` when a
+source's `external_id` matched and the account behind it moved, and
+`HandleManager.reidentify` rewrites `value` (a WhatsApp `@lid` resolved to its
+number) or folds the handle into the row that owns the new value. A fold changes
+neither row's keys, and history's revert restores a changeset's earlier keys as
+they were. Each saves through `Handle.save`, which derives `normalized_value`
+from the value it writes, so none leaves the comparison key behind. A resource
+row that names another address under an xref a load already wrote is refused:
+a new address is a row of its own. The guard is the instance save: queryset
+`update`, `bulk_update` and a `bulk_create` that updates on conflict bypass it,
+and no path writes the keys that way.
 
 Ordinary person edits assert normal statements; confirm/dismiss writes preferred
 statements without rewriting the source or copying evidence. Person preferences

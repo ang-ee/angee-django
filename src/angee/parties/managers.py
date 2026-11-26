@@ -19,6 +19,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -75,7 +76,7 @@ from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
-from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
+from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size, row_lock_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import canonical_json
 from angee.base.signals import MutedChanges, mute_changes, publish_change
@@ -466,7 +467,14 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         concurrent insert of the same identity lands where it did. A pre-check,
         never a failed save, keeps a value collision out of the caller's
         transaction. The value-keyed path never rewrites ``external_id`` (it is
-        not the key it matched on).
+        not the key it matched on). Rewriting ``value`` behind a matched
+        ``external_id`` is the one change of a write-once key
+        (``Handle.immutable_fields``) this verb makes: it never changes ``platform``
+        or ``external_id``, and it rewrites nothing when another row already holds
+        the new address (a spelling merged into the matched row): the call then lands
+        on the matched row, which keeps its address. Only a moved address costs that
+        extra read. An ``external_id`` given as a number is matched and stored as its
+        text.
 
         ``created_by_id`` stamps the creator, who holds the handle's access. Control
         is deliberately excluded from the generic refresh loop; :meth:`claim_control`
@@ -474,7 +482,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         without one, so a routine upsert cannot silently move an account between users.
         The holder is refused too: it is the projection of the winning statement, so a
         source states the link (``Party.objects.assert_handle``) and resolution writes it.
-        ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
+        ``normalized_value`` tracks ``value`` on every hit that names the row's own
+        address; a hit on another spelling's survivor leaves the row's key as it
+        is. Display fields refresh
         on every hit; blank values never clobber, and a field named in ``fill_only``
         is written only while the handle's own value is blank, so a name a person
         typed fills a handle that has none and never renames a shared one. Source
@@ -489,6 +499,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if {"normalized_value", "normalized_version"}.intersection(fields):
             raise TypeError("Handle.normalized_value and its version are maintained by Handle.save().")
         external_id = str(fields.get("external_id") or "")
+        if "external_id" in fields:
+            # Matched and stored as text: an account id a source gives as a number is that id.
+            fields["external_id"] = external_id
         normalized_value = self.clean_identity(platform=platform, value=value, external_id=external_id)
         for name in ("display_name", "label"):
             if fields.get(name):
@@ -512,12 +525,24 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 handle = self.find_identity(platform=platform, value=value, external_id=external_id)
                 if handle is None:
                     raise
-        if external_id and handle.external_id == external_id:
-            self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields}, fill_only=fill_only)
+        if external_id and handle.external_id == external_id and (
+            handle.value == value or not self.model._base_manager.filter(platform=platform, value=value).exists()
+        ):
+            # The source's stable id matched: the address behind it moved, and the row follows it.
+            self._refresh(
+                handle,
+                {"value": value, "normalized_value": normalized_value, **fields},
+                fill_only=fill_only,
+                allow_immutable=("value",),
+            )
         else:
-            # The value matched, not the external id: never rewrite it here.
+            # The value matched, not the external id, or another row holds the address the id's row would move to (a
+            # spelling merged into it): never rewrite either key here.
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
-            self._refresh(handle, {"normalized_value": normalized_value, **refresh}, fill_only=fill_only)
+            if handle.value == value:
+                # The row's own address: its key is the rule's for it. Another spelling's key is not this row's.
+                refresh["normalized_value"] = normalized_value
+            self._refresh(handle, refresh, fill_only=fill_only)
         return handle
 
     def reidentify(
@@ -525,7 +550,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     ) -> tuple[bool, bool] | None:
         """Rewrite a canonical handle or fold it into the existing value owner.
 
-        This is admitted system work, like the native fold it composes.
+        This is admitted system work, like the native fold it composes. The
+        rewrite changes ``value``, a write-once key (``Handle.immutable_fields``),
+        and its one save holds that allowance; a fold changes neither row's keys.
         Return ``(folded, name_filled)``; a gone/redirected/changed source is a
         stale request and returns None. Source and target Handles are locked in
         canonical identity order before Parties and their statements. A value
@@ -566,6 +593,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         if dry_run:
                             return False, bool(display_name and not source.display_name)
                         source.value = value
+                        source.allow_immutable_save("value")
                         source.save(update_fields=("value", "updated_at"))
                         kept, folded = source, False
                     named = bool(display_name and not kept.display_name)
@@ -623,13 +651,25 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         return {(row.platform, row.value): row.canonical() for row in self.filter(match)}
 
     @staticmethod
-    def _refresh(handle: Any, fields: dict[str, Any], *, fill_only: Collection[str] = ()) -> None:
+    def _refresh(
+        handle: Any,
+        fields: dict[str, Any],
+        *,
+        fill_only: Collection[str] = (),
+        allow_immutable: Collection[str] = (),
+    ) -> None:
         """Apply the non-blank ``fields`` that differ; one save, only when dirty.
 
-        A field named in ``fill_only`` is applied only while the handle's value is
-        blank. Adapter-owned metadata merges key-wise so refreshing one identifier
-        does not erase another adapter's retained identifiers. Assertion provenance
-        belongs to statements, independently of this transport metadata.
+        A field named in ``fill_only`` is applied only while the handle's stored
+        value is blank: when the loaded handle shows it blank, the row is locked
+        and read again first, so a value another transaction has just written is
+        kept rather than overwritten (and the handle given that value). Only that
+        fill pays for the lock. ``allow_immutable`` names the write-once keys
+        (``Handle.immutable_fields``) the calling verb may change: the one save that
+        applies them holds that allowance, and the handle's guard refuses any other.
+        Adapter-owned metadata merges key-wise so refreshing one identifier does not
+        erase another adapter's retained identifiers. Assertion provenance belongs to
+        statements, independently of this transport metadata.
         """
 
         merged = fields.get("metadata")
@@ -640,10 +680,21 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             name for name, new in fields.items()
             if new and getattr(handle, name, None) != new and not (name in fill_only and getattr(handle, name, None))
         ]
-        if dirty:
-            for name in dirty:
-                setattr(handle, name, fields[name])
-            handle.save(update_fields=[*dirty, "updated_at"])
+        filling = [name for name in dirty if name in fill_only]
+        if not dirty:
+            return
+        with transaction.atomic() if filling else nullcontext():
+            if filling:
+                stored = row_lock_queryset(type(handle)).get(pk=handle.pk)
+                for name in filling:
+                    if value := getattr(stored, name, None):
+                        setattr(handle, name, value)
+                        dirty.remove(name)
+            if dirty:
+                for name in dirty:
+                    setattr(handle, name, fields[name])
+                handle.allow_immutable_save(*(name for name in dirty if name in allow_immutable))
+                handle.save(update_fields=[*dirty, "updated_at"])
 
     def claim_control(
         self,
