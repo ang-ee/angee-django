@@ -63,6 +63,7 @@ from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Cast, Length
+from django.views.decorators.debug import sensitive_variables
 from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
 
 from angee.base.fields.state import StateField
@@ -660,6 +661,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     """Owns the writes that start a row or an override (the deployment's own row, overriding a shipped default and
     keeping an override over it) and the sends of a template (:meth:`send_as_system`, :meth:`send_test`)."""
 
+    @sensitive_variables("values")
     def send_as_system(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
         must_print: Collection[str] = (),
@@ -726,7 +728,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         outlive the message. Who reads system mail, and how its handles are
         recorded, is messaging's (its README, "System mail"): a value that is a
         credential, such as a sign-in link, is readable by those readers until it
-        expires, and deleting the message does not remove its fragments.
+        expires, and deleting the message does not remove its fragments. So the
+        values and the rendered text are marked as Django's
+        ``sensitive_variables`` in the send's frames and the render's (down to
+        ``TemplateWalk.render``, whose mark covers every frame it calls): an
+        exception's report never shows them.
         """
 
         # compose_as_system refuses a blank reason too, but only after the render, which this refusal precedes.
@@ -821,6 +827,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 require_changeset().record_created(message)
                 return message
 
+    @sensitive_variables("values", "rendered")
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
         subject_prefix: str = "", must_print: Collection[str] = (),
@@ -1402,6 +1409,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         rows = type(self).objects
         TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
 
+    @sensitive_variables("values")
     def render(
         self, values: Mapping[str, Any], *, kit: BrandKit | None = None, must_print: Collection[str] = (),
     ) -> RenderedMessage:

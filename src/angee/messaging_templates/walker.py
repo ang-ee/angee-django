@@ -63,6 +63,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.functional import Promise
 from django.utils.html import escape
 from django.utils.timezone import get_current_timezone, template_localtime  # type: ignore[attr-defined]  # unstubbed
+from django.views.decorators.debug import sensitive_variables
 
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
@@ -565,6 +566,7 @@ class TemplateWalk:
             raise _refused(errors, "invalid_values")
         return filled
 
+    @sensitive_variables()
     @refusals_only()
     def render(self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None = None) -> RenderedMessage:
         """Render the walked row with ``values``, the mail colours from ``kit``.
@@ -578,7 +580,10 @@ class TemplateWalk:
         HTML engine, the subject and preheader at its top level; (4) the plain-text
         body on the text engine, from the rows' text forms. ``frame`` renders a
         layout around a fixed body, subject and preheader. Raises ``ValidationError``
-        alone (:func:`refusals_only`).
+        alone (:func:`refusals_only`). Every variable of this frame, and of every
+        frame it calls (:meth:`prepare`, the engine, Django's template frames, the
+        filters), is Django's ``sensitive_variables``: the values and the text a
+        report would show may hold a credential.
         """
 
         language = self.language

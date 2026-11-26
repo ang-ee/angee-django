@@ -18,6 +18,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.views.debug import ExceptionReporter
 from rebac import (
     PermissionDenied,
     actor_context,
@@ -354,6 +355,52 @@ def test_a_required_value_must_be_printed_by_each_body_through_any_include(
     assert [item.code for item in refusal.value.error_list] == ["value_not_printed"] * len(unprinted)
     assert [body for body in ("HTML", "plain-text") if any(f"The {body} body" in item.message
                                                           for item in refusal.value.error_list)] == unprinted
+
+
+SECRET = "https://app.example.test/sign-in/SECRET-marker"
+
+
+def _leaks(error: BaseException) -> list[tuple[str, str, str]]:
+    """Each variable a Django exception report would show holding the marker, outside the test's own frames and
+    messaging's (which the system mailer marks for its own writer)."""
+
+    reporter = ExceptionReporter(None, type(error), error, error.__traceback__)
+    return [
+        (frame["filename"], frame["function"], name)
+        for frame in reporter.get_traceback_frames()
+        if "/tests/" not in frame["filename"] and "/angee/messaging/" not in frame["filename"]
+        for name, value in frame["vars"] if "SECRET-marker" in repr(value)
+    ]
+
+
+@pytest.mark.parametrize("entry", ["send_as_system", "render"])
+def test_an_exception_inside_the_render_reports_no_value_of_the_mail(system_channel: Any, entry: str) -> None:
+    """A value the render refuses half-way (no JSON holds an ``object()``), raised with the credential beside it."""
+
+    del system_channel
+    row = _mail("[Sign in]({{ link }})", LINKED)
+    values = {"link": SECRET, "unwritable": object()}
+    with pytest.raises(ValidationError) as raised:
+        if entry == "render":
+            with system_context(reason="tests.messaging_templates.send.render"):
+                row.render(values)
+        else:
+            _send(row, values)
+    assert _leaks(raised.value) == []
+
+
+def test_an_exception_inside_compose_reports_no_value_or_rendered_text_in_the_sends_frames(
+    mailing: None, plain: Any, settings: Any,
+) -> None:
+    """Rendered, then refused by compose (system mail not configured): the send's own frames hold the values and the
+    rendered text, the credential in both."""
+
+    del mailing, plain
+    _install()
+    settings.MAILERS = {}
+    with pytest.raises(ValidationError) as raised:
+        _send(_mail("[Sign in]({{ link }})", LINKED), {"link": SECRET})
+    assert _leaks(raised.value) == []
 
 
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
