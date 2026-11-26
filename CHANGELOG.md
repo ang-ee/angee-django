@@ -10,27 +10,39 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.messaging`, `angee.parties`, `angee.calendar`: **Changed behaviour.** An
-  address is landed as it was given. `compose` lands a recipient as typed
-  (`MessageManager.clean_recipient` returns it so) and the channel's sender as
-  configured, so an address that has no handle yet is stored, shown and
-  addressed as typed (a recipient typed `Ada@Example.com` was stored and sent
-  as `ada@example.com`); every other letter case or domain spelling of it still
-  lands on that one handle, which keeps the spelling first written. An answer
-  goes once to each address its parent's `Reply-To` names, as the header first
-  spells it: `Message.reply_addresses` names each address once by its spelling
-  key, keeping that spelling and its display name. The IMAP parser still emits
-  an address trimmed and lower-cased, the form every stored sync hash covers, so
-  a message already synced hashes as it did. The email backend's wire dedupe
-  reads the spelling key instead of `casefold()`; every mailbox it writes has an
-  ASCII part before the `@` and an ASCII domain, where the two agree, so nothing
-  is sent differently. Calendar attendees compare by the person-matching key,
-  without the `angee.calendar.backends.normalized_address` wrapper, which is
-  removed: a provider's two aliases on one invitation stay one attendee. A local
-  part outside ASCII is still admitted and undeliverable. Statement counts are
-  unchanged. **Removed:** `Handle.email_value`; land an address as given, and
-  let the handle owner find its handle. **Upgrade:** nothing to run; handles
-  already stored keep their spelling.
+- `angee.messaging`, `angee.messaging_integrate_imap`, `angee.calendar`,
+  `angee.intake`: **Changed behaviour.** Compose and answers land an address as
+  given; inbound mail keeps the parser's lower-cased form.
+  `Message.reply_addresses` returns each address its `Reply-To` names once, by
+  its spelling key (`Handle.spelling_key_of`), as the header first spells it,
+  with that entry's display name, where it lower-cased each. An answer to an
+  address no handle holds yet stores and sends it in that spelling; an address a
+  handle holds is sent as that handle stores it, with its display name, as every
+  recipient is. The IMAP parser still emits an address trimmed and lower-cased,
+  the form every stored sync hash covers, so a message already synced hashes as
+  it did. An IMAP account's own addresses (its `own_addresses`, its username and
+  its external account's email) compare with a message's by spelling key, any
+  configured display name dropped, so its own mail is outbound, or internal, in
+  any letter case or domain spelling; a configured display name, or a domain
+  spelled in Unicode against the header's punycode, left it inbound. The email
+  backend's wire dedupe reads the spelling key instead of `casefold()`; every
+  mailbox it writes has an ASCII part before the `@` and an ASCII domain, where
+  the two agree, so nothing is sent differently.
+  `angee.calendar.backends.normalized_address` is renamed `attendee_key`:
+  calendar's one rule for which addresses are one attendee before a handle
+  exists, still the person-matching key, so a provider's two aliases on one
+  invitation stay one attendee. `organizer_first` finds the organizer in its
+  list by it, so an organizer listed in another domain spelling carries the
+  answer it is listed with. `Need.requester_address` returns an emailed
+  request's sender as its handle stores it; requests are one requester when
+  their addresses are one account email as iam keys it (`normalize_email`), as
+  before. Statement counts are unchanged. **Upgrade:** nothing to run, and
+  nothing is sent. A message an IMAP channel synced from the account's own
+  address in another spelling keeps the direction it was stored with until the
+  mailbox is fetched again in full (a new stream generation, which a changed
+  `UIDVALIDITY` starts); that fetch rewrites the row in place once, with its
+  direction corrected and its status still synced, and later syncs write
+  nothing.
 - `angee.parties`: **Changed behaviour.** An email handle is one address whatever
   its letter case or domain spelling. A handle has a spelling key,
   `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
@@ -71,8 +83,7 @@ live in code docstrings.
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
-  it already did for the exact spelling. `Handle.email_value` no longer decides
-  which handle an address lands on, and is removed (the entry above).
+  it already did for the exact spelling.
   `HandleManager.clean_identity` returns `None`; nothing read the key it
   returned.
   `renormalize_handles` folds each live email handle that spells the address
@@ -239,10 +250,9 @@ live in code docstrings.
     never re-read. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
-    (default 50, the strictest common provider's per-message limit; each new
-    address costs a call about 35 statements) and
-    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
-    statements each); more is refused (`too_many`) under the argument that
+    (default 50, the strictest common provider's per-message limit) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20), each setting's
+    comment saying what one more costs; more is refused (`too_many`) under the argument that
     crosses the bound, before anything is read. An answer is bound the same way
     by the addresses its parent's `Reply-To` names: over the bound it is refused
     under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
@@ -338,6 +348,8 @@ live in code docstrings.
     `Handle.is_email_address` accepts, one entry per address as the header
     first spells it. A channel's default sender lands on the handle its
     configured address names.
+    A recipient address no handle holds yet is stored and sent as first typed,
+    and every other letter case or domain spelling of it lands on that handle.
     A name typed with a recipient address fills only a handle that has none.
     Inbound mail joins a thread by its subject only when the thread was grouped
     by subject: a conversation a person composed is joined through its threading
@@ -4282,7 +4294,7 @@ live in code docstrings.
 - `Message.objects.compose_reply` composes an email reply as a complete envelope:
   addressed to the parent's `Reply-To` when it carries one, else its sender (RFC
   5322 §3.6.2; `Message.reply_addresses(actor=)` is the one reader of `Reply-To`:
-  each address once, as the header first spells it, with its display name, in header order, read with the
+  lower-cased addresses with their display names, in header order, read with the
   caller's access, empty without the header), titled `Re: <thread title>` without stacking prefixes, and
   identified by a Message-ID (`make_msgid(domain=DNS_NAME)`, as Django mints one) as
   its external id. The email transport renders the parent's Message-ID as
