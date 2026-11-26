@@ -241,7 +241,7 @@ describe("a full-product workshop", () => {
     const sent: string[] = [];
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
     // A workshop as a product writes one: each schema's fake answers the session's reads and nothing of the kit's.
-    const fetch = () => storySchema({ current_user: () => null }, (request) => { sent.push(...request.fields); }).public!.fetch!;
+    const onRequest = (request: GraphQLWireRequest) => { sent.push(...request.fields); };
     const input: CreateAppInput = {
       addons: [stockAddon, brandkit, defineBaseAddon({
         id: "workshop-page",
@@ -249,10 +249,10 @@ describe("a full-product workshop", () => {
       })],
       layouts: { console: { chrome: ConsoleLayout }, public: { schema: "public" } },
       schemas: {
-        public: { url: "/graphql/public/", live: false, fetch: fetch() },
+        public: { ...storySchema({ current_user: () => null }, { onRequest }).public!, live: false },
         console: {
-          url: "/graphql/console/", live: false, fetch: fetch(),
-          metadata: { angee: { resources: [brandKitResource] } }, operationDocuments,
+          ...storySchema({ current_user: () => null }, { schema: "console", resources: [brandKitResource], onRequest }).console!,
+          live: false, operationDocuments,
         },
       },
       defaultSchema: "console",

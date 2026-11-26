@@ -174,7 +174,7 @@ export function createTaskStorySchemas() {
   }));
   let createdCount = 0;
   const values = (args: Record<string, unknown>) => recordValue(args.object) ?? recordValue(args._set) ?? {};
-  const schemas = storySchema({
+  return storySchema({
     tasks: () => storedTasks,
     tasks_aggregate: () => ({ aggregate: { count: storedTasks.length } }),
     stages: () => stages,
@@ -200,9 +200,7 @@ export function createTaskStorySchemas() {
       storedTasks = [...storedTasks, created];
       return created;
     },
-  });
-  schemas.public = { ...schemas.public!, metadata };
-  return schemas;
+  }, { resources: metadata.angee.resources });
 }
 
 function taskWithValues(

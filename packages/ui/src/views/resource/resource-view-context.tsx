@@ -42,7 +42,7 @@ import {
 } from "./resource-view-model";
 import { useAppRuntime } from "../../runtime";
 import { useValueStable } from "../../lib/use-value-stable";
-import { resourceViewPreset, resourceViewPresetDefaults } from "./model/favorites";
+import { inheritedResourceViewSorting, resourceViewPreset, resourceViewPresetDefaults } from "./model/favorites";
 import { useResourceViewFavorites } from "./resource-view-favorites";
 
 /** Group interaction state outlives a temporarily unmounted server list.
@@ -111,6 +111,13 @@ export interface ResourceViewContextValue {
   state: ResourceViewState;
   /** Declared route defaults resolved for the current view kind. */
   readonly defaultState: Readonly<ResourceViewState>;
+  /**
+   * The order a saved view without a `sort` of its own keeps here: the one the collection
+   * declares under the selected preset (`inheritedResourceViewSorting`), `undefined` when
+   * the list's view declares none; applying such a view sets it, and the view shows active
+   * while the list holds it.
+   */
+  readonly inheritedSorting: SortingState | undefined;
   /** Effective immutable scope: caller base filter combined with the selected preset. */
   baseFilter?: ResourceViewFilter;
   setColumnVisibility: OnChangeFn<VisibilityState>;
@@ -531,6 +538,7 @@ function useResourceViewContextValue({
   const groupStack = useValueStable(validated.groupStack);
   const sorting = useValueStable(validated.sorting);
   const state = useMemo(() => ({ ...validated, filter, groupStack, sorting }), [validated, filter, groupStack, sorting]);
+  const inheritedSorting = useMemo(() => inheritedResourceViewSorting(initialState, preset), [initialState, preset]);
   const queryDirty = state.preset !== defaultState.preset
     || stableSerialize(state.filter) !== stableSerialize(defaultState.filter)
     || stableSerialize(state.sorting ?? []) !== stableSerialize(defaultState.sorting ?? [])
@@ -713,6 +721,7 @@ function useResourceViewContextValue({
       toggleSelectedId,
       clearSelectedIds,
       defaultState,
+      inheritedSorting,
       baseFilter: effectiveBaseFilter,
       setColumnVisibility: (updater: Parameters<OnChangeFn<VisibilityState>>[0]) => updateState((current) => ({
         ...current, columnVisibility: functionalUpdate(updater, current.columnVisibility),
@@ -781,13 +790,14 @@ function useResourceViewContextValue({
         resetScope((current) => {
           try {
             const presetId = favorite.preset ?? current.preset;
-            resourceViewPreset(resourceViews, presetId, metadata?.resource.modelLabel ?? resource, presetIds);
+            const viewPreset = resourceViewPreset(resourceViews, presetId, metadata?.resource.modelLabel ?? resource, presetIds);
             const favoriteState = createResourceViewState({
               ...favorite,
               preset: presetId,
               filter: Filter.from(favorite.filter).value,
               groupStack: normaliseGroupStack(favorite.groupStack ?? []),
-              sort: favorite.sort ?? null,
+              // A view with no sort of its own keeps the order the collection declares; null clears it.
+              sorting: inheritedResourceViewSorting(initialState, viewPreset),
               mode: current.mode,
               anchor: current.anchor,
               // A view that names no hidden sources leaves the calendar's toggles as they are.
@@ -817,6 +827,7 @@ function useResourceViewContextValue({
       toggleSelectedId,
       clearSelectedIds,
       defaultState,
+      inheritedSorting,
       initialState,
       queryDirty,
       preset,

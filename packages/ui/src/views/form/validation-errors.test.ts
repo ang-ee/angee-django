@@ -4,7 +4,7 @@ import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { useForm } from "react-hook-form";
-import { boundedGraphQLTransportError } from "@angee/refine";
+import { boundedGraphQLTransportError, type ActionOutcome } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
 import { enUiBundle } from "../../i18n";
 import { createAngeeI18nInstance } from "../../runtime/i18n";
@@ -31,6 +31,7 @@ import {
   validationErrorMessages,
   validationErrorsFromError,
   type FormSubmitResult,
+  type ValidationErrors,
 } from "./validation-errors";
 
 const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
@@ -458,8 +459,9 @@ describe("shared form submission errors", () => {
   test("adapts action outcomes without losing accepted data or issue messages", () => {
     const outcome = { ok: true, message: "Saved", id: "one" };
     expect(actionFormSubmitResult({ saved: outcome }, "saved")).toEqual({ status: "ok", data: outcome, message: "Saved" });
-    expect(actionFormSubmitResult({ saved: { ok: false, message: "Review", id: null, validation_errors: { title: ["Required"] } } }, "saved")).toEqual({
-      status: "invalid", issues: { fieldErrors: { title: ["Required"] }, formErrors: ["Review"] },
+    // The wire's message joins the refusal's reasons: the field's reason stays under its key, said once.
+    expect(actionFormSubmitResult({ saved: { ok: false, message: "Required", id: null, validation_errors: { title: ["Required"] } } }, "saved")).toEqual({
+      status: "invalid", issues: { fieldErrors: { title: ["Required"] }, formErrors: [] },
     });
     expect(actionFormSubmitResult(null, "saved")).toEqual({ status: "invalid", issues: { fieldErrors: {}, formErrors: [] } });
   });
@@ -502,9 +504,41 @@ describe("shared form submission errors", () => {
   });
 });
 
-test("normalized action outcomes retain their transport-owned validation map", () => {
-  const outcome = { ok: false, message: "Review", validationErrors: { title: ["Required"] } };
-  expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit({ fieldErrors: outcome.validationErrors, formErrors: ["Review"] }));
+// Each shape of refusal the server sends (`ActionResult.from_error`): its `message` joins every
+// validation message, a refused target's is the verb's summary, and non-field reasons sit under `__all__`.
+test.each<[string, ActionOutcome, ValidationErrors]>([
+  ["one field: its reason under its key, and no form-level reason",
+    { ok: false, message: "Too early.", validationErrors: { date: ["Too early."] } },
+    { fieldErrors: { date: ["Too early."] }, formErrors: [] }],
+  ["two fields: both under their keys, and no form-level reason",
+    { ok: false, message: "Write a subject.; Too early.", validationErrors: { subject: ["Write a subject."], date: ["Too early."] } },
+    { fieldErrors: { subject: ["Write a subject."], date: ["Too early."] }, formErrors: [] }],
+  ["fields and a non-field reason: only that reason at form level, without its key",
+    { ok: false, message: "Too early.; The period is closed.", validationErrors: { date: ["Too early."], __all__: ["The period is closed."] } },
+    { fieldErrors: { date: ["Too early."] }, formErrors: ["The period is closed."] }],
+  ["non-field reasons only, with a map: each reason once, at form level",
+    { ok: false, message: "The period is closed.; The ledger is locked.", validationErrors: { __all__: ["The period is closed.", "The ledger is locked."] } },
+    { fieldErrors: {}, formErrors: ["The period is closed.", "The ledger is locked."] }],
+  ["a plain message with no map: the message stands in",
+    { ok: false, message: "The period is closed." },
+    { fieldErrors: {}, formErrors: ["The period is closed."] }],
+  ["a map whose only key holds no reason (`__all__`): the message stands in",
+    { ok: false, message: "Send failed.", validationErrors: { __all__: [] } },
+    { fieldErrors: {}, formErrors: ["Send failed."] }],
+  ["a map whose only key holds no reason (a field's): the message stands in, and the empty key binds nothing",
+    { ok: false, message: "Send failed.", validationErrors: { to: [] } },
+    { fieldErrors: { to: [] }, formErrors: ["Send failed."] }],
+  ["a domain error in band: the message stands in",
+    { ok: false, message: "RECORD_ACCESS_SUBJECT_REFUSED", code: "RECORD_ACCESS_SUBJECT_REFUSED" },
+    { fieldErrors: {}, formErrors: ["RECORD_ACCESS_SUBJECT_REFUSED"] }],
+  ["a refused target: its reason, not the verb's summary",
+    { ok: false, message: "Confirm failed.", validationErrors: { __all__: ["You are not allowed to modify this sales order."] } },
+    { fieldErrors: {}, formErrors: ["You are not allowed to modify this sales order."] }],
+  ["a reason under a key no field has: left in the map, for the binder to show",
+    { ok: false, message: "A saved project is required.", validationErrors: { target: ["A saved project is required."] } },
+    { fieldErrors: { target: ["A saved project is required."] }, formErrors: [] }],
+])("an action's refusal says each reason once: %s", (_shape, outcome, issues) => {
+  expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit(issues));
 });
 
 test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT"] as const)("decodes %s as the shared form conflict, carrying its code", (code) => {

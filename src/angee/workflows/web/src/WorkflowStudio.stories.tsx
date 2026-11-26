@@ -55,7 +55,7 @@ export function StudioStory({ appearance, conflict = false, invalid = false, unr
     };
     const invalidDraft = (validationErrors: Record<string, string[]>) =>
       new GraphQLError("Invalid draft.", { extensions: { code: "VALIDATION", validationErrors, formErrors: [] } });
-    const publicSchema = storySchema({
+    return storySchema({
       save_workflow_draft: (args) => {
         if (saveInvalid) throw invalidDraft({ "nodes.entry.config.threshold": ["Threshold is too small."] });
         if (conflict && !refused) {
@@ -91,8 +91,7 @@ export function StudioStory({ appearance, conflict = false, invalid = false, unr
       notes_by_pk: () => ({ id: "nte_7", display_name: "Selected record" }),
       notes: () => [{ id: "nte_8", display_name: "Another record" }],
       notes_aggregate: () => ({ aggregate: { count: 1 } }),
-    }, onRequest).public!;
-    return { console: { ...publicSchema, metadata: { angee: { resources: [workflowResourceFixture, runSubjectFixture] } } } };
+    }, { schema: "console", onRequest, resources: [workflowResourceFixture, runSubjectFixture] });
   }, [conflict, invalid, unrenderedIssues, failLatest, readOnly, outcomesGate, linked, extended, saveInvalid, savedDiagnostics, outcomeIssue, badUnusedSchema, emptyLayout, onRequest]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/studio">
     <ShellPageTestProviders runtime={{ widgets: defaultWidgets }}>

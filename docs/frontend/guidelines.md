@@ -1355,7 +1355,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `formSubmitError` (VALIDATION and STALE_REVISION). Do not add another in-band
   form transport. Adapt ActionResult wire responses with
   `actionFormSubmitResult(data, root)` and normalized outcomes with
-  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  `actionOutcomeSubmitResult(outcome)`: field reasons stay under their keys, the
+  non-field ones (`__all__`) are the form-level reasons, and the outcome's
+  message, which joins every reason (a refused target's is the verb's summary),
+  stands in only when the outcome carries no reason, the rule `runActionResult`
+  applies. A dialog thus says each reason once: under the field it names when it
+  shows that field ([shownFields](../../packages/ui/src/views/form/form-view-model.ts)),
+  on its banner otherwise; a reason under a name only a `content` editor holds
+  shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
@@ -1367,9 +1374,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
   the line naming the refused fields, so one focused place says everything;
-  with field reasons only, the first shown field takes focus. A surface gives
-  its banner's focus through `useRefusalBannerFocus`, never an effect of its
-  own. Save stays focusable while a save runs.
+  with field reasons only, the first shown field takes focus where it can: the
+  form library focuses it as the answer lands, so a field disabled or replaced
+  while the submit runs (a native input of a schema-driven or definition
+  `ActionFormDialog`, held in a fieldset it disables; a checkbox or switch
+  still takes it) cannot take it, and the banner, which names the field but
+  does not repeat its reason, takes focus instead. A surface gives its
+  banner's focus through `useRefusalBannerFocus`,
+  never an effect of its own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
@@ -2462,12 +2474,30 @@ shell's providers, `AppShellTestProviders` from `@angee/ui/testing/shell`, and
 each root field of a request from the handler named for it, fails loudly on a
 field without a handler or a missing required variable, and reports each parsed
 request; a handler throws `GraphQLError` to answer an error. Stories and addon
-tests wrap it as `storySchema(operations, onRequest)`; framework package tests
+tests wrap it as `storySchema(operations, { schema, resources, onRequest })`:
+the schema it names (`public` unless `schema` says), whose metadata names the
+data resources a story declares once, without which a resource surface finds
+no model, warns and loads no record. `testDataResource` declares `console`
+unless told otherwise, so a `public` story schema names `schemaName: "public"`
+resources; naming a resource of another schema throws. Framework package tests
 pass it as the `fetch` of a real Angee data provider. Tests match requests by
 `fields` or `operationName`, never by query text. A routed fixture
 reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
-has one provider stack — appearance, data, toasts and modals.
+has one provider stack — appearance, data, toasts and modals. The data layer
+tells its notices only to a `notificationProvider` a test passes to record them,
+so such a test records which notices the data layer opens for a surface's calls
+(none for a call passing `SURFACE_RENDERS_FAILURE`), not what the app's
+`useConnectionNotifications` holds back or tells once; a surface's own toast is
+not recorded. The workshop package's
+[story check](../../packages/storybook/src/stories/stories.test.tsx) imports
+each story module of that package and renders each of its stories (but one
+that fetches a missing file on purpose) through the preview's own annotations,
+failing on a model its schema does not name, a crash or an unanswered read; the
+fragments' and products' stories the workshop also loads need generated
+documents, so it does not import them. No story's runtime imports reach a test
+runner, which the [architecture guardrails](../../packages/app/src/architecture-guardrails.test.ts)
+check.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
