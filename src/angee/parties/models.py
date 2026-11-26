@@ -1277,6 +1277,8 @@ class Handle(
             owner := self.value_owner()
         ) is not None:
             # The foundation spends an allowance in its own save (ImmutableFieldsMixin), which this refusal precedes.
+            # Debt at angee.base: the mixin offers no public way to spend an allowance on a refused save; this line
+            # switches to it when the mixin has one.
             self._allowed_immutable_fields = set()
             raise ValueOwned({"value": ValidationError(
                 "Handle %(owner)s is this address; a second live handle of it is not kept.",
