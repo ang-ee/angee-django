@@ -10,6 +10,25 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: **Changed behaviour.** A person's merge of handles
+  (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
+  addresses only for a contact administrator, an effective member of
+  `parties/role:contact_admin` (platform administrators are). Every later message
+  to a merged handle's address goes to the kept one, so whoever had created two
+  handles (the person who first typed each address) could merge a contact into
+  their own address and receive other people's later mail to it. Anyone else
+  merging two different addresses is refused with a `ValidationError` that names
+  who can and says to merge their contacts instead, which moves no address.
+  Merging another spelling of an address (the same platform and comparison key)
+  is unchanged for whoever holds the merge's permissions, messages already
+  written keep their addresses, and the system's `fold` (`HandleManager.reidentify`)
+  is unchanged. A contact administrator can now complete a handle merge at all:
+  the merge wrote the redirect after resolving the merged handle's party, which
+  had cleared the party the administrator's write on that handle came through.
+  The redirect is now written first; the rows a merge ends in are unchanged, and
+  only the merged handle's history between differs. **Upgrade:** a person who
+  merged two addresses of one contact merges the contacts, or is granted the
+  contact administrator role.
 - `angee.base`: **Changed behaviour.** A refused write of a write-once field
   (`ImmutableFieldsMixin`) is keyed by the field's name, as model validation and
   `form.add_error` key a field: a relation changed through its attname is refused

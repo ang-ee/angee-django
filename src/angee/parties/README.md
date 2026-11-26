@@ -447,6 +447,17 @@ A handle that proves to be another's spelling folds through the shared
 value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
+Every later message to a merged handle's address goes to the kept one, so a
+person's merge (`merge_records`) admits only another spelling of the kept
+address, the same platform and comparison key, unless that person is a contact
+administrator: an effective member of `parties/role:contact_admin`, as platform
+administrators are. Anyone else is refused and merges the contacts instead,
+which says two addresses reach one person and moves no address. Messages already
+written keep the handle they were written to. A system fold (`reidentify`
+folding an `@lid` into its number) merges any two handles on one platform. The
+merge writes the redirect before it resolves both handles' parties, so a contact
+administrator, who writes a handle only through the party it reaches, completes
+it.
 
 A handle's ingestion keys, `platform`, `value` and `external_id`, are written
 once (`Handle.immutable_fields`, through the foundation's `ImmutableFieldsMixin`).

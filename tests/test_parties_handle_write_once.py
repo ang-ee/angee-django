@@ -1,13 +1,15 @@
 """A handle's ingestion keys are written once: only the handle owner's verbs change its platform, value or external id.
 
 A held message reads its addresses from its handles when it is sent, so a field
-write of one of them would send another person's message somewhere else.
+write of one of them would send another person's message somewhere else. A merge
+sends every later message to the merged address to the kept one, so a person
+merges another spelling only, unless they are a contact administrator.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -16,11 +18,16 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
+from angee.base.models.identity import public_id_of
+from angee.base.models.merge import MergeableMixin
+from angee.graphql import records
+from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging.testing.models import Handle, Message, Party, Recipient
+from angee.parties import schema as parties_schema
 from angee.provenance.context import changeset
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.testing.models import Resource
-from tests.conftest import create_platform_admin, create_user, make_addon
+from tests.conftest import addon_schema, create_platform_admin, create_user, make_addon
 from tests.messaging_campaign import grant, make_user
 from tests.test_messaging_compose import DESK, _wire, desk  # noqa: F401 -- the desk fixture
 
@@ -299,3 +306,211 @@ def test_a_seed_creates_the_handle_it_names_and_cannot_readdress_it(db: None, tm
         Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
     assert _keys(handle) == _keyed("email", "client@example.test")
     assert not Handle._base_manager.filter(value="elsewhere@example.test").exists()
+
+
+MERGE_REFUSAL = "Only a contact administrator merges two different addresses; merge their contacts instead."
+MERGES = {
+    # seat: whether its merge of a handle into the kept one lands, for (another spelling, another address)
+    "creator": (True, False),
+    "contact manager": (False, False),
+    "contact administrator": (True, True),
+    "platform administrator": (True, True),
+    "outsider": (False, False),
+    "system fold": (True, True),
+}
+PAIRS = ("another spelling", "another address")
+
+
+@pytest.fixture
+def merging(db: None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Three handles one contact holds, its creator's: the kept address, another spelling of it and another address."""
+
+    del db
+    creator = create_user("merge-creator")
+    manager = create_user("merge-contact-manager")
+    contact_admin = create_user("merge-contact-administrator")
+    with system_context(reason="tests.parties.write_once.merging"):
+        party = Party._base_manager.create(display_name="Client Example", created_by=creator)
+        handles = {
+            name: Handle.objects.upsert(platform="email", value=value, created_by_id=creator.pk)
+            for name, value in (
+                ("kept", "client@example.test"),
+                ("another spelling", "Client@Example.test"),
+                ("another address", "other@example.test"),
+            )
+        }
+        for handle in handles.values():
+            Party.objects.assert_handle(party, handle, asserted_by=creator)
+        grant_role(actor=manager, role="parties/role:contact_manager")
+        grant_role(actor=contact_admin, role="parties/role:contact_admin")
+    actors = {
+        "creator": creator,
+        "contact manager": manager,
+        "contact administrator": contact_admin,
+        "platform administrator": create_platform_admin("merge-platform-administrator"),
+        "outsider": create_user("merge-outsider"),
+    }
+    return handles, actors
+
+
+@pytest.mark.parametrize("pair", PAIRS)
+@pytest.mark.parametrize("seat", list(MERGES))
+def test_who_may_merge_which_handles(merging: tuple[dict[str, Any], dict[str, Any]], seat: str, pair: str) -> None:
+    """A person merges another spelling into a handle; only a contact administrator merges another address."""
+
+    handles, actors = merging
+    kept, merged = handles["kept"], handles[pair]
+
+    def merge() -> None:
+        if seat == "system fold":
+            with system_context(reason="tests.parties.write_once.fold"):
+                Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+            return
+        actor = actors[seat]
+        with actor_context(actor):
+            Handle._base_manager.get(pk=kept.pk).with_actor(actor).merge(records=[public_id_of(merged)])
+
+    if MERGES[seat][PAIRS.index(pair)]:
+        merge()
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
+    else:
+        with pytest.raises((ValidationError, PermissionDenied)) as refused:
+            merge()
+        if seat == "creator":
+            assert isinstance(refused.value, ValidationError) and refused.value.messages == [MERGE_REFUSAL]
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id is None
+    assert (_keys(kept), _keys(merged)) == (
+        _keyed("email", kept.value), _keyed("email", merged.value),
+    )
+
+
+def _resolve_first(self: Any, merged: Any) -> None:
+    """``Handle.retire_merged`` as it ran before: both parties resolved, then the redirect written."""
+
+    merged.resolve()
+    self.resolve()
+    MergeableMixin.retire_merged(self, merged)
+
+
+@pytest.mark.parametrize("order", ["redirect first", "resolve first"])
+@pytest.mark.parametrize("verb", ["a person's merge", "a system fold"])
+def test_a_handle_merge_ends_in_the_same_rows_whichever_order_and_only_the_history_between_differs(
+    merging: tuple[dict[str, Any], dict[str, Any]], monkeypatch: pytest.MonkeyPatch, verb: str, order: str,
+) -> None:
+    """Redirecting before resolving changes only the merged handle's version between: the rows it ends in agree."""
+
+    handles, actors = merging
+    kept, merged = handles["kept"], handles["another spelling"]
+    party = Handle._base_manager.get(pk=kept.pk).party_id
+    confirmed = Handle._base_manager.get(pk=kept.pk).party_link_confirmed
+    if order == "resolve first":
+        monkeypatch.setattr(Handle, "retire_merged", _resolve_first)
+    if verb == "a system fold":
+        with system_context(reason="tests.parties.write_once.order"):
+            Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+    else:
+        with actor_context(actors["creator"]):
+            Handle._base_manager.get(pk=kept.pk).with_actor(actors["creator"]).merge(records=[public_id_of(merged)])
+
+    rows = Handle._base_manager.filter(pk__in=(kept.pk, merged.pk)).values_list(
+        "pk", "merged_into_id", "party_id", "party_link_confirmed",
+    )
+    assert set(rows) == {(kept.pk, None, party, confirmed), (merged.pk, kept.pk, None, False)}
+    assert Party._base_manager.get(pk=party).handle_count == 2
+    between = list(Handle.history.filter(id=merged.pk).order_by("history_id").values_list("merged_into_id", "party_id"))
+    assert between[-2:] == (
+        [(kept.pk, party), (kept.pk, None)] if order == "redirect first" else [(None, None), (kept.pk, None)]
+    )
+
+
+_MERGE = """mutation Merge($type: String!, $id: ID!, $records: [ID!]!) {
+  merge_records(target_type: $type, target_id: $id, records: $records, confirm: true) {
+    ok message validation_errors
+  }
+}"""
+
+
+def _merge_records(user: Any, kept: Any, merged: Any) -> dict[str, Any]:
+    """Merge ``merged`` into ``kept`` as ``user`` through the public ``merge_records`` mutation."""
+
+    schema = addon_schema(parties_schema.schemas, "console", records.schemas)
+    variables = {"type": "parties/handle", "id": public_id_of(kept), "records": [public_id_of(merged)]}
+    return cast(dict[str, Any], result_data(execute_schema(schema, _MERGE, variables, user=user))["merge_records"])
+
+
+def _two_contacts_one_replier_typed(channel: Any) -> tuple[Any, Any, Any, Any]:
+    """Two repliers; the first typed both the client's address and their own, so created both handles."""
+
+    first, second = make_user("merge-redirect-first"), make_user("merge-redirect-second")
+    for replier in (first, second):
+        grant(channel, "replier", replier)
+    Message.objects.compose(channel=channel, to=["client@example.test"], text="Hi.", actor=first)
+    Message.objects.compose(channel=channel, to=["mine@example.net"], text="Mine.", actor=first)
+    with system_context(reason="tests.parties.write_once.redirect"):
+        client = Handle._base_manager.get(value="client@example.test")
+        mine = Handle._base_manager.get(value="mine@example.net")
+    assert client.created_by_id == mine.created_by_id == first.pk
+    return first, second, client, mine
+
+
+def test_a_creator_cannot_merge_a_contact_into_their_own_address_and_the_next_persons_mail_goes_to_the_contact(
+    desk: Any,  # noqa: F811 -- the compose desk fixture
+) -> None:
+    first, second, client, mine = _two_contacts_one_replier_typed(desk)
+    held = Message.objects.compose(channel=desk, to=["client@example.test"], text="For approval.", actor=second)
+
+    refused = _merge_records(first, mine, client)
+    assert refused["ok"] is False and MERGE_REFUSAL in refused["message"], refused
+    later = Message.objects.compose(channel=desk, to=["client@example.test"], text="Later.", actor=second)
+    assert _wire(desk, held)["To"] == _wire(desk, later)["To"] == "client@example.test"
+    assert Handle._base_manager.get(pk=client.pk).merged_into_id is None
+
+
+@pytest.mark.parametrize(
+    "kept_address", ["Client@Example.test", "mine@example.net"], ids=["another spelling", "another address"],
+)
+def test_a_contact_administrator_merges_through_the_mutation_and_only_later_mail_follows_the_kept_handle(
+    desk: Any, kept_address: str,  # noqa: F811 -- the compose desk fixture
+) -> None:
+    """A contact administrator merges the client into a handle they did not create; mail already written stays."""
+
+    _first, second, client, mine = _two_contacts_one_replier_typed(desk)
+    contact_admin = create_user("merge-redirect-contact-administrator")
+    with system_context(reason="tests.parties.write_once.redirect"):
+        kept = mine if kept_address == mine.value else Handle.objects.upsert(platform="email", value=kept_address)
+        grant_role(actor=contact_admin, role="parties/role:contact_admin")
+        party = Party._base_manager.create(display_name="Client Example", created_by=contact_admin)
+        for handle in (client, kept):
+            Party.objects.assert_handle(party, handle, asserted_by=contact_admin)
+    held = Message.objects.compose(channel=desk, to=["client@example.test"], text="For approval.", actor=second)
+
+    assert _merge_records(contact_admin, kept, client)["ok"] is True
+    later = Message.objects.compose(channel=desk, to=["client@example.test"], text="Later.", actor=second)
+    assert _wire(desk, held)["To"] == "client@example.test"
+    assert _wire(desk, later)["To"] == kept_address
+    assert Handle._base_manager.get(pk=client.pk).merged_into_id == kept.pk
+    assert _keys(client) == _keyed("email", "client@example.test")
+
+
+def test_merging_two_contacts_leaves_each_of_their_addresses_as_it_is(
+    desk: Any, django_capture_on_commit_callbacks: Any,  # noqa: F811 -- the compose desk fixture
+) -> None:
+    """Saying two addresses reach one person merges their contacts, and moves no address and no mail."""
+
+    owner = desk.owner
+    with system_context(reason="tests.parties.write_once.contacts"):
+        kept, merged = (
+            Party._base_manager.create(display_name=name, created_by=owner) for name in ("Ada", "Ada Work")
+        )
+        home = Handle.objects.upsert(platform="email", value="ada@example.test", created_by_id=owner.pk)
+        work = Handle.objects.upsert(platform="email", value="ada@work.example", created_by_id=owner.pk)
+        Party.objects.assert_handle(kept, home, asserted_by=owner)
+        Party.objects.assert_handle(merged, work, asserted_by=owner)
+    with actor_context(owner), django_capture_on_commit_callbacks(execute=True):
+        kept.with_actor(owner).merge(records=[merged.public_id])
+
+    with system_context(reason="tests.parties.write_once.contacts"):
+        rows = dict(Handle._base_manager.filter(pk__in=(home.pk, work.pk)).values_list("value", "merged_into_id"))
+    assert rows == {"ada@example.test": None, "ada@work.example": None}
+    later = Message.objects.compose(channel=desk, to=["ada@work.example"], text="Hi.", actor=owner)
+    assert _wire(desk, later)["To"] == "ada@work.example"

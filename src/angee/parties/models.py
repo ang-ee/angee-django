@@ -42,7 +42,16 @@ from phonenumbers import (
     is_valid_number,
     parse,
 )
-from rebac import PermissionDenied, SubjectRef, actor_context, backend, system_context, to_object_ref, to_subject_ref
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    SubjectRef,
+    actor_context,
+    backend,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+)
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -60,6 +69,7 @@ from angee.base.models.roles import role_anchor
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id, instance_actor, reader_queryset
 from angee.base.prefetch import prefetched
+from angee.iam.roles import subject_has_role
 from angee.integrate.mixins import LinkedRecordMixin, StatedRecordMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.parties.backends import DirectoryBackend
@@ -1182,11 +1192,31 @@ class Handle(
         super().save(*args, **kwargs)
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
-        """A contact alias keeps its platform and the directory identity lock order."""
+        """A contact alias keeps its platform and the directory identity lock order; a person merges a spelling.
+
+        Every later message to a merged handle's address goes to the kept one. So a
+        person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
+        binds the kept handle to its actor) admits only another spelling of the kept
+        address, the same ``normalized_value``, unless that actor is a contact
+        administrator: an effective member of ``parties/role:contact_admin``, as
+        platform administrators are. Anyone else merges the contacts, which says two
+        addresses reach one person and moves no address. System work (``fold``, as
+        ``HandleManager.reidentify`` folds an ``@lid`` into its number) merges any two
+        handles on one platform.
+        """
 
         super().validate_merge(merged)
         if any(row.platform != self.platform for row in merged):
             raise ValidationError("Only handles on the same platform can be merged.")
+        actor, elevated = self.effective_actor()
+        if (
+            not elevated
+            and any(row.normalized_value != self.normalized_value for row in merged)
+            and not subject_has_role(actor, ObjectRef("parties/role", "contact_admin"))
+        ):
+            raise ValidationError(
+                "Only a contact administrator merges two different addresses; merge their contacts instead."
+            )
         apps.get_model("parties", "Party").objects.lock_identity_rows(
             party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
         )
@@ -1216,15 +1246,20 @@ class Handle(
                 self.set_avatar(row.avatar)
 
     def retire_merged(self, merged: Any) -> None:
-        """Recompute identity projections after shared reference moves, then redirect.
+        """Redirect the merged handle, then recompute both handles' parties after the shared reference moves.
 
-        Resolution carries each handle's resolved party onto its instance, so the
-        redirect's history snapshot records that party.
+        A person's merge writes the redirect as that person (``MergeableMixin.merge``),
+        and a contact administrator writes a handle only through the party it reaches.
+        The moves have taken the merged handle's statements to the kept one, so its
+        resolution clears that party: redirecting first keeps the write the merge
+        authorized. The redirect's history version still names the former party;
+        the resolution that follows records the cleared one, and carries each
+        handle's resolved party onto its instance.
         """
 
+        super().retire_merged(merged)
         merged.resolve()
         self.resolve()
-        super().retire_merged(merged)
 
     def resolve(self) -> None:
         """Materialize the applied, eligible cross-party winner and both parties' handle counts.
