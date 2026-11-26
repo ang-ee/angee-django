@@ -1383,13 +1383,14 @@ class Message(
         """Return the addresses this message's ``Reply-To`` names, each with its display name.
 
         The header is read through :meth:`source_header_values` with the caller's
-        access, in header order. One entry per address, by its spelling key
-        (``Handle.spelling_key_of``: any letter case or domain spelling of an
-        address is one), keeping the spelling and display name the header gives it
-        first, which an answer is landed on and addressed to as the handle owner
-        lands any spelling; an entry the handle owner's predicate
-        (``Handle.is_email_address``) rejects is no address. Without a
-        ``Reply-To`` the mapping is empty.
+        access, in header order. Which entries are one address is the spelling
+        key's (``Handle.spelling_key_of``); each is returned as the header first
+        spells it, with that entry's display name: what an answer is landed on
+        (``MessageManager.compose``). An address no handle holds yet is stored and
+        sent in that spelling; an address a handle holds is sent as that handle
+        stores it, with its display name, as every recipient is. An entry the
+        handle owner's predicate (``Handle.is_email_address``) rejects is no
+        address. Without a ``Reply-To`` the mapping is empty.
         """
 
         addresses: dict[str, str] = {}

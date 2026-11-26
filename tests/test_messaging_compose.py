@@ -1031,6 +1031,22 @@ def test_an_answer_goes_once_to_each_address_a_reply_to_names_as_the_header_spel
     assert _wire(desk, reply)["To"] == "Ann <Ann@Example.test>, Bob <bob@xn--bcher-kva.example>"
 
 
+def test_an_answer_to_an_address_a_handle_holds_goes_as_that_handle_stores_it_with_its_name(desk: Any) -> None:
+    """The header's spelling and name only fill a handle that has none: compose first stored the address, inbound
+    mail and a named third spelling landed on it, and an answer to a fourth spelling is addressed as stored."""
+
+    first = Message.objects.compose(channel=desk, to=["Client@Example.test"], text="Hello.", actor=desk.owner)
+    relayed = _receive(desk, "relayed-held", sender="client@example.test", reply_to="Relay <CLIENT@EXAMPLE.TEST>")
+    with system_context(reason="tests.messaging.compose.reply_to.held"):
+        (held,) = Recipient._base_manager.filter(message=first).values_list("handle_id", flat=True)
+        assert Handle.objects.upsert(platform="email", value="CLIENT@example.TEST", display_name="Third").pk == held
+    assert relayed.sender_id == held
+    reply = Message.objects.compose(parent=relayed, text="Thanks.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.reply_to.held"):
+        assert list(Recipient._base_manager.filter(message=reply).values_list("handle_id", flat=True)) == [held]
+    assert _wire(desk, reply)["To"] == "Third <Client@Example.test>"
+
+
 @pytest.mark.parametrize("local", ["a\x1bb", "a\u202eb", "a\u2028b", "a\u200bb", "a\x85b"])
 def test_an_answer_to_a_sender_whose_address_is_not_one_is_refused_unwritten(desk: Any, local: str) -> None:
     """The sender an answer falls back to is checked as a Reply-To is, so no unprintable address reaches the wire."""

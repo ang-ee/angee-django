@@ -347,10 +347,10 @@ def _dedupe(addresses: Any) -> list[str]:
 
 
 def _bare_address(address: str) -> str:
-    """Return which address one written mailbox names: its spelling key (``Handle.spelling_key_of``), else as written.
+    """Return which address one written mailbox names, for sending each address once.
 
-    One address in any letter case or domain spelling is one mailbox; ``casefold()``
-    would join ``ß`` and ``ss`` in a part before the ``@``, which can be two.
+    Which mailboxes are one address is the handle owner's spelling key
+    (``Handle.spelling_key_of``); a mailbox with no ``@`` is only itself.
     """
 
     parsed = getaddresses([address])
