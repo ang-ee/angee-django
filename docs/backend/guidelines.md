@@ -475,7 +475,8 @@ Use these owners instead of maintaining another contract in an addon:
   validate a key it is not changing
   ([`ImplClassField.holds`](../../src/angee/base/fields/implementation.py)
   reads the stored row): the row saves its other fields, the generic GraphQL
-  update and a model form included, and keeps the key and its config. Resolving
+  update and a model form that leaves the column out included, and keeps the
+  key and its config. Resolving
   the key raises naming the field, the key and the setting. Every Angee GraphQL
   schema reads such a key as null on a type's field
   ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
@@ -484,8 +485,9 @@ Use these owners instead of maintaining another contract in an addon:
   (`strawberry-django-aggregates` refuses a group key outside the column's
   choices: `ChoicesValueNotInEnumError`), which every Angee schema answers as a
   public refusal naming the column
-  ([`AngeeSchema`](../../src/angee/graphql/schema.py)); no "Not registered"
-  group exists yet. A
+  ([`AngeeSchema`](../../src/angee/graphql/schema.py)); the same holds for any
+  choices column holding a value its choices no longer name. No "Not
+  registered" group exists yet. A
   `create_only` selector is never chosen again by a save. `angee.E052` and
   `ANGEE_IMPL_KEY_REMEDIES` name the rows and the remedy but move none: the
   key resolves again once the addon that registers it is installed, and only a

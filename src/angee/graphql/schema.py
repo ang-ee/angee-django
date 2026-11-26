@@ -249,8 +249,9 @@ class AngeeSchema(strawberry.Schema):
 
         A grouped read the grouping library refuses because a row holds a value outside a column's
         choices (``ChoicesValueNotInEnumError``) is a public refusal in Angee's words, naming the
-        column from the request (:meth:`_grouped_choice_columns`); the library's own message, which
-        names the stored value, goes to the operator's log.
+        column from the request (:meth:`_grouped_choice_columns`): for every choices column, an
+        implementation key its registry no longer names being the first case. The library's own
+        message, which names the stored value, goes to the operator's log.
         """
 
         original = error.original_error
@@ -313,7 +314,7 @@ class AngeeSchema(strawberry.Schema):
                 f"so this list cannot be grouped by {label} until that is resolved."
             )
         return (
-            f"A record holds a value {label} no longer offers, "
+            f"A record holds a {label} that is no longer offered, "
             "so this list cannot be grouped by it until that is resolved."
         )
 

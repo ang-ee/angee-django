@@ -50,10 +50,13 @@ live in code docstrings.
   choices (`ChoicesValueNotInEnumError`), so a list grouped, a board laned or a
   facet counted by the column still cannot be read for such a row. Every Angee
   schema answers that as a public refusal (`BAD_USER_INPUT`, which the console
-  does not retry) naming the column: "A record holds an implementation that is
+  does not retry) naming the column, for every choices column that holds a
+  value its choices no longer name: "A record holds an implementation that is
   not registered, so this list cannot be grouped by backend class until that
-  is resolved."; the library's message, which names the stored value, goes to
-  the server's log. The console shows the words once on the grouped list and
+  is resolved.", or for any other choices column "A record holds a category
+  that is no longer offered, so this list cannot be grouped by it until that
+  is resolved." (a masked internal error before); the library's message, which
+  names the stored value, goes to the server's log. The console shows the words once on the grouped list and
   the board; a refused facet now says why, above the options its last read
   still holds, in the search panel and its shortcut, with no notice (each
   facet was already its own read, so the others kept counting before too). **Known gap:** no "Not registered" group, lane or
