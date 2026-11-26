@@ -10,6 +10,28 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A number shown as a percentage or a progress bar holds `null`
+  when it holds nothing, where it held the empty text. `percent` and
+  `progressBar` join the number widgets (`NUMBER_WIDGETS`) in the one rule for
+  a form field's empty value (`emptyValueForField`) and in every reader of
+  that set, so they behave as `integer` and `float` do. Declared by one of
+  them alone, an untouched field reaches an action's `submit` and a
+  `MutationDialog`'s `parseValues` as `null` where it was `""`; a record
+  form's create leaves it out, and its edit sends a stored empty text, or a
+  member the record lacks, as `null`; the presence control treats it as a
+  number, with its own control and no "Set value". No control of theirs writes
+  the empty text. The number and date widget rows are read before the kinds,
+  so under these two widgets a `boolean`, `switch`, `object` or `array` kind
+  now holds `null`, as it already did under `integer` and `float`; a `string`
+  kind keeps `""` but its empty text is left out of a create and sent as
+  `null` on an edit. No declared descriptor has such a pair, and no declared
+  form changes on screen or in what it sends. Not changed: a progress bar
+  shows `0` while it holds `null`; the `boolean`, `booleanToggle` and
+  `booleanBadge` widgets with no kind hold `""` until a field's type reaches
+  its descriptor, and the `money` widget, which the money addon's fragment
+  registers, holds `""` until a widget can declare the kind of value it holds.
+  **Upgrade:** code that tested a field declared by `percent` or `progressBar`
+  alone for the empty text tests for `null`.
 - `@angee/ui`: A form no longer refuses its own seed. An optional field with a
   bound whose empty value is `null` and whose declared type does not refuse
   that `null` (a field declared by a number, date or time widget alone, or of
@@ -253,7 +275,8 @@ live in code docstrings.
   record form's own rule is deleted. A lines editor's new cell keeps its own
   rule (`emptyCellValue`). First match wins, after a declared `format` (the
   entry above): an explicit `string` kind holds
-  `""` whatever its widget; the `integer` and `float` widgets and the date and
+  `""` whatever its widget; the number widgets (`integer`, `float`, and
+  since then `percent` and `progressBar`) and the date and
   time widgets hold `null`; the list widgets and a relation list `[]`; the
   `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
   for an `array` kind, `null` for an untyped value and `{}` otherwise; then
@@ -282,9 +305,9 @@ live in code docstrings.
   `string` kind with only its widget to tell it from text) seeds `""`, so a
   record form's edit that changed a sibling member sends `""` for it where it
   sent `null`; one that declares its format holds `null` (the entry above),
-  and no form declares such a member today. Not changed, and known: the other boolean widgets
-  (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
-  `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
+  and no form declares such a member today. Not changed, and known: the
+  `boolean`, `booleanToggle`, `booleanBadge` and `money` widgets with no kind
+  still hold `""` (`percent` and `progressBar` have changed since). **Upgrade:** a
   `submit` or a `parseValues` that tested an untouched date, time or number
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and

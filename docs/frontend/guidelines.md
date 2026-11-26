@@ -1371,8 +1371,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the record form's draft, every dialog's seeds and the presence control read: a
   descriptor with a declared `format` (a date, a date and time or a time carried
   as text) holds `null`, then an explicit `string` kind holds `""` whatever its
-  widget, the `integer` and `float` widgets and the date and time widgets
-  `null`; a lines editor's new cell has its own rule. A form spec's parser
+  widget, the number widgets (`NUMBER_WIDGETS`: `integer`, `float`, `percent`,
+  `progressBar`) and the date and time widgets `null`, read before the kinds,
+  so a `boolean` kind under one of them holds `null`; a lines editor's new
+  cell has its own rule. A form spec's parser
   carries the `format` from the schema
   ([deserializeFormSpec](../../packages/ui/src/views/form/form-spec.ts)), and
   the backend's form spec keeps it beside the date control it selects; a

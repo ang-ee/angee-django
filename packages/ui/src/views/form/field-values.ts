@@ -9,8 +9,15 @@ export function textValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 }
 
-/** The widgets that edit a number; their control holds `null` when it holds nothing. */
-export const NUMBER_WIDGETS: ReadonlySet<string> = new Set(["integer", "float"]);
+/**
+ * The widgets that show or edit a number (`percent` only shows one): with no `string` kind they hold
+ * `null` when they hold nothing, and a record form's edit sends one holding the empty text as `null`.
+ * The `money` widget,
+ * which the money addon's fragment registers, is not one of them: this rule waits for a seam where a
+ * widget declares the kind of value it holds. `EditableLines` keeps its own list of number widgets,
+ * for alignment.
+ */
+export const NUMBER_WIDGETS: ReadonlySet<string> = new Set(["integer", "float", "percent", "progressBar"]);
 /** The widgets that pick a date, a time, or a date and time; their control holds `null` when it holds nothing. */
 export const DATE_TIME_WIDGETS: ReadonlySet<string> = new Set(["date", "datetime", "time"]);
 /** The widgets that hold a list; a relation list (`isRelationListField`) holds one too. */
@@ -26,14 +33,16 @@ const LIST_WIDGETS: ReadonlySet<string> = new Set(["tagInput", "list", "rows"]);
  *    kind and widget, since `""` is none of them. Then an explicit `string` kind: `""`, whatever its
  *    widget, since a controlled text input needs a text and a widget only presents. The format, never
  *    the widget, tells a date carried as text from text.
- * 2. A number widget (`NUMBER_WIDGETS`: `integer`, `float`) or a date or time widget
- *    (`DATE_TIME_WIDGETS`: `date`, `datetime`, `time`): `null`.
+ * 2. A number widget (`NUMBER_WIDGETS`: `integer`, `float`, `percent`, `progressBar`) or a date or
+ *    time widget (`DATE_TIME_WIDGETS`: `date`, `datetime`, `time`): `null`.
  * 3. The `tagInput`, `list` and `rows` widgets and a relation list (`many2many`): `[]`.
  * 4. The `switch` widget: `false`; the `object` widget: `{}`; the `json` widget: `[]` for an `array`
  *    kind, `null` for an `any` kind (a form spec's untyped value), `{}` otherwise (a widget alone).
  * 5. An `array` kind: `[]`; `object`: `{}`; `boolean` or `switch`: `false`; `integer`, `number` or
  *    `any`: `""` under the `select` widget, else `null`.
  * 6. Otherwise `""`.
+ * The widget rows (2 to 4) are read before the kinds (5): under a number or a date widget, a
+ * `boolean`, `switch`, `object` or `array` kind holds `null`.
  */
 export function emptyValueForField(field: Pick<FieldDescriptor, "name" | "widget" | "kind" | "format">): unknown {
   if (field.format !== undefined) return null;

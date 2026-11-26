@@ -2827,6 +2827,19 @@ describe("FormView", () => {
     expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
   });
 
+  test("a create leaves out an untouched percent or progress bar field its metadata does not know: it holds null, which a create leaves out, where it held and sent an empty text", async () => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={[
+      { name: "label", label: "Label" },
+      { name: "share", label: "Share", widget: "percent" },
+      { name: "progress", label: "Progress", widget: "progressBar" },
+    ]} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
+  });
+
   test("guard: a create leaves an untouched optional member out of what it saves", async () => {
     sdkMocks.mutate.mockClear();
     renderWithProviders(<FormView resource="OAuthClient" fields={deserializeFormSpec({ type: "object", properties: {
@@ -2854,7 +2867,7 @@ describe("FormView", () => {
   // The create draft seeds a field declared by a number widget alone with null (it has no kind for the seed rule
   // to read) and a bound makes it a field the rule check reads; the check takes that seed for the field holding
   // nothing.
-  test.each(["integer", "float"])("a create with an untouched optional bounded field declared by the %s widget alone is sent, the field left out", async (widget) => {
+  test.each(["integer", "float", "percent", "progressBar"])("a create with an untouched optional bounded field declared by the %s widget alone is sent, the field left out", async (widget) => {
     sdkMocks.mutate.mockClear();
     renderWithProviders(<FormView resource="OAuthClient" fields={[
       { name: "label", label: "Label" },
@@ -2880,6 +2893,22 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     expect(sdkMocks.mutate.mock.calls[0]![0].data.config).toStrictEqual({ name: "b", limit: null, count: null });
+  });
+
+  test("an edit that writes its object sends a percent or progress bar member holding the empty text, a stored value no control writes, as null, as it sends a cleared number", async () => {
+    const members = [
+      { name: "config.name", label: "Name" },
+      { name: "config.share", label: "Share", widget: "percent" },
+      { name: "config.progress", label: "Progress", widget: "progressBar" },
+    ];
+    sdkMocks.record = { id: "note-1", title: "First", config: { name: "a", share: "", progress: "" } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={members} />);
+    const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    await waitFor(() => expect(name.value).toBe("a"));
+    fireEvent.change(name, { target: { value: "b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data.config).toStrictEqual({ name: "b", share: null, progress: null });
   });
 
   test("a date carried as text that the record lacks is sent as null when an edit writes its object", async () => {

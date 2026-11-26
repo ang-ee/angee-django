@@ -146,7 +146,7 @@ describe("MutationDialog", () => {
 
   // A field declared by a number widget alone has no kind, so the seed rule does not leave it out and it is seeded
   // null; a bound makes it a field the rule check reads, and the check takes that seed for the field holding nothing.
-  test.each(["integer", "float"])("an optional bounded field declared by the %s widget alone, left untouched, keeps the submit enabled beside a required sibling, and the dialog submits", async (widget) => {
+  test.each(["integer", "float", "percent", "progressBar"])("an optional bounded field declared by the %s widget alone, left untouched, keeps the submit enabled beside a required sibling, and the dialog submits", async (widget) => {
     const submit = vi.fn().mockResolvedValue(ok);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <MutationDialog open onOpenChange={vi.fn()} title="Quota" fields={[
