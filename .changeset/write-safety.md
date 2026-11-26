@@ -27,8 +27,11 @@ pending write and typed values.
   shows. A keyed surface still open when its answer is lost says so, that the
   write may have gone through and that sending again from the page sends it
   once (`formSubmitError`'s `answerLost`; chatter and notes in their own
-  words); the dashboards' create and duplicate tell a spent key in their own
-  words. The relation picker's quick create ("Create “name”") sits on it too
+  words). The record form promises it only where its own create root takes the
+  key: a custom create owner (`submit`) receives the draft's key, but its lost
+  answer says only that it may have been sent, since nothing tells the form
+  the owner sends it. The dashboards' create and duplicate tell a spent key in
+  their own words. The relation picker's quick create ("Create “name”") sits on it too
   when its create root takes a key, as one draft per relation field, so a
   retry after a lost answer no longer writes the record twice
   (`useRelationQuickCreate` takes the field's name).

@@ -13,7 +13,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
+import { OperationDocumentsProvider, boundedGraphQLTransportError, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import gql from "graphql-tag";
 import { useList, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
@@ -1726,6 +1726,16 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
   expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
+});
+
+test("a custom create owner's lost answer says only that it may have been sent: the form cannot tell that its owner sends the key", async () => {
+  const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(boundedGraphQLTransportError(new TypeError("Failed to fetch")));
+  const f = await fixture({ id: null, submit, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "One");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostMaybeSent"]);
 });
 
 test("a new record is one draft: a refused create keeps its key for the corrected retry, and discarding it then starts a new draft", async () => {
