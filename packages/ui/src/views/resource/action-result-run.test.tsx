@@ -165,7 +165,7 @@ describe("useActionResultRun", () => {
     warn.mockRestore();
   });
 
-  test("a domain failure toasts danger with its in-band non-field reasons", async () => {
+  test("a domain failure toasts danger with its in-band reasons, under any key", async () => {
     const { result } = renderHook(() => useActionResultRun(), { wrapper });
 
     await act(async () => {
