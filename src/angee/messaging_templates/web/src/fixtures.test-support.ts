@@ -30,7 +30,8 @@ import {
  *
  * The fake answers from those recordings and keeps the library across requests: a
  * verb applies what the recording says it changed. A save applies its patch as it
- * is. A read or a verb the recording has no answer for is answered with a GraphQL
+ * is. A preview of unsaved edits is answered by its row and its patch, compared by
+ * value. A read or a verb the recording has no answer for is answered with a GraphQL
  * error naming it. Lists, counts and groups are `resourceSnapshotOperations` over the
  * current rows, so filters and grouping are the resource metadata's own.
  */
@@ -84,6 +85,10 @@ interface RecordedFixtures {
   }>>;
   /** Saves the server kept: what was sent, what the save answered, and what a reload then read. */
   saved: readonly { id: string; set: Readonly<Record<string, unknown>>; row: WireRow; reread: WireRow }[];
+  /** Previews of unsaved edits: the row, the edits as its Save would send them (`patch`), and the answer. */
+  unsavedPreviews: readonly { id: string; patch: Readonly<Record<string, unknown>>; result: Preview }[];
+  /** The same edits where the deployment lets nobody write a layout (`write__layout`): each a failed query. */
+  unsavedPreviewsLayoutGated: readonly { id: string; patch: Readonly<Record<string, unknown>>; error: RecordedError }[];
 }
 
 /** What the recorder wrote: JSON, so its values are checked by the recorder's own test, its shapes by these types. */
@@ -134,6 +139,13 @@ export interface MessageTemplateFixtureOptions {
    * read again that the save causes; the reads before it answer as recorded.
    */
   failPreviewAfterSave?: boolean;
+  /**
+   * The deployment lets nobody write a template's layout (`write__layout`): a preview of unsaved edits is answered
+   * as the server answered it under that gate.
+   */
+  layoutGated?: boolean;
+  /** Awaited before each preview read is answered, with its arguments: a test holds an answer until it releases it. */
+  beforePreview?: (args: Readonly<Record<string, unknown>>) => Promise<void> | void;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
 }
@@ -147,17 +159,23 @@ function unrecorded(what: string): GraphQLError {
   return new GraphQLError(`The recorded fixtures hold no answer for ${what}.`);
 }
 
-function sameObject(left: Readonly<Record<string, unknown>>, right: unknown): boolean {
-  if (typeof right !== "object" || right === null) return false;
-  const other = right as Record<string, unknown>;
-  const keys = Object.keys(left);
-  return keys.length === Object.keys(other).length && keys.every((key) => left[key] === other[key]);
+/** Whether two values sent as JSON are equal: objects by their keys in any order, lists item by item. */
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((item, index) => sameValue(item, right[index]));
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) return left === right;
+  const [ours, theirs] = [left as Record<string, unknown>, right as Record<string, unknown>];
+  const keys = Object.keys(ours);
+  return keys.length === Object.keys(theirs).length
+    && keys.every((key) => Object.hasOwn(theirs, key) && sameValue(ours[key], theirs[key]));
 }
 
 /** The schemas a story or a test mounts: the console over the fake, with the recorded metadata. */
 export function messageTemplateSchemas({
   viewer = "admin", refuseSave, refuseKeep = false, overrideDenied = false, failPreviewAfterSave = false,
-  onRequest, onCall,
+  layoutGated = false, beforePreview, onRequest, onCall,
 }: MessageTemplateFixtureOptions = {}) {
   const member = viewer === "member";
   let savedOnce = false;
@@ -197,9 +215,18 @@ export function messageTemplateSchemas({
       if (!row) return null;
       return Object.hasOwn(backlinks, row.id) ? { ...row, backlinks: backlinks[row.id] } : row;
     },
-    message_template_preview: ({ template, brand_kit }) => {
+    message_template_preview: async (args) => {
+      const { template, brand_kit, patch } = args;
+      await beforePreview?.(args);
       if (failPreviewAfterSave && savedOnce) {
         throw new GraphQLError(`The preview of ${String(template)} fails when read again after a save.`);
+      }
+      if (patch != null) {
+        const recorded = (layoutGated ? RECORDED.unsavedPreviewsLayoutGated : RECORDED.unsavedPreviews)
+          .find((entry) => entry.id === template && brand_kit == null && sameValue(entry.patch, patch));
+        if (!recorded) throw unrecorded(`the preview of ${String(template)} with the edits ${JSON.stringify(patch)}`);
+        if ("error" in recorded) throw recordedError(recorded.error);
+        return recorded.result;
       }
       const preview = typeof brand_kit === "string"
         ? (member ? undefined : RECORDED.previewsInKit[brand_kit]?.[String(template)])
@@ -225,7 +252,7 @@ export function messageTemplateSchemas({
       return entry.result;
     },
     insert_message_templates_one: ({ object }) => {
-      const recorded = RECORDED.insert.find((candidate) => sameObject(candidate.object, object));
+      const recorded = RECORDED.insert.find((candidate) => sameValue(candidate.object, object));
       if (!recorded) throw unrecorded(`the insert of ${JSON.stringify(object)}`);
       if ("error" in recorded) throw recordedError(recorded.error);
       apply(recorded.changes);
@@ -238,7 +265,7 @@ export function messageTemplateSchemas({
       if (!current) throw unrecorded(`the row ${id}`);
       savedOnce = true;
       // A save the server was recorded keeping answers as it answered, and the row is what a reload then read.
-      const kept = RECORDED.saved.find((entry) => entry.id === id && sameObject(entry.set, _set));
+      const kept = RECORDED.saved.find((entry) => entry.id === id && sameValue(entry.set, _set));
       if (kept) {
         rows = rows.map((row) => (row.id === id ? kept.reread : row));
         return kept.row;

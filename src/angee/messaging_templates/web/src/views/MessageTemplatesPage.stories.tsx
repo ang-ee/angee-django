@@ -8,7 +8,8 @@ import { REFINE_CREATE_ID } from "@angee/ui";
 import { MESSAGE_TEMPLATE_MODEL, MESSAGE_TEMPLATES_ROUTE } from "../resources";
 import {
   MESSAGE_TEMPLATE_RECORD_ROUTE, MESSAGE_TEMPLATE_ROUTE_HREF, ROW, messageTemplateRuntime, messageTemplateSchemas,
-  type MessageTemplateFixtureCall, type MessageTemplateViewer, type RecordedSaveRefusal,
+  type MessageTemplateFixtureCall, type MessageTemplateFixtureOptions, type MessageTemplateViewer,
+  type RecordedSaveRefusal,
 } from "../fixtures.test-support";
 import { MessageTemplatesPage } from "./MessageTemplatesPage";
 
@@ -42,6 +43,14 @@ export const NewMessageTemplate = { render: (_args: unknown, { globals }: StoryC
 export const PreviewWarnings = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
 /** A template whose sample no longer renders: that it does not render, then each reason as the server words it; no frame. */
 export const PreviewRenderError = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.invoiceSent} /> };
+/** Password reset with an unsaved Subject: paste `Your new {{ brand.name }} password` into Subject. Once the edit settles the Preview says it shows your unsaved edits and renders "Your new Angee password"; Discard, or Save, and it shows the saved row again. */
+export const PreviewUnsavedEdits = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
+/** Password reset with unsaved sample values that leave out the reset link: in Sample values, replace the sample with `{"person": {"first_name": "Ana"}}`, then open Preview (the form asks whether to leave without saving: leaving keeps the edits). It says these edits would save but do not render with these sample values, and gives the server's reason; no frame. */
+export const PreviewUnsavedUnrendered = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
+/** Password reset with edits Save would refuse: choose HTML in Format and empty Layout. The Preview says Save would refuse these edits and lists the server's two reasons; choose the layout's and Layout takes focus. */
+export const PreviewUnsavedRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
+/** The same edit where the deployment lets nobody write a layout: choose HTML in Format and empty Layout. The server refuses the preview itself, and the band shows its refusal under the unsaved-edits caption; no frame. */
+export const PreviewUnsavedDenied = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} layoutGated /> };
 /** The deployment's own Arabic template: the frame's document, its subject, preheader and plain text read right to left. */
 export const RightToLeft = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcomeArabic} /> };
 /** The deployment's own block an override includes: Delete in the record's menu shows the server's refusal. */
@@ -61,7 +70,7 @@ const documents = { console: operationDocuments };
  */
 export function MessageTemplateStory({
   appearance, open, viewer = "admin", refuseSave, refuseKeep = false, overrideDenied = false,
-  failPreviewAfterSave = false, onRequest, onCall, queryClient,
+  failPreviewAfterSave = false, layoutGated = false, beforePreview, onRequest, onCall, queryClient,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
   /** The row whose record opens, or `new` for the create form; the library when absent. */
@@ -71,6 +80,8 @@ export function MessageTemplateStory({
   refuseKeep?: boolean;
   overrideDenied?: boolean;
   failPreviewAfterSave?: boolean;
+  layoutGated?: boolean;
+  beforePreview?: MessageTemplateFixtureOptions["beforePreview"];
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
   /** A test's own query client (its retry policy, say); the fixture makes one when absent. */
@@ -78,9 +89,11 @@ export function MessageTemplateStory({
 }) {
   const schemas = useMemo(
     () => messageTemplateSchemas({
-      viewer, refuseSave, refuseKeep, overrideDenied, failPreviewAfterSave, onRequest, onCall,
+      viewer, refuseSave, refuseKeep, overrideDenied, failPreviewAfterSave, layoutGated, beforePreview, onRequest,
+      onCall,
     }),
-    [viewer, refuseSave, refuseKeep, overrideDenied, failPreviewAfterSave, onRequest, onCall],
+    [viewer, refuseSave, refuseKeep, overrideDenied, failPreviewAfterSave, layoutGated, beforePreview, onRequest,
+      onCall],
   );
   const collectionPath = MESSAGE_TEMPLATE_ROUTE_HREF(MESSAGE_TEMPLATES_ROUTE);
   const initialEntry = open

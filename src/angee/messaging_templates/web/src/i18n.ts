@@ -46,6 +46,7 @@ export const enMessagingTemplatesMessages: Record<string, string> = {
   "preview.kit": "Brand kit",
   "preview.kitDefault": "Default kit",
   "preview.saved": "Preview of the saved message template",
+  "preview.unsaved": "Preview with your unsaved edits",
   "preview.fidelity":
     "Shown in a safe frame that blocks remote content; a mail client may space and size it slightly differently.",
   "preview.html": "HTML",
@@ -57,6 +58,9 @@ export const enMessagingTemplatesMessages: Record<string, string> = {
   "preview.preheader": "Preheader",
   "preview.frameTitle": "Message preview",
   "preview.refused": "This message template does not render",
+  "preview.unsavedRefused": "Save would refuse these edits",
+  "preview.unsavedRefusedRegion": "Why Save would refuse these edits",
+  "preview.unsavedUnrendered": "These edits would save, but they do not render with these sample values",
   "preview.loadError": "The preview could not be loaded.",
   "backlinks.label": "Backlinks",
   "backlinks.overridden": "Overridden",

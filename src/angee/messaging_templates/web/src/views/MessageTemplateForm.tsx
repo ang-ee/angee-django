@@ -55,7 +55,8 @@ function plainTextSourceFor(format: unknown): Record<string, unknown> {
  * source and, for HTML, its plain-text source; the values it reads; and its
  * description. The insert takes only the name and the identity and the server
  * seeds the rest, so a create form shows nothing else. The values it is previewed
- * with are a pane of their own, beside the saved row's Preview.
+ * with are a pane of their own, beside the Preview, which shows the saved row or,
+ * while the form holds unsaved edits, those edits as Save would write them.
  *
  * A shipped default is read-only (it projects no `write`); Override starts the
  * deployment's override of it and opens it. An override whose shipped default
@@ -78,9 +79,9 @@ function MessageTemplateForm({
       presentation: "full-bleed",
       visibleWhen: (record) => holdsPermission(record, "preview"),
       // The pane's toolbar row is the shared pane toolbar's, as every pane's is; the strip names the tab.
-      render: ({ recordId, active, form }) => (
+      render: ({ recordId, active, form, focusField }) => (
         <PaneToolbarHost>
-          <MessageTemplatePreviewPane template={recordId} active={active}
+          <MessageTemplatePreviewPane template={recordId} active={active} form={form} focusField={focusField}
             carriesMessageFields={carriesMessageFields(form.displayRecord ?? {})} />
         </PaneToolbarHost>
       ),

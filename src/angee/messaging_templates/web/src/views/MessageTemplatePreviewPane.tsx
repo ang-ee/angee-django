@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useDebounce } from "use-debounce";
 import type { MessageTemplateTextDirection } from "@angee/gql/console/graphql";
 import { useAuthoredQuery } from "@angee/refine";
 import {
@@ -13,18 +14,26 @@ import {
   Select,
   errorMessage,
   textRoleVariants,
+  useFormViewValues,
   useRelationOptions,
   type RecordIssue,
+  type RecordPanelContext,
 } from "@angee/ui";
 
 import { MessageTemplatePreview } from "../documents.console";
 import { useMessagingTemplatesT } from "../i18n";
 import { BRAND_KIT_MODEL, BRAND_KIT_RELATION, MESSAGE_TEMPLATE_MODEL } from "../resources";
 
-/** A saved row's preview reads again when a row or a kit changes. */
+/** A row's preview reads again when a row or a kit changes. */
 const PREVIEW_MODELS = [MESSAGE_TEMPLATE_MODEL, BRAND_KIT_MODEL];
 /** What the kit select reads beside each kit's id and label. */
 const KIT_FIELDS = ["is_default"];
+
+/**
+ * How long the open form's edits stay unchanged before the pane reads their preview. A preview of edits runs the
+ * save's validation and a walk of the row, so it is read once an edit settles, never once per keystroke.
+ */
+export const PREVIEW_PAUSE_MS = 400;
 
 type PreviewFormat = "html" | "text";
 
@@ -38,23 +47,53 @@ export interface MessageTemplatePreviewPaneProps {
   active: boolean;
   /** The row's kind carries a subject and a preheader, as the form decides for its Message section. */
   carriesMessageFields: boolean;
+  /** The record form's save surface: the pane previews its unsaved edits as its Save would write them. */
+  form: RecordPanelContext["form"];
+  /** Bring the person to a field of the record form, as a refusal naming it offers. */
+  focusField: RecordPanelContext["focusField"];
 }
 
 /**
- * The saved row as a recipient receives it: rendered by the server with its
- * sample, in the brand kit chosen here or, unset, the deployment's default kit;
- * for a mail its subject and preheader; its HTML body or its plain-text body; and
- * what the server warns about. A row that does not render says so and shows each
- * reason as the server words it. The HTML is only ever in the framework's
- * sandboxed message frame, which runs no script, has no same origin and loads
- * remote images only when asked; the frame's own body styles sit under the mail,
- * so a mail client may space and size it slightly differently, which the pane
- * says beside a frame. While another kit's preview loads, the previous one stays
- * on screen and the pane says it is busy.
+ * What the open form's Save would send (`nextSave`), as text, once it has stayed the same for `PREVIEW_PAUSE_MS`;
+ * null while the form holds no edit Save would write: it takes none, holds none, or holds only edits its Save
+ * cannot write. That null is known at once, with no pause, so Discard and Save return the pane to the saved row
+ * straight away. `settling` says newer edits are not yet the ones previewed. The text is what is compared, since
+ * each read of `nextSave` is a new object; it is read in render, never in a form subscription's callback.
+ */
+function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | null; settling: boolean } {
+  useFormViewValues(form); // render again on each edit
+  const data = form.formIsDirty && form.formTakesEdits ? form.nextSave().data : {};
+  const edits = Object.keys(data).length ? JSON.stringify(data) : null;
+  const [settled, pause] = useDebounce(edits, PREVIEW_PAUSE_MS);
+  React.useEffect(() => {
+    if (edits === null) pause.flush();
+  }, [edits, pause]);
+  const patch = edits === null ? null : settled;
+  return { patch, settling: edits !== patch };
+}
+
+/**
+ * The row as a recipient receives it: rendered by the server with its sample, in
+ * the brand kit chosen here or, unset, the deployment's default kit; for a mail its
+ * subject and preheader; its HTML body or its plain-text body; and what the server
+ * warns about. While the record form holds unsaved edits its Save would write, the
+ * pane renders those edits as Save would write them, the sample values among them,
+ * and its caption says so; it reads them once they settle, and shows the saved row
+ * again as soon as the form holds none. Edits Save would refuse are titled so,
+ * each refusal in Save's words; edits Save would keep that the sample cannot render
+ * say that instead; a saved row that does not render says so. A refusal that names
+ * a field takes the person to it when they choose it, never by itself, since they
+ * are editing elsewhere; each one is announced by the shared alert it is shown in.
+ * The HTML is only ever in the framework's sandboxed message frame, which runs no
+ * script, has no same origin and loads remote images only when asked; the frame's
+ * own body styles sit under the mail, so a mail client may space and size it
+ * slightly differently, which the pane says beside a frame. Until the preview on
+ * screen is the one for the kit and the edits now chosen, while newer edits settle
+ * or another preview loads, the earlier one stays and the pane says it is busy.
  *
  * The pane fills the height its record tab is given. The brand kit select and the
  * HTML or plain-text switch are its pane toolbar's (`PaneToolbar`, in the host the
- * tab renders it in). Under it, the line saying this is the saved row and what the
+ * tab renders it in). Under it, the line saying what is previewed and what the
  * server says of the render take at most part of the height and scroll within it;
  * the body takes the rest, and the frame or the plain text scrolls the whole mail
  * within it. Each region that scrolls can be reached and scrolled from the keyboard.
@@ -63,15 +102,20 @@ export interface MessageTemplatePreviewPaneProps {
  * rendered the mail in, as its frame does, whatever their first letter.
  */
 export function MessageTemplatePreviewPane({
-  template, active, carriesMessageFields,
+  template, active, carriesMessageFields, form, focusField,
 }: MessageTemplatePreviewPaneProps): React.ReactElement {
   const t = useMessagingTemplatesT();
   const [kit, setKit] = React.useState("");
   const [format, setFormat] = React.useState<PreviewFormat>("html");
   // The kit resource's own rows in its own order; choosing the default kit by name reads what unset reads.
   const kits = useRelationOptions(BRAND_KIT_RELATION, { enabled: active, fields: KIT_FIELDS });
-  // Unset sends no kit, and the server renders in the default one.
-  const variables = React.useMemo(() => (kit ? { template, brand_kit: kit } : { template }), [kit, template]);
+  const { patch, settling } = useSettledPatch(form);
+  // Unset sends no kit, and the server renders in the default one; no edit sends no patch, the saved row's preview.
+  const variables = React.useMemo(() => ({
+    template,
+    ...(kit ? { brand_kit: kit } : {}),
+    ...(patch === null ? {} : { patch: JSON.parse(patch) }),
+  }), [kit, patch, template]);
   const preview = useAuthoredQuery(MessageTemplatePreview, variables, {
     models: PREVIEW_MODELS,
     keepPreviousData: true,
@@ -93,12 +137,16 @@ export function MessageTemplatePreviewPane({
   ], [t]);
   const result = preview.data?.message_template_preview;
   const rendered = result?.rendered ?? null;
-  // A rendered row's warnings, or the reasons a row does not render, each as the server words it.
+  // A rendered row's warnings, or the reasons nothing renders, each as the server words it and under the column it
+  // names, if any: the same words can come under two columns ("Give an object." under variables and sample).
   const issues: RecordIssue[] = (result?.warnings ?? []).map((warning) => ({
-    id: `${warning.code}:${warning.detail}`,
+    id: `${warning.code}:${warning.field ?? ""}:${warning.detail}`,
     tone: rendered ? "warning" as const : "danger" as const,
     message: warning.detail,
+    ...(warning.field ? { field: warning.field } : {}),
   }));
+  // Save would refuse the edits; else, with edits, Save would keep them but the sample does not render them.
+  const saveRefused = result?.warnings.some((warning) => warning.code === "SAVE_REFUSED") ?? false;
   const framed = rendered !== null && format === "html";
   const dir = rendered ? TEXT_DIRECTION[rendered.direction] : undefined;
 
@@ -111,12 +159,14 @@ export function MessageTemplatePreviewPane({
     />
   );
 
-  // What the server warns about first, then that this is the saved row and the rest of what it says of the
-  // render, above the body: never more than part of the pane, scrolling within it.
+  // What the server warns about first, then whether this is the saved row or the unsaved edits and the rest of what
+  // it says of the render, above the body: never more than part of the pane, scrolling within it.
   const facts = [
     preview.error ? <ErrorBanner key="error" description={errorMessage(preview.error, t("preview.loadError"))} /> : null,
-    rendered ? <RecordIssues key="warnings" items={issues} /> : null,
-    <p key="saved" className={textRoleVariants({ role: "meta" })}>{t("preview.saved")}</p>,
+    rendered ? <RecordIssues key="warnings" items={issues} onFocusField={focusField} /> : null,
+    <p key="caption" className={textRoleVariants({ role: "meta" })}>
+      {patch === null ? t("preview.saved") : t("preview.unsaved")}
+    </p>,
     rendered && carriesMessageFields ? (
       <MetaGrid key="message" rows={[
         {
@@ -140,10 +190,12 @@ export function MessageTemplatePreviewPane({
   } else if (!rendered) {
     // The state first and the server's reasons under it, both at the top of what the pane is given.
     body = (
-      <div tabIndex={0} role="region" aria-label={t("preview.refusedRegion")}
+      <div tabIndex={0} role="region"
+        aria-label={saveRefused ? t("preview.unsavedRefusedRegion") : t("preview.refusedRegion")}
         className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
-        <EmptyState icon="triangle-alert" title={t("preview.refused")} className="min-h-0 p-6" />
-        <RecordIssues items={issues} />
+        <EmptyState icon="triangle-alert" className="min-h-0 p-6" title={saveRefused ? t("preview.unsavedRefused")
+          : patch === null ? t("preview.refused") : t("preview.unsavedUnrendered")} />
+        <RecordIssues items={issues} onFocusField={focusField} />
       </div>
     );
   } else if (format === "text") {
@@ -161,7 +213,8 @@ export function MessageTemplatePreviewPane({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-sheet" aria-busy={preview.isPlaceholderData || undefined}>
+    <div className="flex min-h-0 flex-1 flex-col bg-sheet"
+      aria-busy={settling || preview.isFetching || preview.isPlaceholderData || undefined}>
       {toolbar}
       {result || preview.error ? (
         <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}

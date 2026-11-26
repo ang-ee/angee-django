@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useMemo } from "react";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { RuntimeFixture, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { RelatedPane } from "@angee/ui";
@@ -13,7 +13,11 @@ import {
   messageTemplateSchemas, type MessageTemplateFixtureCall, type MessageTemplateViewer,
 } from "../fixtures.test-support";
 import { enMessagingTemplatesMessages as M } from "../i18n";
+import { PREVIEW_PAUSE_MS } from "./MessageTemplatePreviewPane";
 import { MessageTemplateStory } from "./MessageTemplatesPage.stories";
+
+// A test that holds the pause takes the fake clock, which also runs with real time so the waits below still poll.
+afterEach(() => { vi.useRealTimers(); });
 
 /** One of the fragment's own words, as its bundle has it. */
 function word(key: string): string {
@@ -315,6 +319,10 @@ test("a template whose include sits inside a condition renders with that value e
   const frame = await screen.findByTitle(word("preview.frameTitle"));
   await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain(preview.rendered!.html));
   expect(screen.queryByText(word("preview.refused"))).toBeNull();
+  // Nor does it warn: the band lists no warning, only what it always says of a rendered mail.
+  expect(preview.warnings).toEqual([]);
+  expect(bandOutline(screen.getByRole("region", { name: word("preview.factsRegion") }), []))
+    .toEqual(["saved", "message", "caveat"]);
 });
 
 /** The plain-text source in the record form, or null where the form does not show it. */
@@ -419,6 +427,7 @@ function bandOutline(band: HTMLElement, warnings: readonly string[]): string[] {
     const text = child.textContent ?? "";
     if (warnings.length && warnings.every((detail) => text.includes(detail))) return "warnings";
     if (text === word("preview.saved")) return "saved";
+    if (text === word("preview.unsaved")) return "unsaved";
     if (text.includes(word("preview.subject")) && text.includes(word("preview.preheader"))) return "message";
     if (text === word("preview.fidelity")) return "caveat";
     if (child.querySelector("[role=alert]") || child.getAttribute("role") === "alert") return "error";
@@ -609,6 +618,254 @@ test("after a save, the preview reads the row again", async () => {
 
   await screen.findByText(ui("form.updateSuccess"));
   await waitFor(() => expect(reads()).toBeGreaterThan(before));
+});
+
+/** The recorded preview of the unsaved edit to Password reset that writes `column`. */
+function unsavedPreview(column: string): (typeof RECORDED.unsavedPreviews)[number] {
+  const recorded = RECORDED.unsavedPreviews.find((entry) => entry.id === ROW.passwordReset && column in entry.patch);
+  if (!recorded) throw new Error(`The recorded fixtures preview no unsaved edit of ${column}.`);
+  return recorded;
+}
+
+/** The variables of each preview read the page sent, in order. */
+function previewReads(requests: readonly GraphQLWireRequest[]): Readonly<Record<string, unknown>>[] {
+  return requests.filter((request) => request.operationName === "MessageTemplatePreview")
+    .map((request) => request.variables as Readonly<Record<string, unknown>>);
+}
+
+/** What the server says of the render, above the body; the pane is its parent. */
+function factsBand(): HTMLElement {
+  return screen.getByRole("region", { name: word("preview.factsRegion") });
+}
+
+/** The Preview pane, which says when it is busy. */
+function busyPane(): HTMLElement {
+  return factsBand().parentElement!;
+}
+
+/** Let the open form's edits settle, as a pause after the last keystroke does. */
+function pause(): void {
+  act(() => { vi.advanceTimersByTime(PREVIEW_PAUSE_MS); });
+}
+
+/** A preview answer a test holds, and releases when it chooses. */
+function heldAnswer(): { promise: Promise<void>; release: () => void } {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
+
+/** The edits a held preview read carries, as text whatever the order of their columns. */
+function editsKey(patch: unknown): string {
+  return JSON.stringify(Object.entries(patch as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+/**
+ * Replace the whole text of a code editor the form labels, as a person does: select all, then paste. The paste
+ * lands once focus has left the editor, which then writes no selection into the page while it updates: the test
+ * document announces a selection change at once, inside the editor's own update, where a browser waits.
+ */
+function pasteInto(editor: HTMLElement, text: string): void {
+  act(() => editor.focus());
+  const mac = /Mac/.test(navigator.platform);
+  fireEvent.keyDown(editor, { key: "a", code: "KeyA", metaKey: mac, ctrlKey: !mac });
+  act(() => editor.blur());
+  fireEvent.paste(editor, { clipboardData: { getData: (type: string) => (type === "text/plain" ? text : "") } });
+}
+
+test("an edit is read once it settles, as its Save would send it, under the caption for unsaved edits", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: GraphQLWireRequest[] = [];
+  const edit = unsavedPreview("subject");
+  const rendered = edit.result.rendered!;
+  render(<MessageTemplateStory open={ROW.passwordReset} onRequest={(request) => requests.push(request)} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  const before = previewReads(requests).length;
+  fireEvent.change(within(form).getByLabelText(word("field.subject")), { target: { value: edit.patch.subject } });
+
+  // While the edit settles nothing is read: the saved row's preview stays, under its own caption, said to be busy.
+  expect(previewReads(requests)).toHaveLength(before);
+  expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy();
+  expect(busyPane().getAttribute("aria-busy")).toBe("true");
+  pause();
+  await waitFor(() => expect(previewReads(requests).slice(before))
+    .toEqual([{ template: ROW.passwordReset, patch: edit.patch }]));
+  const subject = await within(factsBand()).findByText(rendered.subject);
+  // The edits' subject reads in the direction the server rendered them in, as the saved row's does.
+  expect([subject.getAttribute("dir"), subject.getAttribute("lang")]).toEqual(["ltr", rendered.language]);
+  const warnings = edit.result.warnings.map((warning) => warning.detail);
+  expect(bandOutline(factsBand(), warnings)).toEqual(["warnings", "unsaved", "message", "caveat"]);
+  await waitFor(() => expect(screen.getByTitle(word("preview.frameTitle")).getAttribute("srcdoc")).toContain(rendered.html));
+  await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+});
+
+test("Discard returns the Preview to the saved row at once, and the next edit starts from it", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: GraphQLWireRequest[] = [];
+  const edit = unsavedPreview("subject");
+  const saved = RECORDED.previews[ROW.passwordReset]!.rendered!;
+  render(<MessageTemplateStory open={ROW.passwordReset} onRequest={(request) => requests.push(request)} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  fireEvent.change(within(form).getByLabelText(word("field.subject")), { target: { value: edit.patch.subject } });
+  pause();
+  await within(factsBand()).findByText(edit.result.rendered!.subject);
+  fireEvent.click(screen.getByRole("button", { name: ui("form.discard") }));
+
+  // In the same turn: the saved row's caption and its preview, read before the edit, with no pause between.
+  expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy();
+  expect(within(factsBand()).getByText(saved.subject)).toBeTruthy();
+  expect(previewReads(requests).filter((variables) => "patch" in variables)).toEqual([
+    { template: ROW.passwordReset, patch: edit.patch },
+  ]);
+  // The next edit starts from the saved row: while it settles, the saved row shows, never the discarded edits.
+  fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
+  expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy();
+  expect(within(factsBand()).getByText(saved.subject)).toBeTruthy();
+  expect(within(factsBand()).queryByText(edit.result.rendered!.subject)).toBeNull();
+});
+
+test("after a save the Preview shows the saved row at once, said to be busy until the row is read again", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: GraphQLWireRequest[] = [];
+  const reread = heldAnswer();
+  let saved = false;
+  const edit = unsavedPreview("subject");
+  const before = RECORDED.previews[ROW.passwordReset]!.rendered!;
+  render(<MessageTemplateStory open={ROW.passwordReset} onRequest={(request) => requests.push(request)}
+    onCall={(call) => { if (call.field === "update_message_templates_by_pk") saved = true; }}
+    beforePreview={(args) => (saved && args.patch == null ? reread.promise : undefined)} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  fireEvent.change(within(form).getByLabelText(word("field.subject")), { target: { value: edit.patch.subject } });
+  pause();
+  await within(factsBand()).findByText(edit.result.rendered!.subject);
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+  await screen.findByText(ui("form.updateSuccess"));
+
+  // The saved row's earlier answer is the render from before the edit: it shows only said to be busy.
+  await waitFor(() => expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy());
+  expect(within(factsBand()).getByText(before.subject)).toBeTruthy();
+  expect(busyPane().getAttribute("aria-busy")).toBe("true");
+  act(() => reread.release());
+  await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+  expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset });
+});
+
+test("answers released out of order never show a preview of edits the form no longer holds", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const held = new Map<string, ReturnType<typeof heldAnswer>>();
+  const subject = unsavedPreview("subject");
+  const refused = unsavedPreview("layout");
+  const savedSubject = String(RECORDED.rows.find((row) => row.id === ROW.passwordReset)!.subject);
+  render(<MessageTemplateStory open={ROW.passwordReset} beforePreview={(args) => {
+    if (args.patch == null) return undefined;
+    const answer = heldAnswer();
+    held.set(editsKey(args.patch), answer);
+    return answer.promise;
+  }} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  const subjectBox = within(form).getByLabelText(word("field.subject"));
+  // First the subject, read and held.
+  fireEvent.change(subjectBox, { target: { value: subject.patch.subject } });
+  pause();
+  await waitFor(() => expect(held.has(editsKey(subject.patch))).toBe(true));
+  // Then the subject put back and the edits Save would refuse, read and held too.
+  fireEvent.change(subjectBox, { target: { value: savedSubject } });
+  await choose(word("field.format"), "HTML");
+  fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
+  pause();
+  await waitFor(() => expect(held.has(editsKey(refused.patch))).toBe(true));
+
+  // The later answer first: Save would refuse the edits the form holds.
+  act(() => held.get(editsKey(refused.patch))!.release());
+  expect(await screen.findByText(word("preview.unsavedRefused"))).toBeTruthy();
+  // The earlier answer last renders edits the form no longer holds: it never shows.
+  await act(async () => { held.get(editsKey(subject.patch))!.release(); });
+  await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+  expect(screen.getByText(word("preview.unsavedRefused"))).toBeTruthy();
+  expect(screen.queryByText(subject.result.rendered!.subject)).toBeNull();
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+});
+
+test("the sample values ride the edits, and edits Save would keep that the sample cannot render say so", async () => {
+  const requests: GraphQLWireRequest[] = [];
+  const edit = unsavedPreview("sample");
+  render(<MessageTemplateStory open={ROW.passwordReset} onRequest={(request) => requests.push(request)} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  fireEvent.click(await screen.findByRole("tab", { name: word("form.sample") }));
+  pasteInto(await screen.findByRole("textbox", { name: word("field.sample") }), JSON.stringify(edit.patch.sample));
+  fireEvent.click(screen.getByRole("tab", { name: word("tab.preview") }));
+  // Today the record form's unsaved-changes guard asks before a routed record tab changes the page's search, though
+  // the form stays; leaving keeps the edits (`allowSearchChanges` in `useUnsavedChangesNavigationGuard`).
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+  expect(await screen.findByRole("button", { name: ui("form.discard") })).toBeTruthy();
+
+  await waitFor(() => expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset, patch: edit.patch }));
+  expect(await screen.findByText(word("preview.unsavedUnrendered"))).toBeTruthy();
+  const body = screen.getByRole("region", { name: word("preview.refusedRegion") });
+  for (const warning of edit.result.warnings) {
+    expect(warning.code).toBe("RENDER_ERROR");
+    expect(within(body).getByText(warning.detail)).toBeTruthy();
+  }
+  expect(within(factsBand()).getByText(word("preview.unsaved"))).toBeTruthy();
+  expect(screen.queryByText(word("preview.unsavedRefused"))).toBeNull();
+  expect(screen.queryByText(word("preview.refused"))).toBeNull();
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+});
+
+test("edits Save would refuse are titled so, each refusal announced in Save's words, and one naming a field takes the person there when chosen", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const edit = unsavedPreview("layout");
+  render(<MessageTemplateStory open={ROW.passwordReset} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  await choose(word("field.format"), "HTML");
+  const layout = within(form).getByLabelText<HTMLInputElement>(word("field.layout"));
+  const source = within(form).getByLabelText<HTMLTextAreaElement>(word("field.source"));
+  fireEvent.change(layout, { target: { value: "" } });
+  // The person moves on to Source while the edit settles.
+  act(() => source.focus());
+  pause();
+
+  expect(await screen.findByText(word("preview.unsavedRefused"))).toBeTruthy();
+  const body = screen.getByRole("region", { name: word("preview.unsavedRefusedRegion") });
+  expect(edit.result.warnings.map((warning) => [warning.code, warning.field])).toEqual([
+    ["SAVE_REFUSED", "layout"], ["SAVE_REFUSED", null],
+  ]);
+  for (const warning of edit.result.warnings) {
+    const words = within(body).getByText(warning.detail);
+    expect(words.closest("[role=alert]")).not.toBeNull();
+    // A refusal under a column is a control that takes the person to that field; one of the whole row is not.
+    expect(words.closest("button") !== null).toBe(warning.field !== null);
+  }
+  // The refusals arrived while the person was in Source, and left them there.
+  expect(document.activeElement).toBe(source);
+  fireEvent.click(within(body).getByRole("button", { name: edit.result.warnings[0]!.detail }));
+  await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+  expect(screen.queryByText(word("preview.refused"))).toBeNull();
+});
+
+test("edits the server refuses to preview at all show its refusal, with no frame, and the pane stops being busy", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const denied = RECORDED.unsavedPreviewsLayoutGated[0]!;
+  expect(denied.error.extensions.code).toBe("PERMISSION_DENIED");
+  render(<MessageTemplateStory open={ROW.passwordReset} layoutGated queryClient={noRetryClient()} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  await choose(word("field.format"), "HTML");
+  fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
+  pause();
+
+  const refusal = await within(factsBand()).findByText(denied.error.message, { exact: false });
+  expect(refusal.closest("[role=alert]")).not.toBeNull();
+  expect(bandOutline(factsBand(), [])).toEqual(["error", "unsaved"]);
+  await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+  expect(screen.queryByText(word("preview.unsavedRefused"))).toBeNull();
 });
 
 test("a member reads a shipped default with its fact alone: no verb, no Preview, no Delete, and the sample as a restriction", async () => {
