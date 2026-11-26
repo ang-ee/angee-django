@@ -12,13 +12,18 @@ live in code docstrings.
 
 - `angee.messaging`, `angee.workflows_messaging`, `angee.iam`: **System mail: each email
   Django sends is recorded on a system channel and sent through one transport mailer.**
-  - **Upgrade first:** with messaging installed, start-up refuses a deployment that
-    states its own `MAILERS.default` until it is renamed `MAILERS.transport`
-    (keeping its `BACKEND` and `OPTIONS`; remove it instead when a transport is
-    stated); the refusal names the edit. Django itself refuses legacy `EMAIL_*`
-    settings beside the `MAILERS` messaging states: move them into
-    `MAILERS.transport` `OPTIONS`. Then provision: it
-    loads the system channel's rows and runs `rebac sync` for schema revision 30.
+  - **Upgrade first:** stop the serving processes and workers through the operator
+    before editing settings: with messaging installed, start-up refuses a
+    deployment that states its own `MAILERS.default` until it is renamed
+    `MAILERS.transport` (keeping its `BACKEND` and `OPTIONS`; remove it instead
+    when a transport is stated), and the refusal names the edit; a process that
+    reloads before the edit stops at settings load. Django itself refuses legacy
+    `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
+    `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
+    rows and runs `rebac sync` for schema revision 30. Without that load, every
+    email Django sends raises `SystemChannelMissing` at the sender (a password
+    reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
+    channel backend enums gain `SYSTEM`.
     A host that authors `LOGGING` names `using: transport` on its
     `AdminEmailHandler` (messaging's README gives the block). Tests that observed
     delivery through `MAILERS={"default": ...}` override `transport`. With
