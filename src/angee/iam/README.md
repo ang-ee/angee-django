@@ -144,8 +144,7 @@ The actor's own account still requires Change password with the current password
 which keeps the requesting session; service and other non-person accounts remain
 refused. Issue password, Reset password and the other account actions retain their
 protected-account refusals. A successful set invalidates the target's existing
-session hashes and, through the account facts a link is bound to, retires
-outstanding sign-in links. After commit, IAM logs one
+session hashes. After commit, IAM logs one
 `set_password` event with `actor_public_id` and `target_public_id`; it records no
 password, hash or validator message. Actorless system calls retain the full
 protected-account refusal; other non-user subjects cannot set passwords.
@@ -187,9 +186,8 @@ same account, and the mark ends with the attempt. A project that sets its own
 whitelist callable loses that exemption.
 
 Every session records `angee.iam.auth.SESSION_BACKEND`, IAM's `ModelBackend`,
-whatever credential opened it: OIDC login and emailed sign-in links
-([`iam_messaging`](../iam_messaging/README.md)) bind it, so a session outlives
-its credential's backend.
+whatever credential opened it: a credential's sign-in binds it, as OIDC login
+does, so a session outlives its credential's backend.
 Start-up refuses an `AUTHENTICATION_BACKENDS` entry that does not import, and a
 list without `SESSION_BACKEND` (`angee.iam.E006`): Django imports backends only
 when someone signs in.

@@ -94,7 +94,8 @@ live in code docstrings.
   `angee.iam.models.account_action_refusals` puts them first, and no override
   drops them. `account_actions` is
   typed by one enum of the composed actions, built when the schema is by the
-  permissions builder (`angee.graphql.capabilities.permission_enum`, now public)
+  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
+  `_permission_enum` made public beside `permissions_field`)
   and named after its members (`Permissions_10_set_active_…`): its values are the
   actions' Zed permission names (`issue_password`), where the fixed
   `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum

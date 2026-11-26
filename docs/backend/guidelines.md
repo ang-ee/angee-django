@@ -1836,7 +1836,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,
-  validates names at schema build and batches list evaluation in SQL.
+  validates names at schema build and batches list evaluation in SQL. The
+  enum it types the field with, `permission_enum(names)`, also types a
+  composed set of permission names, as IAM's `account_actions` field does.
   Server predicates compose the same owner's `held_permissions(record, names)`.
   View-as therefore reports the target's permissions. Clients consume these
   answers; they never reconstruct authority from roles or identity.
