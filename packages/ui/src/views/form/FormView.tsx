@@ -140,7 +140,12 @@ function FormViewComponent(props: FormViewProps): React.ReactElement {
   />;
 }
 
-/** Existing public FormView export also exposes form-owned declaration seams.
+/** Existing public FormView export also exposes form-owned declaration seams. It guards
+ * unsaved edits against route moves (`useUnsavedChangesNavigationGuard`), so it renders under
+ * the app's router and `ModalsHost`, editable or not: without the router it throws at render
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.` A test or a story
+ * provides both through the shared providers (`createUiTestProviders` or
+ * `AppShellTestProviders` with `router`, the workshop's routed fixtures).
  * @kind surface
  */
 export const FormView = Object.assign(FormViewComponent, {

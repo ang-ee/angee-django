@@ -42,9 +42,14 @@ live in code docstrings.
   `failedWriteOutcome`, exported for any surface whose answer can land after
   it is gone). `MessageActions` shows on a coarse pointer. The
   unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
-  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`; an
-  open form dialog renders under the router and `ModalsHost` and says so when
-  one is missing; `createUiTestProviders` and `ShellPageTestProviders` render
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`;
+  every surface the unsaved-changes guard protects (a `DialogForm` given
+  `dirty` as it opens, so both form dialogs; `FormView`; a page guarding its
+  own edits) renders under the app's router and `ModalsHost`, and without the
+  router throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
+  test or a story provides both through the shared providers below;
+  `createUiTestProviders` and `ShellPageTestProviders` render
   one app shell (`AppShellTestProviders`), which provides `ModalsHost`;
   `ShellPageTestProviders` renders under a memory router unless one is already
   above, and `createUiTestProviders` takes `router`; a keyed dialog's

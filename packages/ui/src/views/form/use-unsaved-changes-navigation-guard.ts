@@ -34,7 +34,13 @@ export function useUnsavedChangesQuestion(): (whilePending?: boolean) => Promise
 
 /** Owns both in-app and before-unload protection for a dirty editable form. A move
  * `leaves` calls leaving asks first; by default every move leaves. It renders under the app's
- * router and `ModalsHost`, and says so at mount when either is missing.
+ * router and `ModalsHost`, whatever the form holds, and throws at render when one is missing:
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.`, or
+ * `useConfirm must be used under ModalsHost.`. Its callers render under them so: a `DialogForm`
+ * given `dirty` (so `MutationDialog` and the typed-args action dialog), `FormView`, and a page
+ * guarding its own edits. A test or a story provides both through the shared providers:
+ * `createUiTestProviders` or `AppShellTestProviders` with `router`, `@angee/app/testing`'s
+ * `ShellPageTestProviders`, or the workshop's routed fixtures.
  * @owner FormView
  */
 export function useUnsavedChangesNavigationGuard({

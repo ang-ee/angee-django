@@ -223,10 +223,13 @@ interface MutationDialogBaseProps<
  * `mutation`) gets the `AuthoredMutateOptions` that keep refine from toasting it besides.
  * While a submission runs the dialog cannot be dismissed, and dismissing typed values asks
  * first; a route move asks first in both cases (`DialogForm`, so it renders under the app's
- * router and `ModalsHost`, as every app page does). An answer that lands after the dialog went
- * away is still reported (`useLateAnswerReport`); only the dialog's own close and `onSubmitted`
- * are skipped. A `trigger`-owned dialog stays mounted while open when its owner keeps rendering
- * it without a trigger: hide the trigger by passing none, not by unmounting the dialog.
+ * router and `ModalsHost`, as every app page does: opened without the router it throws
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.`, and a test provides
+ * both through the shared providers, `createUiTestProviders` or `AppShellTestProviders` with
+ * `router`). An answer that lands after the dialog went away is still reported
+ * (`useLateAnswerReport`); only the dialog's own close and `onSubmitted` are skipped. A
+ * `trigger`-owned dialog stays mounted while open when its owner keeps rendering it without a
+ * trigger: hide the trigger by passing none, not by unmounting the dialog.
  * @kind surface
  */
 export function MutationDialog<

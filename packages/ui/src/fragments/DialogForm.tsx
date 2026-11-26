@@ -41,10 +41,14 @@ export interface DialogFormProps {
    *  footer's Cancel say why, and a refused Escape or backdrop press is announced. */
   pending?: boolean;
   /** The form holds typed content. Given at all (true or false), the dialog guards its work
-   *  from the moment it opens, so it renders under the app's router and `ModalsHost`: a
-   *  dismissal of typed content asks first, with the shared unsaved-changes question, and a
-   *  route move asks while it holds typed content or a running submission. A close the owner
-   *  makes itself through `open` (the accepted close after a submit) is no dismissal. */
+   *  from the moment it opens, so it renders under the app's router and `ModalsHost`: a dismissal
+   *  of typed content asks first, with the shared unsaved-changes question, and a route move asks
+   *  while it holds typed content or a running submission. A close the owner makes itself through
+   *  `open` (the accepted close after a submit) is no dismissal. Opened without the router it
+   *  throws at render `useUnsavedChangesNavigationGuard must be used under the app's router.`;
+   *  without `ModalsHost`, `useConfirm must be used under ModalsHost.` A test or a story provides
+   *  both through the shared providers (`createUiTestProviders` or `AppShellTestProviders` with
+   *  `router`, the workshop's routed fixtures). */
   dirty?: boolean;
   /** Whether the dialog holds work a route move or a dismissal would lose, read live when one
    *  is asked; by default `pending || dirty` as last rendered. An owner whose accepted submit
@@ -116,7 +120,8 @@ function firstField(body: HTMLElement | null): HTMLElement | null {
  * does the same: that is the platform's answer to a question Base UI cannot ask for a dialog
  * opened through its `open` prop, how it was opened. While `pending` it refuses to be
  * dismissed, and given `dirty` it guards typed content and a running submission against a
- * dismissal and a route move (`dirty`).
+ * dismissal and a route move (`dirty`), so it renders open under the app's router and
+ * `ModalsHost`, and throws without them, naming the one missing.
  * @kind fragment
  */
 export function DialogForm({

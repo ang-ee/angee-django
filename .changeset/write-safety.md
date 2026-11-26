@@ -112,8 +112,8 @@ pending write and typed values.
   reasons, a lost one that it may not have been sent. A `trigger`-owned `MutationDialog` given no
   trigger while open stays open until it closes.
 - The unsaved-changes guard's question says a submission is still sending when
-  one runs (`pendingNow`), and the guard says at mount when it renders outside
-  the router.
+  one runs (`pendingNow`), and the guard throws at render outside the router
+  (Upgrade, below).
 - `MessageActions` shows its actions where the primary pointer is coarse
   (`pointer-coarse:opacity-100`), as touch never hovers.
 - `useUnsavedChangesNavigationGuard` takes `leaves(move)`, which says whether a
@@ -130,16 +130,25 @@ Upgrade:
   under an `AppRuntimeProvider` (`createUiTestProviders` provides one); a key
   minted per attempt (`crypto.randomUUID`, `createClientKey` at send time) or
   held in a ref moves onto it.
-- An open `MutationDialog` or typed-args `ActionFormDialog` renders under the
-  app's router and `ModalsHost`, as every app page provides both, and says so as
-  it opens when one is missing. `createUiTestProviders` (`@angee/ui/testing`)
-  and `ShellPageTestProviders` (`@angee/app/testing`) render the same app shell,
-  `AppShellTestProviders` (`@angee/ui/testing`), which always provides
-  `ModalsHost`. `ShellPageTestProviders` renders under a memory router by
-  default, as every shell page renders under the app's router (`{ initialEntries }`
-  places it; `onRouter` receives it), and under a router a test or story brings
-  around it, it renders that one alone; entries asked for inside such a router
-  are refused.
+- **Changed contract:** every surface the unsaved-changes guard protects
+  renders under the app's router and `ModalsHost`, as every app page provides
+  both: a `DialogForm` given `dirty`, from the moment it opens, so every open
+  `MutationDialog` and typed-args `ActionFormDialog`; the record form
+  `FormView`, editable or not, with the create and edit dialogs a relation
+  field opens; and a page guarding its own edits (the dashboard surface, the
+  appearance settings page, the workflow studio). Rendered without the router
+  such a surface throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, and
+  without `ModalsHost`, `useConfirm must be used under ModalsHost.`. A test or a
+  story provides both through the shared providers: `createUiTestProviders`
+  (`@angee/ui/testing`) and `ShellPageTestProviders` (`@angee/app/testing`)
+  render the same app shell, `AppShellTestProviders` (`@angee/ui/testing`),
+  which always provides `ModalsHost`. `ShellPageTestProviders` renders under a
+  memory router by default, as every shell page renders under the app's router
+  (`{ initialEntries }` places it; `onRouter` receives it), and under a router a
+  test or story brings around it, it renders that one alone; entries asked for
+  inside such a router are refused. A story renders under the workshop's routed
+  fixtures (its decorator, `RoutedRuntimeFixture`, `ComposedRuntimeFixture`).
   `createUiTestProviders` renders under one when given `router: true` (or
   `{ initialEntries }`, kept in `routers`): a component test that opens a real
   dialog passes `router`.
