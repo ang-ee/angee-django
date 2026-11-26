@@ -209,7 +209,12 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
                 with actor_context(actor) if actor is not None else nullcontext():
                     templates.send_as_system(template, reason=reason, to=address, values=values, must_print=["link"])
             except ValidationError as refusal:
-                if "value_not_printed" not in {item.code for item in getattr(refusal, "error_list", ())}:
+                # The template addon refuses a body that hides a value with items coded ``value_not_printed`` alone
+                # (``MessageTemplate.render``); Django's own merge reads the codes of a refusal of either shape. A
+                # refusal class of the template addon's own replaces this reading once it has one.
+                if {item.code for items in refusal.update_error_dict({}).values() for item in items} != {
+                    "value_not_printed",
+                }:
                     raise
                 logger.warning(
                     "Refused a sign-in link: the message template %s (%s), row %s, or a block or part it includes, "

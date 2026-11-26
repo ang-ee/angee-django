@@ -40,6 +40,7 @@ from rebac.schema import parse_zed
 import angee.iam_messaging
 from angee.base.build import merged_schemas
 from angee.base.origins import PublicOriginUnavailable
+from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam import schema as iam_schema
 from angee.iam.auth import ONE_ATTEMPT_MESSAGE
@@ -1138,12 +1139,16 @@ def _broken(state: str, channel: Any) -> None:
         elif state == "template missing":
             for row in MessageTemplate._base_manager.filter(key=SIGN_IN_LINK_TEMPLATE):
                 row.delete()
+        elif state == "no default brand kit":
+            BrandKit.objects.filter(is_default=True).update(is_default=False)
 
 
 @pytest.mark.parametrize(("state", "key", "code"), [
     pytest.param("system channel missing", "channel", "SYSTEM_CHANNEL_MISSING", id="system-channel-missing"),
     pytest.param("system channel paused", "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="system-channel-paused"),
     pytest.param("template missing", None, "template_missing", id="template-missing"),
+    # The send's own refusal of another code, which is not the template hiding the link and passes as it is.
+    pytest.param("no default brand kit", None, "no_brand_kit", id="the-sends-refusal-of-another-code"),
     pytest.param("cooldown", None, None, id="within-the-cooldown"),
 ])
 def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_link_current(
@@ -1170,9 +1175,11 @@ def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_li
         target.with_actor(iam_admin).issue_sign_in_link()
     with override_settings(**cooldown), django_capture_on_commit_callbacks(execute=True) as answered:
         result = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
-    if key is None and code is not None:
-        assert refusal.value.code == code
-        assert refusal.value.messages == [SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE]
+    if state == "template missing":
+        assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE])
+    if state == "no default brand kit":
+        assert [item.code for item in refusal.value.error_list] == [code]
+        assert "does not show the link" not in caplog.text
     if state == "cooldown":
         assert refusal.value.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
     assert result_data(result)["issue_user_sign_in_link"]["ok"] is False
