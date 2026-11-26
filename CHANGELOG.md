@@ -46,6 +46,61 @@ live in code docstrings.
   render and before anything is written; a path through a list stays held to
   the text, and an empty list passes. `must_print` given as one bare string is a
   `TypeError`, no longer read letter by letter.
+- `angee.decisions`, `angee.decisions_messaging`: **Open decisions are mailed to
+  the people they can be put to.**
+  - **New in decisions.** `decision_asked` (`angee.decisions.signals`) fires once
+    per admitted question, inside `Decision.objects.ask`'s transaction and outside
+    decisions' own system context: a refused ask sends nothing, and a receiver error
+    rolls the admission back. A supersede asks its replacement inside its own
+    `decisions.supersede` system context, so there receivers run elevated.
+    `Decision.get_absolute_url()` returns the question's console path,
+    `/decisions/<public id>`, the decisions fragment's record route; a test reads
+    the fragment's declaration so the two cannot drift.
+    `Decision.objects.deciders()` maps each question to the active people who may
+    both answer and read it, and `Decision.objects.put_to(person)` is the same rule
+    from the person's side: the open questions put to them. Neither has the
+    "assigned to me or unassigned" clause, so administrators are among the deciders
+    of questions assigned to others. `decision.concern_labels(reader)` returns the
+    labels of the concerned records `reader` reads, which the console's
+    `concerns_label` now joins, and `decision.requester_name(reader)` the
+    requester's name as `reader` reads that user.
+  - **New.** The bridge addon `angee.decisions_messaging` mails a question, after
+    commit, to its deciders (the administrator arm and owners' `owner_eligible` arms
+    included; a holder of `act` who may not read the question, service users and
+    inactive accounts left out) when it is asked and when its reminder is due. Once
+    a day at 07:00 UTC it mails each active person one digest of the open questions
+    put to them (`put_to`) that are waiting on them (`waiting_on`), older ones
+    included, each person's list read in their own scope: the ones no asked or
+    reminder mail reached them about in the past day first, due first, at most ten
+    with a count of the rest, and none for a person every waiting question was
+    mailed to in the past day. Each mail is a shipped message template
+    (`decisions_messaging.decision_asked`, `decision_reminder` and `decision_digest`,
+    sharing the part `decisions_messaging.question`) sent with
+    `MessageTemplate.objects.send_as_system` as named system work, with no causing
+    actor, from values read in the recipient's own scope, so a mail never shows a
+    record label or a name that person cannot read; it links the question's page in
+    the app, where the person decides, and no link decides anything.
+    `DecisionNotice` records each person mailed per question and occasion, and
+    `DigestNotice` per person and UTC day, each in the durable transaction of that
+    one send, so a retried task mails nobody twice; the mail verbs therefore run
+    outside any transaction. One person's failure is logged and counted and the
+    others still go, and the task then fails; Celery's soft time limit stops the run
+    at once. A permanent defect (no `ANGEE_PUBLIC_ORIGIN`, a missing template row, a
+    render or address refusal, system mail not configured) is not retried; a system
+    channel that is missing or not connected is, 5, 15 and 45 minutes later. A
+    question a workflow step holds gets no reminder mail, since `remind_due` skips
+    it.
+  - **Upgrade.** Add `angee.decisions_messaging` to the host's `INSTALLED_APPS`
+    (the full addons profile lists it), run `manage.py makemigrations
+    decisions_messaging` after compose and commit the migration, which creates
+    `DecisionNotice` and `DigestNotice`, then `manage.py provision`, which migrates,
+    synchronizes permissions and loads the install tier with the mails. Set
+    `ANGEE_PUBLIC_ORIGIN` and system mail (`MAILERS["transport"]`,
+    `DEFAULT_FROM_EMAIL`). Without the origin a task refuses before anyone is
+    mailed; without system mail each person's mail renders and its send is
+    refused, nobody is mailed, and the task fails, once per run. Only questions
+    asked after the upgrade get an asked mail; the digest lists the open questions
+    waiting on each person, older ones included.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None, must_print=())` renders one effective template (the caller picks it for its
