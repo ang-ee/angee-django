@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from functools import partial
-from typing import Any
 
 from django.apps import AppConfig
 from django.conf import settings
@@ -56,22 +55,20 @@ check_account_disclosures = partial(
 
 
 def check_account_actions(
-    app_configs: Sequence[AppConfig] | None = None, *, model: Any = None, **kwargs: object,
+    app_configs: Sequence[AppConfig] | None = None, **kwargs: object,
 ) -> list[checks.CheckMessage]:
     """``angee.iam.E005``: the composed account actions are unique, and each is a declared ``auth/user`` permission.
 
     A donor adds its action to ``User.account_actions`` once, and declares its
     permission in its own fragment; an action offered twice, or one the
     composed ``auth/user`` does not declare, is reported at start-up instead of
-    on the first users list. ``model`` stands in for the user model in tests.
-    Protection needs no check: every action meets it through
+    on the first users list. Protection needs no check: every action meets it through
     ``account_action_refusals``.
     """
 
     del app_configs, kwargs
     users = get_user_model()
-    owner = users if model is None else model
-    actions = owner.account_actions()
+    actions = users.account_actions()
     errors: list[checks.CheckMessage] = []
     if duplicated := sorted(action for action, count in Counter(actions).items() if count > 1):
         errors.append(checks.Error(

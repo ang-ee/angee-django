@@ -543,23 +543,14 @@ def test_no_donor_override_drops_iams_person_and_protection_blockers(db, monkeyp
         )
 
 
-class _OffersRenameTwice:
-    @classmethod
-    def account_actions(cls) -> tuple[str, ...]:
-        return (*User.account_actions(), "rename")
-
-
-class _OffersAnUndeclaredAction:
-    @classmethod
-    def account_actions(cls) -> tuple[str, ...]:
-        return ("rename", "impersonate")
-
-
-def test_the_composed_account_actions_are_unique_and_declared_and_iam_registers_their_check_once() -> None:
+def test_the_composed_account_actions_are_unique_and_declared_and_iam_registers_their_check_once(monkeypatch) -> None:
     assert check_account_actions() == []
     assert sum(candidate is check_account_actions for candidate in registry.registered_checks) == 1
-    [twice] = check_account_actions(model=_OffersRenameTwice)
+    composed = User.account_actions()
+    monkeypatch.setattr(User, "account_actions", classmethod(lambda cls: (*composed, "rename")))
+    [twice] = check_account_actions()
     assert twice.id == "angee.iam.E005" and "offers rename more than once" in twice.msg
-    [undeclared] = check_account_actions(model=_OffersAnUndeclaredAction)
+    monkeypatch.setattr(User, "account_actions", classmethod(lambda cls: ("rename", "impersonate")))
+    [undeclared] = check_account_actions()
     assert undeclared.id == "angee.iam.E005"
     assert "offers impersonate, which the composed auth/user does not declare" in undeclared.msg
