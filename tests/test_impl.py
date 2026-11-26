@@ -17,6 +17,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
+from django.db.migrations.state import ProjectState
 from django.db.models import Case, F, Value, When
 from django.test import override_settings
 from django.test.utils import isolate_apps
@@ -1647,6 +1648,29 @@ def test_a_write_stores_only_the_registry_key_as_spelled_while_a_lookup_forgives
 
     assert backend_model._base_manager.filter(slug__in=("new", "bulk")).count() == 0
     assert rows.get().backend_class == "local"
+
+
+@pytest.mark.django_db
+def test_a_copy_that_writes_a_retired_key_still_refuses_another_spelling_of_a_registered_one() -> None:
+    """A migration's state model and a history copy write a key the choices no longer name, never "LOCAL"."""
+
+    state_model = ProjectState.from_apps(apps).apps.get_model("storage", "Backend")
+    owner = create_user("spelled-history-owner")
+    vault = vault_for(owner)
+    history_rows = type(vault.history.get())._base_manager.filter(id=vault.pk)
+    with system_context(reason="test.impl.spelling.exempt"):
+        state_row = state_model.objects.create(slug="state", label="State", backend_class="local")
+        state_rows = state_model.objects.filter(pk=state_row.pk)
+        for rows, field, spelling in (
+            (state_rows, "backend_class", "LOCAL"),
+            (state_rows, "backend_class", " local "),
+            (history_rows, "retrieval_class", "LEXICAL"),
+        ):
+            with pytest.raises(ValidationError) as refusal, transaction.atomic():
+                rows.update(**{field: spelling})
+            assert refusal.value.message_dict == {field: [f"Value {spelling!r} is not a valid choice."]}
+            rows.update(**{field: "retired"})
+            assert rows.values_list(field, flat=True).get() == "retired"
 
 
 @pytest.mark.django_db

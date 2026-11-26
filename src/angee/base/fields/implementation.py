@@ -33,8 +33,15 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     A stored key its choices do not name (one a later release retired, or one
     another process's registry holds) still loads, lists and filters, as its
     text; no value the field prepares writes one, and resolving it raises. Its
-    GraphQL read is null, so the row's list and record still answer; the row
-    saves again once a registered implementation is chosen.
+    GraphQL read is null, so the row's list and record still answer. A save
+    that leaves the column out (``save(update_fields=[...])``) keeps the key and
+    writes none, so sync jobs, lifecycle changes and the workers of a rolling
+    deploy go on with the row; a whole-row save is refused until a registered
+    implementation is chosen. A ``create_only`` selector is never chosen again
+    by a save, so its row saves only without the column: ``check --database``
+    (``angee.E052``) names such rows and moves none, and they resolve again once
+    the addon that registers the key is installed, or move by a write outside
+    the model's save (``QuerySet.update``).
 
     Reads forgive and writes do not: a lookup matches what a person or a URL
     may spell (``" local "``, the member's name ``"LOCAL"``), while a write
@@ -178,18 +185,18 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         after the save's REBAC gates, so a caller who may not save the row gets
         that refusal. A stored row saves a key its choices name, even once the
         registry dropped it; a save that leaves the column out writes nothing
-        here. A history copy records its row's key and a historical migration
-        field keeps whatever it stored.
+        here. A history copy and a historical migration field write a key the
+        choices no longer name (the one their row stored), but they refuse
+        another spelling of a key the choices name as every field does.
         """
 
         written = value.value if isinstance(value, models.Value) else value
         spelled = written.value if isinstance(written, Enum) else written
         if (
-            self.refuses_unknown_keys
-            and self.base_class is not None
-            and not hasattr(written, "as_sql")
+            not hasattr(written, "as_sql")
             and written not in self.empty_values
             and spelled not in tuple(member.value for member in self.choices_enum)
+            and (self.has_key(spelled) or (self.refuses_unknown_keys and self.base_class is not None))
         ):
             raise ValidationError({self.name: self.invalid_key(written)})
         return super().get_db_prep_save(value, connection)

@@ -118,7 +118,12 @@ def read_implementation_key(field: StrawberryField) -> None:
     column as its choices enum. The extension goes on the declared field itself,
     where Strawberry's printer looks for a type's fields, so the column prints
     nullable in every schema the declaration joins; any other field is left
-    alone.
+    alone. That includes a field with its own resolver, even one returning the
+    choices enum: the column a field projects is known here, not where a
+    resolver's value comes from, so such a resolver declares itself nullable and
+    returns null for a key the choices do not name (``ImplClassField.has_key``).
+    A group's key is not a type's field read here either: the aggregates library
+    shapes it while it answers the groups root.
     """
 
     if not isinstance(field, StrawberryDjangoField):

@@ -466,14 +466,26 @@ Use these owners instead of maintaining another contract in an addon:
   over, and the addon that stopped providing a key states the remedy in
   `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
   read as text; no value the field prepares writes a key its choices do not
-  name, or a key spelled other than the registry's (a history copy records its
-  row's key), while any other expression (`F`, `Subquery`, `Cast`, `Case`, or a
-  `Value` inside one) is not checked; a lookup forgives what a person or a URL
-  may spell. Resolving the key raises naming the field, the key and the setting. Every
-  Angee GraphQL schema reads such a key as null
+  name (a history copy and a migration's state model write the key their row
+  stored), or a key spelled other than the registry's, while any other
+  expression (`F`, `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not
+  checked; a lookup forgives what a person or a URL may spell. Resolving the
+  key raises naming the field, the key and the setting. Every Angee GraphQL
+  schema reads such a key as null on a type's field
   ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
-  the console labels "Not registered", and the row cannot be saved until an
-  administrator chooses a registered implementation.
+  the console labels "Not registered"; a group's key is not such a field, so a
+  list grouped, a board laned or a facet counted by the column fails the whole
+  read, masked as an internal error (`strawberry-django-aggregates` refuses a
+  group key outside the column's choices: `ChoicesValueNotInEnumError`). A
+  save that leaves the column out keeps the key; a whole-row save (the
+  generic GraphQL update, a model form) is refused under the key's field until
+  a registered implementation is chosen. A `create_only` selector is never
+  chosen again by a save, so such a row saves only without the column, and
+  from the console only its deletion succeeds. `angee.E052` and
+  `ANGEE_IMPL_KEY_REMEDIES` name the rows and the remedy but move none: the
+  key resolves again once the addon that registers it is installed, and only a
+  write outside the model's save (`QuerySet.update` with a registered key)
+  moves such a selector.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs

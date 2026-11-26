@@ -19,32 +19,48 @@ live in code docstrings.
   query that read such a row could finish. Writing the column with such a key
   stays refused in every value the field prepares (a plain value in an insert,
   an update, `QuerySet.update`, `bulk_update`, or a `Value`'s literal), except
-  by a history copy, which records its row's key; any other expression (`F`,
-  `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not checked. A write
-  stores a key only as the registry spells it: the member's name (`"LOCAL"`)
-  or a padded key (`" local "`) is refused, as on main, though a lookup reads
+  by a history copy or a migration's state model, which write the key their
+  row stored; any other expression (`F`, `Subquery`, `Cast`, `Case`, or a
+  `Value` inside one) is not checked. A write stores a key only as the
+  registry spells it: the member's name (`"LOCAL"`) or a padded key
+  (`" local "`) is refused, as before, by every field, though a lookup reads
   both as the key. A save that leaves the column out
-  (`save(update_fields=...)`) succeeds from code; a GraphQL update or a model
-  form saves the whole row and is refused naming the column. Input
+  (`save(update_fields=...)`) succeeds from code and keeps the key, so sync
+  jobs and the workers of a rolling deploy go on with the row; a GraphQL
+  update or a model form saves the whole row and is refused naming the
+  column. Input
   (`full_clean`, a model form, a deserialized fixture, so a dump of such a row,
   history tables included) refuses it as before. Resolving its
   implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
   `ImproperlyConfigured` naming the field, the key and the registry's setting.
-  `angee.graphql`: **Changed read contract.** Every output field projecting an
-  implementation key is nullable on read, in every Angee schema (the column
-  stays non-null in the database, and inputs, filters and ordering, already
-  strings, are unchanged: `_eq: "retired"` still finds the row). Null there
-  means the stored key is one the registry no longer names; a registered key
-  reads its enum member as before. A list or a record holding such a row loads
-  with no error, where the read failed with "Value '…' is not a valid choice."
-  `AngeeSchema.get_fields` reads each such field through
+  `angee.graphql`: **Changed read contract.** Every field of a type that
+  projects an implementation key is nullable on read, in every Angee schema
+  (the column stays non-null in the database, and inputs, filters and
+  ordering, already strings, are unchanged: `_eq: "retired"` still finds the
+  row). Null there means the stored key is one the registry no longer names; a
+  registered key reads its enum member as before. A list or a record holding
+  such a row loads with no error, where the read failed with "Value '…' is not
+  a valid choice." `AngeeSchema.get_fields` reads each such field through
   `angee.graphql.field_types.ImplementationKeyRead`, so no declaration changes
   (`auto` stays `auto`). The console labels such a value "Not registered" in a
-  list cell and marks the field so on its record, whose control still offers
-  every registered implementation. Such a row cannot be saved until an
-  administrator chooses a registered implementation: the generic update runs
-  `full_clean()` and saves the whole row, and is refused under the key's field
-  with its own message. **Upgrade:** a consumer with generated types takes
+  list cell and marks the field so on its record. **Not changed:** a group's
+  key is not such a field, so a list grouped, a board laned or a facet counted
+  by the column still fails the whole read for such a row, now masked as an
+  internal error, where it failed with "Value '…' is not a valid choice.":
+  `strawberry-django-aggregates` refuses a group key outside the column's
+  choices (`ChoicesValueNotInEnumError`). Such a row saves again once a
+  registered implementation is chosen: the generic update runs `full_clean()`
+  and saves the whole row, and is refused under the key's field with its own
+  message until then. A `create_only` selector (`Channel`, `Feed`, `Directory`,
+  `CalendarSource`, `Mount`, `VcsBridge`, `InferenceProvider`,
+  `NotionConnection`) is never chosen again by a save ("Implementation
+  selection is create-only."), so its row saves only without the column, and
+  from the console only its deletion succeeds. `check --database`
+  (`angee.E052`) names such rows with the remedy an addon states in
+  `ANGEE_IMPL_KEY_REMEDIES`, and moves none: the key resolves again once the
+  addon that registers it is installed, and only a write outside the model's
+  save (`QuerySet.update` with a registered key) moves such a selector.
+  **Upgrade:** a consumer with generated types takes
   `| null` on these fields (one in the framework's own documents:
   `ChannelBackendImpl` in messaging's overview); code that reads a selector's
   value as a member (`.label`, `.value`) takes `field.key_for(value)` instead;
