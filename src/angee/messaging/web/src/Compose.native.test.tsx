@@ -354,9 +354,11 @@ test("Reply answers an email from the box docked under the conversation, sends o
   expect(within(box).getByText(word("compose.sentFrom", { channel: "Support desk" }))).toBeTruthy();
   const input = typeReply(box, "Thanks, adding you now.");
   await waitFor(() => expect(document.activeElement).toBe(input));
-  // Two presses before the box locks: one request, one toast (the box refuses re-entry, and locks).
-  submitReply(input);
-  submitReply(input);
+  // Two presses in one event turn, before the box can lock: its re-entry check keeps them to one request.
+  act(() => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+  });
   const written = recordedOk("ana", "Thanks, adding you now.");
   expect(await screen.findByText(written.message)).toBeTruthy();
   await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
