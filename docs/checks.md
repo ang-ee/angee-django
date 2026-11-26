@@ -182,10 +182,13 @@ CPython 3.14.9 bundles SQLite 3.53.1 and 3.14.10 bundles 3.54.1, so the reposito
 SQLite release lifts it. uv reads it for every `uv run` and `uv sync` in the checkout,
 locally and in CI, and recreates a virtual environment built on another patch release; the
 [reusable checks](../.github/workflows/reusable-checks.yml) pass it to the composed-stack
-lane, which runs uv from the stack root above the checkout. A distribution's system Python
-links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1); CI sets
-`UV_PYTHON_PREFERENCE: only-managed` for that reason, and locally `--managed-python` does
-the same.
+lane, which runs uv from the stack root above the checkout. The framework images' `uv sync`
+reads it too and never downloads an interpreter, so the [Dockerfile](../Dockerfile)'s
+`PYTHON_VERSION` default names the same release, and a pin change edits both; the
+[runtime image tests](../tests/test_runtime_image.py) refuse a default that differs. A
+distribution's system Python links the distribution's library (Ubuntu 26.04 and Debian
+trixie ship 3.46.1); CI sets `UV_PYTHON_PREFERENCE: only-managed` for that reason, and
+locally `--managed-python` does the same.
 
 ### Local PostgreSQL Prerequisites
 
@@ -559,9 +562,10 @@ The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
   addons, `lint-imports` over the declared import contracts, and the tests that
-  read source and docs without Django: the [patch guard](../tests/test_patch_targets.py)
-  and the [documentation and methodology tests](#agent-methodology-and-documentation),
-  using the locked framework environment.
+  read source and docs without Django: the [patch guard](../tests/test_patch_targets.py),
+  the [documentation and methodology tests](#agent-methodology-and-documentation)
+  and the [runtime image contract](../tests/test_runtime_image.py), using the locked
+  framework environment.
 - **SQLite:** six shards that pytest-split cuts into contiguous chunks of equal
   stored time from the committed [durations](../.test_durations), so each test
   file stays in one or two shards. Each shard runs `-n auto --dist loadfile` with
@@ -575,8 +579,8 @@ The current tiers are:
   files that import a changed module through the import graph `lint-imports`
   checks; a change under `templates/` selects the template contract tests that
   render or read them. A change to an input every test reads without importing it
-  (dependencies, conftests and the shared test plugins, settings and autoconfig,
-  `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
+  (dependencies, the Python pin, conftests and the shared test plugins, settings and
+  autoconfig, `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
   suite; docs and web code select no Python test, and the shards do not start.
   The `select` job computes the selection once for both lanes. What the app
   registry, signals or composition connect without an import surfaces only in a
