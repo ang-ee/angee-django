@@ -34,6 +34,7 @@ import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
 import { setHumanDateLocale } from "../widgets/date-format";
+import { setIntentKeyActor } from "../lib/intent-key";
 
 /**
  * The sign-in URL of a runtime that composes no `auth.login` route (a workshop,
@@ -320,6 +321,10 @@ export function AppRuntimeProvider(props: {
   );
   // Set before descendants render: the formatter API is pure and has no hook.
   if (value.i18n?.language) setHumanDateLocale(value.i18n.language);
+  // The write keys belong to the person signed in (the real one during a preview, whose
+  // writes are refused): another person forgets them.
+  const actor = value.auth.viewAs?.realUser?.id ?? value.auth.user?.id ?? "";
+  useEffect(() => { setIntentKeyActor(actor); }, [actor]);
   useEffect(() => {
     const i18n = value.i18n;
     if (!i18n?.on || !i18n.off) return;

@@ -1501,6 +1501,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   error reporting. Clear settled failures through
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
+- A keyed write (one the server replays by its idempotency key) takes its key
+  from [`useIntentKeys`](../../packages/ui/src/lib/intent-key.ts): one key per
+  write intent for the page's lifetime, released by the write's answer and kept
+  while the answer is lost or the refusal came before the write read its key.
+  Never hold a key in component state, and promise "it will not go out twice"
+  only from this page.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:

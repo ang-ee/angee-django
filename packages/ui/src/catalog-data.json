@@ -8361,6 +8361,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useIntentKeys",
+    "source": "packages/ui/src/lib/intent-key.ts",
+    "kind": null,
+    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useLatestRef",
     "source": "packages/ui/src/lib/use-latest-ref.ts",
     "kind": null,

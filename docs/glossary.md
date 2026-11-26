@@ -601,6 +601,12 @@ a theme rather than a template.
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
 
+**Intent key** — the request identity a keyed write carries, one per write
+intent (what the write would create, as its owner fingerprints it), so a retry
+of the same intent is written once by the server. `useIntentKeys` keeps it for
+the page's lifetime and settles it by the write's answer. Unrelated to the
+feedback intents (`FEEDBACK_INTENTS`) that name a status's tone.
+
 **Settings place** — the one synthetic destination in every console that groups
 every menu node declared with `group:"platform"`, at any depth. Its rail entry
 sits below the scrolling list; the chooser exposes one Settings entry. Inside it, the expanded rail shows
