@@ -69,8 +69,8 @@ class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
             rows = rows.filter(history_id__lt=before)
         return cast(Self, rows.order_by("-history_id"))
 
-    def dated_versions_of(self, pk: Any, *, until: Any = None, outside: Any = None) -> Self:
-        """The versions of row ``pk`` dated no later than ``until``, outside changeset ``outside``, if given.
+    def dated_versions_of(self, pk: Any, *, until: Any = None, excluding_changeset: Any = None) -> Self:
+        """The versions of row ``pk`` dated no later than ``until`` and outside ``excluding_changeset``, if given.
 
         The latest comes first by date: dates order versions across tables, as an MTI
         descendant's versions, which carry an ancestor's columns, are read. Each
@@ -81,8 +81,8 @@ class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
         rows = self.filter(**{key: pk})
         if until is not None:
             rows = rows.filter(history_date__lte=until)
-        if outside is not None:
-            rows = rows.exclude(changeset_id=outside)
+        if excluding_changeset is not None:
+            rows = rows.exclude(changeset_id=excluding_changeset)
         return cast(Self, rows.order_by("-history_date", "-history_id"))
 
 
@@ -402,12 +402,7 @@ class ModelHistory(HistoricalRecords):
             return Value(None, output_field=models.CharField())
         latest = [
             Cast(
-                Subquery(
-                    get_history_manager_for_model(table)
-                    .filter(**{table._meta.pk.attname: OuterRef("pk")})
-                    .order_by("-history_id")
-                    .values("history_id")[:1]
-                ),
+                Subquery(get_history_manager_for_model(table).versions_of(OuterRef("pk")).values("history_id")[:1]),
                 models.CharField(),
             )
             for table in self.carriers(model)

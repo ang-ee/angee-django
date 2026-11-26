@@ -1697,8 +1697,12 @@ retains its native routing contract.
   an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../src/angee/resources/loader.py)
   composes it with native identity loading, validation, row results and the single
   ledger hook. Domain adapters may defer persistence to a manager without
-  inventing another importer or ledger API. A batch preflight may acquire only
-  the complete ordered domain lock set; it must not consume groups or write rows.
+  inventing another importer or ledger API. A batch preflight (`AngeeResource.lock_imports`)
+  may acquire only one owner-level lock taken once in a fixed order; it must not
+  consume groups or write rows. It must not lock every row the batch may touch: held
+  to commit while the import locks re-applied rows in file order, such locks let the
+  load hold a later row and wait for an earlier one a writer taking both in order
+  already holds, a deadlock. A row's lock is taken where the row is saved, by its owner.
   `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
   through the same native instance loader; preflights compose this public owner.
   A row removed from an addon's files keeps its ledger row and its record; its xref

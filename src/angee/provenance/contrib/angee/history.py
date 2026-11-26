@@ -151,8 +151,6 @@ class ModelHistory(CaptureHistory):
         """
 
         page = {changeset.pk: changeset for changeset in changesets}
-        if not page:
-            return {}
         history = model.history
         key = model._meta.pk.attname
         same_row = {key: OuterRef(key)}
@@ -171,7 +169,7 @@ class ModelHistory(CaptureHistory):
             ~Exists(history.versions_of(OuterRef(key), before=OuterRef("history_id"))),
             *(
                 ~Exists(carrier.dated_versions_of(
-                    OuterRef(key), until=OuterRef("history_date"), outside=OuterRef("changeset_id"),
+                    OuterRef(key), until=OuterRef("history_date"), excluding_changeset=OuterRef("changeset_id"),
                 ))
                 for carrier in carriers
             ),
@@ -225,18 +223,19 @@ class ModelHistory(CaptureHistory):
 
         changeset_type = changeset_model()
         lineage = concrete_lineage(model)
-        mergeable = any(issubclass(table, MergeableMixin) for table in lineage)
+        merges = changeset_type._base_manager.all()
+        if not any(issubclass(table, MergeableMixin) for table in lineage):
+            merges = merges.none()
         survivor = OuterRef("survivor")
-        merges = changeset_type._base_manager.filter(
+        return merges.filter(
             pk__in=[changeset.pk for changeset in changesets],
             activity=changeset_type.Activity.MERGE,
-            origin_content_type__in=list(ContentType.objects.get_for_models(*lineage).values()) if mergeable else [],
+            origin_content_type__in=list(ContentType.objects.get_for_models(*lineage).values()),
         ).annotate(
             survivor=Cast("origin_object_id", output_field=model._meta.pk),
             unchanged=~Exists(model.history.filter(changeset_id=OuterRef("pk")).versions_of(survivor)),
             standing=Exists(model._base_manager.filter(pk=survivor)),
         ).order_by()
-        return merges if mergeable else merges.none()
 
     def changeset_states(self, model: Any, changeset: Any) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
@@ -275,12 +274,12 @@ class ModelHistory(CaptureHistory):
         boundary), excluding ``changeset``'s own.
         """
 
-        outside = None if before is None else changeset.pk
+        excluding_changeset = None if before is None else changeset.pk
         versions = [
             version
             for table in self.carriers(model)[1:]
             if (version := get_history_manager_for_model(table).dated_versions_of(
-                pk, until=before, outside=outside,
+                pk, until=before, excluding_changeset=excluding_changeset,
             ).first()) is not None
         ]
         return max(versions, key=lambda version: version.history_date, default=None)

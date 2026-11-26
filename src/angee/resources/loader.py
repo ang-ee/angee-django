@@ -123,7 +123,13 @@ class AngeeResource(resources.ModelResource):
         """Acquire batch-wide domain locks before imports; never import or write rows.
 
         Called once per declared resource class inside the loader's transaction.
-        A subclass may inspect the complete batch solely to order its locks.
+        A subclass may inspect the complete batch solely to order its locks. It suits
+        one owner-level lock taken once, in a fixed order, such as a singleton's row.
+        It does not suit locking every row the batch may touch: those locks are held to
+        commit while the import then locks the rows it re-applies in file order, so the
+        load can hold a later row and wait for an earlier one that another writer, taking
+        the two in order, already holds, and the two deadlock. A row's own lock belongs
+        where the row is saved, taken by its owner in the owner's order.
         """
 
     @classmethod
