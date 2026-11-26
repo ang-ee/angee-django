@@ -344,14 +344,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      # The action empties its destination first, so on runners sharing one home its
+      # default ~/setup-pnpm lets one job delete another's pnpm mid-run.
       - uses: pnpm/action-setup@v5
         with:
           version: 11.1.3
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@v5
         with:
           node-version: "26"
-          # GitHub's cache only on GitHub-hosted runners; a self-hosted runner keeps its own
-          # pnpm store, and the path setup-node reads there is not the one install fills.
+          # GitHub's cache only on GitHub-hosted runners; a self-hosted runner installs from
+          # the registry and leaves the repository's cache space to them.
           # package-manager-cache turns off the caching v5 otherwise starts on its own
           # from package.json's packageManager.
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
@@ -456,12 +459,18 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
+      # The action empties its destination first, so on runners sharing one home its
+      # default ~/setup-pnpm lets one job delete another's pnpm mid-run.
       - uses: pnpm/action-setup@v5
         with:
           version: 11.1.3
+          dest: ${{ runner.temp }}/setup-pnpm
       - uses: actions/setup-node@v5
         with:
           node-version: "26"
+          # This job caches nothing, but on a reused runner the workspace root can hold
+          # another job's package.json, from whose packageManager v5 would start a cache.
+          package-manager-cache: false
       - name: Render the stack (local template ref — no registry round-trip)
         run: >-
           angee stack init "$GITHUB_WORKSPACE/stack/workspaces/src/angee/templates/stacks/dev"
