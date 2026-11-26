@@ -310,7 +310,10 @@ class BrandKitHistory(ModelHistory):
         """Order a kit that was the default before the changeset ahead of the kits that were not.
 
         Its save takes the default back, so restoring the kit that took it is no
-        untick, whichever kit the changeset wrote first.
+        untick, whichever kit the changeset wrote first. The revert still restores a
+        row the changeset deleted before the rows that point at it: when the previous
+        default points at one (a purged logo file), another kit can go first and is
+        refused as an untick.
         """
 
         *order, version = super().revert_order(first, last, previous)

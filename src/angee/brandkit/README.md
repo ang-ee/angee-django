@@ -68,7 +68,10 @@ console and the resource loader) keep exactly one default:
 - a changeset revert restores the kit that was the default before the changeset
   ahead of every other kit (`BrandKitHistory.revert_order`), so the kit that took
   the default is restored after it has lost it again, whichever the changeset
-  wrote first.
+  wrote first. The revert restores a row the changeset deleted before the rows
+  that point at it, so when the previous default points at one (a purged file it
+  showed as a logo or dark logo), another kit can go ahead of it and the revert is
+  refused with the untick message.
 
 Two writers take kit rows without that lock. A file purge clears the logo or
 dark logo of every kit that shows the file, under the history capture's row lock,

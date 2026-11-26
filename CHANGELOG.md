@@ -393,7 +393,10 @@ live in code docstrings.
     so an edit cleaned before its kit became the default is refused, as `clean()`
     refuses it, instead of leaving no default. A changeset revert restores the
     kit that was the default before the changeset ahead of every other kit, so
-    reverting a change of default never meets that refusal. Two writers take kit
+    reverting a change of default does not meet that refusal, unless the previous
+    default points at a row the same changeset deleted (a purged file it showed as
+    a logo or dark logo): the revert restores that row first, and another kit can
+    then go ahead of the previous default and be refused. Two writers take kit
     rows without the lock: a file purge that clears the logo or dark logo of two
     or more kits, which can deadlock with a change of default (one of the two
     fails with a database error); and the
