@@ -1,12 +1,12 @@
 import { useSignInRedirect } from "@angee/app/auth";
+import { IamLoginPage } from "@angee/iam";
 import { useAuthoredMutation } from "@angee/refine";
 import { Button, ErrorBanner } from "@angee/ui";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 
-import { IamRedeemSignInLink } from "./documents.public";
-import { useIamT } from "./i18n";
-import { IamLoginPage } from "./IamLoginPage";
+import { IamMessagingRedeemSignInLink } from "./documents.public";
+import { useIamMessagingT } from "./i18n";
 
 type LinkState =
   | { kind: "ready" }
@@ -31,13 +31,13 @@ export function SignInLinkPage(): ReactNode {
  * Once signed in, the page names the account before continuing.
  */
 export function SignInLinkMethod(): ReactNode {
-  const t = useIamT();
+  const t = useIamMessagingT();
   const navigate = useNavigate();
   const hash = useRouterState({ select: (state) => state.location.hash });
   const [token] = useState(() => new URLSearchParams(hash).get("token") || null);
   const [state, setState] = useState<LinkState>(() => (token === null ? { kind: "refused" } : { kind: "ready" }));
   // This method renders its own refusal; no generic notification on top.
-  const [redeem] = useAuthoredMutation(IamRedeemSignInLink, { errorNotification: false });
+  const [redeem] = useAuthoredMutation(IamMessagingRedeemSignInLink, { errorNotification: false });
   const proceed = useSignInRedirect();
 
   useEffect(() => {

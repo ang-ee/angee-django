@@ -1,4 +1,4 @@
-"""Sign-in links: the account verb that emails one, its single-use redemption and the axes seam."""
+"""Emailed sign-in links: the account verb that sends one, its single-use redemption and the axes seam."""
 
 import logging
 import re
@@ -10,7 +10,8 @@ from urllib.parse import unquote
 
 import pytest
 from axes.models import AccessAttempt
-from django.contrib.auth import SESSION_KEY, authenticate, get_user_model
+from django.apps import apps
+from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, authenticate, get_user, get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.signals import user_login_failed
 from django.contrib.sessions.middleware import SessionMiddleware
@@ -24,18 +25,24 @@ from django.test.utils import override_settings
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.errors import MissingActorError
+from rebac.schema import parse_zed
 
-import angee.iam
+import angee.iam_messaging
+from angee.base.build import merged_schemas
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
-from angee.iam.auth import ONE_ATTEMPT_MESSAGE, sign_in_credentials
+from angee.iam import schema as iam_schema
+from angee.iam.auth import ONE_ATTEMPT_MESSAGE
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
-from angee.iam.events import sign_in_link_sent
-from angee.iam.models import SIGN_IN_LINK_PATH, SIGN_IN_LINK_UNAVAILABLE_MESSAGE
-from tests.conftest import create_platform_admin
+from angee.iam_messaging import schema as iam_messaging_schema
+from angee.iam_messaging.auth import sign_in_credentials
+from angee.iam_messaging.autoconfig import SETTINGS as LINK_SETTINGS
+from angee.iam_messaging.models import ISSUE_SIGN_IN_LINK, SIGN_IN_LINK_PATH, SIGN_IN_LINK_UNAVAILABLE_MESSAGE
+from angee.iam_messaging.testing.models import SignInLink
+from tests.conftest import addon_schema, create_platform_admin
 from tests.iam_campaign import iam_admin as iam_admin
-from tests.iam_models import SignInLink
-from tests.test_iam_graphql import _schema
+from tests.test_iam_account_actions import _manager
 from tests.test_iam_login_throttle import LOGIN, _refusals
+from tests.test_zed_extensions import _addon, _contrib_addon
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -44,14 +51,20 @@ ORIGIN = "https://app.example.test"
 DELIVERABLE = {
     "MAILERS": {"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
     "ANGEE_PUBLIC_ORIGIN": ORIGIN,
-    "ANGEE_IAM_SIGN_IN_LINK_COOLDOWN": 0,
+    "ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN": 0,
 }
 ISSUE = "mutation($id: ID!) { issue_user_sign_in_link(id: $id) { ok message } }"
 REDEEM = "mutation($token: String!) { redeem_sign_in_link(token: $token) { ok user { username } } }"
 SPENT_MARK = "angee_iam_spent_credential"
 LIST = "{ users(limit: 100) { username account_actions } }"
-# IAM's own order, axes first: the bare harness authors ModelBackend ahead of it.
-BACKENDS = IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"]
+# The composed order, axes first: the bare harness authors ModelBackend ahead of it.
+BACKENDS = [*IAM_SETTINGS["AUTHENTICATION_BACKENDS:append"], *LINK_SETTINGS["AUTHENTICATION_BACKENDS:append"]]
+
+
+def _schema(name: str) -> Any:
+    """IAM's schema bucket with this addon's contributions, as a host composing both serves it."""
+
+    return addon_schema(iam_schema.schemas, name, iam_messaging_schema.schemas)
 
 
 class RefusingEmailBackend(BaseEmailBackend):
@@ -113,17 +126,8 @@ def _redeem(token: str, ip: str = "198.51.100.1") -> Any:
 
 def test_issue_emails_one_link_to_the_account_and_stores_only_its_digest(deliverable, iam_admin, sent, caplog):
     target = _person("guest-ada")
-    events: list[dict[str, Any]] = []
-
-    def receive(sender: Any, instance: Any, link: Any, **kwargs: Any) -> None:
-        events.append({"sender": sender, "instance": instance, "link": link, "extra": kwargs})
-
-    sign_in_link_sent.connect(receive, weak=False)
-    try:
-        with caplog.at_level(logging.DEBUG):
-            token = sent(target, iam_admin)
-    finally:
-        sign_in_link_sent.disconnect(receive)
+    with caplog.at_level(logging.DEBUG):
+        token = sent(target, iam_admin)
 
     [message] = mail.outbox
     assert message.to == ["guest-ada@example.com"]
@@ -140,10 +144,6 @@ def test_issue_emails_one_link_to_the_account_and_stores_only_its_digest(deliver
     ttl = timedelta(seconds=259_200)
     assert link.created_at + ttl - timedelta(seconds=5) <= link.expires_at <= link.created_at + ttl
     assert secret not in caplog.text
-    assert [(event["sender"], event["instance"].pk, event["link"].pk) for event in events] == [
-        (User, target.pk, link.pk),
-    ]
-    assert events[0]["link"].sent_at is not None and events[0]["extra"] == {"signal": sign_in_link_sent}
 
 
 def test_a_link_signs_in_exactly_once(deliverable, iam_admin, sent):
@@ -205,7 +205,7 @@ def test_tampered_or_malformed_tokens_are_refused_alike(deliverable, iam_admin, 
 def test_redemption_rechecks_the_account(deliverable, iam_admin, sent, change):
     target = _person("guest-changed")
     token = sent(target, iam_admin)
-    with system_context(reason="test.iam.sign_in_link.change"):
+    with system_context(reason="test.iam_messaging.sign_in_link.change"):
         User._base_manager.filter(pk=target.pk).update(**change)
 
     assert _redeem(token) is None
@@ -223,7 +223,10 @@ def test_issue_requires_the_permission_and_an_actor_or_the_system(
         target.with_actor(plain).issue_sign_in_link()
     assert not SignInLink._base_manager.exists() and mail.outbox == []
 
-    with django_capture_on_commit_callbacks(execute=True), system_context(reason="test.iam.sign_in_link.system"):
+    with (
+        django_capture_on_commit_callbacks(execute=True),
+        system_context(reason="test.iam_messaging.sign_in_link.system"),
+    ):
         User._base_manager.get(pk=target.pk).issue_sign_in_link()
     assert SignInLink._base_manager.get(user=target).created_by_id is None
     assert len(mail.outbox) == 1
@@ -268,7 +271,7 @@ def test_an_undeliverable_deployment_offers_no_link_and_refuses(iam_admin, missi
     target = _person("guest-undeliverable")
     settings = {**DELIVERABLE, missing: {} if missing == "MAILERS" else "https://app.example.test/path"}
     with override_settings(**settings):
-        assert "issue_sign_in_link" not in target.account_actions_for(to_subject_ref(iam_admin))
+        assert ISSUE_SIGN_IN_LINK not in target.account_actions_for(to_subject_ref(iam_admin))
         with (
             actor_context(iam_admin),
             pytest.raises(ValidationError, match=re.escape(SIGN_IN_LINK_UNAVAILABLE_MESSAGE)),
@@ -282,7 +285,7 @@ def test_account_actions_offer_the_link_where_the_verb_acts(deliverable, iam_adm
     _person("guest-inactive", is_active=False)
     _person("guest-staff", is_staff=True)
     rows = result_data(execute_schema(_schema("console"), LIST, user=iam_admin))["users"]
-    offered = {row["username"]: "issue_sign_in_link" in row["account_actions"] for row in rows}
+    offered = {row["username"]: ISSUE_SIGN_IN_LINK in row["account_actions"] for row in rows}
     assert offered["guest-offered"] is True
     assert offered["guest-inactive"] is offered["guest-staff"] is offered["campaign-admin"] is False
 
@@ -351,7 +354,7 @@ def test_genuine_spent_links_never_lock_a_person_out(deliverable, iam_admin, sen
     expired = sent(target, iam_admin)
     SignInLink._base_manager.filter(user=target).update(expires_at=timezone.now() - timedelta(seconds=1))
     retired = sent(target, iam_admin)
-    with system_context(reason="test.iam.sign_in_link.password"):
+    with system_context(reason="test.iam_messaging.sign_in_link.password"):
         account = User._base_manager.get(pk=target.pk)
         account.set_password("correct-horse-battery")
         account.save(update_fields=["password", "updated_at"])
@@ -464,7 +467,7 @@ def test_deactivation_retires_links_for_good(deliverable, iam_admin, sent):
 def test_a_password_change_or_any_sign_in_retires_outstanding_links(deliverable, iam_admin, sent, change):
     target = _person("guest-moved-on")
     token = sent(target, iam_admin)
-    with system_context(reason="test.iam.sign_in_link.account"):
+    with system_context(reason="test.iam_messaging.sign_in_link.account"):
         account = User._base_manager.get(pk=target.pk)
         if change == "password":
             account.set_password("a-new-password-1")
@@ -494,7 +497,7 @@ def test_redemption_cycles_the_session_key(deliverable, iam_admin, sent):
 def test_issue_waits_out_the_per_account_cooldown(deliverable, iam_admin, sent):
     target = _person("guest-cooldown")
     sent(target, iam_admin)
-    with override_settings(ANGEE_IAM_SIGN_IN_LINK_COOLDOWN=60):
+    with override_settings(ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN=60):
         with actor_context(iam_admin), pytest.raises(ValidationError, match="moments ago"):
             target.with_actor(iam_admin).issue_sign_in_link()
         SignInLink._base_manager.filter(user=target).update(created_at=timezone.now() - timedelta(seconds=61))
@@ -520,8 +523,8 @@ def test_links_need_an_https_origin_and_a_valid_sender(overrides, deliverable_no
         assert SignInLink.deliverable() is deliverable_now
 
 
-def test_links_open_the_route_iams_web_fragment_declares():
-    manifest = Path(angee.iam.__file__).with_name("web") / "src" / "index.ts"
+def test_links_open_the_route_this_addons_web_fragment_declares():
+    manifest = Path(angee.iam_messaging.__file__).with_name("web") / "src" / "index.ts"
     assert f'const SIGN_IN_LINK_PATH = "{SIGN_IN_LINK_PATH}";' in manifest.read_text()
 
 
@@ -613,3 +616,94 @@ def test_link_failures_stay_under_the_account_public_id_after_a_sign_in(delivera
 
     assert result_data(signed_in)["redeem_sign_in_link"]["ok"] is True
     assert AccessAttempt.objects.get(username=target.public_id).failures_since_start == 1
+
+
+_ISSUER = {
+    "platform admin": lambda: create_platform_admin("decision-admin", password=None),
+    "people manager": lambda: _manager("decision-manager"),
+    "member": lambda: User.objects.create_user("decision-member", "decision-member@example.com"),
+}
+_TARGET = {
+    "active person": lambda issuer: _person("decision-person"),
+    "own account": lambda issuer: User._base_manager.get(pk=issuer.pk),
+    "staff": lambda issuer: _person("decision-staff", is_staff=True),
+    "superuser": lambda issuer: _person("decision-super", is_superuser=True),
+    "another platform admin": lambda issuer: create_platform_admin("decision-peer", password=None),
+    "inactive": lambda issuer: _person("decision-inactive", is_active=False),
+    "service": lambda issuer: User.objects.create_user(
+        "decision-service", "decision-service@example.com", kind="service",
+    ),
+}
+_SENDS = "sends"
+
+
+@pytest.mark.parametrize(("issuer", "target", "outcome"), [
+    pytest.param("platform admin", "active person", _SENDS, id="admin-sends-to-an-active-person"),
+    pytest.param("platform admin", "own account", "protected", id="never-to-own-account"),
+    pytest.param("platform admin", "staff", "protected", id="never-to-staff"),
+    pytest.param("platform admin", "superuser", "protected", id="never-to-a-superuser"),
+    pytest.param("platform admin", "another platform admin", "protected", id="never-to-a-protected-account"),
+    pytest.param("platform admin", "inactive", "Only active accounts", id="never-to-an-inactive-account"),
+    pytest.param("platform admin", "service", "Only person accounts", id="never-to-a-service-account"),
+    pytest.param("people manager", "active person", PermissionDenied, id="a-people-manager-may-not"),
+    pytest.param("member", "active person", PermissionDenied, id="a-member-may-not"),
+])
+def test_who_may_send_a_link_to_whom(deliverable, db, issuer, target, outcome, django_capture_on_commit_callbacks):
+    """The users list offers the link exactly where the verb sends it, and a refused issue sends nothing."""
+
+    actor = _ISSUER[issuer]()
+    account = _TARGET[target](actor)
+    assert (ISSUE_SIGN_IN_LINK in account.account_actions_for(to_subject_ref(actor))) is (outcome == _SENDS)
+    with django_capture_on_commit_callbacks(execute=True), actor_context(actor):
+        if outcome == _SENDS:
+            account.with_actor(actor).issue_sign_in_link()
+        elif outcome is PermissionDenied:
+            with pytest.raises(PermissionDenied, match=ISSUE_SIGN_IN_LINK):
+                account.with_actor(actor).issue_sign_in_link()
+        else:
+            with pytest.raises(ValidationError, match=outcome):
+                account.with_actor(actor).issue_sign_in_link()
+    assert [message.to for message in mail.outbox] == ([[account.email]] if outcome == _SENDS else [])
+    assert SignInLink._base_manager.filter(user=account).count() == (1 if outcome == _SENDS else 0)
+
+
+def test_a_link_session_records_iams_session_backend_and_outlives_the_link_backend(deliverable, iam_admin, sent):
+    target = _person("guest-session-backend")
+    token = sent(target, iam_admin)
+    request = _request()
+
+    redeemed = execute_schema(_schema("public"), REDEEM, {"token": token}, request=request)
+
+    assert result_data(redeemed)["redeem_sign_in_link"]["ok"] is True
+    assert request.session[BACKEND_SESSION_KEY] == "angee.iam.auth.ModelBackend"
+    # With the link backend gone from the deployment, the session still loads its person.
+    with override_settings(AUTHENTICATION_BACKENDS=["angee.iam.auth.ModelBackend"]):
+        assert get_user(request) == target
+
+
+def test_iam_alone_declares_no_sign_in_link_permission(tmp_path: Path) -> None:
+    """IAM's own Zed names no link verb; this addon's fragment adds it and unions it into the disclosures."""
+
+    declaration = Path(apps.get_app_config("iam").path, "permissions.zed").read_text(encoding="utf-8")
+    owned = parse_zed(declaration).get_definition("auth/user")
+    assert owned is not None and ISSUE_SIGN_IN_LINK not in {permission.name for permission in owned.permissions}
+    assert ISSUE_SIGN_IN_LINK not in declaration
+    fragment = Path(apps.get_app_config("iam_messaging").path, "permissions.extends.zed").read_text(encoding="utf-8")
+    iam = _addon(tmp_path, "angee.iam", "permissions.zed", declaration)
+    merged = merged_schemas([iam, _contrib_addon(tmp_path, fragment, name="angee.iam_messaging")])
+    composed = merged["angee.iam"].get_definition("auth/user")
+    assert composed is not None
+    names = {permission.name: permission.raw_text or str(permission.expression) for permission in composed.permissions}
+    assert ISSUE_SIGN_IN_LINK in names
+    assert all(ISSUE_SIGN_IN_LINK in names[point] for point in ("active_account_granted", "nonstaff_account_granted"))
+
+
+def test_setting_a_password_retires_outstanding_links(deliverable, iam_admin, sent):
+    target = _person("guest-new-password", password="Old-password-unique-731!")
+    token = sent(target, iam_admin)
+    with actor_context(iam_admin):
+        revision = User._base_manager.get(pk=target.pk).account_revision
+        target.with_actor(iam_admin).set_account_password("New-password-unique-942!", expected_revision=revision)
+
+    assert _redeem(token) is None
+    assert SignInLink._base_manager.get(user=target).used_at is None

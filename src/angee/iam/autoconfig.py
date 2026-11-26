@@ -27,16 +27,10 @@ SETTINGS = {
     "AUTHENTICATION_BACKENDS:append": [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
-        "angee.iam.auth.SignInLinkBackend",
     ],
     # IAM calls REBAC actions directly and deliberately omits Django's optional
     # has_perm/codename bridge; its absence is not a configuration defect here.
     "SILENCED_SYSTEM_CHECKS:append": ["rebac.W001"],
-    # Seconds a sign-in link stays valid: Django's default for an emailed
-    # password-reset link, since the person cannot request a fresh one.
-    "ANGEE_IAM_SIGN_IN_LINK_TTL": 259_200,
-    # Seconds before an account may be sent another sign-in link.
-    "ANGEE_IAM_SIGN_IN_LINK_COOLDOWN": 60,
     # IAM's login throttling policy (django-axes): a lockout lifts after an
     # hour. A success clears nothing, so a client cannot interleave its own
     # sign-ins with guesses; each request makes one attempt (`authenticate_once`).

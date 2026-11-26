@@ -270,30 +270,48 @@ def test_authored_documents_validate_against_the_root_closure(root: str) -> None
         assert [str(error) for error in errors] == [], name
 
 
-def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
-    """An IAM-only host never scans operations belonging to the optional OIDC schema.
+@pytest.mark.parametrize(("app", "package", "requires"), [
+    ("angee.iam_integrate_oidc", "@angee/iam-integrate-oidc", {"angee.iam", "angee.integrate", "angee.parties"}),
+    ("angee.iam_messaging", "@angee/iam-messaging", {"angee.iam"}),
+])
+def test_optional_sign_in_web_documents_follow_their_backend_addon(app: str, package: str, requires: set[str]) -> None:
+    """An IAM-only host never scans operations belonging to an optional sign-in addon's schema.
 
-    IAM owns public operations of its own (sign-in link redemption): an
-    IAM-only host's public schema validates every one, and none of OIDC's.
+    IAM's public schema has no operation of its own that those addons' pages
+    send; each addon's public operations validate only against IAM's schema
+    with that addon's contributions.
     """
 
     iam_configs = enabled_apps(("angee.iam",), group="angee.addons").app_configs
-    oidc_configs = enabled_apps(("angee.iam_integrate_oidc",), group="angee.addons").app_configs
+    addon_configs = enabled_apps((app,), group="angee.addons").app_configs
     iam_manifest = _web_runtime(iam_configs).manifest
-    oidc_manifest = _web_runtime(oidc_configs).manifest
+    addon_manifest = _web_runtime(addon_configs).manifest
 
-    assert "@angee/iam-integrate-oidc" not in {entry["package"] for entry in iam_manifest["addonPackages"]}
-    oidc = next(entry for entry in oidc_manifest["addonPackages"] if entry["app"] == "angee.iam_integrate_oidc")
-    assert oidc["package"] == "@angee/iam-integrate-oidc"
-    assert {"angee.iam", "angee.integrate", "angee.parties"} <= set(oidc["dependsOn"])
-    iam_config = next(config for config in iam_configs if config.name == "angee.iam")
-    oidc_config = next(config for config in oidc_configs if config.name == "angee.iam_integrate_oidc")
-    iam_public = addon_schema(import_module("angee.iam.schema").schemas, "public")._schema
-    iam_operations = authored_documents(Path(iam_config.path) / "web" / "src" / "documents.public.ts")
-    oidc_operations = authored_documents(Path(oidc_config.path) / "web" / "src" / "documents.public.ts")
-    assert iam_operations and oidc_operations
-    assert [validate(iam_public, operation) for operation in iam_operations] == [[]] * len(iam_operations)
-    assert all(validate(iam_public, operation) for operation in oidc_operations)
+    assert package not in {entry["package"] for entry in iam_manifest["addonPackages"]}
+    entry = next(entry for entry in addon_manifest["addonPackages"] if entry["app"] == app)
+    assert entry["package"] == package
+    assert requires <= set(entry["dependsOn"])
+    addon_config = next(config for config in addon_configs if config.name == app)
+    iam_schemas = import_module("angee.iam.schema").schemas
+    iam_public = addon_schema(iam_schemas, "public")._schema
+    composed_public = addon_schema(iam_schemas, "public", import_module(f"{app}.schema").schemas)._schema
+    operations = authored_documents(Path(addon_config.path) / "web" / "src" / "documents.public.ts")
+    assert operations
+    assert all(validate(iam_public, operation) for operation in operations)
+    assert [validate(composed_public, operation) for operation in operations] == [[]] * len(operations)
+
+
+def test_iam_alone_serves_no_sign_in_link() -> None:
+    """The sign-in link's redemption and issue verb leave IAM's schemas with the link."""
+
+    iam_schemas = import_module("angee.iam.schema").schemas
+    public = addon_schema(iam_schemas, "public")._schema
+    console = addon_schema(iam_schemas, "console")._schema
+    assert "redeem_sign_in_link" not in public.mutation_type.fields
+    assert not {"redeem_sign_in_link", "issue_user_sign_in_link"} & set(console.mutation_type.fields)
+    assert "UserAccountAction" not in console.type_map
+    user_type = console.type_map["UserType"]
+    assert str(user_type.fields["account_actions"].type) == "[String!]!"
 
 
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:

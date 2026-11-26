@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 30
+// @rebac_schema_revision: 31
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -39,8 +39,8 @@ definition auth/user {
     // Staff status itself is never described by these disclosures.
     // A fragment unions its verb into the `_granted` grants; IAM derives each
     // disclosure from them and seals it (angee.iam.E004).
-    permission active_account_granted = colleague + view_as + issue_password + reset_password + issue_sign_in_link
-    permission nonstaff_account_granted = view_as + write + set_active + rename + reset_password + issue_password + issue_sign_in_link
+    permission active_account_granted = colleague + view_as + issue_password + reset_password
+    permission nonstaff_account_granted = view_as + write + set_active + rename + reset_password + issue_password
     permission active_account = active_account_granted & active->disclosed
     permission nonstaff_account = nonstaff_account_granted - staff->disclosed
     // Restricted fields: the sign-in identity, last sign-in, access state and
@@ -72,8 +72,6 @@ definition auth/user {
 
     // Account verbs refuse protected accounts except Set password (see iam/protected).
     permission issue_password = admin->member
-    // Emails the account a single-use sign-in link; the issuer never sees it.
-    permission issue_sign_in_link = admin->member
     permission reset_password = admin->member
     // Sealed: fragments cannot bypass platform-admin membership or either write gate.
     permission set_password = admin->member & write & write__password

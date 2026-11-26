@@ -42,13 +42,6 @@ describe("iam addon manifest", () => {
       .toEqual([["iam.last-login", "iam.User#read__last_login"]]);
   });
 
-  test("opens sign-in links on a public route outside the console chrome", () => {
-    expect(iam.routes?.find((route) => route.name === "iam.sign-in-link")).toMatchObject({
-      path: "/sign-in-link",
-      layout: "public",
-    });
-  });
-
   test("publishes login backgrounds as frontend build assets", () => {
     expect(IAM_LOGIN_BACKGROUND_IMAGE_URLS).toHaveLength(6);
     expect(IAM_LOGIN_BACKGROUND_IMAGE_URLS.map((url) => basename(new URL(url).pathname))).toEqual([

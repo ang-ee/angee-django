@@ -1,10 +1,9 @@
-"""Django authentication backend adapters owned by IAM."""
+"""Django authentication owned by IAM: its backend, the one attempt per request and the login throttle's seams."""
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
-from django.apps import apps
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.backends import BaseBackend
 from django.contrib.auth.backends import ModelBackend as DjangoModelBackend
@@ -81,19 +80,6 @@ def authenticate_once(request: Any, **credentials: Any) -> Any | None:
         vars(request).pop(_SPENT_CREDENTIAL, None)
 
 
-def sign_in_credentials(token: str) -> dict[str, str]:
-    """Return the ``authenticate()`` credentials of a sign-in link.
-
-    ``sign_in_token`` carries the token; Django masks it before
-    ``user_login_failed`` receivers see it. ``sign_in_account`` carries the
-    account public id the token names, unmasked, so ``axes_username`` records
-    the attempt under that account.
-    """
-
-    account = cast(Any, apps.get_model("iam", "SignInLink")).token_account(token)
-    return {"sign_in_token": token, "sign_in_account": account}
-
-
 def axes_username(request: Any, credentials: Any) -> str | None:
     """``AXES_USERNAME_CALLABLE``: the account a credential names, else axes' own username lookup.
 
@@ -139,37 +125,3 @@ def spent_credential(request: Any, credentials: Any) -> bool:
         return False
     del vars(request)[_SPENT_CREDENTIAL]
     return True
-
-
-class SignInLinkBackend(ModelBackend):
-    """Django authentication from a single-use sign-in link, with IAM's session loading.
-
-    Its credentials come from :func:`sign_in_credentials`, and callers run it
-    through :func:`authenticate_once`; Django's ``authenticate()`` admits the
-    backend only for ``sign_in_token``. django-axes counts and locks out
-    failed links at the same seam as passwords, recorded by
-    ``axes_username``, without the token reaching its records. A genuine link
-    that is spent is marked through :func:`mark_spent_credential`.
-    ``SignInLinkManager.redeem`` owns every check.
-    """
-
-    @sensitive_variables("sign_in_token")
-    def authenticate(  # type: ignore[override]
-        self,
-        request: Any,
-        *,
-        sign_in_token: str,
-        sign_in_account: str = "",
-    ) -> Any | None:
-        """Return the person ``sign_in_token`` signs in, consuming it, or ``None``."""
-
-        from angee.iam.models import SignInLinkSpent
-
-        try:
-            return cast(Any, apps.get_model("iam", "SignInLink")).objects.redeem(sign_in_token)
-        except SignInLinkSpent:
-            mark_spent_credential(request, sign_in_account)
-            return None
-
-    # Django's async default wraps ``authenticate``; the parent binds the password one.
-    aauthenticate = BaseBackend.aauthenticate  # type: ignore[assignment]
