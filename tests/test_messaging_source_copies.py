@@ -173,7 +173,7 @@ def _copied(external_id, *, sender, cc, in_reply_to=""):
 def test_a_records_chatter_thread_is_never_folded_with_a_mailbox_thread(settings, monkeypatch):
     """A copy of chatter mail in a colleague's own mailbox folds as a message; their thread stays theirs."""
 
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = {"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}}
     monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
     desk = make_integration(
         "fold-desk", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
