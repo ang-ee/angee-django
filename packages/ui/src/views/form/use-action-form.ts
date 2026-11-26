@@ -7,7 +7,7 @@ import { useUiT } from "../../i18n";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
 import {
-  SURFACE_RENDERS_FAILURE, applyFormErrors, formErrorsFromForm, serverErrorsFromForm, formSubmitError, useRefusalBannerFocus, type FormSubmitResult,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, formErrorsFromForm, serverErrorsFromForm, formSubmitError, useRefusalFocus, type FormSubmitResult,
 } from "./validation-errors";
 import { useFieldValidation, type FieldValidationForm } from "./use-field-validation";
 import { useLateAnswerReport, type LateAnswer } from "./late-answer";
@@ -54,7 +54,7 @@ export interface UseActionFormResult<TValues extends FieldValues, TSubmitValues 
   /** The form-level messages of the last refused or failed submit, each its own entry; empty when there is none. */
   formErrors: readonly string[];
   /** Spread on the banner that renders `formErrors`: a refused submit brings the person to it or to its first refused field. */
-  banner: ReturnType<typeof useRefusalBannerFocus>["banner"];
+  banner: ReturnType<typeof useRefusalFocus>["banner"];
   saveConflict: boolean;
   clearFieldError: (name: string) => void;
   resetErrors: () => void;
@@ -85,7 +85,8 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const formErrors = formErrorsFromForm(form.formState.errors);
-  const { banner, focusBanner } = useRefusalBannerFocus(formErrors);
+  // Its fields lock while it submits: a refusal's focus waits until they are ready again.
+  const { banner, focus } = useRefusalFocus(formErrors, { form, ready: !form.formState.isSubmitting });
   const run = React.useCallback(async (): Promise<boolean> => {
     if (submittingRef.current || preview.current.viewAs || preview.current.pending) return false;
     submittingRef.current = true;
@@ -111,14 +112,14 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
         // A refusal brings the person to it: the banner, which then also names the refused fields, or
         // the first refused field (`applyFormErrors` decides).
         const shown = typeof fieldNames === "function" ? fieldNames(form.getValues()) : fieldNames;
-        if (applyFormErrors(form, result, { fieldNames: shown, fallback, focus: focusBanner, ...(fieldSummary ? { fieldSummary } : {}) })) return;
+        if (applyFormErrors(form, result, { fieldNames: shown, fallback, focus, ...(fieldSummary ? { fieldSummary } : {}) })) return;
         if (toastSuccess && result.message) toast.success({ title: result.message });
         succeeded = true;
         onSuccess?.(collected, result.data);
       }, () => { validateEditors(); })();
     } finally { submittingRef.current = false; }
     return succeeded;
-  }, [clearErrors, focusBanner, form, handleSubmit, preview, reportLate, t, toast, validateFields]);
+  }, [clearErrors, focus, form, handleSubmit, preview, reportLate, t, toast, validateFields]);
   const clearFieldError = React.useCallback((name: string) => clearErrors(name as Path<TValues>), [clearErrors]);
   return {
     form: enhancedForm, run,
