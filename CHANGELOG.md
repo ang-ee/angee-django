@@ -94,7 +94,10 @@ live in code docstrings.
     default sender is invalid is refused; a keyed retry still returns its
     original. A reply to a message whose `Reply-To` names no address the handle
     owner accepts is refused (`reply_to`) rather than sent to the sender, which
-    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    may be a relay; the sender an answer falls back to is checked the same way,
+    so one stored with an address the handle owner does not take (a control or
+    an invisible character in it) is refused (`parent`, `reply_unaddressed`)
+    instead of being written and failing at delivery. Idempotency keys claimed through `compose_reply` (scope
     `messaging.reply:`) do not replay through `compose` (scope
     `messaging.compose:`): a posts workflow reply retried across the upgrade
     does not replay, and if its original was trashed or failed, which the

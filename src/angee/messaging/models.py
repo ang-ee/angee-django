@@ -1386,7 +1386,8 @@ class Message(
         with ``actor``'s access). A ``Reply-To`` that names no address is refused
         (``reply_to``, ``reply_to_invalid``) rather than answered at its sender,
         which may be a relay; only a message with no ``Reply-To`` is answered at
-        its sender (``parent``, ``reply_unaddressed`` when it has none). A
+        its sender (``parent``, ``reply_unaddressed`` when it has none, or one the
+        handle owner's predicate does not take as an address). A
         ``Reply-To`` naming more than ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses
         is refused (``reply_to``, ``too_many``), as a typed list of as many is. Any other
         kind is answered by its transport's own sender: the envelope is empty.
@@ -1410,7 +1411,8 @@ class Message(
             raise ValidationError({"reply_to": ValidationError(
                 "The message's Reply-To names no address to answer.", code="reply_to_invalid",
             )})
-        if not addresses and self.sender_id is None:
+        if not addresses and (self.sender is None or not Handle.is_email_address(self.sender.value)):
+            # The sender an answer falls back to is checked as a Reply-To address is.
             raise ValidationError({"parent": ValidationError(
                 "An email answer needs a Reply-To or a sender to address.", code="reply_unaddressed",
             )})

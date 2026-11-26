@@ -966,6 +966,16 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
 
 
+@pytest.mark.parametrize("local", ["a\x1bb", "a\u202eb", "a\u2028b", "a\u200bb", "a\x85b"])
+def test_an_answer_to_a_sender_whose_address_is_not_one_is_refused_unwritten(desk: Any, local: str) -> None:
+    """The sender an answer falls back to is checked as a Reply-To is, so no unprintable address reaches the wire."""
+
+    parent = _receive(desk, f"sender-{ord(local[1])}", sender=f"{local}@example.test")
+    assert parent.reply_error(actor=desk.owner).error_dict["parent"][0].code == "reply_unaddressed"
+    with _refused(key="parent", code="reply_unaddressed"):
+        Message.objects.compose(parent=parent, text="Thanks.", actor=desk.owner)
+
+
 def test_an_answer_to_a_reply_to_over_the_recipient_bound_is_refused_and_one_at_it_is_written(desk: Any) -> None:
     """The bound on to, cc and bcc holds for the addresses an answer takes from its parent's Reply-To."""
 
