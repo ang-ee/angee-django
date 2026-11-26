@@ -629,10 +629,11 @@ live in code docstrings.
   the mail itself, before its first link. While the body or anything in the
   mail has keyboard focus, a ring fixed to the frame's edges stays as the
   arrow, page, space and end keys scroll the mail, and stays beside a link's
-  own ring, also in a mail that removes its links' outline: 2px of the theme's
-  `--border-focus` outside, made opaque, and 2px of white or black inside,
-  whichever contrasts with it, so one edge holds 3:1 on a white mail and on a
-  near-black one (on a mid-grey mail neither edge may reach it). A click on
+  own ring, also in a mail that removes its links' outline. The ring has three
+  tones, 2px each: the theme's `--border-focus` outside, then a black line,
+  then a white one, so one of them holds contrast on any mail, whatever it
+  paints and whatever the theme's color is (at least 4.6:1 on any grey). A
+  click on
   the mail's text or on a link shows no ring until the next key press; a
   click into a field of the mail shows it, as the field shows its own. The
   ring is the root's own
@@ -653,10 +654,9 @@ live in code docstrings.
   name. The ring's color is read from the page when the document is
   assembled: a theme, brand or light/dark switch reloads an open mail, which
   returns to its top and shows no ring until the next Tab; an ordinary render
-  keeps it. A browser without CSS relative color syntax draws the theme's
-  color as it is, then a black and a white line inside it; one without
-  `:has()` (before Chrome 105, Safari 15.4, Firefox 121) draws no ring, as
-  before this change.
+  keeps it. A browser without `:has()` (before Chrome 105, Safari 15.4,
+  Firefox 121) draws no ring, as before this change; the ring needs nothing
+  newer.
   `@angee/ui/lib/use-motion-tokens` is removed and
   `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
   beside `useRootTokens`, the one reader of the root's resolved tokens, which
