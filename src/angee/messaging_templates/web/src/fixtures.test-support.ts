@@ -59,7 +59,10 @@ type RecordedInsert =
 
 /** The names the stories and tests open rows by, as the recorder names them (`OPENED`). */
 type OpenedRow = "welcome" | "welcomeArabic" | "passwordReset" | "invoiceSent" | "button" | "quote" | "recordCard"
-  | "notice";
+  | "notice" | "conditionalInclude";
+
+/** The refused saves the recorder records, by what each shows (`saves` in the recorder). */
+export type RecordedSaveRefusal = "layout" | "variablePath" | "variableDescription";
 
 interface RecordedFixtures {
   metadata: Readonly<Record<string, unknown>>;
@@ -76,7 +79,11 @@ interface RecordedFixtures {
   /** What Keep override answers on an override another session deleted since it was shown. */
   keepRefused: Readonly<Record<string, ActionResult>>;
   insert: readonly RecordedInsert[];
-  save: readonly { id: string; set: Readonly<Record<string, unknown>>; error: RecordedError }[];
+  save: Readonly<Record<RecordedSaveRefusal, {
+    id: string; set: Readonly<Record<string, unknown>>; error: RecordedError;
+  }>>;
+  /** Saves the server kept: what was sent, what the save answered, and what a reload then read. */
+  saved: readonly { id: string; set: Readonly<Record<string, unknown>>; row: WireRow; reread: WireRow }[];
 }
 
 /** What the recorder wrote: JSON, so its values are checked by the recorder's own test, its shapes by these types. */
@@ -113,8 +120,8 @@ export interface MessageTemplateFixtureCall {
 export interface MessageTemplateFixtureOptions {
   /** A platform administrator, or a member who reads every row and may do nothing with it. */
   viewer?: MessageTemplateViewer;
-  /** Every save is refused as the console refused the recorded one. */
-  refuseSave?: boolean;
+  /** Every save is refused as the console refused the recorded save of that name, whatever it sends. */
+  refuseSave?: RecordedSaveRefusal;
   /** Keep override is refused as the console refuses it on an override another session deleted meanwhile. */
   refuseKeep?: boolean;
   /**
@@ -122,6 +129,11 @@ export interface MessageTemplateFixtureOptions {
    * preview every row. The permission schema has no such reader today, so this one answer is the fake's.
    */
   overrideDenied?: boolean;
+  /**
+   * Once a save is answered, every preview read fails with a GraphQL error, as a server failing on the
+   * read again that the save causes; the reads before it answer as recorded.
+   */
+  failPreviewAfterSave?: boolean;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
 }
@@ -144,9 +156,11 @@ function sameObject(left: Readonly<Record<string, unknown>>, right: unknown): bo
 
 /** The schemas a story or a test mounts: the console over the fake, with the recorded metadata. */
 export function messageTemplateSchemas({
-  viewer = "admin", refuseSave = false, refuseKeep = false, overrideDenied = false, onRequest, onCall,
+  viewer = "admin", refuseSave, refuseKeep = false, overrideDenied = false, failPreviewAfterSave = false,
+  onRequest, onCall,
 }: MessageTemplateFixtureOptions = {}) {
   const member = viewer === "member";
+  let savedOnce = false;
   let rows: WireRow[] = RECORDED.rows
     .map((row) => (member ? { ...row, ...RECORDED.member[row.id], id: row.id } : row))
     .map((row) => (overrideDenied ? { ...row, can_override: false } : row));
@@ -184,6 +198,9 @@ export function messageTemplateSchemas({
       return Object.hasOwn(backlinks, row.id) ? { ...row, backlinks: backlinks[row.id] } : row;
     },
     message_template_preview: ({ template, brand_kit }) => {
+      if (failPreviewAfterSave && savedOnce) {
+        throw new GraphQLError(`The preview of ${String(template)} fails when read again after a save.`);
+      }
       const preview = typeof brand_kit === "string"
         ? (member ? undefined : RECORDED.previewsInKit[brand_kit]?.[String(template)])
         : previews[String(template)];
@@ -216,10 +233,16 @@ export function messageTemplateSchemas({
     },
     update_message_templates_by_pk: ({ pk_columns, _set }) => {
       const { id } = pk_columns as { id: string };
-      const refusal = RECORDED.save[0];
-      if (refuseSave && refusal) throw recordedError(refusal.error);
+      if (refuseSave) throw recordedError(RECORDED.save[refuseSave].error);
       const current = find(id);
       if (!current) throw unrecorded(`the row ${id}`);
+      savedOnce = true;
+      // A save the server was recorded keeping answers as it answered, and the row is what a reload then read.
+      const kept = RECORDED.saved.find((entry) => entry.id === id && sameObject(entry.set, _set));
+      if (kept) {
+        rows = rows.map((row) => (row.id === id ? kept.reread : row));
+        return kept.row;
+      }
       const saved: WireRow = { ...current, ...(_set as Row), id };
       rows = rows.map((row) => (row.id === id ? saved : row));
       return saved;

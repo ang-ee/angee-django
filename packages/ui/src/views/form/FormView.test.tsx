@@ -4169,16 +4169,44 @@ describe("FormView", () => {
   const banner = () => screen.queryAllByRole("alert").map((node) => node.textContent ?? "").join(" ");
 
   test.each([
-    ["alone", [], "code: Code is taken."],
-    ["with a form-level error", ["Note is misconfigured."], "Note is misconfigured. code: Code is taken."],
-  ])("a hidden field the server refuses %s shows the server's own text in the banner, and no field is called highlighted", async (_case, formErrors, text) => {
+    ["alone", [], ["code: Code is taken."]],
+    ["with a form-level error", ["Note is misconfigured."], ["Note is misconfigured.", "code: Code is taken."]],
+  ])("a hidden field the server refuses %s shows the server's own text in the banner, each message its own, and no field is called highlighted", async (_case, formErrors, messages) => {
     refuse(formErrors);
     renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);
     fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(banner()).toContain(text));
+    await screen.findByText(messages.at(-1)!);
+    // One message is the banner's body; several are a list, one item each, never one run-on sentence.
+    const alert = screen.getByRole("alert");
+    expect(within(alert).queryAllByRole("listitem").map((item) => item.textContent)).toEqual(messages.length > 1 ? messages : []);
+    for (const message of messages) expect(within(alert).getByText(message)).toBeTruthy();
     expect(banner()).not.toContain("highlighted");
+  });
+
+  test("a save the server refuses for shown fields moves focus to the first of them in the form's order, not the answer's", async () => {
+    sdkMocks.mutate.mockRejectedValue({ graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: { code: "VALIDATION", validationErrors: { code: ["Code is taken."], label: ["Label is taken."] }, formErrors: [] },
+    }] });
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code" }]} />);
+    const label = await screen.findByLabelText("Label");
+    fireEvent.change(label, { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await screen.findByText("Label is taken.");
+    await screen.findByText("Code is taken.");
+    expect(document.activeElement).toBe(label);
+  });
+
+  test("a save the server refuses for no shown field moves focus to its banner", async () => {
+    refuse(["Note is misconfigured."]);
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);
+    fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = (await screen.findByText("Note is misconfigured.")).closest<HTMLElement>('[role="alert"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(alert.getAttribute("tabindex")).toBe("-1");
   });
 
   test("a field of a group the record does not display that the server refuses shows the server's own text in the banner, called highlighted nowhere and marked invalid nowhere", async () => {
@@ -6225,9 +6253,10 @@ describe("FormView", () => {
     await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
     await screen.findByText("This field cannot be blank.");
     // Server-only issues retain both their field name and their actionable reason.
-    expect(
-      screen.getByText("Please fix the highlighted fields: Title. environment: This field cannot be blank."),
-    ).toBeTruthy();
+    const banner = screen.getByText("environment: This field cannot be blank.").closest<HTMLElement>('[role="alert"]')!;
+    expect(within(banner).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Please fix the highlighted fields: Title.", "environment: This field cannot be blank.",
+    ]);
   });
 });
 

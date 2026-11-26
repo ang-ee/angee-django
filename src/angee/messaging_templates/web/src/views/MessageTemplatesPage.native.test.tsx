@@ -6,6 +6,7 @@ import { operationDocuments } from "@angee/gql/console/actions";
 import { RuntimeFixture, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { RelatedPane } from "@angee/ui";
 import { enUiMessages as UI } from "@angee/ui/i18n/en";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 import {
   KEEP_REFUSAL, MESSAGE_TEMPLATE_RESOURCE, RECORDED, ROW, messageTemplateRecordContext, messageTemplateRuntime,
@@ -119,7 +120,9 @@ function refusedIdentities(): [string, Readonly<Record<string, string>>, string]
       : []);
 }
 
-test.each(refusedIdentities())("New refuses the identity %s in the Save failed banner, in the server's words", async (
+// A shipped default's identity, one the deployment has, and a new language seeded from a row whose includes nest
+// past the depth: each refused before any field, in the banner, which takes focus.
+test.each(refusedIdentities())("New refuses %s in the Save failed banner, in the server's words, and focuses it", async (
   _key, object, message,
 ) => {
   render(<MessageTemplateStory open="new" />);
@@ -127,6 +130,8 @@ test.each(refusedIdentities())("New refuses the identity %s in the Save failed b
   fireEvent.click(screen.getByRole("button", { name: ui("form.create") }));
   await screen.findByText(ui("form.saveFailed"));
   expect(await screen.findByText(message)).toBeTruthy();
+  await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("alert"));
+  expect(document.activeElement?.textContent).toContain(message);
   expect(screen.getByRole("textbox", { name: "Name" })).toBeTruthy();
 });
 
@@ -163,7 +168,13 @@ test("Override on a shipped default sends its id and lands on the deployment's o
   expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
 });
 
-test("Keep override sends the override's id, and the default-updated warning goes", async () => {
+/** The toasts a person sees, one element each, in the toast library's viewport (named Notifications by it). */
+function shownToasts(): HTMLElement[] {
+  return [...screen.getByRole("region", { name: "Notifications" })
+    .querySelectorAll<HTMLElement>("[role=dialog], [role=alertdialog]")];
+}
+
+test("Keep override sends the override's id, toasts the server's message once, and the default-updated warning goes", async () => {
   const calls: MessageTemplateFixtureCall[] = [];
   render(<MessageTemplateStory open={ROW.recordCard} onCall={(call) => calls.push(call)} />);
   await screen.findByText(word("notice.defaultUpdated"));
@@ -173,6 +184,8 @@ test("Keep override sends the override's id, and the default-updated warning goe
   await waitFor(() => expect(screen.queryByText(word("notice.defaultUpdated"), { exact: false })).toBeNull());
   expect(await screen.findByText(word("notice.live"), { exact: false })).toBeTruthy();
   expect(screen.queryByRole("button", { name: word("action.keepOverride") })).toBeNull();
+  // By now the verb has settled and the row has been read again: one toast, the server's message.
+  expect(shownToasts().map((toast) => toast.textContent)).toEqual([RECORDED.keep[ROW.recordCard]!.result.message]);
 });
 
 test("a reader who may preview a shipped default but whom the server does not admit to Override is offered neither", async () => {
@@ -192,20 +205,22 @@ test("a current override offers no Keep override, and says Delete returns to the
   expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
 });
 
-test("a refused Keep override says why, in the server's words for this row, and the warning stays", async () => {
+test("a refused Keep override says why under the verb's name, in the server's words for this row, and the warning stays", async () => {
   render(<MessageTemplateStory open={ROW.recordCard} refuseKeep />);
   await screen.findByText(word("notice.defaultUpdated"));
   fireEvent.click(await screen.findByRole("button", { name: word("action.keepOverride") }));
 
-  // The toast is also announced in a live region, so the words are on the page more than once.
-  expect((await screen.findAllByText(KEEP_REFUSAL.message, { exact: false })).length).toBeGreaterThan(0);
-  // Its reason names this row, which another session deleted since it opened; nothing says it overrides no default.
+  // The action bar toasts the refusal once, titled with the verb, its body the server's reason; the toast is
+  // also announced in a live region, so its words are on the page more than once.
   const reasons = Object.values(KEEP_REFUSAL.validation_errors ?? {}).flat().map(String);
   expect(reasons.length).toBeGreaterThan(0);
   for (const reason of reasons) {
-    expect(reason).toContain(ROW.recordCard);
     expect((await screen.findAllByText(reason, { exact: false })).length).toBeGreaterThan(0);
   }
+  expect(shownToasts()).toHaveLength(1);
+  expect(screen.getAllByText(word("action.keepOverride")).length).toBeGreaterThan(1);
+  // The server's summary gives way to its reasons: no second toast says it.
+  expect(screen.queryByText(KEEP_REFUSAL.message, { exact: false })).toBeNull();
   expect(screen.getByText(word("notice.defaultUpdated"))).toBeTruthy();
 });
 
@@ -223,8 +238,8 @@ test("Delete on a block another row includes shows the server's refusal", async 
 
 test("a save the server refuses shows its row-wide reasons in the Save failed banner and each field's under the field", async () => {
   const calls: MessageTemplateFixtureCall[] = [];
-  const refusal = RECORDED.save[0]!;
-  render(<MessageTemplateStory open={ROW.passwordReset} refuseSave onCall={(call) => calls.push(call)} />);
+  const refusal = RECORDED.save.layout;
+  render(<MessageTemplateStory open={ROW.passwordReset} refuseSave="layout" onCall={(call) => calls.push(call)} />);
   // The list's kind groups share their names with fields ("Layout"), so the field is looked up in the form.
   const form = await recordForm();
   await within(form).findByLabelText(word("field.layout"));
@@ -237,7 +252,69 @@ test("a save the server refuses shows its row-wide reasons in the Save failed ba
   for (const words of refusal.error.extensions.validationErrors?.layout ?? []) {
     await expectFieldError(within(form).getByLabelText(word("field.layout")), words);
   }
+  // The refused save brings the person to the field it refused.
+  await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
   expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([refusal.set]);
+});
+
+test("a declared path or description over its length is refused at the variables editor, which takes focus", async () => {
+  for (const why of ["variablePath", "variableDescription"] as const) {
+    const words = RECORDED.save[why].error.extensions.validationErrors!.variables![0]!;
+    render(<MessageTemplateStory open={ROW.quote} refuseSave={why} />);
+    const form = await recordForm();
+    // The editor types through its code editor; the save is answered as the server refused that value.
+    fireEvent.change(within(form).getByLabelText(word("field.description")), { target: { value: "Edited." } });
+    fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+    const field = (await within(form).findByText(word("field.variables"))).parentElement!.parentElement!;
+    expect(await within(field).findByText(words)).toBeTruthy();
+    await waitFor(() => expect(field.contains(document.activeElement)).toBe(true));
+    cleanup();
+  }
+});
+
+test("a source pasted with carriage returns saves as the server keeps it, and Default updated stays off", async () => {
+  const calls: MessageTemplateFixtureCall[] = [];
+  const pasted = RECORDED.saved.find((entry) => entry.id === ROW.passwordReset)!;
+  render(<MessageTemplateStory open={ROW.passwordReset} onCall={(call) => calls.push(call)} />);
+  const form = await recordForm();
+  fireEvent.change(await within(form).findByLabelText(word("field.source")), { target: { value: pasted.set.source } });
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+
+  await screen.findByText(ui("form.updateSuccess"));
+  expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([pasted.set]);
+  // The server keeps newlines, and the row still overrides a current default.
+  await waitFor(() => expect(within(form).getByLabelText<HTMLTextAreaElement>(word("field.source")).value)
+    .toBe(pasted.reread.source));
+  expect(screen.queryByText(word("notice.defaultUpdated"), { exact: false })).toBeNull();
+  expect(screen.getByText(word("notice.live"), { exact: false })).toBeTruthy();
+});
+
+test("an override whose default changed still says so after a save and the read that follows it", async () => {
+  const calls: MessageTemplateFixtureCall[] = [];
+  const kept = RECORDED.saved.find((entry) => entry.id === ROW.recordCard)!;
+  render(<MessageTemplateStory open={ROW.recordCard} onCall={(call) => calls.push(call)} />);
+  await screen.findByText(word("notice.defaultUpdated"));
+  const reads = argsOf(calls, "message_templates_by_pk").length;
+  fireEvent.change(screen.getByLabelText(word("field.description")), { target: { value: kept.set.description } });
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+
+  await screen.findByText(ui("form.updateSuccess"));
+  expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([kept.set]);
+  // The form reads the row again after the save, as a reload does, and the server still says the default changed.
+  await waitFor(() => expect(argsOf(calls, "message_templates_by_pk").length).toBeGreaterThan(reads));
+  expect(kept.reread.has_updated_default).toBe(true);
+  expect(screen.getByText(word("notice.defaultUpdated"))).toBeTruthy();
+});
+
+test("a template whose include sits inside a condition renders with that value empty", async () => {
+  const preview = RECORDED.previews[ROW.conditionalInclude]!;
+  const row = RECORDED.rows.find((candidate) => candidate.id === ROW.conditionalInclude)!;
+  expect(Object.keys(row.sample as object)).not.toContain("booking_url");
+  expect(preview.rendered).not.toBeNull();
+  render(<MessageTemplateStory open={ROW.conditionalInclude} />);
+  const frame = await screen.findByTitle(word("preview.frameTitle"));
+  await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain(preview.rendered!.html));
+  expect(screen.queryByText(word("preview.refused"))).toBeNull();
 });
 
 /** The plain-text source in the record form, or null where the form does not show it. */
@@ -336,17 +413,84 @@ test("a left-to-right mail's subject, preheader and plain text say so, from the 
   expect((await screen.findByRole("region", { name: word("preview.text") })).getAttribute("dir")).toBe("ltr");
 });
 
+/** What each of the band's children is, in its order: by the one fact of the pane each shows. */
+function bandOutline(band: HTMLElement, warnings: readonly string[]): string[] {
+  return [...band.children].map((child) => {
+    const text = child.textContent ?? "";
+    if (warnings.length && warnings.every((detail) => text.includes(detail))) return "warnings";
+    if (text === word("preview.saved")) return "saved";
+    if (text.includes(word("preview.subject")) && text.includes(word("preview.preheader"))) return "message";
+    if (text === word("preview.fidelity")) return "caveat";
+    if (child.querySelector("[role=alert]") || child.getAttribute("role") === "alert") return "error";
+    return `unknown: ${text}`;
+  });
+}
+
 test("a template whose preview warns lists each warning in the server's words, first in the band", async () => {
   render(<MessageTemplateStory open={ROW.passwordReset} />);
   await screen.findByTitle(word("preview.frameTitle"));
   const band = screen.getByRole("region", { name: word("preview.factsRegion") });
-  const saved = within(band).getByText(word("preview.saved"));
-  const subject = within(band).getByText(word("preview.subject"));
-  for (const warning of RECORDED.previews[ROW.passwordReset]!.warnings) {
-    const shown = await within(band).findByText(warning.detail);
-    // Before the saved-row line and the subject: seen whole before the rest of the band.
-    expect(shown.compareDocumentPosition(saved) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(shown.compareDocumentPosition(subject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const warnings = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
+  for (const detail of warnings) expect(await within(band).findByText(detail)).toBeTruthy();
+
+  // The whole order: the warnings, the saved-row line, the subject and preheader, the frame caveat.
+  expect(bandOutline(band, warnings)).toEqual(["warnings", "saved", "message", "caveat"]);
+});
+
+/** A query client that does not retry a refused read, as the app's own does not retry a GraphQL refusal. */
+function noRetryClient() {
+  return createUiTestProviders().createClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+test("a preview read for another kit that fails shows its error and nothing of the earlier answer", async () => {
+  render(<MessageTemplateStory open={ROW.passwordReset} queryClient={noRetryClient()} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  // The recording holds Password reset's preview in the default kit only: the other kit's read fails. It is a
+  // new read, so the earlier kit's answer is not kept beside its error.
+  const other = RECORDED.kits.find((kit) => kit.is_default !== true)!;
+  await choose(word("preview.kit"), String(other.display_name));
+  const band = screen.getByRole("region", { name: word("preview.factsRegion") });
+  await waitFor(() => expect(bandOutline(band, [])[0]).toBe("error"));
+
+  expect(bandOutline(band, [])).toEqual(["error", "saved"]);
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+});
+
+test("a preview read again after a save that fails shows its error first, above the earlier answer it keeps", async () => {
+  render(<MessageTemplateStory open={ROW.passwordReset} failPreviewAfterSave queryClient={noRetryClient()} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  // The save makes the preview read the same row again, and that read fails: the earlier answer stays.
+  fireEvent.change(screen.getByLabelText(word("field.description")), { target: { value: "Sent on request." } });
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+  await screen.findByText(ui("form.updateSuccess"));
+  const band = screen.getByRole("region", { name: word("preview.factsRegion") });
+  await waitFor(() => expect(bandOutline(band, [])[0]).toBe("error"));
+  const warnings = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
+
+  // The whole order with every part present: the error, the warnings, the saved-row line, subject and preheader,
+  // the frame caveat; the frame keeps the earlier mail.
+  expect(bandOutline(band, warnings)).toEqual(["error", "warnings", "saved", "message", "caveat"]);
+  expect(screen.getByTitle(word("preview.frameTitle"))).toBeTruthy();
+});
+
+test("the library's three flags read as facts, a word for each state and no checkbox", async () => {
+  render(<MessageTemplateStory />);
+  const open = (name: string) => ui("list.openRecord").replace("{label}", name);
+  // In a routed list the row's opener is a link.
+  await screen.findByRole("link", { name: open("Button") });
+  const headers = screen.getAllByRole("columnheader");
+  const flags = [word("col.shipped"), word("col.effective"), word("col.defaultUpdated")]
+    .map((label) => headers.findIndex((header) => header.textContent === label));
+  expect(flags.every((index) => index >= 0)).toBe(true);
+  for (const [name, states] of [
+    // A shipped block nobody overrides, and the deployment's own block.
+    ["Button", ["flag.yes", "flag.yes", "flag.no"]],
+    ["Notice", ["flag.no", "flag.yes", "flag.no"]],
+  ] as const) {
+    const row = screen.getByRole("link", { name: open(name) }).closest("tr")!;
+    const cells = within(row).getAllByRole("cell");
+    expect(flags.map((index) => cells[index]?.textContent)).toEqual(states.map(word));
+    for (const index of flags) expect(within(cells[index]!).queryByRole("checkbox")).toBeNull();
   }
 });
 
@@ -509,6 +653,8 @@ test("Backlinks is absent where nothing names the row", async () => {
   await waitFor(() => expect(requests.some((request) => request.operationName === "MessageTemplateBacklinks")).toBe(true));
   await waitFor(() => expect(screen.queryByText(word("backlinks.label"))).toBeNull());
   expect(screen.queryAllByRole("link")).toEqual([]);
+  // With no group showing anything, the Links tab says it is empty.
+  expect(await screen.findByText(ui("related.empty.title"))).toBeTruthy();
 });
 
 test("Backlinks is no part of a member's Links tab, which reads nothing for it", async () => {
