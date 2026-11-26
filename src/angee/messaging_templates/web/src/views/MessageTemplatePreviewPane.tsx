@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useDebounce } from "use-debounce";
+import type { DocumentType } from "@angee/gql/console";
 import type { MessageTemplateTextDirection, Message_Templates_Set_Input } from "@angee/gql/console/graphql";
 import { useAuthoredQuery } from "@angee/refine";
 import {
@@ -54,16 +55,41 @@ export interface MessageTemplatePreviewPaneProps {
 }
 
 /**
- * What the open form's Save would send (`nextSave`), as text, once it has stayed the same for `PREVIEW_PAUSE_MS`;
- * null while the form holds no edit Save would write: it takes none, holds none, or holds only edits its Save
- * cannot write. That null is known at once, with no pause, so Discard and Save return the pane to the saved row
- * straight away. `settling` says newer edits are not yet the ones previewed. The text is what is compared, since
- * each read of `nextSave` is a new object; it is read in render, never in a form subscription's callback.
+ * What the open form's Save would send now (`nextSave`), as text, the form's to compare by value since each read is
+ * a new object; null when it would send no edit: the form holds none, takes none (it is read-only, or stopped taking
+ * edits, as when a permission is withdrawn while it is dirty), or holds only edits its Save cannot write. Read it in
+ * render, never in a form subscription's callback.
+ */
+export function unsavedEdits(form: Pick<RecordPanelContext["form"], "formIsDirty" | "formTakesEdits" | "nextSave">):
+  string | null {
+  const data = form.formIsDirty && form.formTakesEdits ? form.nextSave().data : {};
+  return Object.keys(data).length ? JSON.stringify(data) : null;
+}
+
+type PreviewWarning = DocumentType<typeof MessageTemplatePreview>["message_template_preview"]["warnings"][number];
+
+/**
+ * What a preview says of the render, one issue per warning, in the server's words and under the column it names, if
+ * any: a rendered row's warnings, or the reasons nothing renders. The same words can come under two columns ("Give
+ * an object." under variables and under sample), so each issue is told apart by its column too.
+ */
+export function previewIssues(warnings: readonly PreviewWarning[], rendered: boolean): RecordIssue[] {
+  return warnings.map((warning) => ({
+    id: `${warning.code}:${warning.field ?? ""}:${warning.detail}`,
+    tone: rendered ? "warning" as const : "danger" as const,
+    message: warning.detail,
+    ...(warning.field ? { field: warning.field } : {}),
+  }));
+}
+
+/**
+ * The open form's unsaved edits (`unsavedEdits`) once they have stayed the same for `PREVIEW_PAUSE_MS`, or null while
+ * there are none. That null is known at once, with no pause, so Discard and Save return the pane to the saved row
+ * straight away. `settling` says newer edits are not yet the ones previewed.
  */
 function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | null; settling: boolean } {
   useFormViewValues(form); // render again on each edit
-  const data = form.formIsDirty && form.formTakesEdits ? form.nextSave().data : {};
-  const edits = Object.keys(data).length ? JSON.stringify(data) : null;
+  const edits = unsavedEdits(form);
   const [settled, pause] = useDebounce(edits, PREVIEW_PAUSE_MS);
   React.useEffect(() => {
     if (edits === null) pause.flush();
@@ -141,14 +167,7 @@ export function MessageTemplatePreviewPane({
   ], [t]);
   const result = preview.data?.message_template_preview;
   const rendered = result?.rendered ?? null;
-  // A rendered row's warnings, or the reasons nothing renders, each as the server words it and under the column it
-  // names, if any: the same words can come under two columns ("Give an object." under variables and sample).
-  const issues: RecordIssue[] = (result?.warnings ?? []).map((warning) => ({
-    id: `${warning.code}:${warning.field ?? ""}:${warning.detail}`,
-    tone: rendered ? "warning" as const : "danger" as const,
-    message: warning.detail,
-    ...(warning.field ? { field: warning.field } : {}),
-  }));
+  const issues = previewIssues(result?.warnings ?? [], rendered !== null);
   // Save would refuse the edits; else, with edits, Save would keep them but the sample does not render them.
   const saveRefused = result?.warnings.some((warning) => warning.code === "SAVE_REFUSED") ?? false;
   const framed = rendered !== null && format === "html";
