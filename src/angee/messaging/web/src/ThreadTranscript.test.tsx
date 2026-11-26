@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createUiTestProviders } from "@angee/ui/testing";
 import { formatDayLabel } from "@angee/ui";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -315,4 +316,30 @@ test("day separators and date anchors share the explicitly selected timezone", (
   expect(screen.getAllByText(day)).toHaveLength(1);
   fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
   expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");
+});
+
+describe("ThreadTranscript's Reply gate", () => {
+  test("while the gate reads a window that adds a channel, the Replies it showed stay", async () => {
+    const { Provider, createClient } = createUiTestProviders();
+    const client = createClient({ defaultOptions: { queries: { retry: false } } });
+    const asked: string[][] = [];
+    // The gate answers the first window and never the wider one.
+    const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: Record<string, unknown> } }) => {
+      const ids = (meta?.gqlVariables?.ids ?? []) as string[];
+      asked.push(ids);
+      if (ids.includes("chn_b")) return new Promise<never>(() => undefined);
+      return { data: { channels: [{ id: "chn_a" }] } };
+    });
+    const onA = message({ id: "msg_a", channel: { id: "chn_a", display_name: "Desk A" } } as Partial<ThreadTranscriptRow>);
+    const host = () => <Provider queryClient={client} dataProvider={{ custom }}>
+      <ThreadTranscript threadId="thr_1" reply={{ leaves: () => true }} />
+    </Provider>;
+    mocks.transcriptRows = [onA];
+    const view = render(host());
+    expect(await screen.findByRole("button", { name: /^Reply to / })).toBeTruthy();
+    mocks.transcriptRows = [onA, message({ id: "msg_b", feed_order_key: "v1:0002", channel: { id: "chn_b", display_name: "Desk B" } } as Partial<ThreadTranscriptRow>)];
+    view.rerender(host());
+    await waitFor(() => expect(asked.some((ids) => ids.includes("chn_b"))).toBe(true));
+    expect(screen.getAllByRole("button", { name: /^Reply to / })).toHaveLength(1);
+  });
 });

@@ -525,7 +525,8 @@ function ReplyButton({ channel, channels, expanded, controls, onReply, message, 
   label: string;
 }): React.ReactElement | null {
   const t = useMessagingT();
-  const gate = useAuthoredQuery(MessagingSendableChannelIds, { ids: [...channels] }, { models: CHANNEL_MODELS });
+  // A window that adds a channel reads the gate again; the last answer holds meanwhile, so no Reply drops.
+  const gate = useAuthoredQuery(MessagingSendableChannelIds, { ids: [...channels] }, { models: CHANNEL_MODELS, keepPreviousData: true });
   if (!gate.data?.channels.some((row) => row.id === channel)) return null;
   return (
     <Button size="sm" variant="ghost" data-reply-for={message} aria-expanded={expanded}
