@@ -276,7 +276,6 @@ class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
         self.lock_default()
         previous = list(
             self.sudo(reason="brandkit.brand_kit.default_integrity")
-            .lock_if_supported()
             .filter(is_default=True)
             .exclude(pk=kit.pk)
         )
@@ -420,16 +419,15 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
         return super().lock_for_delete(queryset=queryset)
 
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
-        """Lock every kit before this one when the write makes or keeps it the default.
+        """Lock every kit, then this one (:meth:`BrandKitManager.lock_default`).
 
-        Such a write saves through :meth:`BrandKitManager.demote_defaults`; taking
-        :meth:`BrandKitManager.lock_default` first keeps a writer that locks its
-        subject before saving it, as the console does, in the order every change
+        A writer that locks its kit before saving it, the console's or a changeset
+        revert's, cannot know before the lock whether the kit is the default by the
+        time it saves, so it always takes every kit first, in the order every change
         of default takes.
         """
 
-        if self.is_default:
-            type(self).objects.lock_default()
+        type(self).objects.lock_default()
         return super().lock_subject(members)
 
     def save(self, *args: Any, **kwargs: Any) -> None:

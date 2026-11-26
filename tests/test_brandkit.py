@@ -390,29 +390,48 @@ def test_a_save_that_does_not_set_the_default_leaves_it(db: None) -> None:
     assert _default_names() == ["Still default"]
 
 
-def test_only_a_save_that_can_move_the_default_takes_the_kits_lock_and_takes_it_once(db: None) -> None:
-    """The lock is one statement, :meth:`lock_default`'s; a save that cannot move the default takes none."""
+def test_the_kits_lock_is_one_statement_each_writer_that_needs_it_takes_once(db: None) -> None:
+    """The lock is :meth:`lock_default`'s one statement, and each writer takes it as often as it needs it.
+
+    A save takes it when it can move the default and not otherwise; the console
+    takes it before its subject, whatever the kit, and once more when its save moves
+    the default.
+    """
 
     del db
+    admin = create_platform_admin("brandkit-lock-counter")
     with CaptureQueriesContext(connection) as lock:
         BrandKit.objects.lock_default()
     (lock_statement,) = [query["sql"] for query in lock.captured_queries]
 
-    def locks(kit: Any) -> int:
-        with system_context(reason="tests.brandkit.lock"), CaptureQueriesContext(connection) as captured:
-            kit.save()
+    def locks(write: Callable[[], object]) -> int:
+        with CaptureQueriesContext(connection) as captured:
+            write()
         return [query["sql"] for query in captured.captured_queries].count(lock_statement)
 
+    def save(kit: Any) -> Callable[[], object]:
+        def write() -> None:
+            with system_context(reason="tests.brandkit.lock"):
+                kit.save()
+
+        return write
+
+    def console(kit: Any, values: dict[str, Any]) -> Callable[[], object]:
+        variables = {"id": public_id_of(kit), "set": values}
+        return lambda: result_data(execute_schema(_schema(), _UPDATE_KIT, variables, user=admin))
+
     first = BrandKit(**{**ANGEE, "name": "First"})
-    assert locks(first) == 1  # the first kit takes the default
+    assert locks(save(first)) == 1  # the first kit takes the default
     second = BrandKit(**{**ANGEE, "name": "Second"})
-    assert locks(second) == 0  # a kit saved beside the default
+    assert locks(save(second)) == 0  # a kit saved beside the default
     second.accent = "#0e7490"
-    assert locks(second) == 0  # an edit of a kit that is not the default
+    assert locks(save(second)) == 0  # an edit of a kit that is not the default
     second.is_default = True
-    assert locks(second) == 1  # a change of default
+    assert locks(save(second)) == 1  # a change of default
     second.name = "Second, renamed"
-    assert locks(second) == 1  # an edit of the default kit, which keeps it
+    assert locks(save(second)) == 1  # an edit of the default kit, which keeps it
+    assert locks(console(first, {"accent": "#0e7490"})) == 1  # a console edit of a kit that is not the default
+    assert locks(console(first, {"is_default": True})) == 2  # a console change of default
 
 
 def test_the_constraint_refuses_a_second_default_written_past_the_save(db: None) -> None:
