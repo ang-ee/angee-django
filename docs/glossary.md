@@ -410,8 +410,9 @@ Not a person's mail on a channel they send from. See
 nothing itself. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **System channel** — messaging's install row `messaging.system_channel` (backend
-`system`), where **System mail** is written. Administrators alone read it, and it
-is system-only: nobody chooses it to send from or to watch. A person finds it in a
+`system`), where **System mail** is written. Administrators alone read it, no
+verb shares its threads or grants on its messages, and it is system-only: nobody
+chooses it to send from or to watch. A person finds it in a
 list of channels under the label "System mail", which the row is given once, when
 it is created. See [messaging's contracts](../src/angee/messaging/README.md).
 

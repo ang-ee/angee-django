@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 31
+// @rebac_schema_revision: 32
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -14,10 +14,10 @@ definition messaging/channel {
     relation annotator: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
     // The system channel (backend `system`) records system mail, live sign-in links
-    // among it: administrators alone read, send on, write, annotate or delete it,
-    // whatever was granted, bound or transferred, and its threads and messages
-    // subtract `sealed` too (see each). Arrow-only through `system_kind`, as
-    // messaging/message#conceal: never check `system_seal` or `sealed` directly.
+    // among it: administrators alone read, send on, write, annotate or delete the
+    // channel, and no verb shares its threads or grants on its messages (see each).
+    // Arrow-only through `system_kind`, as messaging/message#conceal: never check
+    // `system_seal` or `sealed` directly.
     relation system_kind: messaging/channel // rebac:const={"target_id":"system","filters":{"backend_class":"system"}}
     permission system_seal = authenticated + anonymous
     permission sealed = system_kind->system_seal
@@ -55,14 +55,16 @@ definition messaging/thread {
     permission chatter_read = nil
     // The inbox lists no record chatter, where `chatter_read` holds for nobody,
     // so its read leaves the chatter arms out of the statement. Overrides that must
-    // govern both reads target `read_granted`. A system thread (on the system channel)
-    // reads through its sealed channel; nobody shares it, administrators included,
-    // and its own write and delete arms subtract the seal. Its own grants and the
-    // fragments' arms are not subtracted from its reads: the inbox's planned reads
-    // cannot afford it.
+    // govern both reads target `read_granted`. Nobody shares a system thread (on the
+    // system channel) and none of these `write` arms, administrators' included, writes
+    // it, so no verb shares or binds it; administrators keep its delete. Its reads are
+    // not subtracted, as the inbox's planned reads cannot afford it, so a `reader` or
+    // `editor` tuple written directly and the source-identity rule's principal read
+    // it. Fragments' arms on `read_granted`, `chatter_read` and `write` (appended after
+    // the seal) hold whenever a system thread carries what they key on.
     permission read_inbox = read_granted
     permission read = read_granted + chatter_read
-    permission write  = ((channel->write + owner + editor + identity_source) - channel->sealed) + admin->member
+    permission write  = (channel->write + owner + editor + identity_source + admin->member) - channel->sealed
     // Messages inherit the authority, then apply their own read gate.
     permission annotate_granted = write + channel->annotate
     permission annotate = annotate_granted & read
@@ -100,10 +102,10 @@ definition messaging/message {
     // Who keeps reading a withheld message: its channel's managers, the identity
     // rule and admins.
     permission withheld_keeper = channel->write + identity_source + admin->member
-    // A system message (on the system channel) is read through its thread and its
-    // sealed channel. Nobody writes it, administrators included, so nobody grants on
-    // it. Its own `editor` and `reader` arms and the identity rule are not subtracted
-    // from its reads; the inbox's planned reads cannot afford that subtraction.
+    // Nobody writes a system message (on the system channel), administrators
+    // included, so no verb grants on it; administrators keep its delete. A `reader`
+    // or `editor` tuple written directly and the source-identity rule's principal
+    // still read it: the inbox's planned reads cannot afford that subtraction.
     permission read = ((thread->read + read_granted) - withheld) + withheld_keeper
     permission read_inbox = ((thread->read_inbox + read_granted) - withheld) + withheld_keeper
     permission send_held = channel->write + admin->member

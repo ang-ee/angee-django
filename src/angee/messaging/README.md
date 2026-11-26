@@ -395,15 +395,17 @@ A system message is trashed only through the shared trash verb, which decides
 `delete` on it: administrators alone. A record's moderation never takes one off
 (`Message.trash_error`): it sits in the system channel's own thread.
 
-Nobody shares a system thread or grants on a system message, administrators
-included: the thread's `share` and the message's `write` admit nobody, so the
-share verbs and a project binding of the thread are refused. A system thread's
-own `write` and `delete` arms subtract the seal. Its reads and a system
-message's reads are not subtracted, because the inbox's planned reads cannot
-afford it, so what reaches them without a share still reads: a `reader` or
-`editor` tuple no verb wrote, the identity rule, a spaces group an administrator
-binds to the thread (through its `write`), and another addon's fragment on the
-thread's `read_granted` or `write`.
+No verb shares a system thread or grants on a system message. Nobody shares a
+system thread or writes a system message, administrators included, and none of
+messaging's own arms writes a system thread, so the share verbs and a group or
+project binding of the thread are refused; administrators keep their deletes.
+What still reaches system mail without any verb: a `reader` or `editor` tuple
+written directly and the source-identity rule's principal, which read it, and
+another addon's arm on the thread's `read_granted`, `chatter_read` or `write`,
+which holds whenever a system thread carries what that arm keys on (a group, a
+project binding, a record's chatter edge), which only system code can give it.
+Their reads are not subtracted because the inbox's planned reads cannot afford
+it, and the composer appends the fragments' `write` arms after the seal.
 
 The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's

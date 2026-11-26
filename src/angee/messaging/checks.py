@@ -34,12 +34,12 @@ SEALED = {
 """The permissions that subtract the system channel's seal, which fragments never extend.
 
 On the system channel (backend ``system``) each admits administrators alone; a
-system thread's ``share`` and a system message's ``write`` admit nobody, so nobody
+system thread's ``share`` and a system message's ``write`` admit nobody, so no verb
 grants on either; their deletes keep the administrator arm. An arm unioned into
 one would reach system mail past the seal. Fragments widen
 ``integrate/integration#read`` and ``#write`` instead, which the channel's seal
 subtracts. The thread's ``write``, which fragments extend, subtracts the seal from
-its own arms only.
+its own arms, administrators' included, and so is not sealed here.
 """
 
 check_messaging_seals = partial(

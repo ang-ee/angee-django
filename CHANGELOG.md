@@ -20,7 +20,7 @@ live in code docstrings.
     reloads before the edit stops at settings load. Django itself refuses legacy
     `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
     `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
-    rows and runs `rebac sync` for schema revision 31. Without that load, every
+    rows and runs `rebac sync` for schema revision 32. Without that load, every
     email Django sends raises `SystemChannelMissing` at the sender (a password
     reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
     channel backend enums gain `SYSTEM`.
@@ -67,13 +67,15 @@ live in code docstrings.
     recorded as sent. A
     transport that hands a delivery back to the system mailer fails that delivery
     instead of recording it again. Administrators alone read, send on, write,
-    annotate and delete the system channel (schema revision 31): no channel,
-    integration, team, project or ownership grant reaches it. Nobody shares a
-    system thread or grants on a system message, administrators included (the
-    thread's `share` and the message's `write` admit nobody); their reads are not
-    subtracted, so a tuple no verb wrote, the identity rule, a group an
-    administrator binds to the thread and another addon's thread fragment still
-    read it (messaging's README lists them). `messaging.E003` refuses a fragment arm on the
+    annotate and delete the system channel (schema revision 32): no channel,
+    integration, team, project or ownership grant reaches it. No verb shares its
+    threads or grants on its messages: nobody shares a system thread or writes a
+    system message, administrators included, and none of messaging's own arms
+    writes a system thread, so a group or project binding of one is refused.
+    Without any verb, a `reader` or `editor` tuple written directly and the
+    source-identity rule's principal read system mail, and another addon's arm on
+    the thread's `read_granted`, `chatter_read` or `write` holds whenever a system
+    thread carries what it keys on (messaging's README). `messaging.E003` refuses a fragment arm on the
     channel's `read`, `reply`, `write`, `annotate` or `delete`, the thread's
     `share`, `delete` or `annotate`, or the message's `write`, `delete` or
     `annotate`. Its threads show in administrators' inbox lists. A channel whose
