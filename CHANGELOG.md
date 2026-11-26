@@ -10,6 +10,38 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/messaging`, `@angee/nexus`: **The console writes a new email and
+  answers one, and shows the delivery of what it wrote.**
+  - **New.** `NewMessageAction` (exported from `@angee/messaging`), the inbox's
+    results header beside Clear selection: a new email on a channel the viewer
+    may send on (the channels filter `sendable`; with one channel it is fixed),
+    to To, Cc and Bcc, with a subject, the message and Send later, through
+    `compose_message`. It shows only to a viewer with such a channel; each
+    refusal shows under the field it names, and the inbox opens what it wrote.
+  - **New.** `ThreadTranscript`'s `reply` (`ThreadTranscriptReply`): a host's
+    opt-in to Reply on every email of a channel the viewer may send on, a box
+    docked under the conversation (Ctrl/Cmd+Enter sends); `leaves` names the
+    route moves that abandon an unsent reply, which ask first. The inbox's
+    conversation (`conversationLeaves`: another conversation, a message's reader
+    or another page) and Messaging › Threads (`pathnameChanges`) opt in; Spaces
+    and a record's Conversation aside do not.
+  - Both send through the draft's idempotency key (`useIdempotencyKeys`): after
+    a lost answer, sending again from this page writes it once, and an edited
+    resend of an earlier version that was written is told so and then sent as a
+    new message.
+  - **Changed behaviour.** Every transcript shows, on each message written here
+    and going out (`is_locally_written` and an outgoing `direction`), its status,
+    when it is due to go out or be tried again, the attempts made, and for a
+    failed or uncertain one Delivery details, its page; an outgoing message
+    whose sender the viewer cannot read names its channel. Synced mail and
+    internal notes show none of it. `TranscriptMessageFields` selects `status`,
+    `is_locally_written`, `scheduled_at` and `delivery_attempts`.
+  - **New.** A message's page shows Why delivery failed (`delivery_error`, for
+    those holding `send_held`) and Delivery attempts. Queued, Sent and Uncertain
+    take field-scoped tones (`MESSAGE_STATUS_TONES`) in the messaging and Nexus
+    apps, which claim no global status word.
+  - **Upgrade.** Regenerate `@angee/gql`; messaging's web package gains the dev
+    dependency `@angee/storybook` (one `pnpm-lock.yaml` importer entry).
 - `angee.messaging`: **The console reads where one may send a new message, which
   messages were written here, and the recipient bound.**
   - **New.** The channels filter `sendable`
