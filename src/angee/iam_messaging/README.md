@@ -174,8 +174,10 @@ reaches. Strawberry's line quotes the request's document where the error
 points, so a token passed as a variable, as this addon's page passes it, is
 logged nowhere, but one written into the document itself is logged there.
 Django never filters an exception's own message: nothing this addon raises
-carries the link or the address, but a database's or a transport's error text
-is its own. Django's
+carries the link or the address; the template's refusals pass in their own
+words, and the one that quotes a value (a value read as a date) quotes its
+first 40 characters, which end before a link's secret; a database's or a
+transport's error text is its own. Django's
 plain-text error report shows no local variables. The mail is stored on the
 system channel, where the link lives until it signs in, expires or is retired:
 
