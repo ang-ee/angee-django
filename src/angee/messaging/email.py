@@ -366,7 +366,9 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
     def system_mail_configured(cls) -> bool:
         """Whether system mail can be sent, from settings alone: a transport mailer and a valid sender.
 
-        True exactly when :meth:`default_sender` returns. As installed, the system
+        This backend's own contract: callers ask ``ChannelManager.system_mail_configured()``,
+        which asks the backend the registry binds to the system key. True exactly
+        when :meth:`default_sender` returns. As installed, the system
         channel's row names no ``from_email``, so its :meth:`outbound_sender` is that
         default sender too; a ``from_email`` set on the row would be its own. It
         reads no row, so a projection may ask it per record.

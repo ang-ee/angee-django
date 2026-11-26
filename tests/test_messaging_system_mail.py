@@ -110,7 +110,7 @@ def test_system_mail_is_configured_exactly_when_the_system_channel_has_a_sender(
     """The settings-only predicate and the connected channel's sender answer alike."""
 
     with override_settings(MAILERS=mailers, DEFAULT_FROM_EMAIL=sender):
-        assert SystemChannelBackend.system_mail_configured() is configured
+        assert Channel.objects.system_mail_configured() is SystemChannelBackend.system_mail_configured() is configured
         if configured:
             sender = ("Angee", "noreply@example.test")
             assert system_channel.outbound_sender() == SystemChannelBackend.default_sender() == sender
@@ -632,3 +632,63 @@ def test_an_error_report_of_a_system_mail_write_that_fails_shows_none_of_its_tex
     finally:
         post_save.disconnect(fail, sender=Handle)
     assert _reported_secret(failed.value) == []
+
+
+class UnconfiguredSystemBackend(SystemChannelBackend):
+    """A host's own system backend, bound to the system key, that never has system mail configured."""
+
+    @classmethod
+    def system_mail_configured(cls) -> bool:
+        return False
+
+
+def test_a_rebound_system_backend_gives_callers_and_the_writer_one_answer(system_channel: Any, settings: Any) -> None:
+    """The registry decides: callers ask the channel manager, never a backend class by name."""
+
+    assert Channel.objects.system_mail_configured()
+    settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
+        **settings.ANGEE_CHANNEL_BACKEND_CLASSES,
+        SYSTEM_CHANNEL_BACKEND: "tests.test_messaging_system_mail.UnconfiguredSystemBackend",
+    }
+    assert SystemChannelBackend.system_mail_configured()
+    assert not Channel.objects.system_mail_configured()
+    with _refused(ValidationError, key="channel", code="OUTBOUND_EMAIL_NOT_CONFIGURED"):
+        Message.objects.compose_as_system(reason="tests.system_mail", to=["reader@example.test"], text="Hello.")
+
+
+@override_settings(MAILERS={"transport": LOCMEM}, DEFAULT_FROM_EMAIL=SENDER)
+def test_whether_system_mail_is_configured_and_can_reach_an_address_is_answered_with_no_database() -> None:
+    assert Channel.objects.system_mail_configured()
+    assert Message.objects.clean_system_recipient("Reader <reader@example.test>") == ("Reader", "reader@example.test")
+    with pytest.raises(ValidationError) as refused:
+        Message.objects.clean_system_recipient("jörg@example.test")
+    assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+
+
+def _refusals(call: Any) -> list[tuple[str, str]]:
+    try:
+        call()
+    except ValidationError as error:
+        return [(key, item.code) for key, items in error.error_dict.items() for item in items]
+    return []
+
+
+@pytest.mark.parametrize(
+    ("entry", "refusal"),
+    [
+        pytest.param("reader@example.test", None, id="ordinary"),
+        pytest.param("jörg@example.test", "cannot_carry", id="local-part-outside-ascii"),
+        pytest.param('"a b"@example.test', "invalid", id="quoted-local-part-with-a-space"),
+        pytest.param("", "invalid", id="blank"),
+    ],
+)
+def test_system_mail_refuses_exactly_the_recipients_its_recipient_rule_refuses(
+    system_channel: Any, entry: str, refusal: str | None,
+) -> None:
+    """Django's email validator refuses the first odd address and admits the second; system mail's rule decides."""
+
+    expected = [] if refusal is None else [("cc", refusal)]
+    assert _refusals(lambda: Message.objects.clean_system_recipient(entry, key="cc")) == expected
+    assert _refusals(lambda: Message.objects.compose_as_system(
+        reason="tests.system_mail", to=["reader@example.test"], cc=[entry], text="Hello.",
+    )) == expected
