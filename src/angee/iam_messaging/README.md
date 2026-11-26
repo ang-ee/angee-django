@@ -126,7 +126,8 @@ in before continuing. The password form stays below it as the fallback.
 
 The token is minted in `SignInLinkManager.issue` and leaves it only inside the
 mail; nothing here logs it, puts it in a refusal or holds it in an on-commit
-callback. Angee's Sentry setup sends no frame's local variables
+callback. A host that logs `django.db.backends` at `DEBUG` logs every
+statement's parameters, so it logs each link the send writes. Angee's Sentry setup sends no frame's local variables
 (`include_local_variables=False`), so its reports never hold it. Django's own
 error reports can: `SignInLinkManager.issue` is marked `sensitive_variables`,
 but the link passes unmarked through the template's render and messaging's
@@ -140,7 +141,8 @@ it signs in, expires or is retired:
   they point to, which are indexed for search and kept after the message is
   deleted;
 - the message's preview, the first 280 characters of its text, which hold the
-  link whole.
+  link whole unless the text before it is long (a long first name pushes some
+  or all of it out).
 
 Deleting the message does not revoke the link; retiring it does (a newer link,
 deactivation, a new email address or password, any sign-in), as does its expiry.
