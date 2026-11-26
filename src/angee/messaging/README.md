@@ -386,7 +386,7 @@ is read is closed on it:
 | a spaces team bound to the channel | grants nothing |
 | a project bound to its integration | grants nothing |
 | its integration's owner, after an administrator transfers it | grants nothing |
-| a workflow trigger's principal | enabling a trigger on it is refused before any grant (`not_offered`) |
+| a workflow trigger's principal | enabling a trigger on it is refused before any grant (`system_only`) |
 
 A system message is trashed only through the shared trash verb, which decides
 `delete` on it: administrators alone. A record's moderation never takes one off
@@ -398,7 +398,7 @@ administrator's own act, because system threads are ownerless and channel
 `write` is sealed, and sealing thread reads would touch the inbox's hottest
 statement.
 
-The system channel is not offered (`ChannelBackend.offered`): it is never
+The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
 source. `compose` itself decides `reply` alone, which administrators hold there,
 so an administrator's `compose(channel=Channel.objects.system_channel())` is

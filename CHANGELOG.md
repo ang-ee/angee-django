@@ -44,8 +44,9 @@ live in code docstrings.
     (`DEFAULT_FROM_EMAIL`) from settings alone, and
     `SystemChannelBackend.system_mail_configured()` answers whether system mail
     can be sent. `carries_address(address)` (`angee.messaging.email`) is the one
-    rule for what the transport can carry. `ChannelBackend.offered` declares
-    whether people choose a backend to send from or to watch. `messaging.E004`
+    rule for what the transport can carry. `ChannelBackend.system_only` (read
+    through `Channel.system_only`) declares a backend that serves the system
+    channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
     contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
     with `mail_admins` sending through `transport`. `messaging.W001` reports a
@@ -61,9 +62,9 @@ live in code docstrings.
     integration, team, project or ownership grant reaches it, and `messaging.E003`
     refuses a fragment arm on the channel's `read`, `reply`, `write`, `annotate`
     or `delete`. Its threads show in administrators' inbox lists. A channel whose
-    backend is not offered (the system channel) is never selected to send from
+    backend is system-only (the system channel) is never selected to send from
     (`ChannelQuerySet.outbound_email`), and enabling a `message_ingested` trigger
-    on it is refused under `channel` (`not_offered`) before any grant. A channel's
+    on it is refused under `channel` (`system_only`) before any grant. A channel's
     default sender is checked by `MessageManager.clean_recipient`, the check every
     address messaging lands takes, and must be an address the transport carries,
     where it was Django's `validate_email`. Error mail goes through the transport,

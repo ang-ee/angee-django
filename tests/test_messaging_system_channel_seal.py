@@ -164,17 +164,15 @@ def test_a_system_message_is_never_trashed_through_a_records_moderation(sealed: 
     assert not message.can_trash(moderate_access=True)
 
 
-def test_the_system_channel_is_offered_to_nobody_yet_an_administrator_may_compose_on_it(
+def test_nobody_sends_from_the_system_channel_by_choice_yet_an_administrator_may_compose_on_it(
     sealed: SimpleNamespace,
 ) -> None:
-    """Today's answer for a person's compose on the system channel, pending the framework coordinator's ruling.
+    """The system channel is system-only, so no seat is given it to send from; ``compose`` decides ``reply``.
 
-    No seat, administrators included, is offered the system channel to send from
-    (``ChannelQuerySet.outbound_email``, the console's sendable selection). Yet ``compose`` decides
-    ``reply`` alone, which administrators hold on it, so an administrator's
-    ``compose(channel=system_channel())`` is admitted. Whether a person's compose there is admitted
-    (an administrator's test send is one candidate) is pending; the line that would refuse it is
-    ``MessageManager.compose``'s channel gate also refusing a backend that is not offered.
+    No seat, administrators included, finds it on the sending selection
+    (``ChannelQuerySet.outbound_email``). ``compose`` decides ``reply`` on the channel,
+    which administrators alone hold there, so an administrator's
+    ``compose(channel=system_channel())`` is admitted and every other seat's is refused.
     """
 
     seats = sealed.seats

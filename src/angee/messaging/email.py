@@ -354,14 +354,14 @@ class AnymailEmailChannelBackend(ChannelBackend):
 class SystemChannelBackend(AnymailEmailChannelBackend):
     """The system channel's backend: Django's own mail is recorded on it, and nobody chooses it.
 
-    It delivers as every email channel does. It is not offered: no person sends
+    It delivers as every email channel does. It is system-only: no person sends
     from it or watches it, so it is never selected for outbound email and never a
     workflow trigger's source.
     """
 
     key = SYSTEM_CHANNEL_BACKEND
     label = "System mail"
-    offered = False
+    system_only = True
 
     @classmethod
     def system_mail_configured(cls) -> bool:

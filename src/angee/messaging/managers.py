@@ -258,7 +258,7 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         return self.filter(backend_class=backend_class)
 
     def outbound_email(self, *, backend_class: str | None = None) -> Self:
-        """Connected channels whose declared backend currently offers configured outbound email.
+        """Connected channels people send from whose declared backend has outbound email configured.
 
         ``backend_class`` narrows the selection to one declared backend. This
         predicate remains lazy and chainable; ``require_outbound_email`` refuses
@@ -270,13 +270,13 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         )
 
     def _outbound_email_backends(self, backend_class: str | None) -> list[str]:
-        """Offered, configured email implementations in the channel's declared registry."""
+        """Configured email implementations people send from, in the channel's declared registry."""
 
         field = self.model.backend_class.field
         candidates = field.registered_keys() if backend_class is None else (backend_class,)
         return [
             key for key in candidates
-            if (backend := field.resolve_class(key)).offered and backend.outbound_email_configured()
+            if not (backend := field.resolve_class(key)).system_only and backend.outbound_email_configured()
         ]
 
     def require_outbound_email(self, *, backend_class: str | None = None) -> Self:

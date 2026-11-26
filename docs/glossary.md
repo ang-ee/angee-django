@@ -394,7 +394,7 @@ configured. Not Django's default mailer, which is the **System mailer**. See
 **System channel** — messaging's install row `messaging.system_channel`
 (backend `system`), where framework mail is written
 (`MessageManager.compose_as_system`) and from which it is delivered through the
-**Transport mailer**; administrators alone read it, and it is offered to nobody
+**Transport mailer**; administrators alone read it, and it is system-only: nobody chooses it
 to send from or watch. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **Compose (a message)** — write one outgoing message through

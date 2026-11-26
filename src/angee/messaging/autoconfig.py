@@ -59,7 +59,7 @@ SETTINGS: _Settings = {
     "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.messaging.schema.related_counts"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
-    # registry); ``system`` is the system channel's, offered to nobody. Source addons
+    # registry); ``system`` is the system channel's, which is system-only. Source addons
     # add their own with a yamlconf dotted key, e.g.
     # ``"ANGEE_CHANNEL_BACKEND_CLASSES.imap"`` from ``messaging_integrate_imap``.
     "ANGEE_CHANNEL_BACKEND_CLASSES": {
