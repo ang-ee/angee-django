@@ -3,6 +3,7 @@ import { senderDisplayName } from "@angee/parties";
 import { extractActionOutcome, failedWriteOutcome, stringValue } from "@angee/refine";
 import {
   Banner,
+  SURFACE_RENDERS_FAILURE,
   errorMessage,
   textRoleVariants,
   useActionResultRun,
@@ -22,13 +23,6 @@ import type { ThreadTranscriptRow } from "./documents";
 import { useMessagingT } from "./i18n";
 import { MessageReplyQuote } from "./MessageReplyQuote";
 import { StreamComposer } from "./StreamComposer";
-
-/**
- * The quiet call options: the box tells a failure itself, so refine's generic notice stays off. A copy of
- * `@angee/ui`'s `SURFACE_RENDERS_FAILURE`, which that package does not export yet: debt, deleted for the
- * import once its owner exports it.
- */
-const BOX_RENDERS_FAILURE = { errorNotification: false } as const;
 
 export interface ThreadReplyProps {
   /** The box's id, which the Reply that opened it controls. */
@@ -98,7 +92,7 @@ export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest
     setSending(true);
     try {
       const data = await keys.send(scope, (idempotencyKey) => compose(
-        { parent: parent.id, text: body, queued: true, idempotency_key: idempotencyKey }, BOX_RENDERS_FAILURE,
+        { parent: parent.id, text: body, queued: true, idempotency_key: idempotencyKey }, SURFACE_RENDERS_FAILURE,
       ), composeOutcome);
       const outcome = await settle(async () => extractActionOutcome(data, "compose_message"));
       if (outcome?.ok && mounted.current) {
