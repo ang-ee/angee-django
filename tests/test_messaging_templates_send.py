@@ -41,6 +41,7 @@ from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient
+from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_LINKABLE, VALUE_NOT_PRINTED
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
@@ -243,7 +244,7 @@ def test_a_render_refusal_reads_no_system_channel_and_leaves_the_bypass_entry_al
     with _refused(ValidationError) as refusal:
         _send(row, {"title": "Welcome"})
     ((code, message),) = [(item.code, item.message) for item in refusal.value.error_list]
-    assert code == "invalid_values" and message.startswith("name ")
+    assert code == INVALID_VALUES and message.startswith("name ")
     assert looked_up == []
     assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, REASON)]
 
@@ -319,7 +320,7 @@ def test_an_override_that_no_longer_prints_the_value_its_sender_needs_is_refused
         with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
             _send(row, LINK, must_print=["link"])
         assert [(item.code, item.message) for item in refusal.value.error_list] == [
-            ("value_not_printed", message) for message in expected], row.key
+            (VALUE_NOT_PRINTED, message) for message in expected], row.key
         assert (callbacks, sent) == ([], [])
     assert "sign-in/once" not in _stored(_send(override, LINK))[1]
     shipped = _mail("Hello. [Sign in]({{ link }})", LINKED, key="tests.signin_shipped")
@@ -360,7 +361,7 @@ def test_a_required_value_must_be_printed_by_each_body_through_any_include(
     with _refused(ValidationError) as refusal:
         _send(row, {"link": values["link"]}, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_printed", f"The {body} body does not print {must_print[0]}, which this mail is sent for.")
+        (VALUE_NOT_PRINTED, f"The {body} body does not print {must_print[0]}, which this mail is sent for.")
         for body in unprinted]
 
 
@@ -411,7 +412,7 @@ def test_must_print_holds_a_plain_path_to_what_this_mail_shows_and_a_list_path_t
     with _refused(ValidationError) as refusal:
         _send(row, values, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_printed", message) for message in refusals]
+        (VALUE_NOT_PRINTED, message) for message in refusals]
     assert sent == []
 
 
@@ -465,7 +466,7 @@ def test_a_link_the_mail_cannot_carry_is_refused_before_anything_is_written_not_
     with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
         _send(row, {"link": DECISION}, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_linkable", "link is not a link this mail can carry: the mail cannot link to localhost:8000."),
+        (VALUE_NOT_LINKABLE, "link is not a link this mail can carry: the mail cannot link to localhost:8000."),
     ]
     assert (callbacks, sent) == ([], [])
 
@@ -486,7 +487,7 @@ def test_a_keyed_test_send_whose_sample_the_mail_cannot_link_is_refused_with_no_
     row = _decision(sample={"link": DECISION})
     with pytest.raises(ValidationError) as refusal:
         MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="unlinkable-1")
-    assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"]
+    assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE]
     assert (_claim("unlinkable-1", tester), Message._base_manager.count(), sent) == (None, 0, [])
 
 
@@ -537,7 +538,7 @@ def test_the_public_link_check_answers_as_the_render_does(plain: Any, settings: 
             with pytest.raises(ValidationError) as rendered_refusal:
                 row.render({"link": value})
             assert [(item.code, item.message) for item in rendered_refusal.value.error_list] == expected
-            assert [code for code, _ in expected] == ["value_not_linkable"]
+            assert [code for code, _ in expected] == [VALUE_NOT_LINKABLE]
             return
         rendered = row.render({"link": value})
     assert link is not None
@@ -576,7 +577,7 @@ def test_the_deployments_own_public_origin_is_linked_in_both_bodies_and_no_other
         with _refused(ValidationError) as refusal:
             _send(row, {"link": value}, must_print=["link"])
         assert refusal.value.error_list[0].message == checked.value.error_list[0].message
-        assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"]
+        assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE]
         return
     link = MessageTemplate.objects.clean_link(value)
     subject, text, html = _stored(_send(row, {"link": value}, must_print=["link"]))
@@ -605,7 +606,7 @@ def test_a_refused_link_names_no_part_of_it_past_its_host(plain: Any, settings: 
     with system_context(reason="tests.messaging_templates.send.echo"), pytest.raises(ValidationError) as rendered:
         _decision(key="tests.decision_echo").render({"link": value})
     for refusal in (checked.value, rendered.value):
-        assert [item.code for item in refusal.error_list] == ["value_not_linkable"]
+        assert [item.code for item in refusal.error_list] == [VALUE_NOT_LINKABLE]
         assert all("SECRET-marker" not in item.message for item in refusal.error_list), refusal.messages
 
 
@@ -1037,7 +1038,7 @@ def test_an_account_with_no_address_writes_nothing_and_a_refused_render_leaves_t
     assert (refusal.value.code, walked, _audits()) == ("no_test_address", [], audits)
     with _refused(ValidationError) as refusal:
         MessageTemplate.objects.send_test(unrenderable, actor=tester)
-    assert [item.code for item in refusal.value.error_list] == ["invalid_values"]
+    assert [item.code for item in refusal.value.error_list] == [INVALID_VALUES]
     assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, TEST_SEND_REASON)]
 
 

@@ -319,6 +319,13 @@ in punycode."""
 VALUE_NOT_LINKABLE = "value_not_linkable"
 """The code of a value a render prints as a link and :func:`url` would empty (:func:`clean_link`)."""
 
+VALUE_NOT_PRINTED = "value_not_printed"
+"""The code of a value a sender requires (``must_print``) that a body does not print, or this mail does not show."""
+
+INVALID_VALUES = "invalid_values"
+"""The code of the values a render refuses to read: not JSON, a shape or a value its declarations do not admit, a
+required value missing, a number a float does not hold, a moment the date rules refuse."""
+
 
 def _link(value: Any) -> tuple[str, str | None]:
     """The link :func:`url` gives for ``value`` and, when it gives none for a value that is not blank, why."""

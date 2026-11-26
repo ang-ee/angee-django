@@ -213,7 +213,10 @@ walk), `value_not_linkable` (a value printed through `url` that gives no link),
 `value_not_printed` (a value passed in `must_print` that a body does not
 print; see [Sending as system work](#sending-as-system-work)), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
-any other failure, which is logged with its traceback first. Every string value,
+any other failure, which is logged with its traceback first. The three value
+refusals a sender is told to handle are the engine's constants, to compare against
+rather than retype: `INVALID_VALUES`, `VALUE_NOT_LINKABLE` and `VALUE_NOT_PRINTED`
+(`angee.messaging_templates.engine`). Every string value,
 and the subject and preheader, drop the control characters and the bidirectional
 overrides and isolates (`UNPRINTED`). A sender picks the row with
 `effective("template", key, person=recipient)` and renders it in its own scope:

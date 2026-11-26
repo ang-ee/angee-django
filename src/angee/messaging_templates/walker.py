@@ -68,8 +68,10 @@ from django.views.decorators.debug import sensitive_variables
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
     BRAND_PATHS,
+    INVALID_VALUES,
     MARKUP_FILTERS,
     VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED,
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
@@ -550,12 +552,12 @@ class TemplateWalk:
         """
 
         if not isinstance(values, Mapping):
-            raise ValidationError("Pass the values as an object of names to values.", code="invalid_values")
+            raise ValidationError("Pass the values as an object of names to values.", code=INVALID_VALUES)
         try:
             text = json.dumps(values, cls=DjangoJSONEncoder, ensure_ascii=False)
             data = json.loads(text)
         except (TypeError, ValueError, RecursionError) as error:
-            raise ValidationError(f"The values are not JSON: {error}", code="invalid_values") from error
+            raise ValidationError(f"The values are not JSON: {error}", code=INVALID_VALUES) from error
         if len(text) > VALUES_JSON_LIMIT:
             raise ValidationError(
                 f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code="values_too_large",
@@ -564,11 +566,11 @@ class TemplateWalk:
             text.encode()
         except UnicodeEncodeError as error:
             raise ValidationError(
-                "The values hold a character no mail can encode, a lone surrogate.", code="invalid_values",
+                "The values hold a character no mail can encode, a lone surrogate.", code=INVALID_VALUES,
             ) from error
         errors = _value_errors(data)
         if errors:
-            raise _refused(errors, "invalid_values")
+            raise _refused(errors, INVALID_VALUES)
         tree = _tree(self.declared)
         shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
         errors.extend(
@@ -576,13 +578,13 @@ class TemplateWalk:
             if _lacks(shaped, path)
         )
         if errors:
-            raise _refused(errors, "invalid_values")
+            raise _refused(errors, INVALID_VALUES)
         filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
         for path in sorted(self.float_paths):
             errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
                           if isinstance(number, (int, float)) and not isinstance(number, bool) and not _finite(number))
         if errors:
-            raise _refused(errors, "invalid_values")
+            raise _refused(errors, INVALID_VALUES)
         for path in sorted(self.link_paths):
             for link in _at(filled, path):
                 try:
@@ -595,7 +597,7 @@ class TemplateWalk:
         for path in sorted(self.date_paths):
             _parse_dates(filled, path, path, printer, errors)
         if errors:
-            raise _refused(errors, "invalid_values")
+            raise _refused(errors, INVALID_VALUES)
         return filled
 
     @sensitive_variables()
@@ -641,7 +643,7 @@ class TemplateWalk:
         with refusals_only():
             unprinted = self._unprinted(must_print)
             if unprinted:
-                raise _refused(unprinted, "value_not_printed")
+                raise _refused(unprinted, VALUE_NOT_PRINTED)
             language = self.language
             with translation.override(language):
                 prepared = self.prepare(values)
@@ -678,7 +680,7 @@ class TemplateWalk:
             )
             unshown = self._unshown(must_print, prepared, rendered)
             if unshown:
-                raise _refused(unshown, "value_not_printed")
+                raise _refused(unshown, VALUE_NOT_PRINTED)
             return rendered
 
     def _unprinted(self, must_print: tuple[str, ...]) -> list[str]:

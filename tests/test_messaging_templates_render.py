@@ -55,7 +55,9 @@ from angee.messaging_templates import walker as walker_module
 from angee.messaging_templates.engine import (
     ALLOWED_FILTERS,
     ALLOWED_TAGS,
+    INVALID_VALUES,
     RENDER_BUDGET,
+    VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
     RenderBudget,
     RenderBudgetExceeded,
@@ -1242,7 +1244,7 @@ def _unless_unlinkable(render: Callable[[], str], value: str) -> str | None:
     try:
         return render()
     except ValidationError as refusal:
-        assert [item.code for item in refusal.error_list] == ["value_not_linkable"], refusal
+        assert [item.code for item in refusal.error_list] == [VALUE_NOT_LINKABLE], refusal
         assert UNPRINTED.sub("", value).strip() and url(UNPRINTED.sub("", value)) == "", value
         return None
 
@@ -1651,7 +1653,7 @@ def test_a_url_value_gives_a_link_or_the_render_is_refused(plain: Any, kit: Any)
         assert url(link) == "", link
         with pytest.raises(ValidationError) as refusal:
             _render(template, {"link": link}, kit)
-        assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"], link
+        assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE], link
     assert 'href=""' in _render(template, {"link": " "}, kit).html
     for link, sent in ADMITTED_LINKS.items():
         assert f'href="{sent}"' in _render(template, {"link": link}, kit).html, link
@@ -1979,12 +1981,12 @@ def test_a_caller_tells_each_refusal_apart_by_its_code(
         return {item.code for item in caught.value.error_list}
 
     template = _mail("{{ order.total }} {{ name }}", {"order.total": "x", "name": "x"}, key="tests.codes")
-    assert codes(template, {"order": "x"}) == {"invalid_values"}
-    assert codes(template, {"order": {"total": None}, "name": None}) == {"invalid_values"}
+    assert codes(template, {"order": "x"}) == {INVALID_VALUES}
+    assert codes(template, {"order": {"total": None}, "name": None}) == {INVALID_VALUES}
     assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {"message_template_refused"}
     looping = _mail("{% for i in items %}" + "{{ i|upper }}{{ i|lower }}{{ i|title }}" * 2 + "{% endfor %}",
                     {"items.*": "x"}, key="tests.looping")
-    assert codes(looping, {"items": ["a"] * 501}) == {"invalid_values"}
+    assert codes(looping, {"items": ["a"] * 501}) == {INVALID_VALUES}
     assert codes(looping, {"items": ["a" * 90] * 500}) == {"render_budget"}
     long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
     assert codes(long_subject, {"name": "n" * 600}) == {"subject_too_long"}
@@ -2005,7 +2007,7 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
     template.sample = {"name": "a\ud800b"}  # unsaved: PostgreSQL's jsonb refuses a lone surrogate
     with pytest.raises(ValidationError, match="lone surrogate") as caught:
         _render(template, {"name": "a\ud800b"}, kit)
-    assert {item.code for item in caught.value.error_list} == {"invalid_values"}
+    assert {item.code for item in caught.value.error_list} == {INVALID_VALUES}
     with system_context(reason="tests.messaging_templates.render.preview"):
         assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
 
