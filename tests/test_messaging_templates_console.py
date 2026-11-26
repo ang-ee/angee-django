@@ -202,16 +202,23 @@ def test_each_verb_is_projected_as_what_it_then_admits(db: None) -> None:
 
 @contextmanager
 def _narrowed(name: str) -> Iterator[None]:
-    """A deployment whose message templates' permission ``name`` admits nobody, for the block's duration."""
+    """A deployment whose message templates' permission ``name`` admits nobody, for the block's duration; a field gate
+    the addon declares none of (``write__layout``) is added, as a deployment adds one."""
+
+    def narrowing(permissions: tuple[Any, ...]) -> tuple[Any, ...]:
+        if all(permission.name != name for permission in permissions):
+            return (*permissions, replace(permissions[0], name=name, expression=PermNil(), raw_text="nil"))
+        return tuple(
+            replace(permission, expression=PermNil(), raw_text="nil") if permission.name == name else permission
+            for permission in permissions
+        )
 
     active = backend()
     original = active.schema()
     narrowed = deepcopy(original)
     narrowed.definitions = [
-        replace(definition, permissions=tuple(
-            replace(permission, expression=PermNil(), raw_text="nil") if permission.name == name else permission
-            for permission in definition.permissions
-        )) if definition.resource_type == "messaging_templates/message_template" else definition
+        replace(definition, permissions=narrowing(definition.permissions))
+        if definition.resource_type == "messaging_templates/message_template" else definition
         for definition in narrowed.definitions
     ]
     install_schema(narrowed, backend=active)
@@ -480,13 +487,18 @@ _EDIT = {"subject": "Edited {{ brand.name }}"}
 
 
 def _patch_rows() -> dict[str, Any]:
-    """A shipped default, the deployment's override of it, and a row of the deployment's own."""
+    """A shipped default, the deployment's override of it, and a row of the deployment's own; a second layout."""
 
+    _row("layout", "letter")
     return {
         "shipped default": _row("template", "tests.welcome", baseline=True),
         "override": _row("template", "tests.welcome"),
         "own row": _row("template", "tests.own"),
     }
+
+
+_NARROWED = {"preview only": "write", "layout gated": "write__layout"}
+"""The administrators a deployment narrows: one whose ``write`` admits nobody, one whose ``write__layout`` does."""
 
 
 @pytest.mark.parametrize(("caller", "state", "patch", "answer"), [
@@ -501,6 +513,8 @@ def _patch_rows() -> dict[str, Any]:
     pytest.param("preview only", "own row", None, "renders", id="preview-only-own"),
     pytest.param("preview only", "own row", _EDIT, "denied", id="preview-only-own-patched"),
     pytest.param("preview only", "own row", {}, "denied", id="preview-only-own-empty-patch"),
+    pytest.param("layout gated", "own row", {"layout": "letter"}, "denied", id="layout-gated-own-layout"),
+    pytest.param("layout gated", "own row", _EDIT, "renders", id="layout-gated-own-patched"),
     pytest.param("member", "own row", None, "denied", id="member-own"),
     pytest.param("member", "own row", {"source": ("{{ x }}" * 7_143)[:50_000]}, "denied", id="member-own-patched"),
     pytest.param("signed out", "own row", None, "signed out", id="signed-out-own"),
@@ -510,32 +524,40 @@ def test_who_may_preview_a_patch(
     library: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caller: str, state: str, patch: dict[str, Any] | None,
     answer: str,
 ) -> None:
-    """``preview`` admits the read, and a patch, empty or not, also asks ``write``: so a shipped default, which only a
-    load writes, and a role granted ``preview`` alone render the saved row only. Both are decided before any row is
-    cleaned or walked."""
+    """``preview`` admits the read, and a patch, empty or not, also asks ``write`` and what the save's gates ask of the
+    columns it edits: so a shipped default, which only a load writes, a role granted ``preview`` alone and a column a
+    deployment's field gate closes render the saved row only, and a signed-in caller's patch is admitted exactly where
+    the update of it is. All are decided before any row is cleaned or walked."""
 
     del library
     rows = _patch_rows()
     users = {"administrator": create_platform_admin("messaging-templates-console-patcher"),
              "preview only": create_platform_admin("messaging-templates-console-viewer"),
+             "layout gated": create_platform_admin("messaging-templates-console-gated"),
              "member": create_user("messaging-templates-console-unpatched"), "signed out": AnonymousUser()}
     checked: list[str] = []
     cleaned: list[Any] = []
     _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     _recording(monkeypatch, MessageTemplate, "full_clean", lambda row, *args, **kwargs: cleaned.append(row.pk))
-    narrowed = _narrowed("write") if caller == "preview only" else nullcontext()
-    with narrowed:
-        result = execute_schema(_schema(), _PATCHED, {"id": public_id_of(rows[state]), "patch": patch},
-                                user=users[caller])
+    variables = {"id": public_id_of(rows[state])}
+    with _narrowed(_NARROWED[caller]) if caller in _NARROWED else nullcontext():
+        result = execute_schema(_schema(), _PATCHED, {**variables, "patch": patch}, user=users[caller])
+        work = (list(checked), list(cleaned))
+        if patch is not None and caller != "signed out":  # a signed-out update finds no row; the preview says why
+            with transaction.atomic():
+                updated = execute_schema(_schema(), _UPDATE, {**variables, "set": patch}, user=users[caller])
+                transaction.set_rollback(True)
+            assert [(error.extensions or {}).get("code") for error in updated.errors or ()] == (
+                [] if answer == "renders" else ["PERMISSION_DENIED"]), updated.errors
     if answer == "renders":
         rendered = result_data(result)["message_template_preview"]["rendered"]
         assert rendered["subject"] == ("Edited Angee" if patch == _EDIT else "Hello"), rendered
-        assert cleaned == ([] if patch is None else [rows[state].pk])
+        assert work[1] == ([] if patch is None else [rows[state].pk])
         return
     (error,) = result.errors or [None]
     assert error is not None and error.extensions["code"] == "PERMISSION_DENIED", result
     assert ("Authentication required." in error.message) is (answer == "signed out"), error.message
-    assert (checked, cleaned) == ([], [])
+    assert work == ([], [])
 
 
 _REFUSED_PATCHES = {
@@ -598,10 +620,13 @@ def test_a_patch_is_decoded_as_the_update_decodes_its_input(library: dict[str, A
 
 def test_a_patched_preview_writes_nothing(library: dict[str, Any], django_capture_on_commit_callbacks: Any) -> None:
     """A patch renders as it would save, and nothing is written: no save, no content hash, no history, no
-    permission audit row, whatever commits; the saved preview writes none either."""
+    permission audit row, whatever commits; the saved preview writes none either. The save's gates are asked, on the
+    row, in a rehearsal that rolls back what it writes, under a deployment's field gate too, which then refuses the
+    column it closes; the copy is validated in the reader's own scope, so no bypass is audited."""
 
     del library
     admin = create_platform_admin("messaging-templates-console-unwritten")
+    _row("layout", "letter")
     row = _row("template", "tests.unwritten")
     schema = _schema()
     variables = {"id": public_id_of(row)}
@@ -622,11 +647,19 @@ def test_a_patched_preview_writes_nothing(library: dict[str, Any], django_captur
         text = preview["message_template_preview"]["rendered"]["plain_text"]
         assert ("Hello, edited." in text) is (patch is not None) and ("Hello." in text) is (patch is None), text
         assert stored() == before, patch
+    with _narrowed("write__layout"):
+        for patch, refused in (({"source": "Hello, edited."}, False), ({"layout": "letter"}, True)):
+            with django_capture_on_commit_callbacks(execute=True):
+                answer = execute_schema(schema, _PATCHED, {**variables, "patch": patch}, user=admin)
+            assert [(error.extensions or {}).get("code") for error in answer.errors or ()] == (
+                ["PERMISSION_DENIED"] if refused else []), answer.errors
+            assert stored() == before, patch
 
 
 def test_a_preview_reads_a_fixed_number_of_statements_with_a_patch_or_without(library: dict[str, Any]) -> None:
-    """The saved preview, and a patch that changes what renders, validated as its save would be and rendered from
-    the walk that validation ran, each read their measured statements, none repeated beyond the measured count."""
+    """The saved preview, and a patch that changes what renders, its columns' gates asked of the row, validated as its
+    save would be and rendered from the walk that validation ran, each read their measured statements, none repeated
+    beyond the measured count."""
 
     del library
     admin = create_platform_admin("messaging-templates-console-measurer")
@@ -639,7 +672,7 @@ def test_a_preview_reads_a_fixed_number_of_statements_with_a_patch_or_without(li
     assert saved.data["message_template_preview"]["rendered"] is not None
     assert "More." in patched.data["message_template_preview"]["rendered"]["plain_text"]
     saved.assert_ceiling(statements=31, repeated=21)
-    patched.assert_ceiling(statements=115, repeated=55)
+    patched.assert_ceiling(statements=155, repeated=71)  # 40 of them the save's gates, rehearsed on the row
 
 
 # ---------- creating the deployment's own row ----------

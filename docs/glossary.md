@@ -543,9 +543,10 @@ whether its reader may start or keep an override (`can_override`,
 
 **Preview (message templates)** — a row rendered with its sample, with what a
 sender should know about it. A preview with a **patch** renders the open form's
-unsaved edits as Save would write them: it needs `write` as well as `preview`,
-refuses what Save would refuse, in Save's words and under its fields, and saves
-nothing. See [rendering](../src/angee/messaging_templates/README.md#rendering).
+unsaved edits as Save would write them: it needs `write` as well as `preview`
+and whatever Save's gates ask of the columns it edits, refuses what Save would
+refuse (what Save's validation refuses in Save's words and under its fields),
+and saves nothing. See [rendering](../src/angee/messaging_templates/README.md#rendering).
 
 **Backlinks (message templates)** — the rows, in any language, naming a message
 template's kind and key: a template its layout, any row a block or part it

@@ -263,8 +263,9 @@ live in code docstrings.
     length, unused variables, a missing stop link, an empty plain-text body, the
     size, or a render error, one for each refusal, naming its column
     (`TemplateWarning.field`). With a `patch` of edited columns it previews the row
-    as that patch would save: `write` is asked as well as `preview`, before
-    anything is copied or walked, the copy is validated as the save validates it,
+    as that patch would save: `write` is asked as well as `preview`, and what the
+    save's gates ask of the columns it edits (`write__<field>` included), before
+    anything is copied or walked; the copy is validated as the save validates it,
     refused for what the save refuses, and never saved. The console's
     `message_template_preview(template, brand_kit, patch)` read returns it to
     callers holding the new `preview` permission (platform admins;

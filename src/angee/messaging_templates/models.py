@@ -59,6 +59,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.permissions import require_save_allowed
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
@@ -1150,14 +1151,15 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def preview(self, *, kit: BrandKit | None = None, patch: Mapping[str, Any] | None = None) -> TemplatePreview:
         """Render this row with its ``sample``, or as ``patch`` would save it, and say what a sender should know.
 
-        Requires ``preview`` on the row, and with a ``patch`` also ``write``,
-        before anything is copied or walked (named system work always may);
-        ``PermissionDenied`` otherwise. So a patch on a shipped default, which
-        only a resource load writes, is refused, and an empty patch is a patch.
-        ``patch`` holds native values of :attr:`edited_fields`, decoded as the
-        console's update decodes its input; the row it makes (:meth:`_patched`)
-        is validated as an update of this row is, ``full_clean()``, and never
-        saved. One walk serves the preview: the one that ``clean()`` ran when the
+        Requires ``preview`` on the row, and with a ``patch`` also ``write`` and
+        what the save's gates ask of the columns it edits, before anything is
+        copied or walked (named system work always may); ``PermissionDenied``
+        otherwise. So a patch on a shipped default, which only a resource load
+        writes, is refused, and an empty patch is a patch. ``patch`` holds native
+        values of :attr:`edited_fields`, decoded as the console's update decodes
+        its input; the row it makes (:meth:`_patched`) is validated with
+        ``full_clean()``, refused for what the update's validation refuses, and
+        never saved. One walk serves the preview: the one that ``clean()`` ran when the
         patch changed what renders (:attr:`_clean_walk`, never a shipped default's,
         which reaches shipped rows alone), else the walk of the row as it would
         render. A template renders whole, a layout around its handler's fixed
@@ -1196,13 +1198,22 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def _patched(self, patch: Mapping[str, Any]) -> Self:
         """This row with ``patch``'s native values over its :attr:`edited_fields`, for :meth:`preview`; never saved.
 
-        ``copy`` keeps the primary key and the saved state, so the row validates
-        as an update of this row does, Django's unique checks leaving this row
-        out. A key outside :attr:`edited_fields` raises ``ValueError``.
+        Refused before anything is copied: a key outside :attr:`edited_fields`
+        (``ValueError``), and a column the save's own gates refuse the reader,
+        a deployment's ``write__<field>`` among them (``PermissionDenied``,
+        :func:`~angee.base.permissions.require_save_allowed` on this row, as the
+        update's save decides). ``copy`` keeps the primary key and the saved
+        state, so Django's unique checks leave this row out. It does not keep
+        REBAC's state of this row (its pinned actor, its loaded values, its
+        field-deny mode), which is why the gates are asked of this row: the copy
+        validates in the reader's own scope, the one every message template is
+        read in.
         """
 
         if unknown := sorted(set(patch) - set(self.edited_fields)):
             raise ValueError(f"A patch edits {', '.join(self.edited_fields)}, never {', '.join(unknown)}.")
+        if patch:
+            require_save_allowed(self, update_fields=list(patch))
         row = copy(self)
         for name, value in patch.items():
             setattr(row, name, value)

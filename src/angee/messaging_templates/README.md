@@ -188,10 +188,12 @@ value nothing reads, a declared `unsubscribe_url` the body does not show, an
 empty plain-text body, HTML near Gmail's clipping size, or a render error, one
 for each refusal, naming the column it belongs to (`field`, none for a refusal
 of the row as a whole). A `patch` of edited columns previews the row as it
-would save. It asks `write` as well as `preview`, both before anything is
-copied or walked, so a shipped default, which only a resource load writes,
-takes no patch. Its copy of the row is validated as the save would validate it
-(`full_clean()`), refused for whatever the save would refuse, and never saved.
+would save. It asks `write` as well as `preview`, and what the save's own gates
+ask of the columns it edits (a deployment's `write__<field>` among them), all
+before anything is copied or walked, so a shipped default, which only a resource
+load writes, takes no patch. Its copy of the row is validated as the save would
+validate it (`full_clean()`), refused for whatever the save would refuse, and
+never saved.
 One walk serves it: the one that validation ran, or the row's own when the
 patch changed only the name, the description or the sample. The console's
 `message_template_preview` read returns it to administrators (`preview`
