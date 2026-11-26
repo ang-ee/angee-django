@@ -62,6 +62,16 @@ pending write and typed values.
   attempt is a new draft. `@angee/refine`'s `ActionOutcome` carries a
   refusal's `code` when the answer has one, and a caller's own refusal may set
   it.
+- The record form tells a create whose key an earlier attempt spent in its
+  own words ("Created earlier": an earlier attempt from this form already
+  created a record, which is in the list; saving again creates another), with
+  nothing to undo; the save surface's `saveKeyConflict` says it is so, and a
+  stale revision keeps its banner and its reload. Both form dialogs bring the
+  person to a refusal, as the record form does: `MutationDialog` and the
+  typed-args action dialog pass `applyFormErrors` their banner's focus
+  (`useRefusalBannerFocus`) and a line naming the refused fields
+  (`fieldValidationSummary`); `useActionForm` takes `fieldSummary` and returns
+  `banner` to spread on its `ErrorBanner`.
 - `@angee/refine`: `errorFromAuthoredEnvelope` (and so `useAuthoredMutation`'s
   `errorFrom`) throws an `AuthoredEnvelopeError` carrying the envelope's `code`,
   where it threw a plain `Error`. `boundedGraphQLTransportError` keeps

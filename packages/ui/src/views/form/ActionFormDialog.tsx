@@ -21,7 +21,7 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
-import { visibleFields } from "./form-view-model";
+import { fieldValidationSummary, visibleFields } from "./form-view-model";
 import { actionOutcomeSubmitResult, formSubmitOutcome, markMemberErrors } from "./validation-errors";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
@@ -139,9 +139,14 @@ function ActionArgsDialog({
       if (!inline) onOpenChange(false);
     },
     fieldNames: argNames,
+    // The banner's line naming the refused fields, by the labels the dialog shows.
+    fieldSummary: (fieldErrors: Record<string, readonly string[]>): string => fieldValidationSummary(fieldErrors, new Map(
+      (typeof fields === "function" ? fields(actionForm.form.getValues()) : fields).map((field) => [field.name, field]),
+    ), t),
   });
   const {
     formErrors,
+    banner,
     submitting,
     saveConflict,
   } = actionForm;
@@ -167,7 +172,7 @@ function ActionArgsDialog({
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
       {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} unregisterHidden /> : null}
-      <ErrorBanner messages={formErrors} />
+      <ErrorBanner {...banner} messages={formErrors} />
     </>
   );
 

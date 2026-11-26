@@ -61,8 +61,8 @@ live in code docstrings.
   takes focus and also carries the line naming the refused fields, which it
   showed only without a form-level reason; with field reasons only, the first
   shown field takes focus, as before. `applyFormErrors` decides which, for a
-  surface that passes it `focus` and a `fieldSummary` (today the record form;
-  the two dialogs pass neither yet and are unchanged). Its `focus` option,
+  surface that passes it `focus` and a `fieldSummary` (the record form,
+  `MutationDialog` and the typed-args action dialog). Its `focus` option,
   added in this release as `true`, is now a function, the surface's way of
   focusing its banner, given by the new `useRefusalBannerFocus`, exported with
   `formErrorsFromForm`; the record form exposes the banner's props as

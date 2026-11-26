@@ -1204,6 +1204,27 @@ describe("ActionFormDialog", () => {
     expect(keys[0]).toEqual(expect.any(String));
   });
 
+  test.each([
+    ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field", "Review refused.", "banner"],
+    ["a refusal of a field only brings the person to that field, or to the banner naming it while the fields are held", "", "field"],
+  ] as const)("%s", async (_name, message, focused) => {
+    const submit = vi.fn(async () => ({ ok: false, message, validationErrors: { date: ["Too early."] } }));
+    renderDialog(registerReviewAction(submit));
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    await screen.findByText("Too early.");
+    const date = screen.getByRole("textbox", { name: "Date" });
+    if (focused === "field") {
+      // The field takes focus; were it disabled at the answer, the banner naming it would.
+      await waitFor(() => expect([date, date.closest("[role='dialog']")?.querySelector("[tabindex='-1']")]).toContain(document.activeElement));
+    } else {
+      const banner = (await screen.findByText("Review refused.")).closest("[tabindex='-1']");
+      await waitFor(() => expect(document.activeElement).toBe(banner));
+      expect(banner?.textContent).toContain("Date");
+    }
+  });
+
   test("Cancel with typed values asks first, and Stay keeps them", async () => {
     renderDialog(registerReviewAction(vi.fn()));
     await screen.findByText("DOC-1");

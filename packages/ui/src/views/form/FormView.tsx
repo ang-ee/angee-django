@@ -199,6 +199,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     saveErrors,
     saveBanner,
     saveConflict,
+    saveKeyConflict,
     declaredActions,
     genericActions,
     actionsBlocked,
@@ -415,8 +416,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
     <ErrorBanner
       {...saveBanner}
-      messages={saveErrors}
-      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      // A spent key is told in the form's own words, true however the person got here (a different
+      // record after a discard, or the same one corrected after a lost answer); it offers nothing to
+      // undo, since saving again is the person's call.
+      messages={saveKeyConflict ? [t("form.createdEarlier")] : saveErrors}
+      title={t(saveConflict ? "form.saveConflict" : saveKeyConflict ? "form.createdEarlierTitle" : "form.saveFailed")}
       actions={saveConflict ? (
         <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
           {t("form.reloadSaved")}

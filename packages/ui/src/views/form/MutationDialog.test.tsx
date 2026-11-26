@@ -383,10 +383,11 @@ describe("MutationDialog", () => {
     const message = await screen.findByText("Choose a title Use a unique value");
     const input = screen.getByRole("textbox", { name: "Title" });
     expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(message.id);
-    // The form-level message and each message no rendered field claims are separate items of the banner.
+    // The form-level message, the line naming the refused fields the form shows, and each message no
+    // rendered field claims are separate items of the banner.
     const banner = screen.getByText("Review the values").closest<HTMLElement>('[role="alert"]')!;
     expect(within(banner).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
-      "Review the values", "missing: The entry changed", "token: Refresh the entry",
+      "Review the values", "Please fix the highlighted fields: details.title.", "missing: The entry changed", "token: Refresh the entry",
     ]);
     expect(submit).not.toHaveBeenCalled();
   });
@@ -561,6 +562,27 @@ describe("MutationDialog", () => {
     </AppRuntimeProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByText(told)).toBeTruthy();
+  });
+
+  test.each([
+    ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field", ["Could not rename."], "banner"],
+    ["a refusal of a field only brings the person to that field", [], "field"],
+  ] as const)("%s", async (_name, formErrors, focused) => {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Rename" fields={[{ name: "name", label: "Display name" }]}
+        initialValues={{ name: "Ada" }} submitLabel="Save" parseValues={parseRawValues}
+        onSubmit={async () => ({ status: "invalid", issues: { fieldErrors: { name: ["Taken."] }, formErrors: [...formErrors] } })} />
+    </AppRuntimeProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    const field = screen.getByRole("textbox", { name: "Display name" });
+    await screen.findByText("Taken.");
+    if (focused === "field") {
+      await waitFor(() => expect(document.activeElement).toBe(field));
+    } else {
+      const banner = (await screen.findByText("Could not rename.")).closest("[tabindex='-1']");
+      await waitFor(() => expect(document.activeElement).toBe(banner));
+      expect(banner?.textContent).toContain("Display name");
+    }
   });
 
   test("a keyed dialog whose submission returns its failures as results ends a spent key's draft: lost, then conflict, then a new key", async () => {

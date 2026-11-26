@@ -1678,6 +1678,25 @@ test("CREATION_KEY_CONFLICT keeps the draft and renews the next attempt's key", 
   expect(next).not.toBe(first);
 });
 
+test("a create whose key an earlier attempt spent is told in the form's own words, with nothing to undo; a stale edit keeps its banner", async () => {
+  const f = await fixture({ id: null, rootArguments: true, publicView: true,
+    viewFields: [{ name: "title", label: "Title" }, { name: "deadline", label: "Deadline" }] });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "My record" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Deadline" }), { target: { value: "2026-09-28" } });
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  expect(await screen.findByText("Created earlier")).toBeTruthy();
+  expect(screen.getByText("An earlier attempt to save from this form already created a record; it is in the list. Saving again creates another.")).toBeTruthy();
+  expect(screen.queryByText("CREATION_KEY_CONFLICT")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reload saved record" })).toBeNull();
+  expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("My record");
+
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Changed", extensions: { code: "STALE_REVISION" } }] });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  expect(await screen.findByText("Record changed")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Reload saved record" })).toBeTruthy();
+});
+
 test("custom create owners receive a retry-stable key that clears on acceptance", async () => {
   const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(new Error("Unavailable"))
     .mockImplementation(async (data) => ({ status: "ok", data: { id: "note-1", ...data } }));

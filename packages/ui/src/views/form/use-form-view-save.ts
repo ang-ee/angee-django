@@ -218,6 +218,11 @@ export interface FormViewSaveSurface {
   /** Spread on the banner that renders `saveErrors`: a refused save brings the person to it or to its first refused field. */
   saveBanner: ReturnType<typeof useRefusalBannerFocus>["banner"];
   saveConflict: boolean;
+  /**
+   * The last create was refused because an earlier attempt from this form already wrote a record
+   * under its key (`CREATION_KEY_CONFLICT`); the next save is a new draft. The form's banner words it.
+   */
+  saveKeyConflict: boolean;
   serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
   requiredFieldNames: ReadonlySet<string>;
@@ -566,6 +571,7 @@ export function useFormViewSave({
   const saveErrors = formErrorsFromForm(form.formState.errors);
   const { banner: saveBanner, focusBanner: focusSaveBanner } = useRefusalBannerFocus(saveErrors);
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
+  const saveKeyConflict = form.formState.errors.root?.server?.type === "creationKeyConflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
   const customSubmit = useMutation({
     mutationFn: async ({ data, lines, submitted, baseline, idempotencyKey }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues; idempotencyKey: string | null }) => {
@@ -1044,6 +1050,7 @@ export function useFormViewSave({
     saveErrors,
     saveBanner,
     saveConflict,
+    saveKeyConflict,
     serverFieldErrors,
     clearServerFieldError,
     requiredFieldNames,

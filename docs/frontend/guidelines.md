@@ -1349,7 +1349,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
   and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
   several as a list; never join them into one text. A surface that asks
-  (`applyFormErrors` with `focus` and a `fieldSummary`; the record form does)
+  (`applyFormErrors` with `focus` and a `fieldSummary`; the record form and
+  both form dialogs do)
   has a refused submit bring the person to its reasons, and `applyFormErrors`
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
