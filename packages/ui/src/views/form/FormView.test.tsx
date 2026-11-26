@@ -4445,6 +4445,23 @@ describe("FormView", () => {
     });
   });
 
+  test("a group that holds only hidden fields shows no heading and no pane, and its values are still sent", async () => {
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField]} defaultValues={{ secret: "kept", token: "kept too" }}
+      groups={[
+        { label: "Coded", fields: [{ name: "code", label: "Code" }], actions: [] },
+        { label: "Internal", fields: [{ name: "secret", label: "Secret", hidden: true }], actions: [] },
+        { label: "Tokens", pane: "tokens", fields: [{ name: "token", label: "Token", hidden: true }], actions: [] },
+      ]} />);
+    // The group beside them is the awaited effect: the sheet has rendered its sections.
+    expect(await screen.findByText("Coded")).toBeTruthy();
+    expect(screen.queryByText("Internal")).toBeNull();
+    expect(screen.queryByText("Tokens")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Label"), { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { code: "", label: "First", secret: "kept", token: "kept too" } });
+  });
+
   test("submits fields declared through the groups prop", async () => {
     renderWithProviders(
       <FormView

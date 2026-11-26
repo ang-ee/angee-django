@@ -620,7 +620,7 @@ export function formRuleErrors(
 /**
  * `sections`, each with the fields it shows for `values`: those visible for them, resolved against
  * them (`visibleFields`), that `displays` keeps (a record form's `displaysField`). A section keeps
- * its key and place whatever fields it is left with (`isEmptySection` says when it has none).
+ * its key and place whatever fields it is left with (`isEmptySection` says when none of them shows).
  */
 export function visibleSections(
   sections: readonly FormSectionModel[],
@@ -631,11 +631,12 @@ export function visibleSections(
 }
 
 /**
- * Whether a section has nothing to show: no field and no content of its own. The sheet renders
- * nothing for it, and the pane strip lists no pane for it.
+ * Whether a section has nothing to show: no field that renders a control (a `hidden` field keeps
+ * its value in the form and renders none) and no content of its own. The sheet renders nothing for
+ * it, its heading included, and the pane strip lists no pane for it.
  */
 export function isEmptySection(section: Pick<FormSectionModel, "fields" | "render">): boolean {
-  return section.fields.length === 0 && section.render === undefined;
+  return section.fields.every((field) => field.hidden) && section.render === undefined;
 }
 
 /** What decides whether a save writes a field at all. */

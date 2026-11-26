@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A form section that holds only hidden fields shows nothing. A
+  `hidden` field keeps its value and renders no control, but a group whose
+  fields were all hidden still counted as having something to show: the sheet
+  drew its heading over an empty grid, and a pane group listed an empty pane.
+  It is now empty, as a section with no field is; its values are saved as
+  before.
 - `@angee/ui`: **Changed API.** A refused save that carries a reason no field
   shows brings the person to the banner. A refusal naming a shown field and
   also carrying a form-level reason focused the field and left the banner,

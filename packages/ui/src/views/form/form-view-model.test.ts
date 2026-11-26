@@ -774,6 +774,14 @@ describe("isEmptySection", () => {
     expect(isEmptySection({ fields: [{ name: "code" }] })).toBe(false);
     expect(isEmptySection({ fields: [], render: content })).toBe(false);
   });
+
+  test("a hidden field holds a value and shows nothing, so a section of hidden fields alone has nothing to show", () => {
+    const content = () => null;
+    expect(isEmptySection({ fields: [{ name: "code", hidden: true }] })).toBe(true);
+    expect(isEmptySection({ fields: [{ name: "code", hidden: true }, { name: "secret", hidden: true }] })).toBe(true);
+    expect(isEmptySection({ fields: [{ name: "code", hidden: true }, { name: "label" }] })).toBe(false);
+    expect(isEmptySection({ fields: [{ name: "code", hidden: true }], render: content })).toBe(false);
+  });
 });
 
 describe("displayedFormFields", () => {
