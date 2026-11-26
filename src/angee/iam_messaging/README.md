@@ -72,10 +72,11 @@ asked as the cause. Messaging delivers it through the transport mailer once that
 transaction commits; Django's default mailer is not on its path.
 
 A link is offered only where it can be built and its mail sent, read from
-settings alone (`SignInLink.deliverable()`): `ANGEE_PUBLIC_ORIGIN` (below) and
-system mail configured, as `SystemChannelBackend.system_mail_configured()`
+settings alone (`SignInLink.deliverable()`): the deployment's public origin
+(below) and system mail configured, as `Channel.objects.system_mail_configured()`
 answers ([messaging's System mail](../messaging/README.md#system-mail)).
-Otherwise no link is offered and the action refuses, naming what to set. What
+Otherwise no link is offered, and the action refuses without naming a setting:
+an operator sets `ANGEE_PUBLIC_ORIGIN` and messaging's transport and sender. What
 settings cannot tell is refused in band, with nothing written: the system
 channel's row missing (`SYSTEM_CHANNEL_MISSING`, under `channel`) or the template
 missing (`template_missing`), which mean provision's resource load has not run,
@@ -113,10 +114,11 @@ the person in and returns them; every refusal is the same `ok: false`. The
 session records IAM's `SESSION_BACKEND` (`angee.iam.auth.ModelBackend`), so it
 outlives this addon's backend being removed or renamed.
 
-Links open `ANGEE_PUBLIC_ORIGIN` + `/sign-in-link#token=...`. Base owns that
-setting and its rule (`angee.base.origins.public_origin`): only an `https`
-origin (`http` only under `DEBUG`) with a valid host and port and no wildcard,
-user info or path builds links, and `angee.E051` reports any other set value.
+Links open the deployment's public origin + `/sign-in-link#token=...`. Base owns
+that origin, `ANGEE_PUBLIC_ORIGIN`, and its one accessor
+(`angee.base.origins.configured_public_origin`): only an `https` origin (`http`
+only under `DEBUG`) with a valid host and port and no wildcard, user info or path
+builds links, and `angee.E051` reports any other set value.
 The token rides the fragment, which no browser request, access log or referrer
 carries, and Angee's browser error reporting strips fragments from what it
 records. This addon's public `/sign-in-link` route renders IAM's login page with

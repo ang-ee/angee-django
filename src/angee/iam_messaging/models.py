@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import models, transaction
 from django.db.models import Q
@@ -33,8 +33,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.timestamps import auto_now_stamps
-from angee.base.origins import public_origin
-from angee.messaging.email import SystemChannelBackend
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 
 ISSUE_SIGN_IN_LINK = "issue_sign_in_link"
 """The account action that emails a sign-in link, named by its Zed permission on ``auth/user``."""
@@ -43,9 +42,9 @@ SIGN_IN_LINK_PATH = "/sign-in-link"
 """The public web route a sign-in link opens; this addon's web fragment declares the same path."""
 
 SIGN_IN_LINK_UNAVAILABLE_MESSAGE = (
-    "Sign-in links need ANGEE_PUBLIC_ORIGIN and system mail: a transport mailer and a valid DEFAULT_FROM_EMAIL."
+    "This deployment cannot send sign-in links: it has no public web address to link to, or no system mail."
 )
-"""Refusal of the sign-in link action on a deployment that cannot build or send the link."""
+"""Refusal of the sign-in link action where :meth:`SignInLink.deliverable` is false; its remedy is the README's."""
 
 SIGN_IN_LINK_TEMPLATE = "iam_messaging.sign_in_link"
 """The key of the message template a sign-in link is mailed with; this addon ships it in English and Spanish."""
@@ -329,20 +328,23 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
     def deliverable(cls) -> bool:
         """Whether this deployment can build links and send their mail, read from settings alone.
 
-        A public origin (``angee.base.origins.public_origin``) and system mail
-        configured, as messaging's ``SystemChannelBackend.system_mail_configured``
-        answers. What settings cannot tell, the system channel's row and the
-        template's, the send refuses in band with nothing written.
+        Its public origin (``angee.base.origins.configured_public_origin``) and
+        system mail configured (``Channel.objects.system_mail_configured``). What
+        settings cannot tell, the system channel's row and the template's, the
+        send refuses in band with nothing written.
         """
 
-        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
-        return origin is not None and SystemChannelBackend.system_mail_configured()
+        try:
+            configured_public_origin()
+        except PublicOriginUnavailable:
+            return False
+        return bool(cast(Any, apps.get_model("messaging", "Channel")).objects.system_mail_configured())
 
     @staticmethod
     def url_for(token: str) -> str:
-        """Return the public URL that redeems ``token``; the token rides the fragment, which no request carries."""
+        """Return the public URL that redeems ``token``; the token rides the fragment, which no request carries.
 
-        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
-        if origin is None:
-            raise ImproperlyConfigured(SIGN_IN_LINK_UNAVAILABLE_MESSAGE)
-        return f"{origin}{SIGN_IN_LINK_PATH}#{urlencode({'token': token})}"
+        The origin is base's (``configured_public_origin``), which raises ``PublicOriginUnavailable`` without one.
+        """
+
+        return f"{configured_public_origin()}{SIGN_IN_LINK_PATH}#{urlencode({'token': token})}"
