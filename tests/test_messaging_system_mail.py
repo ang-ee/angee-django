@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from email import message_from_bytes
+from email.utils import parseaddr
 from types import SimpleNamespace
 from typing import Any
 
@@ -277,6 +278,37 @@ def _deliver(message: Any) -> Any:
     outcome = deliver_message(message._meta.label_lower, message.pk, message.external_id)
     assert outcome["delivered"], outcome
     return mail.outbox[-1]
+
+
+@pytest.mark.parametrize("earlier", [False, True], ids=["no-handle-yet", "an-earlier-spelling"])
+def test_the_system_sender_and_a_recipient_land_on_one_handle_whatever_their_spelling(
+    system_mailer: Any, settings: Any, earlier: bool,
+) -> None:
+    """The handle owner's rule: an address lands on the handle of any earlier spelling, which keeps its own.
+
+    With no handle yet, the sender and the recipient are stored and sent as typed; after an earlier
+    lower-case spelling, they land on its handle and the mail carries that stored spelling.
+    """
+
+    settings.DEFAULT_FROM_EMAIL = "Ops <Ops@Example.test>"
+    if earlier:
+        with system_context(reason="tests.messaging.system_mail.spelling"):
+            for address in ("ops@example.test", "reader@example.test"):
+                Handle.objects.upsert(platform="email", value=address)
+    send_mail("Report", "Body.", None, ["Reader@Example.test"])
+    (message,) = _recorded(system_mailer)
+    sent = _deliver(message)
+    with system_context(reason="tests.messaging.system_mail.spelling"):
+        handles = sorted(Handle._base_manager.filter(
+            spelling_key__in=("ops@example.test", "reader@example.test"),
+        ).values_list("spelling_key", "value"))
+        sender = Message._base_manager.get(pk=message.pk).sender_id
+    typed = {"ops@example.test": "Ops@Example.test", "reader@example.test": "Reader@Example.test"}
+    assert handles == [(key, key if earlier else typed[key]) for key in sorted(typed)]
+    assert sender == Handle._base_manager.get(spelling_key="ops@example.test").pk
+    assert (parseaddr(sent.from_email)[1], sent.to) == (
+        ("ops@example.test", ["reader@example.test"]) if earlier else ("Ops@Example.test", ["Reader@Example.test"])
+    )
 
 
 def test_a_django_email_is_recorded_on_the_system_channel_and_sent_once_through_the_transport(
