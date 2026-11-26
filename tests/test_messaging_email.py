@@ -389,13 +389,13 @@ def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
     with system_context(reason="tests.messaging.email_reply.reply_to"):
         (addressee,) = Handle.objects.filter(recipient_rows__message=reply, recipient_rows__role="to")
         wire = channel.backend.email_message(reply).message()
-    # The address lands on the same handle a received message from it would use.
-    assert (addressee.value, addressee.display_name) == ("applicant@example.test", "Applicant")
+    # The address lands, as the Reply-To spells it, on the handle a received message from it would use.
+    assert (addressee.value, addressee.display_name) == ("Applicant@Example.test", "Applicant")
     assert addressee.pk != relayed.sender_id
-    assert wire["To"] == "Applicant <applicant@example.test>"
+    assert wire["To"] == "Applicant <Applicant@Example.test>"
 
 
-def test_reply_addresses_parse_the_reply_to_in_order_lower_cased_with_display_names(mail_desk):
+def test_reply_addresses_parse_the_reply_to_in_order_once_per_address_with_display_names(mail_desk):
     channel, request = mail_desk
     listed = _receive(
         channel,
@@ -409,8 +409,8 @@ def test_reply_addresses_parse_the_reply_to_in_order_lower_cased_with_display_na
         uid=6,
     )
     addresses = listed.reply_addresses(actor=channel.owner)
-    # A repeated address keeps its first display name; order follows the header.
-    assert list(addresses.items()) == [("jane.doe@example.test", "Doe, Jane"), ("bob@example.test", "")]
+    # An address repeated in any letter case keeps its first spelling and display name; order follows the header.
+    assert list(addresses.items()) == [("Jane.Doe@Example.test", "Doe, Jane"), ("bob@EXAMPLE.test", "")]
     # Without a Reply-To there is nothing: falling back to the sender is the caller's decision.
     assert request.reply_addresses(actor=channel.owner) == {}
     with system_context(reason="tests.messaging.reply_addresses.stranger"):
