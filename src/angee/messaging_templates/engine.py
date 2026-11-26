@@ -310,7 +310,7 @@ _LINKS = MarkdownIt("commonmark")
 in punycode."""
 
 
-LINK_REFUSED = "value_not_linkable"
+VALUE_NOT_LINKABLE = "value_not_linkable"
 """The code of a value a render prints as a link and :func:`url` would empty (:func:`clean_link`)."""
 
 
@@ -345,7 +345,7 @@ def _link(value: Any) -> tuple[str, str | None]:
 def _own_origin_authority(scheme: str, authority: str) -> str | None:
     """The authority of this deployment's public origin, as its owner gives it
     (:func:`~angee.base.origins.configured_public_origin`), when ``scheme://authority`` (as markdown-it writes a
-    link) is that origin; else ``None``. So a deployment whose origin is ``http://localhost:6173`` in ``DEBUG``, an
+    link) is that origin; else ``None``. So a deployment whose origin is ``http://localhost:8000`` in ``DEBUG``, an
     address or another single-label host links its own pages, an IPv6 address in its brackets, which markdown-it
     would percent-encode, and no other host of that kind."""
 
@@ -379,15 +379,15 @@ def clean_link(value: Any, *, path: str = "link") -> str:
     A blank value (nothing but white space) gives ``""`` and no refusal, as a
     render leaves an optional link empty. Any other value :func:`url` would empty
     is refused with a ``ValidationError`` of one item, code
-    :data:`LINK_REFUSED`, naming ``path`` and why: the words a render's refusal
-    uses for that value at that path. It reads nothing, so a caller that mails
+    :data:`VALUE_NOT_LINKABLE`, naming ``path`` and why: the words a render's refusal
+    uses for that value at that path. It reads no row, so a caller that mails
     many recipients asks it once before the first send.
     """
 
     link, problem = _link(value)
     if problem is not None:
         raise ValidationError([ValidationError(
-            f"{path} is not a link this mail can carry: {problem}.", code=LINK_REFUSED,
+            f"{path} is not a link this mail can carry: {problem}.", code=VALUE_NOT_LINKABLE,
         )])
     return link
 

@@ -80,13 +80,12 @@ Anything else fails to compile.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
   gives an absolute `https`, `http` (to a domain name of two labels or more, or
   to the deployment's own public origin as `angee.base.origins.configured_public_origin`
-  gives it, whatever its host: `http://localhost:6173` under `DEBUG`, an address;
+  gives it, whatever its host: `http://localhost:8000` under `DEBUG`, an address;
   with no userinfo), `mailto` or `tel` link, percent-encoded, or none. A render never sends that
   none in place of a value it was given: before rendering, each value a row
   prints through `url` (a Markdown link's destination among them) that `url`
   would empty and that is not blank is refused, `value_not_linkable`, naming its
-  path and why ("link is not a link this mail can carry: the mail cannot link to
-  localhost:6173."); a blank value leaves an optional link empty. A sender asks
+  path and why; a blank value leaves an optional link empty. A sender asks
   the same rule of a value before a run with `MessageTemplate.objects.clean_link(value, path="link")`
   ([Sending as system work](#sending-as-system-work)). Dates go through `date` (`date:"DATE_FORMAT"`), money through
   `floatformat`. A path printed with a time (`DATETIME_FORMAT`, `H:i`) takes an

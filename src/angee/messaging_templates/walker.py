@@ -68,8 +68,8 @@ from django.views.decorators.debug import sensitive_variables
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
     BRAND_PATHS,
-    LINK_REFUSED,
     MARKUP_FILTERS,
+    VALUE_NOT_LINKABLE,
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
@@ -315,6 +315,16 @@ class RenderedMessage:
     """The direction of the mail's own text, the one the HTML's ``dir`` says, for whoever shows the subject, the
     preheader or the plain text outside the HTML. Django's bidi answer for the row's language, left to right for a
     language Django does not know."""
+
+    def bodies_without(self, value: str) -> set[RowPiece]:
+        """The bodies that do not hold ``value`` as a render emits it: the value without its surrounding white space,
+        or the link :func:`~angee.messaging_templates.engine.url` makes of it; escaped as Django escapes an output in
+        the HTML, as it is in the plain text. A blank value is in neither. A value printed only through another filter
+        (``upper``, ``truncatechars``) is not found."""
+
+        emitted = {value.strip(), url(value)} - {""}
+        return {form for form, body in ((RowPiece.HTML, self.html), (RowPiece.TEXT, self.plain_text))
+                if not any((escape(text) if form == RowPiece.HTML else text) in body for text in emitted)}
 
 
 class TemplateWarningCode(StrEnum):
@@ -574,7 +584,7 @@ class TemplateWalk:
                 except ValidationError as refusal:
                     errors.extend(refusal.messages)
         if errors:
-            raise _refused(errors, LINK_REFUSED)
+            raise _refused(errors, VALUE_NOT_LINKABLE)
         printer = _DatePrinter(self.date_paths)
         for path in sorted(self.date_paths):
             _parse_dates(filled, path, path, printer, errors)
@@ -613,7 +623,7 @@ class TemplateWalk:
         a value only tested, or printed in the subject or preheader alone, is not
         printed by a body). After the render, for a path with no ``*``: a value
         that is not a string, or is blank, and a body that does not hold it as
-        the render emits it (:func:`_bodies_without`), as when a condition left
+        the render emits it (:meth:`RenderedMessage.bodies_without`), as when a condition left
         its output out of this mail. A path through a list (``questions.*.link``)
         is held to the text alone: some output prints the item's field, not that
         every item's value is in this mail, so an empty list passes.
@@ -696,7 +706,7 @@ class TemplateWalk:
             elif not value.strip():
                 unshown.append(f"{path} is empty, and this mail is sent for it.")
             else:
-                missing = _bodies_without(rendered, value)
+                missing = rendered.bodies_without(value)
                 unshown.extend(f"The {body} body of this mail does not show {path}, which it is sent for."
                                for form, body in _BODIES if form in missing)
         return unshown
@@ -741,7 +751,7 @@ class TemplateWalk:
         )
         if isinstance(self.root.variables, dict) and "unsubscribe_url" in self.root.variables:
             stop = sample.get("unsubscribe_url")
-            if not isinstance(stop, str) or _bodies_without(rendered, stop):
+            if not isinstance(stop, str) or rendered.bodies_without(stop):
                 warnings.append(TemplateWarning(
                     TemplateWarningCode.STOP_LINK, "The HTML or plain-text body lacks the sample's unsubscribe_url.",
                 ))
@@ -778,17 +788,6 @@ def _one_line(text: str, name: str) -> str:
 
 _BODIES = ((RowPiece.HTML, "HTML"), (RowPiece.TEXT, "plain-text"))
 """The two bodies of a mail, with the names a refusal gives them."""
-
-
-def _bodies_without(rendered: RenderedMessage, value: str) -> set[RowPiece]:
-    """The bodies of ``rendered`` that do not hold ``value`` as a render emits it: the value without its surrounding
-    white space, or the link :func:`~angee.messaging_templates.engine.url` makes of it; escaped as Django escapes an
-    output in the HTML, as it is in the plain text. A blank value is in neither. A value printed only through another
-    filter (``upper``, ``truncatechars``) is not found."""
-
-    emitted = {value.strip(), url(value)} - {""}
-    return {form for form, body in ((RowPiece.HTML, rendered.html), (RowPiece.TEXT, rendered.plain_text))
-            if not any((escape(text) if form == RowPiece.HTML else text) in body for text in emitted)}
 
 
 def _plain(text: str) -> str:

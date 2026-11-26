@@ -50,6 +50,7 @@ def configured_public_origin() -> str:
     into its own refusal, and one that only judges links treats it as no origin.
     """
 
+    # A bare Django host that installs angee.base without its autoconfig declares no setting.
     origin = public_origin(getattr(settings, "ANGEE_PUBLIC_ORIGIN", ""), debug=settings.DEBUG)
     if origin is None:
         raise PublicOriginUnavailable

@@ -441,7 +441,7 @@ def test_must_print_is_an_iterable_of_paths_never_one_path(system_channel: Any, 
             walk.render({"link": SIGN_IN}, kit=row._brand_kit(None), must_print="link")
 
 
-DECISION = "http://localhost:6173/decisions/dec_1"
+DECISION = "http://localhost:8000/decisions/dec_1"
 
 
 def _decision(key: str = "tests.decision", **values: Any) -> Any:
@@ -464,7 +464,7 @@ def test_a_link_the_mail_cannot_carry_is_refused_before_anything_is_written_not_
     with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
         _send(row, {"link": DECISION}, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        ("value_not_linkable", "link is not a link this mail can carry: the mail cannot link to localhost:6173."),
+        ("value_not_linkable", "link is not a link this mail can carry: the mail cannot link to localhost:8000."),
     ]
     assert (callbacks, sent) == ([], [])
 
@@ -500,7 +500,7 @@ def test_the_preview_shows_a_sample_link_the_mail_cannot_carry_as_its_render_err
     assert preview.rendered is None
     assert [(warning.code, warning.detail) for warning in preview.warnings] == [(
         TemplateWarningCode.RENDER_ERROR,
-        "link is not a link this mail can carry: the mail cannot link to localhost:6173.",
+        "link is not a link this mail can carry: the mail cannot link to localhost:8000.",
     )]
 
 
@@ -546,16 +546,16 @@ def test_the_public_link_check_answers_as_the_render_does(plain: Any, settings: 
 @pytest.mark.parametrize(
     ("origin", "debug", "value", "linked"),
     [
-        pytest.param("https://localhost:6173", False, "https://localhost:6173/decisions/1", True, id="own-https-port"),
-        pytest.param("http://localhost:6173", True, DECISION, True, id="own-http-in-debug"),
-        pytest.param("http://LocalHost:6173/", True, DECISION, True, id="own-spelled-otherwise"),
+        pytest.param("https://localhost:8000", False, "https://localhost:8000/decisions/1", True, id="own-https-port"),
+        pytest.param("http://localhost:8000", True, DECISION, True, id="own-http-in-debug"),
+        pytest.param("http://LocalHost:8000/", True, DECISION, True, id="own-spelled-otherwise"),
         pytest.param("http://127.0.0.1:8000", True, "http://127.0.0.1:8000/decisions/1", True, id="own-address"),
         pytest.param("http://[::1]:8000", True, "http://[::1]:8000/decisions/1", True, id="own-ipv6-address"),
         pytest.param("https://app.example.test", False, "https://app.example.test/d", True, id="two-labels"),
-        pytest.param("http://localhost:6173", False, DECISION, False, id="http-origin-outside-debug"),
-        pytest.param("http://localhost:6173", True, "http://localhost:6174/decisions/1", False, id="another-port"),
-        pytest.param("http://localhost:6173", True, "https://localhost:6173/decisions/1", False, id="another-scheme"),
-        pytest.param("http://localhost:6173", True, "http://intranet/decisions/1", False, id="a-foreign-host"),
+        pytest.param("http://localhost:8000", False, DECISION, False, id="http-origin-outside-debug"),
+        pytest.param("http://localhost:8000", True, "http://localhost:8001/decisions/1", False, id="another-port"),
+        pytest.param("http://localhost:8000", True, "https://localhost:8000/decisions/1", False, id="another-scheme"),
+        pytest.param("http://localhost:8000", True, "http://intranet/decisions/1", False, id="a-foreign-host"),
         pytest.param("http://127.0.0.1:8000", True, "http://10.0.0.1/decisions/1", False, id="a-foreign-address"),
         pytest.param("", False, DECISION, False, id="no-origin"),
     ],
