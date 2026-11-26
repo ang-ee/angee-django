@@ -676,8 +676,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   /** The session frame: the only writer of the host appearance source's answer into the provider's host. */
   function HostAppearanceFrame({ children }: { children: ReactNode }): ReactNode {
     const answer = useHostAppearance(sourceTheme, sourceBuild);
-    // No theme asked about: the build's appearance stands whole and nothing is held, whatever the source answers.
-    const read = sourceTheme ? answer : BUILD_APPEARANCE;
+    // No theme asked about, or one that takes no options: no answer can change what it wears, so the
+    // build's appearance stands whole and nothing is held, whatever the source answers.
+    const read = sourceTheme?.options ? answer : BUILD_APPEARANCE;
     const host = useMemo(() => read.options || read.pending
       ? { ...appearance, ...(read.options ? { options: read.options } : {}), ...(read.pending ? { pending: true } : {}) }
       : appearance, [read.options, read.pending]);

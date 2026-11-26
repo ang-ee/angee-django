@@ -242,6 +242,15 @@ describe("the host appearance source", () => {
     });
   });
 
+  test("a fixed theme is painted unheld under a source that stays pending", async () => {
+    const appearance = { themeId: fixed.definition.id, colorScheme: "light" as const };
+    root().style.setProperty("--brand", "#010203");
+    await mounted(hostApp({ source: { useOptions: () => ({ pending: true }) }, appearance }), async () => {
+      await waitFor(() => expect(screen.getByLabelText("Identity").textContent).toBe("resolved"));
+      await waitFor(() => expect(root().style.getPropertyValue("--brand")).toBe("#0a0a0a"));
+    });
+  });
+
   test("every app of a deployment wears the source's palette on its own theme, a locked app's too", async () => {
     const appearance = { themeId: paper.definition.id, colorScheme: "light" as const, options: BUILD };
     const shell = { apps: { reading: { rail: ["identity"], theme: ink.definition.id, themeLocked: true } } };
