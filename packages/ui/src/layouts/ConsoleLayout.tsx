@@ -319,7 +319,6 @@ function ConsoleWorkbench({
       <Workbench
         className="area-content"
         autoSave="console.workbench.v3"
-        scrollMode="contained"
         primary={
           desktopPrimary != null ? (
             <ControlBandProvider host={undefined}>

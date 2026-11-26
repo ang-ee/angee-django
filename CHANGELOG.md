@@ -10,6 +10,26 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
+  applied: the panel library (react-resizable-panels) sets `overflow: auto`
+  inline on the element that takes a pane's class, and an inline style wins
+  over any class that is not `!important`, so a pane scrolls its content.
+  Nothing computed changes. A record in the document presentation that a list
+  opens in its split placement scrolls in the content pane of the list's own
+  workbench, as one opened inline scrolls in the list's record sheet; a record
+  in the workspace presentation, or with a full-bleed pane active, scrolls
+  inside the form in either placement. The pane's docstring says so; the
+  frontend guide's `Workbench` rule names what composes it (the console body
+  and a list's split placement), and its explorer-page rule covers the pages
+  that publish their navigator with `PrimaryPanePublisher`. A test holds, for
+  both placements, which element is the open record's nearest overflow rule
+  and the classes that size it and the list's root; it computes no layout, so
+  `Views/ResourceList`, the first story of a split list, shows a tall record
+  split and inline for a browser to measure the rest. Known, not changed:
+  `Workbench`'s `scrollMode` does nothing (both values compute the same
+  layout, since the library's inline styles override the class it adds); its
+  docstring says so, the console layout no longer passes its default, and
+  removing the prop waits on callers outside the framework.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
