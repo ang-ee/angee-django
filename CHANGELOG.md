@@ -138,6 +138,13 @@ live in code docstrings.
     with the rest of Django's mail.
   - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
     reads `MAILERS["transport"]` itself.
+- `angee.messaging`: **A sender reads the plain refusal of a channel's sender
+  address.** A send on an email channel whose sender address is not one valid
+  address the transport can carry is refused under `channel` with "Configure a
+  valid sender address for this email channel." alone, naming no field and no
+  setting. Which address a channel sends from (its `from_email`, else
+  `DEFAULT_FROM_EMAIL`) and what an operator fixes are in messaging's README,
+  under Mailers.
 - `angee.base`: an implementation key, the value an `ImplClassField` holds,
   pickles. Its choices enum is built at run time, so no module holds it by name
   and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
