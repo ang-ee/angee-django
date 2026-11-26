@@ -26,7 +26,7 @@ from rebac.schema import PermBinOp, PermRef, permission_sources
 from angee.base.build import extension_source_map, merged_schemas
 from angee.base.permissions import contextual_action_holds, purpose_read_holds
 from angee.base.testing.permissions import installed_field_owners
-from angee.messaging.checks import check_derived_reads
+from angee.messaging.checks import check_messaging_seals
 from angee.messaging.inbox_results import InboxResultOptions, InboxResults
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
@@ -119,7 +119,7 @@ def test_check_refuses_fragment_arms_on_derived_reads(tmp_path: Path, fragment: 
         f"definition {resource_type} {{\n    relation helper: auth/user\n    permission {permission} = helper\n}}\n",
         name="inbox_contrib",
     )
-    assert check_derived_reads([messaging]) == []
+    assert check_messaging_seals([messaging]) == []
     sources = extension_source_map([messaging, contrib])
     runtime = tmp_path / "runtime"
     for relative, text in sources.items():
@@ -128,7 +128,7 @@ def test_check_refuses_fragment_arms_on_derived_reads(tmp_path: Path, fragment: 
         output.write_text(text)
     _apply_emitted_schema_paths([messaging, contrib], runtime, sources=sources)
 
-    errors = check_derived_reads([messaging, contrib])
+    errors = check_messaging_seals([messaging, contrib])
     if refused is None:
         assert errors == []
     else:
@@ -142,18 +142,18 @@ def test_a_missing_messaging_declaration_is_a_check_error(monkeypatch: pytest.Mo
     """The sealed reads are never compared against an empty declaration; the check reports, never raises."""
 
     monkeypatch.setattr("angee.base.checks.declared_schema_path", lambda config: None)
-    [error] = check_derived_reads()
+    [error] = check_messaging_seals()
     assert error.id == "messaging.E003"
     assert "messaging declares no permissions schema" in error.msg
     assert "messaging/thread#read_inbox" in error.msg
 
 
 def test_installed_composition_keeps_the_derived_reads() -> None:
-    assert check_derived_reads() == []
+    assert check_messaging_seals() == []
 
 
-def test_derived_read_check_is_registered_once_by_messaging() -> None:
-    assert sum(candidate is check_derived_reads for candidate in registry.registered_checks) == 1
+def test_the_seal_check_is_registered_once_by_messaging() -> None:
+    assert sum(candidate is check_messaging_seals for candidate in registry.registered_checks) == 1
 
 
 def _inbox_world(campaign_user: Any) -> SimpleNamespace:

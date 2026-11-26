@@ -1,4 +1,4 @@
-"""Django's own mail is recorded on the system channel and sent once through the one transport mailer."""
+"""System mail is recorded on the system channel and sent once through the one transport mailer."""
 
 from __future__ import annotations
 

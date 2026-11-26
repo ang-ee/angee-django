@@ -35,7 +35,7 @@ widen ``integrate/integration#read`` and ``#write`` instead, which the seal
 subtracts.
 """
 
-check_derived_reads = partial(check_sealed_permissions, "messaging", {**DERIVED_READS, **SEALED}, "messaging.E003")
+check_messaging_seals = partial(check_sealed_permissions, "messaging", {**DERIVED_READS, **SEALED}, "messaging.E003")
 """``messaging.E003``: the derived thread and message reads, and the channel permissions the system seal guards."""
 
 

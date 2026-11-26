@@ -13,7 +13,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.testing import assert_decisions
 
 from angee.base.build import extension_source_map
-from angee.messaging.checks import check_derived_reads
+from angee.messaging.checks import check_messaging_seals
 from angee.messaging.testing.models import Channel, Message, Part, Person, Thread
 from angee.projects.testing.models import Project, ProjectBinding
 from angee.spaces.testing.models import Group, Membership
@@ -30,7 +30,7 @@ _SEALED_CHANNEL_PERMISSIONS = ("read", "reply", "write", "annotate", "delete")
 
 
 def test_the_installed_fragments_widen_the_integration_and_keep_the_seal() -> None:
-    assert check_derived_reads() == []
+    assert check_messaging_seals() == []
 
 
 @pytest.mark.parametrize("permission", _SEALED_CHANNEL_PERMISSIONS)
@@ -42,7 +42,7 @@ def test_check_refuses_fragment_arms_on_the_sealed_channel_permissions(tmp_path:
         f"definition messaging/channel {{\n    relation helper: auth/user\n    permission {permission} = helper\n}}\n",
         name="channel_contrib",
     )
-    assert check_derived_reads([messaging]) == []
+    assert check_messaging_seals([messaging]) == []
     sources = extension_source_map([messaging, contrib])
     runtime = tmp_path / "runtime"
     for relative, text in sources.items():
@@ -51,7 +51,7 @@ def test_check_refuses_fragment_arms_on_the_sealed_channel_permissions(tmp_path:
         output.write_text(text)
     _apply_emitted_schema_paths([messaging, contrib], runtime, sources=sources)
 
-    [error] = check_derived_reads([messaging, contrib])
+    [error] = check_messaging_seals([messaging, contrib])
     assert error.id == "messaging.E003"
     assert f"messaging/channel#{permission}" in error.msg
     assert "channel_contrib" in error.msg

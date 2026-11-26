@@ -386,16 +386,21 @@ messaging delivers every email through it, and without it delivery is not
 configured. Not Django's default mailer, which is the **System mailer**. See
 [messaging's contracts](../src/angee/messaging/README.md).
 
-**System mailer** — Django's default mailer wherever messaging is installed,
-`SystemMailer`: it records each email Django sends as one queued message on the
-**System channel** and sends nothing itself. See
+**System mail** — mail the framework sends on no person's behalf, each email
+Django sends among it: one queued message written on the **System channel** by
+`MessageManager.compose_as_system` and delivered through the **Transport mailer**.
+Not a person's mail on a channel they send from. See
 [messaging's contracts](../src/angee/messaging/README.md).
 
-**System channel** — messaging's install row `messaging.system_channel`
-(backend `system`), where framework mail is written
-(`MessageManager.compose_as_system`) and from which it is delivered through the
-**Transport mailer**; administrators alone read it, and it is system-only: nobody chooses it
-to send from or watch. See [messaging's contracts](../src/angee/messaging/README.md).
+**System mailer** — Django's default mailer wherever messaging is installed,
+`SystemMailer`: it records each email Django sends as **System mail** and sends
+nothing itself. See [messaging's contracts](../src/angee/messaging/README.md).
+
+**System channel** — messaging's install row `messaging.system_channel` (backend
+`system`), where **System mail** is written. Administrators alone read it, and it
+is system-only: nobody chooses it to send from or to watch. A person finds it in a
+list of channels under the label "System mail", which the row is given once, when
+it is created. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **Compose (a message)** — write one outgoing message through
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery

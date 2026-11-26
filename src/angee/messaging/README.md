@@ -347,7 +347,7 @@ no grant. `ChannelManager.system_channel()` is its one lookup, read as named
 system work; absent, it refuses with `SystemChannelMissing`
 (`SYSTEM_CHANNEL_MISSING`, under `channel`).
 
-[`MessageManager.compose_as_system`](managers.py) writes framework mail there:
+[`MessageManager.compose_as_system`](managers.py) writes system mail there:
 one queued email per call, through `compose`'s own writer, in the caller's
 transaction, from the deployment's `DEFAULT_FROM_EMAIL`
 (`AnymailEmailChannelBackend.default_sender`; the channel names no sender of its own).
@@ -372,7 +372,7 @@ attachments, `reply_to`, any other header, any other body or alternative type,
 and an `AnymailMessage`. A batch is recorded whole or not at all; built with
 `fail_silently`, it logs a refusal and reports none sent.
 
-The system channel holds the framework's own mail, live sign-in links among it,
+The system channel holds system mail, live sign-in links among it,
 so administrators alone read it, send on it, write, annotate or delete it
 (messaging's `permissions.zed`, the channel's system seal; `messaging.E003`
 refuses a fragment arm on any of those permissions). Every other way a channel

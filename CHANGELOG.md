@@ -10,8 +10,8 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.messaging`, `angee.workflows_messaging`, `angee.iam`: **Django's own mail is
-  recorded on a system channel and sent through one transport mailer.**
+- `angee.messaging`, `angee.workflows_messaging`, `angee.iam`: **System mail: each email
+  Django sends is recorded on a system channel and sent through one transport mailer.**
   - **Upgrade first:** with messaging installed, start-up refuses a deployment that
     states its own `MAILERS.default` until it is renamed `MAILERS.transport`
     (keeping its `BACKEND` and `OPTIONS`; remove it instead when a transport is
@@ -52,7 +52,7 @@ live in code docstrings.
     with `mail_admins` sending through `transport`. `messaging.W001` reports a
     host's `AdminEmailHandler` that would send through the system mailer.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
-    default mailer; delivery is configured exactly when it is stated. Django mail
+    default mailer; delivery is configured exactly when it is stated. System mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
     goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` and `Message-ID` are
     not kept, and attachments, `reply_to` and extra headers are refused. A

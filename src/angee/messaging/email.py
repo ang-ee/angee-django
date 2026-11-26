@@ -354,7 +354,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
 
 class SystemChannelBackend(AnymailEmailChannelBackend):
-    """The system channel's backend: Django's own mail is recorded on it, and nobody chooses it.
+    """The system channel's backend: system mail is recorded on it, and nobody chooses it.
 
     It delivers as every email channel does. It is system-only: no person sends
     from it or watches it, so it is never selected for outbound email and never a

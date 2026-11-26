@@ -8,7 +8,7 @@ DELIVER_MESSAGE_TASK = "messaging.deliver_message"
 RELEASE_MESSAGES_TASK = "messaging.release_held_messages"
 
 SYSTEM_CHANNEL_BACKEND = "system"
-"""The registry key of the system channel's backend, which records Django's own mail."""
+"""The registry key of the system channel's backend, on which system mail is recorded."""
 
 SYSTEM_CHANNEL_XREF = "messaging.system_channel"
 """The resource handle of the system channel, messaging's install row."""
