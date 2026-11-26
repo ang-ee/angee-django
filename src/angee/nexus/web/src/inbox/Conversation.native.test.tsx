@@ -10,15 +10,20 @@ import type { ReactElement } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { InboxConversation } from "./Conversation";
 import { InboxTranscriptMatches } from "./documents";
-import { inboxQuery, useInboxNavigation } from "./state";
+import { conversationLeaves, inboxQuery, useInboxNavigation } from "./state";
 
 // The transcript's window is driven by the route's anchor, so a test moves it by navigating.
+const transcript = vi.hoisted(() => ({ reply: undefined as unknown }));
 vi.mock("@angee/messaging", async (importOriginal) => ({
   ...await importOriginal<typeof import("@angee/messaging")>(),
-  ThreadTranscript: ({ anchor, renderWindow }: {
+  ThreadTranscript: ({ anchor, renderWindow, reply }: {
     anchor: string;
     renderWindow: (messages: { id: string }[], children: ReactElement) => ReactElement;
-  }) => renderWindow([{ id: anchor.startsWith("message:") ? anchor.slice(8) : "m1" }], <div />),
+    reply?: unknown;
+  }) => {
+    transcript.reply = reply;
+    return renderWindow([{ id: anchor.startsWith("message:") ? anchor.slice(8) : "m1" }], <div />);
+  },
 }));
 
 const { Provider, clearClients } = createUiTestProviders({ apiUrl: "test://nexus-conversation", providerNames: [],
@@ -65,4 +70,19 @@ test("a new transcript window keeps the conversation count; another conversation
   await act(async () => router.navigate({ to: "/", search: { thread: "thread-two" } }));
   await waitFor(() => expect(screen.queryByText(COUNT)).toBeNull());
   expect(pendingCount()).toBe(true);
+});
+
+test("the conversation offers Reply, and only leaving it asks about an unsent reply", async () => {
+  fixture();
+  await screen.findByText(COUNT);
+  expect(transcript.reply).toEqual({ leaves: conversationLeaves });
+  const at = (search: Record<string, string>) => ({ pathname: "/nexus/inbox", search });
+  const move = (current: Record<string, string>, next: Record<string, string>, pathname = "/nexus/inbox") =>
+    conversationLeaves({ current: at(current), next: { ...at(next), pathname } } as never);
+  // A move of the window keeps the box; another conversation, a message's reader or another page leaves it.
+  expect(move({ thread: "thread-one" }, { thread: "thread-one", at: "message:m2" })).toBe(false);
+  expect(move({ thread: "thread-one", at: "message:m2" }, { thread: "thread-one" })).toBe(false);
+  expect(move({ thread: "thread-one" }, { thread: "thread-two" })).toBe(true);
+  expect(move({ thread: "thread-one" }, { thread: "thread-one", message: "m1" })).toBe(true);
+  expect(move({ thread: "thread-one" }, { thread: "thread-one" }, "/nexus/graph")).toBe(true);
 });
