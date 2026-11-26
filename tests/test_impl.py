@@ -17,6 +17,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import connection, models, transaction
+from django.db.models import Value
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
@@ -1556,7 +1557,7 @@ def test_a_stored_key_its_choices_no_longer_name_loads_lists_and_filters_as_its_
 
 
 @pytest.mark.django_db
-def test_a_key_its_choices_no_longer_name_is_never_written() -> None:
+def test_a_key_its_choices_no_longer_name_is_refused_wherever_the_field_prepares_it() -> None:
     """Saving, updating, bulk-writing, creating or cleaning with the key is refused; a save leaving it out is not."""
 
     retired = _retired_backend("unwritten")
@@ -1579,6 +1580,23 @@ def test_a_key_its_choices_no_longer_name_is_never_written() -> None:
     stored = backend_model._base_manager.get(pk=retired.pk)
     assert (stored.label, stored.backend_class) == ("Renamed", "retired")
     assert not backend_model._base_manager.filter(slug="new").exists()
+
+
+@pytest.mark.django_db
+def test_a_value_typed_as_the_field_is_refused_and_an_expression_writes_unchecked() -> None:
+    """The refusal covers what the field prepares; a bare ``Value`` is an expression it never sees, so it writes."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    field = backend_model._meta.get_field("backend_class")
+    with system_context(reason="test.impl.expression.write"):
+        row = backend_model.objects.create(slug="expressed", label="Expressed", backend_class="local")
+        rows = backend_model._base_manager.filter(pk=row.pk)
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            rows.update(backend_class=Value("retired", output_field=field))
+        assert "backend_class" in refused.value.message_dict
+        rows.update(backend_class=Value("retired"))
+
+    assert rows.get().backend_class == "retired"
 
 
 @pytest.mark.django_db

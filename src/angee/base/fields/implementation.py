@@ -32,7 +32,7 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
     A stored key its choices do not name (one a later release retired, or one
     another process's registry holds) still loads, lists and filters, as its
-    text; the column is never written with one, and resolving it raises.
+    text; no value the field prepares writes one, and resolving it raises.
     """
 
     def __init__(
@@ -154,8 +154,12 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         return self.key_for(models.Field.get_prep_value(self, value))
 
     def get_db_prep_save(self, value: Any, connection: Any) -> Any:
-        """Refuse every write of a key outside this field's choices: an insert, an update, a bulk write.
+        """Refuse writing a key outside this field's choices, in every value the field prepares.
 
+        That is a plain value in an insert, an update, ``QuerySet.update`` or
+        ``bulk_update``, and a ``Value`` whose output field is this one. An
+        expression is not checked: ``F``, ``Subquery``, ``Cast``, ``Case``, or
+        a ``Value`` without this field as its output writes what it computes.
         The write runs after the save's REBAC gates, so a caller who may not
         save the row gets that refusal. A stored row saves a key its choices
         name, even once the registry dropped it; a save that leaves the column

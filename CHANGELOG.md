@@ -17,19 +17,23 @@ live in code docstrings.
   loads as its member, and a filter on it finds the rows that store it. Loading
   one raised `ValidationError` ("Value '…' is not a valid choice."), so no
   query that read such a row could finish. Writing the column with such a key
-  stays refused, on every write (an insert, an update, `QuerySet.update`,
-  `bulk_update`), except by a history copy, which records its row's key; a save
-  that leaves the column out (`update_fields`) succeeds. Input (`full_clean`, a
-  model form, a deserialized fixture) refuses it as before. Resolving its
+  stays refused in every value the field prepares (a plain value in an insert,
+  an update, `QuerySet.update`, `bulk_update`, or a `Value` whose output field
+  is the column's), except by a history copy, which records its row's key; an
+  expression (`F`, `Subquery`, `Cast`, `Case`, or a `Value` without the field
+  as its output) is not checked. A save that leaves the column out
+  (`save(update_fields=...)`) succeeds from code; a GraphQL update or a model
+  form saves the whole row and is refused naming the column. Input
+  (`full_clean`, a model form, a deserialized fixture, so a dump of such a row,
+  history tables included) refuses it as before. Resolving its
   implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
   `ImproperlyConfigured` naming the field, the key and the registry's setting.
   A GraphQL read that selects the column still fails, but differently: it
   failed on the list with the public `VALIDATION` error "Value '…' is not a
   valid choice."; it now fails on the cell with a masked `INTERNAL` error, which
   the console shows as "Request failed." and retries up to three times.
-  **Upgrade:** code that reads a
-  selector's value as a member (`.label`, `.value`) takes `field.key_for(value)`
-  instead; none in the framework does.
+  **Upgrade:** code that reads a selector's value as a member (`.label`,
+  `.value`) takes `field.key_for(value)` instead; none in the framework does.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.
