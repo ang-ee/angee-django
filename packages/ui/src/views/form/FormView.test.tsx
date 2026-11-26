@@ -1363,7 +1363,7 @@ describe("FormView", () => {
 
     page({});
     const control = await screen.findByRole("combobox", { name: "Backend" });
-    expect(explanation(screen.getByLabelText("Not registered: Backend"))).toBe("Choose a registered one to save this record.");
+    expect(explanation(screen.getByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run until another is chosen.");
     fireEvent.click(control);
     expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
@@ -1372,7 +1372,7 @@ describe("FormView", () => {
     for (const locked of [{ readOnly: true }, { createOnly: true }]) {
       cleanup();
       page(locked);
-      expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("It cannot be changed on this record.");
+      expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run. It cannot be changed on this record.");
       expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
     }
   });

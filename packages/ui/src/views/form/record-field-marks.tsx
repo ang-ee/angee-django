@@ -138,10 +138,11 @@ export function UnregisteredImplementationField({ field, readOnly = false, child
 
 /** Every native form field placement composes attention, provenance, and access marks once.
  * The field the record's own form names through `UnregisteredImplementationField` carries "Not
- * registered" as an attention mark, explained as its accessible description: an editable field
- * offers every registered implementation and the record saves once one is chosen; a read-only one
- * cannot be changed on this record. The save's refusal stays the server's, shown under the field. A
- * dialog's field of the same name is not that field, so it carries none.
+ * registered" as an attention mark, explained as its accessible description: its implementation
+ * cannot run until another is chosen, where the field offers the registered ones, and cannot be
+ * changed on this record where it is read-only. The record's other fields save either way; a
+ * refusal stays the server's, shown under the field. A dialog's field of the same name is not that
+ * field, so it carries none.
  * @kind fragment
  */
 export function RecordFieldMarkControl({ field, label, restricted = false }: {
@@ -156,7 +157,7 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
     ...published,
     ...(unregistered?.field === field ? [{
       field, label: t("implementation.notRegistered"), tone: "warning" as const,
-      explanation: t(unregistered.readOnly ? "implementation.unchangeable" : "implementation.chooseRegistered"),
+      explanation: t(unregistered.readOnly ? "implementation.cannotRunUnchangeable" : "implementation.cannotRunUntilChosen"),
     }] : []),
     ...(restricted ? [{ field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }] : []),
   ];

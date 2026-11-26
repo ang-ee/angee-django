@@ -41,17 +41,18 @@ const backendById = (args: Record<string, unknown>) => {
 };
 
 /**
- * The backends' roots. A save keeps a backend only once its key is a registered one: the server
- * saves the whole row, and refuses a key the registry no longer names under the key's field.
+ * The backends' roots. A save keeps the key the backend holds unless it chooses another, as the
+ * server does: choosing a key the registry does not name is refused under the key's field.
  */
 export const backendOperations: Readonly<Record<string, GraphQLWireOperation>> = {
   backends: () => backends,
   backends_aggregate: () => ({ aggregate: { count: backends.length } }),
   backends_by_pk: backendById,
   update_backends_by_pk: (args) => {
-    const saved: Record<string, unknown> = { ...backendById(args), ...(typeof args._set === "object" && args._set !== null ? args._set : {}) };
-    if (registered.some(({ value }) => value === saved.backend_class)) return saved;
-    const refusal = "Value 'retired' is not a valid choice.";
+    const patch: Record<string, unknown> = typeof args._set === "object" && args._set !== null ? { ...args._set } : {};
+    const saved = { ...backendById(args), ...patch };
+    if (!("backend_class" in patch) || registered.some(({ value }) => value === patch.backend_class)) return saved;
+    const refusal = `Value '${String(patch.backend_class)}' is not a valid choice.`;
     throw new GraphQLError(refusal, {
       extensions: { code: "VALIDATION", validationErrors: { backend_class: [refusal] }, formErrors: [] },
     });

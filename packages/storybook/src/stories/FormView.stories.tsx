@@ -306,9 +306,9 @@ const unregistered = backends[1];
 const backendField = { name: "backend_class", label: "Backend" } satisfies FormField;
 
 /**
- * Old archive's Backend is editable: it carries the warning mark "Not registered", described "Choose
- * a registered one to save this record.", and its select offers Local folder and S3 bucket. Choosing
- * one clears the mark and the record saves; saving without one is refused under Backend.
+ * Old archive's Backend is editable: it carries the warning mark "Not registered", described "Its
+ * implementation cannot run until another is chosen.", and its select offers Local folder and S3
+ * bucket. Choosing one clears the mark; a rename saves either way and keeps the key until one is.
  */
 export const ImplementationKeyNotRegistered: Story = {
   render: () => (
@@ -316,7 +316,10 @@ export const ImplementationKeyNotRegistered: Story = {
   ),
 };
 
-/** The same record with Backend create-only: read-only here, its mark is described "It cannot be changed on this record." */
+/**
+ * The same record with Backend create-only: read-only here, its mark is described "Its implementation
+ * cannot run. It cannot be changed on this record."; a rename still saves.
+ */
 export const ImplementationKeyNotRegisteredCreateOnly: Story = {
   name: "Implementation Key Not Registered, Create-only",
   render: () => (

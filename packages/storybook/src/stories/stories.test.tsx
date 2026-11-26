@@ -159,10 +159,10 @@ test("Views/ListView / Implementation Key Not Registered says so in the warning 
 /** A mark's explanation: its accessible description. */
 const explanation = (mark: HTMLElement) => document.getElementById(mark.getAttribute("aria-describedby") ?? "")?.textContent;
 
-test("Views/FormView / Implementation Key Not Registered marks Backend, says a registered one saves it and offers them", async () => {
+test("Views/FormView / Implementation Key Not Registered marks Backend, says it cannot run until another is chosen and offers them", async () => {
   const said = consoleMessages();
   render(<formView.ImplementationKeyNotRegistered />);
-  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Choose a registered one to save this record.");
+  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run until another is chosen.");
   fireEvent.click(screen.getByRole("combobox", { name: "Backend" }));
   expect(await screen.findByRole("option", { name: "Local folder" })).toBeTruthy();
   expect(screen.getByRole("option", { name: "S3 bucket" })).toBeTruthy();
@@ -173,7 +173,7 @@ test("Views/FormView / Implementation Key Not Registered marks Backend, says a r
 test("Views/FormView / Implementation Key Not Registered, Create-only marks Backend as unchangeable on this record", async () => {
   const said = consoleMessages();
   render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
-  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("It cannot be changed on this record.");
+  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run. It cannot be changed on this record.");
   expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
