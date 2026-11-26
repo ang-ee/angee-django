@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Storage as TestStorage } from "happy-dom";
 import * as v from "valibot";
 
@@ -22,6 +22,7 @@ import {
   AppearanceProvider,
   useAppearance,
   type AppearancePreferences,
+  type AppearanceState,
   type HostAppearanceDefaults,
 } from "./appearance";
 
@@ -309,6 +310,80 @@ test("a pending host keeps the first paint and the boot cache until its options 
   expect(root.style.getPropertyValue("--brand")).toBe("#abcdef");
   expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!)).toMatchObject({
     themeId: paper.definition.id, tokenLayers: { shared: { "--brand": "#abcdef" } },
+  });
+});
+
+describe("while the host's own options are pending", () => {
+  // Only appearance that wears the host's options waits for them: a person following the app default, or a locked app.
+  const pendingHost: HostAppearanceDefaults = { themeId: paper.definition.id, colorScheme: "light", fingerprint: "test-host", pending: true };
+  const cache = () => JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY) ?? "null");
+
+  test("a person who chose nothing keeps the first paint and writes no boot cache", () => {
+    renderAppearance({ preferences: {}, defaults: pendingHost });
+    expect(document.documentElement.dataset.themeId).toBeUndefined();
+    expect(cache()).toBeNull();
+  });
+
+  test.each([
+    { case: "a saved customisable theme", appearance: { version: 1, themeId: paper.definition.id }, themeId: paper.definition.id, brand: "#112233" },
+    { case: "a saved fixed theme", appearance: { version: 1, themeId: ink.definition.id }, themeId: ink.definition.id, brand: "#556677" },
+    { case: "a saved customisation", appearance: saved, themeId: paper.definition.id, brand: "#445566" },
+  ])("$case is worn and cached at once", ({ appearance, themeId, brand }) => {
+    renderAppearance({ preferences: { appearance }, defaults: pendingHost });
+    expect(document.documentElement.dataset.themeId).toBe(themeId);
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe(brand);
+    expect(cache()).toMatchObject({ themeId });
+  });
+
+  test("a locked app keeps the first paint, and the boot cache takes the person's own theme at once", () => {
+    renderAppearance({ preferences: { appearance: { version: 1, themeId: ink.definition.id } }, defaults: pendingHost, themeLocked: true });
+    expect(document.documentElement.dataset.themeId).toBeUndefined();
+    expect(cache()).toMatchObject({ themeId: ink.definition.id });
+  });
+
+  test("before the first paint, a draft that follows the app default waits and a theme picked in it applies at once", async () => {
+    const { result } = renderAppearance({ preferences: {}, defaults: pendingHost });
+    act(() => result.current.openDraft());
+    await act(async () => { await result.current.setColorScheme("dark"); });
+    expect(document.documentElement.dataset.themeId).toBeUndefined();
+    await act(async () => { await result.current.setTheme(ink.definition.id); });
+    expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+    expect(cache()).toBeNull();
+  });
+
+  test.each([
+    { leave: "Discard", leaveDraft: async (appearance: AppearanceState) => { appearance.discard(); } },
+    { leave: "a return to the app default", leaveDraft: async (appearance: AppearanceState) => { await appearance.setTheme(undefined); } },
+  ])("after the first paint, a picked theme left by $leave gives way to the host theme at once", async ({ leaveDraft }) => {
+    const { result } = renderAppearance({ preferences: {}, defaults: pendingHost });
+    act(() => result.current.openDraft());
+    await act(async () => { await result.current.setTheme(ink.definition.id); });
+    expect(document.documentElement.dataset.themeId).toBe(ink.definition.id);
+    await act(async () => { await leaveDraft(result.current); });
+    // The document follows the context: the host theme, with the build's options until the host answers.
+    expect(result.current.effectiveThemeId).toBe(paper.definition.id);
+    expect(document.documentElement.dataset.themeId).toBe(paper.definition.id);
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
+  });
+
+  test("another person signing in while the host's options are read again keeps the paint until they arrive", () => {
+    const answered = (brand: string): HostAppearanceDefaults => ({ ...pendingHost, pending: false, options: { version: 1, value: { brand, rail: "#223344" } } });
+    const signedIn = (id: string | null, status: RuntimeAuthState["status"] = "authenticated"): RuntimeAuthState =>
+      ({ status, user: id ? { id, name: id } : null, hasRole: () => false });
+    const tree = (host: HostAppearanceDefaults, auth: RuntimeAuthState) => (
+      <AppRuntimeProvider runtime={{ themes: THEMES, auth, userPreferences: { available: true, preferences: {}, patchPreferences: vi.fn(async () => undefined) } }}>
+        <AppearanceProvider host={host}>{null}</AppearanceProvider>
+      </AppRuntimeProvider>
+    );
+    const brand = () => document.documentElement.style.getPropertyValue("--brand");
+    const { rerender } = render(tree(answered("#abcdef"), signedIn("actor-1")));
+    expect(brand()).toBe("#abcdef");
+    // A session change resolves identity again and starts the host's read over: this person's first paint waits.
+    rerender(tree(pendingHost, signedIn(null, "resolving")));
+    rerender(tree(pendingHost, signedIn("actor-2")));
+    expect(brand()).toBe("#abcdef");
+    rerender(tree(answered("#123456"), signedIn("actor-2")));
+    expect(brand()).toBe("#123456");
   });
 });
 

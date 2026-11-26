@@ -16,9 +16,12 @@ live in code docstrings.
   - `@angee/app` gains the install-one manifest key `hostAppearance`, a
     `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
     per render of its session frame; two providers fail composition, as two dashboard
-    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps the
-    first paint and the boot cache until the source's first read answers, fails or
-    pauses; only the session frame sets it, and `CreateAppInput.appearance` takes none.
+    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps each
+    person's first paint, and the boot cache, where they wear the host's options, until
+    the source's first read answers, fails or pauses; a person's own saved theme or
+    customisation is painted at once, and after the first paint every choice applies
+    at once, a draft's included. Only the session frame sets it, and
+    `CreateAppInput.appearance` takes none.
     Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
     precedence".
   - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's

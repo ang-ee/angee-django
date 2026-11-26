@@ -59,8 +59,9 @@ export interface HostAppearanceDefaults {
   options?: ThemeOptionsEnvelope;
   fingerprint?: string;
   /**
-   * The host's own options are still being read: keep the first paint and the boot
-   * cache until they arrive, as while identity resolves. Only the app's session frame
+   * The host's own options are still being read: where the appearance wears them (a
+   * person following the app default, or a locked app), keep that person's first paint
+   * and the boot cache until they arrive. Only the app's session frame
    * sets it, from its host appearance source, which clears it when its read settles,
    * fails or pauses; a build never does.
    */
@@ -166,7 +167,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
     () => themeLocked ? resolvePreferredAppearance(preferences, saved.notice, catalogue, host, system, false) : savedAppearance,
     [themeLocked, preferences, saved.notice, catalogue, host, system, savedAppearance],
   );
-  const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice } = useMemo(
+  const { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice, wearsHostOptions } = useMemo(
     () => draft ? resolvePreferredAppearance(draft, null, catalogue, host, system, lockRequested) : savedAppearance,
     [draft, catalogue, host, system, lockRequested, savedAppearance],
   );
@@ -183,15 +184,22 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
   }, [hostTheme, host.options]);
 
   const resolvingIdentity = auth.status === "resolving";
-  // The first paint and the boot cache wait for identity and for the host's own options.
-  const holding = resolvingIdentity || host.pending === true;
+  const actorId = resolvingIdentity ? null : auth.user?.id ?? "anonymous";
+  // The person whose first paint is on the document: a change of person starts a new first paint.
+  const [paintedFor, setPaintedFor] = useState<string | null>(null);
+  // Every paint waits for identity. The host's own pending options hold only this person's first
+  // paint, and only where it wears them; later choices, a draft's included, apply at once.
+  const holdingPaint = resolvingIdentity
+    || (paintedFor !== actorId && host.pending === true && wearsHostOptions);
+  const holdingCache = resolvingIdentity || (host.pending === true && ownAppearance.wearsHostOptions);
   useEffect(() => {
-    if (holding) return;
+    if (holdingPaint) return;
     applyAppearanceRoot({ themeId: effectiveThemeId, colorScheme, tokens: effectiveTokens });
-  }, [colorScheme, effectiveThemeId, effectiveTokens, holding]);
+    setPaintedFor(actorId);
+  }, [actorId, colorScheme, effectiveThemeId, effectiveTokens, holdingPaint]);
 
   useEffect(() => {
-    if (holding) return;
+    if (holdingCache) return;
     writeAppearanceCache({
       schema: APPEARANCE_CACHE_SCHEMA,
       fingerprint: host.fingerprint ?? "",
@@ -200,7 +208,7 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST, themeLocked:
       colorSchemePreference: ownAppearance.colorSchemePreference,
       tokenLayers: ownAppearance.tokenLayers,
     });
-  }, [auth.user?.id, ownAppearance, host.fingerprint, holding]);
+  }, [auth.user?.id, ownAppearance, host.fingerprint, holdingCache]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
@@ -350,7 +358,9 @@ function resolvePreferredAppearance(preferences: AppearancePreferences, notice: 
   const effectiveThemeId = effectiveTheme?.definition.id ?? null;
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
-  const requestedOptions = themeLocked || preferences.themeId === undefined ? host.options : preferences.options;
+  // A locked app, or a person following the app default, wears the host's options; any other choice wears its own.
+  const wearsHostOptions = themeLocked || preferences.themeId === undefined;
+  const requestedOptions = wearsHostOptions ? host.options : preferences.options;
   let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
@@ -365,7 +375,7 @@ function resolvePreferredAppearance(preferences: AppearancePreferences, notice: 
     if (effectiveTheme.definition.options) effectiveOptions = { version: resolved.version, value: resolved.value };
   }
   const effectiveTokens = { ...tokenLayers.shared, ...tokenLayers[colorScheme] };
-  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice, themeLocked };
+  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice, themeLocked, wearsHostOptions };
 }
 
 /**
