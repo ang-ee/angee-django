@@ -3454,12 +3454,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
     @staticmethod
     def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
-        """Return each recipient's ``(handle id, role)``, its addresses resolved in one read.
+        """Return each recipient's ``(handle id, role)`` in the order given, its addresses resolved in one read.
 
         Known handles resolve through the handle owner's batch lookup
         (``HandleManager.find_identities``); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
-        only a handle that has none and never renames a shared one.
+        only a handle that has none and never renames a shared one. Those writes
+        take the handles in one order, by their identity key, so two composes
+        naming the same addresses in different orders take their row locks in the
+        same order and do not deadlock each other; another writer that takes the
+        same handles in its own order still can.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3467,19 +3471,15 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         found = handle_model.objects.find_identities(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        rows: list[tuple[Any, str]] = []
-        for addressee in recipients:
-            handle_id = addressee.handle_id
-            if handle_id is None:
-                handle = found.get((email, addressee.address))
-                if handle is None or addressee.name:
-                    handle = found[(email, addressee.address)] = handle_model.objects.upsert(
-                        platform=email, value=addressee.address, display_name=addressee.name,
-                        fill_only=("display_name",), created_by_id=created_by_id,
-                    )
-                handle_id = handle.pk
-            rows.append((handle_id, addressee.role))
-        return rows
+        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+            if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
+                found[(email, addressee.address)] = handle_model.objects.upsert(
+                    platform=email, value=addressee.address, display_name=addressee.name,
+                    fill_only=("display_name",), created_by_id=created_by_id,
+                )
+        return [
+            (addressee.handle_id or found[(email, addressee.address)].pk, addressee.role) for addressee in recipients
+        ]
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
