@@ -6,16 +6,24 @@
 A write from a dialog or a composer is safe to retry, and a dialog keeps a
 pending write and typed values.
 
-- `useIntentKeys(scope)` (`@angee/ui`, beside `createClientKey`) keeps one
-  request identity per write intent for the page's lifetime: `keyFor(intent)`,
-  `run(intent, fire)` and `state(intent)`. The intent's object keys may come in
-  any order. `run` releases the key on the write's answer (a result, ok or
-  refused, a GraphQL error, an in-band envelope refusal) and keeps it when the
-  answer is lost, when the connection boundary refused the request before
-  sending it, and when the server refused who may write (`state` then says
-  `unconfirmed`, `not-sent`, `denied` or `denied-after-unconfirmed`). A surface
-  unmounting never releases a key; a change of signed-in person forgets them
-  all; nothing is persisted, so a retry writes once from this page only.
+- `useIdempotencyKeys()` (`@angee/ui`, beside `createClientKey`) keeps one
+  idempotency key per draft of a keyed write, for the app runtime:
+  `send(scope, fire, confirmed?)`, `discard(scope)` and `restart(scope)`. A
+  draft is named by its scope (the surface and what it writes to); its key is
+  minted at its first attempt and lasts until a confirmed answer ends it, or the
+  surface restarts it, or the person discards it with nothing possibly
+  written. No error releases it, so a resend, edited or not, is written once
+  by the server, which answers `CREATION_KEY_CONFLICT` for an earlier version it
+  wrote; the caller says so and restarts. `useIdempotencyKeyState(scope)`
+  reads what the draft can tell (`{ outcome, uncertain }`), re-rendering only
+  its reader. The store lives on the root `AppRuntimeProvider`, is forgotten on
+  a change of signed-in person (not on entering a preview) and is never
+  persisted, so a retry writes once from this page only. `MutationDialog` takes
+  `idempotencyScope` and passes the key as its submission's third argument; an
+  action takes `idempotencyScope` and its `submit` reads
+  `context.idempotencyKey`. The record form's create, chatter's post,
+  knowledge's note and vault clone, the project from a template, the
+  dashboards' create and duplicate, and the workflow start sit on it.
 - `@angee/refine`: `errorFromAuthoredEnvelope` (and so `useAuthoredMutation`'s
   `errorFrom`) throws an `AuthoredEnvelopeError` carrying the envelope's `code`,
   where it threw a plain `Error`. `hasGraphQLAnswer(error)` says whether a
@@ -55,6 +63,10 @@ pending write and typed values.
 Upgrade:
 
 - `allowSearchChanges: true` becomes `leaves: pathnameChanges`.
+- A keyed write takes its key from `useIdempotencyKeys().send(scope, fire)`
+  under an `AppRuntimeProvider` (`createUiTestProviders` provides one); a key
+  minted per attempt (`crypto.randomUUID`, `createClientKey` at send time) or
+  held in a ref moves onto it.
 - An open `MutationDialog` or typed-args `ActionFormDialog` renders under the
   app's router and `ModalsHost`, as every app page provides both, and says so as
   it opens when one is missing. `createUiTestProviders` (`@angee/ui/testing`)

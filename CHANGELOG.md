@@ -11,14 +11,18 @@ live in code docstrings.
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
 - `@angee/ui`, `@angee/refine`: **Changed API.** A write from a dialog or a
-  composer is safe to retry. `useIntentKeys(scope)` (beside `createClientKey`)
-  keeps one request identity per write intent for the page's lifetime and
-  settles it by the answer: released by any answer, kept while the answer is
-  lost, the request was never sent, or the server refused who may write; never
-  released by an unmount, forgotten on a change of signed-in person, never
-  persisted (a retry writes once from this page only). Chatter's post,
-  knowledge's note and vault clone, and the project-from-template action move
-  onto it and drop their own key refs; a refused result now releases their key.
+  composer is safe to retry. `useIdempotencyKeys()` (beside `createClientKey`)
+  keeps one idempotency key per draft, named by its scope, for the app runtime:
+  minted at the draft's first attempt and kept, whatever an error says, until
+  a confirmed answer ends it; a resend after an edit meets the server's
+  `CREATION_KEY_CONFLICT` if an earlier version was written, which the caller
+  says and restarts. Forgotten on a change of signed-in person, never
+  persisted (a retry writes once from this page only). The record form's
+  create (its ref is gone), chatter's post, knowledge's note and vault clone,
+  the project from a template, the dashboards' create and duplicate (which
+  minted a new key per attempt, so a retried lost answer made two) and the
+  workflow start sit on it; `MutationDialog` and actions take
+  `idempotencyScope`.
   `errorFromAuthoredEnvelope` throws an `AuthoredEnvelopeError` with the
   envelope's `code`; `hasGraphQLAnswer` says whether a failed request got the
   server's answer, and a bounded transport error keeps `response.errors` only
