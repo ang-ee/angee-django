@@ -1182,7 +1182,8 @@ def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list
     return markup, raw
 
 
-MARKER = "MARKER"
+MARKER = "https://example.test/MARKER"
+"""Visible text that is also a link ``url`` keeps, so a harmless value renders wherever a row prints its value."""
 _HTML_SPACE = " \t\n\f\r"
 
 
@@ -1229,6 +1230,21 @@ def _assert_value_stays_text(
                 if name in TEXT_ATTRIBUTES or (linking and (was, now) == (url(_harmless(value)), url(value))):
                     continue
                 assert now == was, (before[1], name, was, now)
+
+
+def _unless_unlinkable(render: Callable[[], str], value: str) -> str | None:
+    """``render()``'s HTML, or ``None`` when the render refused ``value`` as a link ``url`` would empty.
+
+    A row printing the value through ``url`` refuses a value that is no link (``value_not_linkable``) rather than
+    render it, so such a value never becomes markup: nothing is rendered. Any other refusal is the test's failure.
+    """
+
+    try:
+        return render()
+    except ValidationError as refusal:
+        assert [item.code for item in refusal.error_list] == ["value_not_linkable"], refusal
+        assert UNPRINTED.sub("", value).strip() and url(UNPRINTED.sub("", value)) == "", value
+        return None
 
 
 class _Rows:
@@ -1441,8 +1457,11 @@ def test_a_value_never_becomes_markup(
         event("refused")
         return  # a refused row never renders
     event("admitted")
-    marker = walk.render({"v": _harmless(value)}, kit=kit).html
-    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+    hostile = _unless_unlinkable(lambda: walk.render({"v": value}, kit=kit).html, value)
+    if hostile is None:
+        event("refused as a link")
+        return
+    _assert_value_stays_text(walk.render({"v": _harmless(value)}, kit=kit).html, hostile, value)
 
 
 _MARKDOWN = st.lists(st.sampled_from([
@@ -1468,8 +1487,9 @@ def test_a_value_never_becomes_markup_through_markdown(kit: Any, source: str, he
         walk = TemplateWalker(saving=True).walk(template, rows)
     except ValidationError:
         return
-    marker = walk.render({"v": _harmless(value)}, kit=kit).html
-    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+    hostile = _unless_unlinkable(lambda: walk.render({"v": value}, kit=kit).html, value)
+    if hostile is not None:
+        _assert_value_stays_text(walk.render({"v": _harmless(value)}, kit=kit).html, hostile, value)
 
 
 PROPERTY_SOURCE = (
@@ -1477,8 +1497,12 @@ PROPERTY_SOURCE = (
     "{% for i in items %}{{ i }}{% endfor %}|{{ v|default:'d' }}|{{ v|upper }}|{{ v|lower }}|{{ v|capfirst }}|"
     "{{ v|title }}|{{ v|truncatechars:20 }}|{{ v|truncatewords:3 }}|{{ v|linebreaksbr }}|{{ v|length }}|"
     "{{ when|date }}|{{ v|floatformat }}|{{ v|pluralize }}|{{ v|yesno }}</p>"
+)
+PROPERTY_LINKS = (
     '<a href="{{ v|url }}" title="{{ v }}">{{ v|url }}</a><img alt="{{ v|upper }}" src="{{ v|default:\'\'|url }}" />'
 )
+"""The paths a value takes through ``url``, in a row of their own: a value that is no link is refused there, and
+:data:`PROPERTY_SOURCE` still renders it through every other filter."""
 
 
 @settings(deadline=None, max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -1492,12 +1516,17 @@ def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, v
             _row("block", "echo", source="<i>{{ x }}</i>", text_source="{{ x }}", variables={"x": "x"})
             _mail(PROPERTY_SOURCE, {"v": "x", "items.*": "x", "when": "x"}, format="html", text_source="{{ v }}",
                   key="tests.property")
+            _mail(PROPERTY_LINKS, {"v": "x"}, format="html", text_source="{{ v }}", key="tests.property_links")
         template = MessageTemplate.objects.get(key="tests.property")
+        links = MessageTemplate.objects.get(key="tests.property_links")
     for candidate in (value, SafeString(value), mark_safe("<b>" + value + "</b>")):
         harmless = _harmless(str(candidate))
         marker = _render(template, {"v": harmless, "items": [harmless], "when": "2026-11-24"}, kit).html
         rendered = _render(template, {"v": candidate, "items": [candidate], "when": "2026-11-24"}, kit)
         _assert_value_stays_text(marker, rendered.html, str(candidate))
+        linked = _unless_unlinkable(lambda: _render(links, {"v": candidate}, kit).html, str(candidate))
+        if linked is not None:
+            _assert_value_stays_text(_render(links, {"v": harmless}, kit).html, linked, str(candidate))
 
 
 TRUNCATING_SENDER = "x onmouseover=alert(document.domain) style=background:url(https://tracker.example/leak);x:"
@@ -1610,15 +1639,20 @@ ADMITTED_LINKS = {
 """Values url makes links of, percent-encoded and in punycode as markdown-it writes them, then escaped."""
 
 
-def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
-    """Property 3: a value gives an absolute https, http, mailto or tel link, or an empty target; a quote cannot
-    leave an attribute."""
+def test_a_url_value_gives_a_link_or_the_render_is_refused(plain: Any, kit: Any) -> None:
+    """Property 3: a value gives an absolute https, http, mailto or tel link; ``url`` gives any other value no link,
+    and a render refuses it rather than send an empty target; a blank value leaves it empty; a quote cannot leave an
+    attribute."""
 
     del plain
     template = _mail('<a href="{{ link|url }}">x</a>', {"link": "x"}, format="html", text_source="{{ link|url }}")
     for link in ("javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:x", "file:///etc/passwd",
                  "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050, *REFUSED_LINKS):
-        assert 'href=""' in _render(template, {"link": link}, kit).html, link
+        assert url(link) == "", link
+        with pytest.raises(ValidationError) as refusal:
+            _render(template, {"link": link}, kit)
+        assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"], link
+    assert 'href=""' in _render(template, {"link": " "}, kit).html
     for link, sent in ADMITTED_LINKS.items():
         assert f'href="{sent}"' in _render(template, {"link": link}, kit).html, link
     rendered = _render(template, {"link": 'https://example.test/" onclick="x'}, kit)

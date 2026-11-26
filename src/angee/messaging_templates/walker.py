@@ -68,12 +68,14 @@ from django.views.decorators.debug import sensitive_variables
 from angee.brandkit.models import BrandKit
 from angee.messaging_templates.engine import (
     BRAND_PATHS,
+    LINK_REFUSED,
     MARKUP_FILTERS,
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
     RenderBudget,
     brand_values,
+    clean_link,
     filter_names,
     url,
 )
@@ -467,7 +469,8 @@ class TemplateWalk:
     item present; ``date_paths`` the paths read through ``date``, each with the
     formats it is printed in; ``float_paths`` the paths a filter reads as a float
     (:data:`FLOAT_FILTERS`); ``reads`` every path of ``D`` some row reads; ``printed`` the paths of ``D`` each form
-    prints, by form, through any include, a condition around the output or not (a value only tested is not printed).
+    prints, by form, through any include, a condition around the output or not (a value only tested is not printed);
+    ``link_paths`` the paths of ``D`` some form prints through ``url``, a Markdown link's destination among them.
     """
 
     root: WalkedRow
@@ -481,6 +484,7 @@ class TemplateWalk:
     float_paths: set[Path] = field(default_factory=set)
     reads: set[Path] = field(default_factory=set)
     printed: dict[RowPiece, set[Path]] = field(default_factory=dict)
+    link_paths: set[Path] = field(default_factory=set)
     includes: set[str] = field(default_factory=set)
     refusals: list[str] = field(default_factory=list)
 
@@ -512,6 +516,10 @@ class TemplateWalk:
            (:data:`UNPRINTED`), so one holding nothing else is empty;
            at a :attr:`float_paths` path, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item.
+           Each value at a :attr:`link_paths` path that :func:`~angee.messaging_templates.engine.url`
+           would empty and is not blank is refused, code ``value_not_linkable``,
+           as :func:`~angee.messaging_templates.engine.clean_link` words it: a
+           render never sends an empty link in place of one it was given.
         4. Every absent or null declared segment filled: an object with ``{}``, a
            list with ``[]``, a leaf with ``""``; so every lookup lands on a key.
         5. At each :attr:`date_paths` path a non-empty string becomes a ``date``,
@@ -559,6 +567,14 @@ class TemplateWalk:
                           if isinstance(number, (int, float)) and not isinstance(number, bool) and not _finite(number))
         if errors:
             raise _refused(errors, "invalid_values")
+        for path in sorted(self.link_paths):
+            for link in _at(filled, path):
+                try:
+                    clean_link(link, path=_dotted(path))
+                except ValidationError as refusal:
+                    errors.extend(refusal.messages)
+        if errors:
+            raise _refused(errors, LINK_REFUSED)
         printer = _DatePrinter(self.date_paths)
         for path in sorted(self.date_paths):
             _parse_dates(filled, path, path, printer, errors)
@@ -1654,6 +1670,8 @@ class _TreeWalker:
                 self.walk.reads.add(binding.effective)
                 if use == ReadUse.OUTPUT:
                     self.walk.printed.setdefault(frame.form, set()).add(binding.effective)
+                    if names[-1:] == ["url"]:
+                        self.walk.link_paths.add(binding.effective)
             optional = names[:1] == ["default"] or self.guarded(frame, binding)
             if use in (ReadUse.OUTPUT, ReadUse.ARGUMENT) and not optional:
                 if binding.kind == BindingKind.UNPASSED:

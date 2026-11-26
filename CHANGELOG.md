@@ -18,6 +18,19 @@ live in code docstrings.
   not one. Code that builds or judges a link without a request calls it instead
   of reading the setting; the callers that read it today move onto it in their
   own changes.
+- `angee.messaging_templates`: **A render never sends an empty link in place of a value it was given.**
+  Before rendering, each value a row prints through `url` (a Markdown link's
+  destination among them) that `url` would empty and that is not blank is
+  refused, `value_not_linkable`, naming its path and why; a blank value still
+  leaves an optional link empty, and `url` itself still gives no link for what it
+  refuses. A host sees one change: a send, a test send or a render whose link
+  value the rule refuses (a single-label host, a relative link, another scheme)
+  used to go out with `href=""` and is now refused before anything is written;
+  a preview of such a sample shows the refusal as its `render_error`.
+  `MessageTemplate.objects.clean_link(value, *, path="link") -> str` asks the same
+  rule before a run: the link a mail prints, `""` for a blank value, or the
+  render's refusal in the same words. The walk records the paths each form
+  prints through `url` (`TemplateWalk.link_paths`).
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None, must_print=())` renders one effective template (the caller picks it for its

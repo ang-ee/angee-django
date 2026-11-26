@@ -18,6 +18,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.html import escape
 from django.views.debug import ExceptionReporter
 from rebac import (
     PermissionDenied,
@@ -40,7 +41,7 @@ from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Handle, Message, Part, Recipient
 from angee.messaging_templates.testing.models import MessageTemplate
-from angee.messaging_templates.walker import TemplateWalker
+from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_platform_admin, create_user
@@ -355,6 +356,108 @@ def test_a_required_value_must_be_printed_by_each_body_through_any_include(
     assert [item.code for item in refusal.value.error_list] == ["value_not_printed"] * len(unprinted)
     assert [body for body in ("HTML", "plain-text") if any(f"The {body} body" in item.message
                                                           for item in refusal.value.error_list)] == unprinted
+
+
+DECISION = "http://localhost:6173/decisions/dec_1"
+
+
+def _decision(key: str = "tests.decision", **values: Any) -> Any:
+    """A mail that exists for one link: a button in the HTML body, the link after its label in the plain text."""
+
+    return _mail("[Open the decision]({{ link }})", LINKED, key=key, **values)
+
+
+@pytest.mark.parametrize("must_print", [[], ["link"]], ids=["no-requirement", "must-print"])
+def test_a_link_the_mail_cannot_carry_is_refused_before_anything_is_written_not_sent_empty(
+    system_channel: Any, sent: list[str], settings: Any, django_capture_on_commit_callbacks: Any, must_print: list[str],
+) -> None:
+    """A single-label host that is not this deployment's origin: the rule cannot link to it, so the send is refused
+    in band, naming the value's path and the host, instead of sending an empty ``href`` and a label with nothing after
+    it."""
+
+    del system_channel
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    row = _decision()
+    with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
+        _send(row, {"link": DECISION}, must_print=must_print)
+    assert [(item.code, item.message) for item in refusal.value.error_list] == [
+        ("value_not_linkable", "link is not a link this mail can carry: the mail cannot link to localhost:6173."),
+    ]
+    assert (callbacks, sent) == ([], [])
+
+
+def test_an_optional_link_left_blank_is_sent_as_it_was(system_channel: Any, settings: Any) -> None:
+    del system_channel
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    for blank in ("", "   "):
+        assert 'href=""' in _stored(_send(_decision(key=f"tests.decision_{len(blank)}"), {"link": blank}))[2]
+
+
+def test_a_keyed_test_send_whose_sample_the_mail_cannot_link_is_refused_with_no_claim(
+    system_channel: Any, settings: Any, sent: list[str],
+) -> None:
+    del system_channel
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    tester = create_platform_admin("messaging-templates-unlinkable-tester")
+    row = _decision(sample={"link": DECISION})
+    with pytest.raises(ValidationError) as refusal:
+        MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="unlinkable-1")
+    assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"]
+    assert (_claim("unlinkable-1", tester), Message._base_manager.count(), sent) == (None, 0, [])
+
+
+def test_the_preview_shows_a_sample_link_the_mail_cannot_carry_as_its_render_error(plain: Any, settings: Any) -> None:
+    """As for any sample value the render refuses: no rendering, and one warning with the refusal's words."""
+
+    del plain
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    row = _decision(sample={"link": DECISION})
+    with system_context(reason="tests.messaging_templates.send.preview"):
+        preview = row.preview()
+    assert preview.rendered is None
+    assert [(warning.code, warning.detail) for warning in preview.warnings] == [(
+        TemplateWarningCode.RENDER_ERROR,
+        "link is not a link this mail can carry: the mail cannot link to localhost:6173.",
+    )]
+
+
+LINKS = [
+    pytest.param("", id="blank"),
+    pytest.param("  ", id="white-space"),
+    pytest.param("https://app.example.test/decisions/1?tab=a&b=c#top", id="two-labels"),
+    pytest.param("https://app.example.test:8443/decisions/1", id="two-labels-port"),
+    pytest.param("mailto:someone@example.test", id="mailto"),
+    pytest.param(DECISION, id="foreign-single-label"),
+    pytest.param("http://10.0.0.1/decisions/1", id="an-address"),
+    pytest.param("/decisions/1", id="path-relative"),
+    pytest.param("javascript:alert(1)", id="javascript"),
+    pytest.param("https://user:secret@app.example.test/", id="user-info"),
+    pytest.param("https:///decisions/1", id="no-host"),
+    pytest.param("https://app.example.test/" + "a" * 2_048, id="too-long"),
+]
+
+
+@pytest.mark.parametrize("value", LINKS)
+def test_the_public_link_check_answers_as_the_render_does(plain: Any, settings: Any, value: str) -> None:
+    """The check a caller asks before a run gives the link the render prints, or exactly the render's refusal."""
+
+    del plain
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    row = _decision(key="tests.decision_check")
+    try:
+        link, expected = MessageTemplate.objects.clean_link(value), None
+    except ValidationError as refusal:
+        link, expected = None, [(item.code, item.message) for item in refusal.error_list]
+    with system_context(reason="tests.messaging_templates.send.check"):
+        if expected is not None:
+            with pytest.raises(ValidationError) as rendered_refusal:
+                row.render({"link": value})
+            assert [(item.code, item.message) for item in rendered_refusal.value.error_list] == expected
+            assert [code for code, _ in expected] == ["value_not_linkable"]
+            return
+        rendered = row.render({"link": value})
+    assert link is not None
+    assert f'href="{escape(link)}"' in rendered.html and f"Open the decision ({link})" in rendered.plain_text
 
 
 SECRET = "https://app.example.test/sign-in/SECRET-marker"

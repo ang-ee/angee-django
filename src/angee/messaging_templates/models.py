@@ -75,6 +75,7 @@ from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.brandkit.models import BrandKit
 from angee.graphql.capabilities import held_permissions
+from angee.messaging_templates.engine import clean_link
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
@@ -660,6 +661,11 @@ _MessageTemplateManagerBase = AngeeHistoryManager.from_queryset(MessageTemplateQ
 class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManagerBase[TemplateT]):
     """Owns the writes that start a row or an override (the deployment's own row, overriding a shipped default and
     keeping an override over it) and the sends of a template (:meth:`send_as_system`, :meth:`send_test`)."""
+
+    clean_link = staticmethod(clean_link)
+    """``clean_link(value, *, path="link") -> str``: the link a mail prints for ``value``, or the render's refusal of it
+    (:func:`~angee.messaging_templates.engine.clean_link`). A caller of :meth:`send_as_system` that sends many mails
+    with one link asks it once, before the first."""
 
     @sensitive_variables("values")
     def send_as_system(
@@ -1425,7 +1431,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         that user, and named system work inside its own ``system_context``
         (:meth:`MessageTemplateManager.send_as_system`). Raises ``ValidationError``
         alone, each item with its code (``invalid_values``, ``values_too_large``,
-        ``message_template_refused``, ``value_not_printed``, ``render_budget``,
+        ``message_template_refused``, ``value_not_linkable``, ``value_not_printed``, ``render_budget``,
         ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
         (:func:`~angee.messaging_templates.walker.refusals_only`).
 

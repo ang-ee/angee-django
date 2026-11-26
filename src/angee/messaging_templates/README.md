@@ -79,7 +79,14 @@ Anything else fails to compile.
   direction, and a template or layout reads `subject` and `preheader`.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
   gives an absolute `https`, `http` (to a named host, with no userinfo),
-  `mailto` or `tel` link, percent-encoded, or none; dates go through `date` (`date:"DATE_FORMAT"`), money through
+  `mailto` or `tel` link, percent-encoded, or none. A render never sends that
+  none in place of a value it was given: before rendering, each value a row
+  prints through `url` (a Markdown link's destination among them) that `url`
+  would empty and that is not blank is refused, `value_not_linkable`, naming its
+  path and why ("link is not a link this mail can carry: the mail cannot link to
+  localhost:6173."); a blank value leaves an optional link empty. A sender asks
+  the same rule of a value before a run with `MessageTemplate.objects.clean_link(value, path="link")`
+  ([Sending as system work](#sending-as-system-work)). Dates go through `date` (`date:"DATE_FORMAT"`), money through
   `floatformat`. A path printed with a time (`DATETIME_FORMAT`, `H:i`) takes an
   aware `datetime`, never a bare date. `linebreaksbr` writes markup, so it is
   the last filter of a printed value.
@@ -199,7 +206,8 @@ carries its code in `error_list`, so a sender tells them apart:
 float holds where `floatformat` or `pluralize` reads it, a moment the local zone
 cannot hold, a bare date printed with a time), `values_too_large` (the values
 over 50,000 characters of JSON), `message_template_refused` (the
-walk), `value_not_printed` (a value passed in `must_print` that a body does not
+walk), `value_not_linkable` (a value printed through `url` that gives no link),
+`value_not_printed` (a value passed in `must_print` that a body does not
 print; see [Sending as system work](#sending-as-system-work)), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
 any other failure, which is logged with its traceback first. Every string value,

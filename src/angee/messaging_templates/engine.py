@@ -307,27 +307,65 @@ _LINKS = MarkdownIt("commonmark")
 in punycode."""
 
 
+LINK_REFUSED = "value_not_linkable"
+"""The code of a value a render prints as a link and :func:`url` would empty (:func:`clean_link`)."""
+
+
+def _link(value: Any) -> tuple[str, str | None]:
+    """The link :func:`url` gives for ``value`` and, when it gives none for a value that is not blank, why."""
+
+    text = str(value)
+    if not text.strip():
+        return "", None
+    if len(text) > URL_INPUT_LIMIT:
+        return "", f"it is over {URL_INPUT_LIMIT:,} characters"
+    link = _LINKS.normalizeLink(text.strip())
+    scheme, colon, rest = link.partition(":")
+    scheme = scheme.lower()
+    if not colon or scheme not in LINK_SCHEMES:
+        schemes = f"{', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]}"
+        return "", f"a mail has no base, so a link is an absolute {schemes} link"
+    if scheme in ("https", "http"):
+        authority = re.split(r"[/?#]", rest[2:], maxsplit=1)[0] if rest.startswith("//") else ""
+        if not authority:
+            return "", "it names no host"
+        if "@" in authority:
+            return "", "it carries user info before its host"
+        if not LINK_HOST.fullmatch(authority):
+            return "", f"the mail cannot link to {authority}"
+    return link, None
+
+
 def url(value: Any) -> str:
     """Return ``value`` as a link a message may carry, or ``""``.
 
     markdown-it's own normalisation of the value without its surrounding white
     space, kept only when it is an absolute link of :data:`LINK_SCHEMES`; any
     other scheme, a protocol- or path-relative link, a fragment, and input over
-    :data:`URL_INPUT_LIMIT` characters give ``""``.
+    :data:`URL_INPUT_LIMIT` characters give ``""``. A render never lets a value
+    it was given be emptied here unseen: it asks :func:`clean_link` of each value
+    it prints through this filter first.
     """
 
-    text = str(value)
-    if len(text) > URL_INPUT_LIMIT:
-        return ""
-    link = _LINKS.normalizeLink(text.strip())
-    scheme, colon, rest = link.partition(":")
-    scheme = scheme.lower()
-    if not colon or scheme not in LINK_SCHEMES:
-        return ""
-    if scheme in ("https", "http") and not (
-        rest.startswith("//") and LINK_HOST.fullmatch(re.split(r"[/?#]", rest[2:], maxsplit=1)[0])
-    ):
-        return ""
+    return _link(value)[0]
+
+
+def clean_link(value: Any, *, path: str = "link") -> str:
+    """Return the link a mail prints for ``value`` through :func:`url`, or refuse it as a render refuses it.
+
+    A blank value (nothing but white space) gives ``""`` and no refusal, as a
+    render leaves an optional link empty. Any other value :func:`url` would empty
+    is refused with a ``ValidationError`` of one item, code
+    :data:`LINK_REFUSED`, naming ``path`` and why: the words a render's refusal
+    uses for that value at that path. It reads nothing, so a caller that mails
+    many recipients asks it once before the first send.
+    """
+
+    link, problem = _link(value)
+    if problem is not None:
+        raise ValidationError([ValidationError(
+            f"{path} is not a link this mail can carry: {problem}.", code=LINK_REFUSED,
+        )])
     return link
 
 
