@@ -10,6 +10,32 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
+  Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
+  the one composed `box-shadow` holds the ring beside the element's own
+  `shadow-*` elevation: a focused pill tab, pressed segmented toggle, drawer
+  rail tab, toast, block-card link, interactive card or collection card frame
+  keeps its elevation and shows the ring. In forced-colours mode, where the
+  browser drops every `box-shadow` and in the last release no control that
+  draws the ring showed focus (controls with their own outline or border, such
+  as the calendar's buttons, did), every control that draws the ring shows a
+  2px outline in the system's colour; the outline is declared for that mode
+  only. An open tab panel shows the ring on keyboard focus. The ring's colour,
+  width and offset are the theme's `--ring` and `--ring-danger`, unchanged.
+  An elevation token is a shadow, never `none`: a layer that is not a shadow
+  voids the composed `box-shadow`, ring included, so "no elevation" is
+  `0 0 #0000` (Ledger and the flat elevation choice). The theme contract
+  (`theme/runtime.mjs`) holds elevations, `--ring` and `--ring-danger` to fixed
+  shadow forms with one exported judge, `isShadowList`, which the theme matrix
+  test also uses, and the composer refuses a theme stylesheet whose text
+  declares an `--elevation-*` property, names one in `@property`, or holds a backslash.
+  `shadow-none` clears an element's own shadow, never the ring: a ring is
+  removed with `ring-0` and `outline-none` under a selector that outranks the
+  ring's state variant, as the form's editable fields do for an input,
+  textarea or button directly inside them and the data-attribute read-only
+  path does. The public token-name list (`@angee/ui/tokens`) leaves out
+  Tailwind's own `--tw-*` variables, so it is unchanged.
 - `@angee/ui`, `@angee/metadata`: **Changed API.** A list header shows a sort
   only for the key its rows visibly follow, the first of the order's keys that
   its groups do not share. A declared or default order's later keys only break

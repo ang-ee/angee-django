@@ -755,7 +755,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **A class composed through a variant is a registered utility.** `styles/index.css`
   declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
   Tailwind gives a variant to a registered utility only, and a plain class in
-  `@layer utilities` compiles to nothing under one, silently
+  `@layer utilities` compiles to nothing under one, silently. The focus ring
+  (`focus-ring`, `focus-ring-danger` on an invalid control) sits under the state
+  variant that shows it, beside a bare `outline-none`, and is Tailwind's ring
+  layer: an elevation is a `shadow-*` utility, never a raw `box-shadow`, so focus
+  keeps both. `ring-0` with `outline-none`, under a selector that outranks the
+  ring's state variant, removes a ring; `shadow-none` does not; an elevation token
+  is a shadow list, never `none` ("no elevation" is `0 0 #0000`; the theme contract
+  holds elevations and the rings to its shadow forms, and a theme stylesheet may not
+  set one, since a layer outside them voids the ring). In forced colours the ring paints a
+  transparent outline the browser colours
   ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,

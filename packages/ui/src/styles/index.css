@@ -293,10 +293,9 @@
 }
 
 /* ============================================================================
-   Non-color CSS vars — gradients and focus-ring shadows. Can't live in @theme
-   (Tailwind's color/shadow utilities expect color/shadow values, not arbitrary
-   tokens). Components reach them through `[property:var(--…)]` arbitrary-value
-   syntax or direct style props.
+   Non-color CSS vars — the avatar gradients, plain tokens outside @theme, so no
+   utility is generated from them. Components reach them through
+   `[property:var(--…)]` arbitrary-value syntax or direct style props.
    ============================================================================ */
 :root {
   /* Avatar — eight stable gradients, hashed from initials. Composed from
@@ -329,12 +328,30 @@
    Tailwind's auto-generated `ring-brand` utility. Declared as utilities so
    variants compose them (`focus-visible:focus-ring`, `focus-within:focus-ring`):
    Tailwind gives a variant to a registered utility only, and a plain class in
-   `@layer utilities` compiles to nothing under one. */
+   `@layer utilities` compiles to nothing under one.
+   - Tailwind's ring layer: `ring-0` emits the composed `box-shadow` and
+     registers its variables, and `--ring` takes the ring layer, so an
+     element's own `shadow-*` stays beside the ring instead of fighting it.
+   - Forced colours drop every box-shadow, so the ring declares a transparent
+     outline for that mode only (as `outline-hidden` does), which the browser
+     paints; under its state variant it outranks a bare `outline-none`.
+   Both keep one shape: Tailwind orders equal utilities by name, so
+   `focus-ring-danger` follows `focus-ring` and wins where both apply. */
 @utility focus-ring {
-  box-shadow: var(--ring);
+  @apply ring-0;
+  --tw-ring-shadow: var(--ring);
+  @media (forced-colors: active) {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
 }
 @utility focus-ring-danger {
-  box-shadow: var(--ring-danger);
+  @apply ring-0;
+  --tw-ring-shadow: var(--ring-danger);
+  @media (forced-colors: active) {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
 }
 
 /* The one selected / active / pressed surface (a tree row, a pressed toggle, a
