@@ -304,8 +304,9 @@ join). In order:
 3. with an `idempotency_key`, its claim for `actor` through provenance's keyed
    creation (`claim_created`), the request being the row and the kit: a retry of
    the same request returns the message the first one sent, neither rendered nor
-   sent again, and the same key for another request raises
-   `CreationKeyConflict`;
+   sent again, unless that message was trashed since, which messaging's replay
+   rule refuses (`replay_claimed`: `discarded`, under `idempotency_key`), and the
+   same key for another request raises `CreationKeyConflict`;
 4. the render inside the system context and `compose_as_system`, as for any send
    (steps 3 and 4 above), with the rendered subject after `[Test] `
    (`TEST_SUBJECT_PREFIX`).

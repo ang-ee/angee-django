@@ -595,6 +595,22 @@ def test_a_keyed_test_send_replays_its_one_message_and_another_request_under_the
         MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="retry-1")
 
 
+def test_a_keyed_retry_of_a_test_whose_message_was_trashed_is_refused_as_discarded(system_channel: Any) -> None:
+    """Messaging's replay rule, not a success naming the trashed row."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-trashed-retrier")
+    row = _sampled()
+    first = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="trashed-1")
+    with system_context(reason="tests.messaging_templates.send.trash"):
+        Message._base_manager.filter(pk=first.pk).update(is_trashed=True)
+    messages = Message._base_manager.count()
+    with pytest.raises(ValidationError) as refused:
+        MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="trashed-1")
+    assert refused.value.error_dict["idempotency_key"][0].code == "discarded"
+    assert Message._base_manager.count() == messages
+
+
 def test_a_test_send_to_an_address_the_transport_cannot_carry_is_refused_and_its_claim_rolled_back(
     system_channel: Any,
 ) -> None:

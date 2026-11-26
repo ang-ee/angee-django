@@ -742,8 +742,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         (``no_test_address``); with ``idempotency_key``, a claim of it for
         ``actor``, the request being the row and the kit, through provenance's
         keyed creation (``claim_created``), so a retry of the same request
-        returns the message it first sent, neither rendered nor sent again, and
-        the same key for another request raises ``CreationKeyConflict``; then
+        returns the message it first sent, neither rendered nor sent again,
+        unless that message was trashed since, which messaging's replay rule
+        refuses (``MessageManager.replay_claimed``: ``discarded`` under
+        ``idempotency_key``), and the same key for another request raises
+        ``CreationKeyConflict``; then
         the render, inside the system context, and ``compose_as_system``, the
         subject after :data:`TEST_SUBJECT_PREFIX`, refusing as they do. A
         refused test writes no message row. A keyed one runs in a transaction of
@@ -776,18 +779,19 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
 
             if idempotency_key is None:
                 return send()
+            messages = apps.get_model("messaging", "Message")
             with changeset(fresh=True), transaction.atomic():
                 sent = changeset_model().objects.claim_created(
                     f"messaging_templates.message_template.send_test:{to_subject_ref(actor)}",
                     idempotency_key,
                     values={"template": row.sqid, "brand_kit": None if kit is None else kit.sqid},
-                    model=apps.get_model("messaging", "Message"),
+                    model=messages,
                     unavailable=ValidationError({"idempotency_key": ValidationError(
                         "The claimed test send is unavailable.", code="unavailable",
                     )}),
                 )
                 if sent is not None:
-                    return cast("Message", sent)
+                    return cast("Message", messages.objects.replay_claimed(sent))
                 message = send()
                 require_changeset().record_created(message)
                 return message
