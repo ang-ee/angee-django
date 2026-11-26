@@ -245,14 +245,16 @@ def test_issue_records_one_system_mail_to_the_account_and_stores_only_its_digest
     assert token.startswith(f"{target.public_id}.") and len(secret) == 43
     link = SignInLink._base_manager.get(user=target)
     stored = " ".join(str(value) for value in SignInLink._base_manager.filter(pk=link.pk).values().get().values())
-    assert secret not in stored and token not in stored
+    in_row = secret in stored or token in stored
+    assert not in_row
     assert link.token_hash == SignInLink.token_digest(target.pk, secret)
     assert link.account_hash == SignInLink.account_digest(target)
     assert link.created_by_id == iam_admin.pk
     assert link.sent_at is not None and link.used_at is None
     ttl = timedelta(seconds=259_200)
     assert link.created_at + ttl - timedelta(seconds=5) <= link.expires_at <= link.created_at + ttl
-    assert secret not in caplog.text
+    logged = secret in caplog.text
+    assert not logged
 
 
 def test_a_link_signs_in_exactly_once(deliverable, iam_admin, sent):
@@ -416,7 +418,8 @@ def test_graphql_issue_and_redeem_sign_the_person_in_once(deliverable, iam_admin
         "message": "Sign-in link sent to the account's email.",
     }
     token = _token(_written(target).body)
-    assert token.partition(".")[2] not in str(issued.data)
+    answered = token.partition(".")[2] in str(issued.data)
+    assert not answered
     # Recorded by the system, caused by the administrator whose request it was; that grants nothing.
     assert _mails(target)[-1].created_by_id == iam_admin.pk
 
@@ -459,7 +462,9 @@ def test_axes_throttles_guessed_links_without_seeing_the_token(deliverable, iam_
     masked = {"sign_in_token": "********************", "sign_in_account": target.public_id}
     assert failures and all(credentials == masked for credentials in failures)
     attempts = list(AccessAttempt.objects.values())
-    assert attempts and secret not in str(attempts) and "wrong-" not in str(attempts)
+    recorded = secret in str(attempts) or "wrong-" in str(attempts)
+    assert attempts
+    assert not recorded
     assert {attempt["username"] for attempt in attempts} == {target.public_id}
     assert _redeem(token, "203.0.113.10") == target
 
