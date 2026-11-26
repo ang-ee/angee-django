@@ -10,6 +10,7 @@ import {
   defineThemeContribution,
   resolveThemeOptions,
   useOptionalAppearance,
+  type ThemeCustomizationConfiguration,
   type ThemeOptionsEnvelope,
 } from "@angee/ui/theme";
 import type { BaseMenuItem } from "@angee/ui/chrome/menu-tree";
@@ -20,7 +21,7 @@ import type { HostAppearanceRead, HostAppearanceSource, ShellSettings } from "./
 import { installTestLocalStorage, TEST_SCHEMAS } from "./testing";
 
 /** A customisable test theme whose palette starts at `brand`. */
-function customisable(id: string, brand: string) {
+function customisable(id: string, brand: string, configuration?: ThemeCustomizationConfiguration) {
   return defineThemeContribution({ definition: defineTheme({
     contractVersion: 1, id, labelKey: `${id}.label`, descriptionKey: `${id}.description`, revision: 1,
     tokens: { shared: {}, light: {}, dark: {} },
@@ -28,14 +29,22 @@ function customisable(id: string, brand: string) {
       brand, accent: "#447788", neutral: "#667788", canvas: "#fafafa", surface: "#ffffff", rail: "#112233",
       success: "#16845b", warning: "#b7791f", danger: "#c2413a", info: "#3178c6",
       font: "theme", radius: "theme", density: "theme", elevation: "theme", logo: "theme",
-    }),
+    }, configuration),
   }) });
 }
 const paper = customisable("notebook.paper", "#112233");
 const ink = customisable("notebook.ink", "#334455");
+/** A customisable theme whose palette is its own: it declines the host appearance source. */
+const letterhead = customisable("notebook.letterhead", "#556677", { acceptsHostAppearanceSource: false });
 const fixed = defineThemeContribution({ definition: defineTheme({
   contractVersion: 1, id: "notebook.fixed", labelKey: "fixed.label", descriptionKey: "fixed.description", revision: 1,
   tokens: { shared: {}, light: { "--brand": "#0a0a0a" }, dark: {} },
+}) });
+/** A theme whose options are its own, written without the shared factory: it says nothing, so it accepts. */
+const handwritten = defineThemeContribution({ definition: defineTheme({
+  contractVersion: 1, id: "notebook.handwritten", labelKey: "handwritten.label", descriptionKey: "handwritten.description", revision: 1,
+  tokens: { shared: {}, light: {}, dark: {} },
+  options: { version: 1, defaults: {}, parse: () => ({}), resolve: () => ({}) },
 }) });
 
 /** A theme's options with one colour changed: what a source answers, or what a build states. */
@@ -44,6 +53,7 @@ function optionsOf(theme: typeof paper, patch: Record<string, string>): ThemeOpt
   return { version: options.version, value: { ...(options.defaults as object), ...patch } };
 }
 const BUILD = optionsOf(paper, { brand: "#5b5bd6", accent: "#0d9488" });
+const LETTERHEAD_BUILD = optionsOf(letterhead, { brand: "#7c3aed" });
 const SOURCE_BRAND = "#c2410c";
 
 /** A host appearance source answering what a test sets, recording the theme and build options it is asked about. */
@@ -118,7 +128,7 @@ function hostApp({ source, search = "", root = {}, shell, appearance, schemas = 
       {
         id: "identity",
         icons: { "notebook-mark": () => null },
-        themes: [paper, ink, fixed],
+        themes: [paper, ink, fixed, letterhead, handwritten],
         menus: { identity: { label: "Identity", icon: "notebook-mark", route: "notes.home", ...root } },
       },
       ...(source ? [{ id: "brand", hostAppearance: source }] : []),
@@ -179,8 +189,12 @@ describe("the host appearance source", () => {
     });
   });
 
-  // Which theme the source is asked about: the one a person who chose none wears, locked or not.
-  // The architect's ruling on which themes a kit dresses changes these rows and `sourceTheme` in createApp.
+  // Which theme the source is asked about: the one a person who chose none wears, locked or not,
+  // and none, with no build options, when that theme's options decline the source.
+  const apps = { apps: {
+    letters: { rail: ["identity"], theme: letterhead.definition.id },
+    reading: { rail: ["identity"], theme: ink.definition.id },
+  } };
   test.each([
     { case: "the build's theme, with the build's options", appearance: { themeId: paper.definition.id, options: BUILD },
       asked: { theme: paper.definition.id, build: BUILD } },
@@ -191,13 +205,49 @@ describe("the host appearance source", () => {
     { case: "the deployment's theme", shell: { theme: ink.definition.id },
       appearance: { themeId: paper.definition.id, options: BUILD }, asked: { theme: ink.definition.id, build: undefined } },
     { case: "a fixed theme", appearance: { themeId: fixed.definition.id }, asked: { theme: fixed.definition.id, build: undefined } },
+    { case: "a theme whose own options say nothing", appearance: { themeId: handwritten.definition.id },
+      asked: { theme: handwritten.definition.id, build: undefined } },
     { case: "no theme", appearance: { themeId: null }, asked: { theme: null, build: undefined } },
+    { case: "no theme for the build's theme that declines it, and none of the build's options",
+      appearance: { themeId: letterhead.definition.id, options: LETTERHEAD_BUILD }, asked: { theme: null, build: undefined } },
+    { case: "no theme for an app whose theme declines it", search: "?app=letters", shell: apps,
+      appearance: { themeId: paper.definition.id, options: BUILD }, asked: { theme: null, build: undefined } },
+    { case: "the theme of the app beside it, which does not decline", search: "?app=reading", shell: apps,
+      appearance: { themeId: paper.definition.id, options: BUILD }, asked: { theme: ink.definition.id, build: undefined } },
   ])("is asked about $case", async ({ search, root: menuRoot, shell, appearance, asked }) => {
     const { source, asked: calls } = controlledSource({ pending: false });
     const app = hostApp({ source, ...(search ? { search } : {}), ...(menuRoot ? { root: menuRoot } : {}), ...(shell ? { shell } : {}), appearance });
     await mounted(app, async () => {
       await screen.findByLabelText("Theme");
       expect(calls.at(-1)).toEqual(asked);
+    });
+  });
+
+  /** A source whose read for a customisable theme never answers: asked about one, it holds the first paint. */
+  const stalled: HostAppearanceSource = { useOptions: (theme) => ({ pending: Boolean(theme?.options) }) };
+
+  test.each([
+    { source: "that dresses every customisable theme", installed: dressing() },
+    { source: "whose read never answers", installed: stalled },
+    // Sources that never look at the theme: the decline holds without their help.
+    { source: "that answers options whatever it is asked",
+      installed: { useOptions: () => ({ options: optionsOf(letterhead, { brand: SOURCE_BRAND }), pending: false }) } },
+    { source: "that is pending whatever it is asked", installed: { useOptions: () => ({ pending: true }) } },
+  ])("a theme that declines the source wears the build's options whole and unheld, under a source $source", async ({ installed }) => {
+    const appearance = { themeId: letterhead.definition.id, colorScheme: "light" as const, options: LETTERHEAD_BUILD };
+    root().style.setProperty("--brand", "#010203");
+    await mounted(hostApp({ source: installed, appearance }), async () => {
+      await waitFor(() => expect(root().style.getPropertyValue("--brand")).toBe(tokenOf(letterhead, LETTERHEAD_BUILD, "--brand")));
+      expect(screen.getByLabelText("Host brand").textContent).toBe("#7c3aed");
+    });
+  });
+
+  test("a fixed theme is painted unheld under a source that stays pending", async () => {
+    const appearance = { themeId: fixed.definition.id, colorScheme: "light" as const };
+    root().style.setProperty("--brand", "#010203");
+    await mounted(hostApp({ source: { useOptions: () => ({ pending: true }) }, appearance }), async () => {
+      await waitFor(() => expect(screen.getByLabelText("Identity").textContent).toBe("resolved"));
+      await waitFor(() => expect(root().style.getPropertyValue("--brand")).toBe("#0a0a0a"));
     });
   });
 
