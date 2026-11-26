@@ -40,6 +40,12 @@ live in code docstrings.
     statement. A test's thread and message are the system channel's, which only
     administrators read. **Upgrade:** regenerate the console schema and its
     codegen.
+  - **Shipped rows.** The `signature` part ships in Spanish too
+    (`part.signature.es`: "El equipo de {{ brand.name }}"), so every shipped part
+    has its English and Spanish rows. **Upgrade:** load the install tier. A
+    Spanish recipient of a template including `parts/signature` now reads the
+    Spanish line; a deployment that wrote its own Spanish `signature` row finds
+    it an override of the new default, with an updated default to keep or reset.
   - **Changed.** A row fact read on a row the list did not annotate
     (`is_effective`, `is_overridden`, `has_updated_default`,
     `overrides_default`) is a structural read through the base manager and writes

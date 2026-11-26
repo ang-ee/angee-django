@@ -232,5 +232,23 @@ def test_a_shipped_part_reads_in_its_own_language_and_the_blocks_fall_back(libra
         greeting = MessageTemplate.objects.effective("part", "greeting", language=language)
         rendered = greeting.render({"person": {"first_name": ""}}, kit=library["kit"])
         assert rendered.plain_text.strip() == "Hola,"
-        named = MessageTemplate.objects.named_rows(["blocks/button", "parts/greeting"], language=language)
-    assert (named["blocks/button"].language, named["parts/greeting"].language) == ("en", "es")
+        names = ["blocks/button", "parts/greeting", "parts/ignore_notice", "parts/signature"]
+        named = MessageTemplate.objects.named_rows(names, language=language)
+    assert {name: row.language for name, row in named.items()} == {
+        "blocks/button": "en", "parts/greeting": "es", "parts/ignore_notice": "es", "parts/signature": "es",
+    }
+    assert named["parts/signature"].is_baseline
+
+
+def test_a_spanish_template_signs_off_in_spanish_in_the_brands_name(library: Any) -> None:
+    with system_context(reason="tests.messaging_templates.layout"):
+        template = MessageTemplate(
+            kind=MessageTemplateKind.TEMPLATE, key="tests.signed", language="es", name="Signed", format="markdown",
+            layout="base", subject="Hola", preheader="Un saludo.",
+            source='Gracias.\n\n{% include "parts/signature" only %}',
+        )
+        template.full_clean()
+        template.save()
+        rendered = template.render({}, kit=library["kit"])
+    assert "El equipo de Angee" in rendered.plain_text and "El equipo de Angee" in rendered.html
+    assert '<html lang="es"' in rendered.html
