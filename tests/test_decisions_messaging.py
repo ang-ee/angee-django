@@ -16,6 +16,7 @@ from celery.signals import task_prerun
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.checks import Tags, run_checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from django.db.models.signals import pre_save
@@ -24,14 +25,27 @@ from rebac import RelationshipTuple, actor_context, system_context, to_object_re
 from rebac.relationships import delete_relationships
 from rebac.types import RelationshipFilter
 
-from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.contracts import (
+    DecisionContext,
+    DecisionFact,
+    DecisionProposal,
+    DecisionRecordReference,
+    DecisionRequest,
+)
 from angee.decisions.testing.models import Decision
 from angee.decisions_messaging import models as decision_mail
+from angee.decisions_messaging.checks import check_audiences
 from angee.decisions_messaging.constants import MAIL_DECISION_TASK, MAIL_DIGESTS_TASK
 from angee.decisions_messaging.models import (
+    DIGEST_FACT_TEXT_LIMIT,
     DIGEST_QUESTION_LIMIT,
+    DIGEST_REASON_TEXT_LIMIT,
+    FACT_TEXT_LIMIT,
+    QUESTION_FACT_LIMIT,
+    REASON_TEXT_LIMIT,
     RETRIED_REFUSALS,
     DecisionNoticeOccasion,
+    MailAudience,
     refusal_codes,
 )
 from angee.decisions_messaging.tasks import mail_decision, mail_digests
@@ -42,6 +56,7 @@ from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelM
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Message
 from angee.messaging_templates.testing.models import MessageTemplate
+from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
 from angee.projects.testing.models import Task
 from tests.conftest import create_platform_admin, vault_for
 
@@ -84,7 +99,7 @@ def ask(world: Any, *assignees: Any, records: tuple[Any, ...] | None = None, **c
 
     return Decision.objects.ask(
         DecisionRequest(
-            kind="order_review",
+            kind=changes.pop("kind", "order_review"),
             records=records or (world.subject,),
             assignees=assignees,
             requester=changes.pop("requester", world.requester),
@@ -124,6 +139,16 @@ def revoke(record: Any, user: Any) -> None:
     delete_relationships(RelationshipFilter(
         resource_type=reference.resource_type, resource_id=reference.resource_id, relation="viewer",
         subject_type=subject.object.resource_type, subject_id=subject.object.resource_id,
+    ))
+
+
+def full_facts(count: int, *evidence: Any, value: str = "passed") -> DecisionContext:
+    """A context of ``count`` checks, as a bill's checklist carries them."""
+
+    return DecisionContext(reason="The bill's checks", facts=tuple(
+        DecisionFact(pointer=f"/checks/{index}", label=f"Check {index}", value=value, authority="source",
+                     evidence=tuple(DecisionRecordReference.of(record) for record in evidence))
+        for index in range(1, count + 1)
     ))
 
 
@@ -217,7 +242,7 @@ def test_a_read_revoked_later_drops_the_label_from_the_reminder_and_the_digest(w
     assert mail_decision(question.pk, "reminder") == 2
     ((_subject, reminder_text),) = mails(DecisionNotice, world.reviewer, decision=question, occasion="reminder")
     assert "Catering order" not in reminder_text
-    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 1
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
     ((_subject, digest_text),) = mails(DigestNotice, world.reviewer)
     assert link(question) in digest_text and "Catering order" not in digest_text
 
@@ -427,10 +452,207 @@ def test_a_soft_time_limit_stops_the_run_at_once(world: Any) -> None:
         assert not Message._base_manager.exists()
 
 
+# ---------- the audience of a kind ----------
+
+
+def test_the_default_audience_is_the_deciders_and_the_only_one_used(settings: Any) -> None:
+    assert settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES == {"*": "deciders"}
+    assert MailAudience.of("order_review") is MailAudience.DECIDERS
+    assert MailAudience.used() == [MailAudience.DECIDERS], "under the default, nobody is checked for admin"
+    assert check_audiences() == []
+
+
+def test_every_kind_falls_under_the_audience_its_lookup_names(world: Any, settings: Any) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = {
+        "*": "administrators", "Approve posting": "deciders", "Approve bill above threshold": "administrators",
+    }
+    kinds = ("Approve posting", "Approve bill above threshold", "order_review")
+    questions = {kind: ask(world, world.reviewer, kind=kind) for kind in kinds}
+    assert MailAudience.used() == [MailAudience.DECIDERS, MailAudience.ADMINISTRATORS]
+    for audience in MailAudience:
+        selected = set(Decision.system_queryset().filter(audience.kinds()).values_list("kind", flat=True))
+        assert selected == {kind for kind in kinds if MailAudience.of(kind) is audience}, audience
+    assert {kind: MailAudience.of(kind) for kind in questions} == {
+        "Approve posting": MailAudience.DECIDERS,
+        "Approve bill above threshold": MailAudience.ADMINISTRATORS,
+        "order_review": MailAudience.ADMINISTRATORS,
+    }
+
+
+def test_an_administrator_who_may_not_answer_a_question_is_mailed_about_it_on_no_occasion(
+    world: Any, settings: Any,
+) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = {"*": "administrators", "Approve posting": "deciders"}
+    managed = ask(world, world.reviewer)
+    write_relationships([RelationshipTuple(to_object_ref(managed), "managed_user", to_subject_ref(world.admin))])
+    assert not managed.with_actor(world.admin).has_access("act")
+    assert mail_decision(managed.pk, "asked") == 0
+    assert managed.remind() and mail_decision(managed.pk, "reminder") == 0
+    assert DigestNotice.objects.mail_digests(now=timezone.now()) == 0
+    assert mailed() == [] and mails(DigestNotice, world.admin) == []
+
+
+def test_under_a_sentence_kind_mapping_an_administrator_who_may_answer_is_mailed(world: Any, settings: Any) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = {"*": "administrators", "Approve posting": "deciders"}
+    setup = ask(world, world.reviewer, kind="Approve bill above threshold")
+    assert setup.with_actor(world.admin).has_access("act")
+    assert mail_decision(setup.pk, "asked") == 1 and mailed(setup) == [(world.admin.pk, "asked")]
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 1
+    ((_subject, text),) = mails(DigestNotice, world.admin)
+    assert link(setup) in text
+
+
+def test_the_administrators_audience_mails_only_administrators_and_lists_assigned_questions(
+    world: Any, settings: Any,
+) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = {"*": "administrators"}
+    question = ask(world, world.reviewer)
+    assert mail_decision(question.pk, "asked") == 1
+    assert mailed(question) == [(world.admin.pk, "asked")]
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 1
+    ((_subject, text),) = mails(DigestNotice, world.admin)
+    assert link(question) in text and mails(DigestNotice, world.reviewer) == []
+
+
+def test_a_kind_mapped_to_its_deciders_under_an_administrators_default_goes_to_its_deciders(
+    world: Any, settings: Any,
+) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = {"*": "administrators", "Approve posting": "deciders"}
+    approval = ask(world, world.reviewer, kind="Approve posting")
+    setup = ask(world, world.reviewer)
+    assert mail_decision(approval.pk, "asked") == 2 and mail_decision(setup.pk, "asked") == 1
+    assert mailed(approval) == [(world.reviewer.pk, "asked"), (world.admin.pk, "asked")]
+    assert mailed(setup) == [(world.admin.pk, "asked")]
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
+    ((_subject, reviewer_text),) = mails(DigestNotice, world.reviewer)
+    ((_subject, admin_text),) = mails(DigestNotice, world.admin)
+    assert link(approval) in reviewer_text and link(setup) not in reviewer_text
+    assert link(approval) in admin_text and link(setup) in admin_text
+
+
+@pytest.mark.parametrize(
+    ("audiences", "named"),
+    [
+        pytest.param({"*": "deciders", "Approve posting": "everyone"}, "'Approve posting' to 'everyone'",
+                     id="unknown-audience"),
+        pytest.param(["deciders"], "is a list", id="not-a-mapping"),
+        pytest.param({"": "deciders"}, "'' to 'deciders'", id="empty-kind"),
+        pytest.param({"*": None}, "'*' to None", id="no-audience"),
+    ],
+)
+def test_an_invalid_audience_setting_is_refused_at_start_up_naming_the_entry(
+    settings: Any, audiences: Any, named: str,
+) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = audiences
+    (error,) = check_audiences()
+    assert error.id == "decisions_messaging.E001" and named in error.msg
+
+
+def test_the_audience_check_runs_with_the_systems_checks(settings: Any) -> None:
+    settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES = {"*": "everyone"}
+    assert "decisions_messaging.E001" in {message.id for message in run_checks(tags=[Tags.compatibility])}
+
+
+# ---------- the facts a person is shown ----------
+
+
+def test_a_mail_shows_the_facts_its_reader_may_see(world: Any) -> None:
+    statement = vault_for(world.requester, name="Bank statement")
+    write_relationships([RelationshipTuple(to_object_ref(statement), "viewer", to_subject_ref(world.reviewer))])
+    context = DecisionContext(reason="Check the bill", facts=(
+        DecisionFact(pointer="/supplier", label="Supplier", value="Acme Ltd", authority="source"),
+        DecisionFact(pointer="/amount", label="Amount", value=1234.5, authority="correction",
+                     widget="money", row={"currency": "EUR"}),
+        DecisionFact(pointer="/paid", label="Paid", value=False, authority="unverified",
+                     evidence=(DecisionRecordReference.of(statement),)),
+    ))
+    question = ask(world, world.reviewer, context=context)
+    revoke(statement, world.reviewer)
+    assert mail_decision(question.pk, "asked") == 2
+    ((_subject, admin_text),) = mails(DecisionNotice, world.admin, decision=question)
+    ((_subject, reviewer_text),) = mails(DecisionNotice, world.reviewer, decision=question)
+    assert "- Supplier: Acme Ltd" in admin_text and "- Amount: 1234.5 (corrected)" in admin_text
+    assert "- Paid: no (unverified)" in admin_text
+    assert "- Supplier: Acme Ltd" in reviewer_text and "Paid" not in reviewer_text, "its evidence is unreadable now"
+
+
+def test_one_overlong_fact_is_cut_and_its_question_still_mailed(world: Any) -> None:
+    question = ask(world, world.reviewer, context=full_facts(1, value="x" * (VALUE_STRING_LIMIT + 1)))
+    assert mail_decision(question.pk, "asked") == 2
+    ((_subject, text),) = mails(DecisionNotice, world.reviewer, decision=question)
+    (line,) = [line for line in text.splitlines() if line.startswith("- Check 1: ")]
+    assert line == f"- Check 1: {'x' * (FACT_TEXT_LIMIT - 1)}…"
+
+
+def test_an_asked_mail_keeps_far_more_of_each_fact_than_a_digest_does(world: Any) -> None:
+    """A bill's checklist of eleven facts with long detail: one question has the digest's whole budget to itself."""
+
+    detail = "detail " + "x" * VALUE_STRING_LIMIT
+    question = ask(world, world.reviewer, context=full_facts(11, value=detail))
+    assert mail_decision(question.pk, "asked") == 2
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
+
+    def checks(text: str) -> list[str]:
+        return [line.partition(": ")[2] for line in text.splitlines() if line.startswith("- Check ")]
+
+    ((_subject, asked_text),) = mails(DecisionNotice, world.reviewer, decision=question)
+    ((_subject, digest_text),) = mails(DigestNotice, world.reviewer)
+    asked, digested = checks(asked_text), checks(digest_text)
+    assert len(asked) == len(digested) == 11
+    assert all(line == f"{detail[:FACT_TEXT_LIMIT - 1]}…" for line in asked)
+    assert all(line == f"{detail[:DIGEST_FACT_TEXT_LIMIT - 1]}…" for line in digested)
+    assert FACT_TEXT_LIMIT >= DIGEST_QUESTION_LIMIT * DIGEST_FACT_TEXT_LIMIT
+
+
+def test_long_reasons_are_cut_per_occasion_and_the_digest_still_renders(world: Any) -> None:
+    """Ten 6,000-character reasons are past a digest's whole budget; each mail cuts them to its occasion's length."""
+
+    reason = "because " + "z" * 6_000
+    questions = [
+        ask(world, world.reviewer, context=DecisionContext(reason=reason)) for _ in range(DIGEST_QUESTION_LIMIT)
+    ]
+    longest = ask(world, world.reviewer, context=DecisionContext(reason="w" * (VALUE_STRING_LIMIT + 1)))
+    assert mail_decision(longest.pk, "asked") == 2
+    ((_subject, asked_text),) = mails(DecisionNotice, world.reviewer, decision=longest)
+    assert f"{'w' * (REASON_TEXT_LIMIT - 1)}…" in asked_text and "w" * REASON_TEXT_LIMIT not in asked_text
+
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
+    ((_subject, text),) = mails(DigestNotice, world.reviewer)
+    assert text.count(f"{reason[:DIGEST_REASON_TEXT_LIMIT - 1]}…") == DIGEST_QUESTION_LIMIT
+    assert all(link(question) in text for question in questions), "the one mailed today is listed last, past the cap"
+    assert DIGEST_QUESTION_LIMIT * DIGEST_REASON_TEXT_LIMIT * 4 <= VALUES_JSON_LIMIT
+
+
+def test_the_fullest_asked_mail_renders(world: Any) -> None:
+    """The most facts one question shows, each label and value as long as a value may be, cut and mailed."""
+
+    long = "y" * VALUE_STRING_LIMIT
+    context = DecisionContext(reason="The bill's checks", facts=tuple(
+        DecisionFact(pointer=f"/checks/{index}", label=f"{index} {long}", value=long, authority="source")
+        for index in range(1, QUESTION_FACT_LIMIT + 2)
+    ))
+    question = ask(world, world.reviewer, context=context)
+    assert mail_decision(question.pk, "asked") == 2
+    ((_subject, text),) = mails(DecisionNotice, world.reviewer, decision=question)
+    lines = [line for line in text.splitlines() if line.startswith("- ") and ": " in line and long[:50] in line]
+    assert len(lines) == QUESTION_FACT_LIMIT and "And 1 more fact in the app." in text
+    assert lines[0] == f"- {f'1 {long}'[:FACT_TEXT_LIMIT - 1]}…: {long[:FACT_TEXT_LIMIT - 1]}…"
+
+
+def test_a_question_with_a_bills_checklist_renders_whole_in_the_asked_mail_and_the_digest(world: Any) -> None:
+    question = ask(world, world.reviewer, context=full_facts(11))
+    assert mail_decision(question.pk, "asked") == 2
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
+    ((_subject, asked_text),) = mails(DecisionNotice, world.reviewer, decision=question)
+    ((_subject, digest_text),) = mails(DigestNotice, world.reviewer)
+    for text in (asked_text, digest_text):
+        assert all(f"- Check {index}: passed" in text for index in range(1, 12)) and "more fact" not in text
+
+
 # ---------- the daily digest ----------
 
 
-def test_each_decider_gets_one_digest_listing_what_waits_on_them(world: Any) -> None:
+def test_each_person_gets_one_digest_listing_the_open_questions_put_to_them(world: Any) -> None:
     first = ask(world, world.reviewer)
     unassigned = ask(world)
     due = ask(world, world.reviewer, due_at=timezone.now() + timedelta(days=2))
@@ -443,7 +665,8 @@ def test_each_decider_gets_one_digest_listing_what_waits_on_them(world: Any) -> 
     assert link(due) in text and link(first) in text and text.index(link(due)) < text.index(link(first))
     assert link(unassigned) not in text and link(answered) not in text
     ((_subject, admin_text),) = mails(DigestNotice, world.admin)
-    assert link(unassigned) in admin_text and link(first) not in admin_text and link(due) not in admin_text
+    assert all(link(question) in admin_text for question in (first, unassigned, due)), "the admin arm decides them all"
+    assert link(answered) not in admin_text
     assert mails(DigestNotice, world.requester) == mails(DigestNotice, world.reader) == []
     with system_context(reason=READ):
         assert set(DigestNotice.objects.values_list("user_id", "day")) == {
@@ -454,9 +677,9 @@ def test_each_decider_gets_one_digest_listing_what_waits_on_them(world: Any) -> 
 def test_a_second_run_the_same_day_mails_nobody_and_the_next_day_mails_again(world: Any) -> None:
     ask(world, world.reviewer)
     now = datetime.combine(timezone.now().astimezone(UTC).date(), datetime.min.time(), UTC) + timedelta(hours=1)
-    assert DigestNotice.objects.mail_digests(now=now) == 1
+    assert DigestNotice.objects.mail_digests(now=now) == 2
     assert DigestNotice.objects.mail_digests(now=now + timedelta(hours=20)) == 0
-    assert DigestNotice.objects.mail_digests(now=now + timedelta(days=1)) == 1
+    assert DigestNotice.objects.mail_digests(now=now + timedelta(days=1)) == 2
     assert len(mails(DigestNotice, world.reviewer)) == 2
 
 
@@ -475,7 +698,7 @@ def test_a_person_mailed_every_waiting_question_within_a_day_gets_no_digest_unti
     now = timezone.now()
     assert DigestNotice.objects.mail_digests(now=now) == 0
     third = ask(world, world.reviewer)
-    assert DigestNotice.objects.mail_digests(now=now) == 1
+    assert DigestNotice.objects.mail_digests(now=now) == 2
     ((_subject, text),) = mails(DigestNotice, world.reviewer)
     assert all(link(question) in text for question in (first, second, third))
     assert text.index(link(third)) < text.index(link(first)), "the question not yet mailed comes first"
@@ -488,7 +711,7 @@ def test_a_question_not_yet_mailed_is_listed_even_when_the_limit_leaves_others_o
     told = ask(world, world.reviewer, due_at=timezone.now() + timedelta(days=1))
     assert mail_decision(told.pk, "asked") == 2
     new = ask(world, world.reviewer)
-    assert DigestNotice.objects.mail_digests(now=timezone.now()) == 1
+    assert DigestNotice.objects.mail_digests(now=timezone.now()) == 2
     ((_subject, text),) = mails(DigestNotice, world.reviewer)
     assert link(new) in text and link(told) not in text and "1 more is waiting in the app." in text
 
@@ -497,7 +720,7 @@ def test_an_asked_mail_older_than_a_day_leaves_its_question_in_the_digest(world:
     question = ask(world, world.reviewer)
     assert mail_decision(question.pk, "asked") == 2
     assert DigestNotice.objects.mail_digests(now=timezone.now()) == 0
-    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 1
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
     ((_subject, text),) = mails(DigestNotice, world.reviewer)
     assert link(question) in text
 
@@ -512,23 +735,28 @@ def test_a_refused_address_gets_no_digest_and_the_others_still_go(world: Any) ->
 
 
 def test_a_digest_lists_at_most_its_limit_due_first_and_counts_the_rest(world: Any) -> None:
-    undated = [ask(world, world.reviewer) for _ in range(DIGEST_QUESTION_LIMIT)]
-    due = ask(world, world.reviewer, due_at=timezone.now() + timedelta(days=3))
-    assert DigestNotice.objects.mail_digests(now=timezone.now()) == 1
+    """The worst digest the bounds admit renders: every listed question with the most facts, each one long."""
+
+    facts = full_facts(QUESTION_FACT_LIMIT + 1, value="passed " + "x" * 400)
+    undated = [ask(world, world.reviewer, context=facts) for _ in range(DIGEST_QUESTION_LIMIT)]
+    due = ask(world, world.reviewer, due_at=timezone.now() + timedelta(days=3), context=facts)
+    assert DigestNotice.objects.mail_digests(now=timezone.now()) == 2
     ((subject, text),) = mails(DigestNotice, world.reviewer)
     total = DIGEST_QUESTION_LIMIT + 1
     assert subject == f"{total} decisions waiting for you"
     assert f"{total} questions are waiting for your decision." in text and "1 more is waiting in the app." in text
     assert text.index(link(due)) < text.index(link(undated[0]))
     assert all(link(question) in text for question in undated[:-1]) and link(undated[-1]) not in text
+    assert text.count("Check 1: passed") == DIGEST_QUESTION_LIMIT and "And 1 more fact in the app." in text
+    assert f"Check 15: passed {'x' * (DIGEST_FACT_TEXT_LIMIT - len('passed ') - 1)}…" in text
 
 
 def test_the_beat_runs_the_digest_task_and_its_timestamp_names_the_day(world: Any, settings: Any) -> None:
     assert settings.CELERY_BEAT_SCHEDULE[MAIL_DIGESTS_TASK]["task"] == mail_digests.name
     ask(world, world.reviewer)
-    assert mail_digests(timestamp=int(datetime(2027, 1, 2, 7, tzinfo=UTC).timestamp())) == 1
+    assert mail_digests(timestamp=int(datetime(2027, 1, 2, 7, tzinfo=UTC).timestamp())) == 2
     with system_context(reason=READ):
-        assert DigestNotice.objects.get().day == date(2027, 1, 2)
+        assert DigestNotice.objects.get(user=world.reviewer).day == date(2027, 1, 2)
 
 
 # ---------- what reaches the outbox ----------

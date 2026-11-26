@@ -63,13 +63,30 @@ live in code docstrings.
     of questions assigned to others. `decision.concern_labels(reader)` returns the
     labels of the concerned records `reader` reads, which the console's
     `concerns_label` now joins, and `decision.requester_name(reader)` the
-    requester's name as `reader` reads that user.
+    requester's name as `reader` reads that user. `decision.facts_for(reader)`
+    returns the context's facts `reader` is shown, in stored order, for the caller
+    to slice: one with an empty value is left out, as the card leaves it out, and so
+    is one whose evidence names a record `reader` may not read or a model the
+    deployment no longer has. `DecisionFact.as_text()` is a fact's one text form,
+    the card's without a widget (object keys by `title_case`, the card's
+    `titleCase`; a widget fact's bare value). GraphQL's `context` field still
+    returns the stored context whole; it does not filter facts by read.
+    `Decision.objects.administrators()` and `for_administrator(person)` read the
+    platform administrators among a question's deciders from both sides, so an
+    administrator whose `act` an owner's `owner_managed` takes away is not put it.
   - **New.** The bridge addon `angee.decisions_messaging` mails a question, after
-    commit, to its deciders (the administrator arm and owners' `owner_eligible` arms
-    included; a holder of `act` who may not read the question, service users and
-    inactive accounts left out) when it is asked and when its reminder is due. Once
-    a day at 07:00 UTC it mails each active person one digest of the open questions
-    put to them (`put_to`) that are waiting on them (`waiting_on`), older ones
+    commit, to its kind's audience when it is asked and when its reminder is due.
+    `ANGEE_DECISIONS_MESSAGING_AUDIENCES` maps decision kinds (`"*"` for every other
+    kind) to `deciders`, the default (the administrator arm and owners'
+    `owner_eligible` arms included; a holder of `act` who may not read the question,
+    service users and inactive accounts left out), or `administrators`, the platform
+    administrators among its deciders, whoever it is assigned to. A key is a
+    `Decision.kind` exactly as asked, not its label; an invalid mapping fails
+    start-up (`decisions_messaging.E001`), naming the entry. A deployment that sends
+    its setup questions to its administrators sets `{"*": "administrators",
+    "Approve posting": "deciders"}`, naming its sentence kinds as they are asked.
+    Once a day at 07:00 UTC it mails each active person one digest of the open
+    questions whose audience includes them, older ones
     included, each person's list read in their own scope: the ones no asked or
     reminder mail reached them about in the past day first, due first, at most ten
     with a count of the rest, and none for a person every waiting question was
@@ -78,8 +95,13 @@ live in code docstrings.
     sharing the part `decisions_messaging.question`) sent with
     `MessageTemplate.objects.send_as_system` as named system work, with no causing
     actor, from values read in the recipient's own scope, so a mail never shows a
-    record label or a name that person cannot read; it links the question's page in
-    the app, where the person decides, and no link decides anything.
+    record label, a fact or a name that person cannot read; it lists the question's
+    facts that person is shown, at most fifteen, each in its text form cut to a
+    length derived from the renderer's limits for the questions the mail lists
+    (`FACT_TEXT_LIMIT` for one question, `DIGEST_FACT_TEXT_LIMIT` in the digest),
+    with an authority mark, its reason cut the same way (`REASON_TEXT_LIMIT`,
+    `DIGEST_REASON_TEXT_LIMIT`), and links the question's page in the app, where
+    the person decides; no link decides anything.
     `DecisionNotice` records each person mailed per question and occasion, and
     `DigestNotice` per person and UTC day, each in the durable transaction of that
     one send, so a retried task mails nobody twice; the mail verbs therefore run

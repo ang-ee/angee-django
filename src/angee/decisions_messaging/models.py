@@ -1,9 +1,9 @@
 """Open decisions mailed to the people they can be put to, and the record of whom each mail reached.
 
-A question is mailed to its deciders (``DecisionQuerySet.deciders``: the active people
-who hold both ``act`` and ``read`` on it) when it is asked and when its reminder is
-due; a daily digest mails each active person the open questions waiting on them
-(``DecisionQuerySet.waiting_on``) that they may read. Each mail is a shipped message
+A question is mailed to the audience its kind has (:class:`MailAudience`, chosen by
+``ANGEE_DECISIONS_MESSAGING_AUDIENCES``: its deciders by default) when it is asked and
+when its reminder is due; a daily digest mails each active person the open questions
+whose audience includes them, the same rule read from their side. Each mail is a shipped message
 template sent as named system work through ``MessageTemplate.objects.send_as_system``,
 in the recipient's language, from values read in that recipient's own scope, and it
 links the question's page in the app, where the person decides. "Mailed" means
@@ -28,6 +28,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, prefetch_related_objects
+from django.utils import translation
+from django.utils.text import Truncator
 from rebac import system_context
 
 from angee.base.fields.state import StateField
@@ -39,6 +41,7 @@ from angee.base.origins import public_origin
 from angee.base.querysets import AngeeQuerySet
 from angee.decisions.contracts import DecisionContext, DecisionProposal
 from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
+from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +53,44 @@ its render are bounded (``angee.messaging_templates.walker.VALUE_ITEMS_LIMIT``,
 ``angee.messaging_templates.engine.RenderBudget``).
 """
 
+QUESTION_FACT_LIMIT = 15
+"""The most facts one question shows (``Decision.facts_for``); it counts the rest.
+
+A bill's checklist runs to about a dozen facts, and every fact is a list item and a
+loop render of the mail (the bounds :data:`QUESTION_RECORD_LIMIT` cites).
+"""
+
 DIGEST_QUESTION_LIMIT = 10
 """The most questions one daily digest lists; it counts the rest (the bounds :data:`QUESTION_RECORD_LIMIT` cites)."""
+
+
+def _text_limit(questions: int, *, texts: int, share: int) -> int:
+    """The longest one text runs when ``texts`` texts of each of ``questions`` questions take ``1/share`` of a mail.
+
+    A mail's values are at most ``VALUES_JSON_LIMIT`` characters of JSON, each string at
+    most ``VALUE_STRING_LIMIT``. The facts of the questions a mail lists take at most
+    half of it (a label and a text each, at most :data:`QUESTION_FACT_LIMIT` per
+    question), their reasons a quarter, and the rest of the mail the last quarter. An
+    ellipsis ends what is cut; the app shows it whole. The bound counts characters as
+    Django's ``Truncator`` does, while JSON writes a quote, backslash or newline in two
+    (the debt the README names), so a mail whose texts are mostly those can still pass
+    ``VALUES_JSON_LIMIT``, and that person's mail then fails as a defect.
+    """
+
+    return min(VALUE_STRING_LIMIT, VALUES_JSON_LIMIT // (share * questions * texts))
+
+
+FACT_TEXT_LIMIT = _text_limit(1, texts=2 * QUESTION_FACT_LIMIT, share=2)
+"""The cut of a fact's label and text in a mail about one question: the asked and reminder mails."""
+
+DIGEST_FACT_TEXT_LIMIT = _text_limit(DIGEST_QUESTION_LIMIT, texts=2 * QUESTION_FACT_LIMIT, share=2)
+"""The cut of a fact's label and text in a daily digest, which lists up to :data:`DIGEST_QUESTION_LIMIT` questions."""
+
+REASON_TEXT_LIMIT = _text_limit(1, texts=1, share=4)
+"""The cut of the question's reason in the asked and reminder mails."""
+
+DIGEST_REASON_TEXT_LIMIT = _text_limit(DIGEST_QUESTION_LIMIT, texts=1, share=4)
+"""The cut of each question's reason in a daily digest."""
 
 DIGEST_WINDOW = timedelta(days=1)
 """A question an asked or reminder mail reached a person about this recently is listed last in their digest.
@@ -83,6 +122,64 @@ class DecisionNoticeOccasion(models.TextChoices):
         """The key of the shipped message template this occasion's mail is written from."""
 
         return f"decisions_messaging.decision_{self.value}"
+
+
+class MailAudience(models.TextChoices):
+    """Who a question's mail goes to, chosen per decision kind by ``ANGEE_DECISIONS_MESSAGING_AUDIENCES``.
+
+    Each audience is one decisions rule read from both sides: the people of each
+    question (:meth:`people`) and the questions put to one person (:meth:`put_to`).
+    ``deciders`` is ``DecisionQuerySet.deciders`` and ``put_to``: who holds both
+    ``act`` and ``read``, with no "assigned to me" clause, the digest included.
+    ``administrators`` is ``DecisionQuerySet.administrators`` and
+    ``for_administrator``: the platform administrators among the deciders.
+    """
+
+    DECIDERS = "deciders", "Deciders"
+    ADMINISTRATORS = "administrators", "Administrators"
+
+    @classmethod
+    def _table(cls) -> tuple[dict[str, MailAudience], MailAudience]:
+        """The setting read once: each named kind's audience, and every other kind's (``"*"``, else ``deciders``).
+
+        The one lookup :meth:`of` and :meth:`kinds` both answer from.
+        """
+
+        audiences = settings.ANGEE_DECISIONS_MESSAGING_AUDIENCES
+        named = {kind: cls(audience) for kind, audience in audiences.items() if kind != "*"}
+        return named, cls(audiences.get("*", cls.DECIDERS))
+
+    @classmethod
+    def of(cls, kind: str) -> MailAudience:
+        """The audience the setting gives ``kind``: its own entry, else every other kind's."""
+
+        named, others = cls._table()
+        return named.get(kind, others)
+
+    @classmethod
+    def used(cls) -> list[MailAudience]:
+        """The audiences the setting gives some kind, in declaration order; under the default, ``deciders`` alone."""
+
+        named, others = cls._table()
+        return [audience for audience in cls if audience is others or audience in named.values()]
+
+    def kinds(self) -> models.Q:
+        """The decision kinds :meth:`of` gives this audience, as a filter on questions."""
+
+        named, others = type(self)._table()
+        if others is self:
+            return ~models.Q(kind__in=sorted(kind for kind, audience in named.items() if audience is not self))
+        return models.Q(kind__in=sorted(kind for kind, audience in named.items() if audience is self))
+
+    def people(self, questions: Any) -> dict[Any, list[Any]]:
+        """Each of ``questions``' people in this audience, keyed by primary key, from the question's side."""
+
+        return questions.deciders() if self is MailAudience.DECIDERS else questions.administrators()
+
+    def put_to(self, questions: Any, person: Any) -> Any:
+        """The open ``questions`` whose people in this audience include ``person``, from the person's side."""
+
+        return questions.put_to(person) if self is MailAudience.DECIDERS else questions.for_administrator(person)
 
 
 def decision_link_origin() -> str:
@@ -117,22 +214,42 @@ def shared_values(decision: Any, *, origin: str, reason_limit: int) -> dict[str,
     }
 
 
-def question_values(row: Any, reader: Any, shared: dict[str, Any]) -> dict[str, Any]:
+def fact_values(fact: Any, *, text_limit: int) -> dict[str, Any]:
+    """One fact of ``Decision.facts_for`` as ``parts/decisions_messaging.question`` writes it.
+
+    Its label and its text (``DecisionFact.as_text``, the card's form), each cut to
+    ``text_limit`` (:data:`FACT_TEXT_LIMIT` or :data:`DIGEST_FACT_TEXT_LIMIT`), and its
+    authority code, which the template marks when the value is not the source's.
+    """
+
+    return {
+        "label": Truncator(fact.label).chars(text_limit),
+        "value": Truncator(fact.as_text()).chars(text_limit),
+        "authority": str(fact.authority),
+    }
+
+
+def question_values(row: Any, reader: Any, shared: dict[str, Any], *, text_limit: int) -> dict[str, Any]:
     """The ``question`` argument of ``parts/decisions_messaging.question`` for ``reader``: ``shared`` and their reads.
 
     ``row`` is the question as ``reader`` reads it. The concerned records are named by
     ``Decision.concern_labels(reader)``, the first :data:`QUESTION_RECORD_LIMIT` of
-    them with a count of the rest, and who asked by ``Decision.requester_name(reader)``,
-    so a person never reads a label or a name in a mail they could not read in the
-    app. Nothing here is secret: the values are kept with the message, which
+    them with a count of the rest, its facts by ``Decision.facts_for(reader)``, at most
+    :data:`QUESTION_FACT_LIMIT`, each cut to ``text_limit`` (:func:`fact_values`), and
+    who asked by ``Decision.requester_name(reader)``,
+    so a person never reads a label, a fact or a name in a mail they could not read
+    in the app. Nothing here is secret: the values are kept with the message, which
     administrators read.
     """
 
     labels = row.concern_labels(reader)
+    facts = row.facts_for(reader)
     return {
         **shared,
         "records": labels[:QUESTION_RECORD_LIMIT],
         "more_records": max(len(labels) - QUESTION_RECORD_LIMIT, 0),
+        "facts": [fact_values(fact, text_limit=text_limit) for fact in facts[:QUESTION_FACT_LIMIT]],
+        "more_facts": max(len(facts) - QUESTION_FACT_LIMIT, 0),
         "asked_by": row.requester_name(reader),
     }
 
@@ -229,7 +346,8 @@ def _mail_one(
     (``Message.objects.clean_recipient``, asked before the reads and the render) is
     skipped as ``refused``, as is a refusal of the send keyed ``to``, which wrote
     nothing. ``values`` is read inside the transaction; ``None`` means nothing is left
-    to mail (``skipped``). The notice is written after the send
+    to mail (``skipped``); it is read in the language of ``user``'s template row, so
+    the text it gives reads in that language. The notice is written after the send
     (:meth:`MailNoticeManager.record`), so a send that raises writes none and the next
     run mails the person; a notice another run wrote first is ``already``, and this
     run's message rolls back with this notice. The transaction is durable, never a
@@ -245,11 +363,13 @@ def _mail_one(
     templates = apps.get_model("messaging_templates", "MessageTemplate").objects
     try:
         with transaction.atomic(durable=True):
-            content = values()
+            row = run.template(user, key)
+            with translation.override(row.language):
+                content = values()
             if content is None:
                 return "skipped"
             message = templates.send_as_system(
-                run.template(user, key), reason=mail_reason(key), to=address,
+                row, reason=mail_reason(key), to=address,
                 values={"person": {"first_name": user.first_name}, **content},
             )
             if not ledger.record(user=user, message=message, **identity):
@@ -356,11 +476,12 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
     """Mails one question to its deciders, once per occasion each."""
 
     def mail_decision(self, decision_id: Any, *, occasion: str) -> int:
-        """Mail an open question to each of its deciders once for ``occasion``; return how many were mailed.
+        """Mail an open question to each person in its kind's audience once for ``occasion``; return how many.
 
-        ``occasion`` is ``asked`` or ``reminder``. The deciders are read once
-        (``DecisionQuerySet.deciders``); one the ledger already holds for the question
-        and occasion is not mailed again. A question that closed since, or that nobody
+        ``occasion`` is ``asked`` or ``reminder``. The audience (:meth:`MailAudience.of`
+        the question's kind) is read once, from the question's side
+        (:meth:`MailAudience.people`); a person the ledger already holds for the
+        question and occasion is not mailed again. A question that closed since, or that nobody
         can be put to, mails nobody. Each person's values are read in their own scope
         as their mail is sent (:func:`question_values`), so a question since closed or
         no longer readable to them is not mailed (``skipped``); this does not depend
@@ -380,7 +501,8 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
             if decision is None:
                 return 0
             mailed = set(self.filter(decision=decision, occasion=occasion).values_list("user_id", flat=True))
-            people = [user for user in rows.deciders().get(decision.pk, []) if user.pk not in mailed]
+            audience = MailAudience.of(decision.kind)
+            people = [user for user in audience.people(rows).get(decision.pk, []) if user.pk not in mailed]
         if not people:
             return 0
         run = _Run.start(people, [key])
@@ -391,7 +513,7 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
                 questions.objects.with_actor(user).open().filter(pk=decision.pk)
                 .prefetch_related(questions.concern_records_prefetch(user)).first()
             )
-            return None if row is None else {"question": question_values(row, user, shared)}
+            return None if row is None else {"question": question_values(row, user, shared, text_limit=FACT_TEXT_LIMIT)}
 
         outcomes = _mail_each(
             people,
@@ -416,10 +538,11 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
     def mail_digests(self, *, now: datetime) -> int:
         """Mail each active person one digest, once per UTC day; return how many were mailed.
 
-        A person's digest lists the open questions put to them
-        (``DecisionQuerySet.put_to``: they hold both ``act`` and ``read``) that are
-        waiting on them (``DecisionQuerySet.waiting_on``), older ones included: the
-        ones an asked or reminder mail did not reach them about within
+        A person's digest lists the open questions whose audience includes them, older
+        ones included: for each :class:`MailAudience`, its kinds' questions put to them
+        from their side (:meth:`MailAudience.put_to`), so it lists exactly the questions
+        whose asked and reminder mails would reach them. The ones an asked or reminder
+        mail did not reach them about within
         :data:`DIGEST_WINDOW` first, then due first, at most
         :data:`DIGEST_QUESTION_LIMIT` with a count of the rest. Each person's list is
         their own scoped read, a few statements whatever the number of open questions,
@@ -450,10 +573,11 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
         shared: dict[Any, dict[str, Any]] = {}
 
         def mail(user: Any) -> Mailed:
+            put = models.Q(pk__in=[])
+            for audience in MailAudience.used():
+                put |= models.Q(pk__in=audience.put_to(questions.objects, user).filter(audience.kinds()).values("pk"))
             waiting = (
-                questions.objects.put_to(user)
-                .filter(pk__in=questions.objects.waiting_on(user).values("pk"))
-                .order_by(F("due_at").asc(nulls_last=True), "pk")
+                questions.objects.with_actor(user).open().filter(put).order_by(F("due_at").asc(nulls_last=True), "pk")
             )
             listed = sorted(waiting, key=lambda row: (user.pk, row.pk) in recent)
             if all((user.pk, row.pk) in recent for row in listed):
@@ -468,7 +592,9 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
                 values=lambda: {
                     "count": len(listed),
                     "more": len(listed) - len(shown),
-                    "questions": [question_values(row, user, shared[row.pk]) for row in shown],
+                    "questions": [
+                        question_values(row, user, shared[row.pk], text_limit=DIGEST_FACT_TEXT_LIMIT) for row in shown
+                    ],
                 },
             )
 

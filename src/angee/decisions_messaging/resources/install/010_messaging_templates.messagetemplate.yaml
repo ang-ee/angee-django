@@ -24,6 +24,22 @@
 
     {% endif %}
 
+    {% if question.facts|length %}
+
+    {% for fact in question.facts %}
+
+    - {{ fact.label }}: {{ fact.value }}{% if fact.authority == 'correction' %} (corrected){% elif fact.authority == 'unverified' %} (unverified){% endif %}
+
+    {% endfor %}
+
+    {% if question.more_facts %}
+
+    And {{ question.more_facts }} more {{ question.more_facts|pluralize:"fact,facts" }} in the app.
+
+    {% endif %}
+
+    {% endif %}
+
     Choices: {% for choice in question.choices %}{{ choice }}{% if not forloop.last %}; {% endif %}{% endfor %}
 
     {% if question.asked_by %}
@@ -44,6 +60,10 @@
     question.reason: Why it is asked; may be empty.
     question.records.*: The labels of the records it concerns that the reader reads, the first few.
     question.more_records: How many more of those records there are than it names.
+    question.facts.*.label: What one fact the reader may see is.
+    question.facts.*.value: Its value as text.
+    question.facts.*.authority: Where its value comes from (source, correction or unverified).
+    question.more_facts: How many more of those facts there are than it shows.
     question.asked_by: Who asked it; empty when no person did.
     question.due_at: When an answer is due; empty when it is undated.
     question.url: Where the question opens in the app.
@@ -55,6 +75,17 @@
       records:
         - Invoice INV-0042
       more_records: 2
+      facts:
+        - label: Supplier
+          value: Acme Ltd
+          authority: source
+        - label: Amount
+          value: 1234.50 EUR
+          authority: correction
+        - label: Paid
+          value: 'no'
+          authority: unverified
+      more_facts: 1
       asked_by: Tomás Rey
       due_at: '2027-03-01T09:00:00+00:00'
       url: https://app.example.test/decisions/dcn_18
@@ -85,6 +116,10 @@
     question.reason: Why it is asked; may be empty.
     question.records.*: The labels of the records it concerns that the reader reads, the first few.
     question.more_records: How many more of those records there are than it names.
+    question.facts.*.label: What one fact the reader may see is.
+    question.facts.*.value: Its value as text.
+    question.facts.*.authority: Where its value comes from (source, correction or unverified).
+    question.more_facts: How many more of those facts there are than it shows.
     question.asked_by: Who asked it; empty when no person did.
     question.due_at: When an answer is due; empty when it is undated.
     question.url: Where the question opens in the app.
@@ -98,6 +133,17 @@
       records:
         - Invoice INV-0042
       more_records: 2
+      facts:
+        - label: Supplier
+          value: Acme Ltd
+          authority: source
+        - label: Amount
+          value: 1234.50 EUR
+          authority: correction
+        - label: Paid
+          value: 'no'
+          authority: unverified
+      more_facts: 1
       asked_by: Tomás Rey
       due_at: '2027-03-01T09:00:00+00:00'
       url: https://app.example.test/decisions/dcn_18
@@ -128,6 +174,10 @@
     question.reason: Why it is asked; may be empty.
     question.records.*: The labels of the records it concerns that the reader reads, the first few.
     question.more_records: How many more of those records there are than it names.
+    question.facts.*.label: What one fact the reader may see is.
+    question.facts.*.value: Its value as text.
+    question.facts.*.authority: Where its value comes from (source, correction or unverified).
+    question.more_facts: How many more of those facts there are than it shows.
     question.asked_by: Who asked it; empty when no person did.
     question.due_at: When an answer is due; empty when it is undated.
     question.url: Where the question opens in the app.
@@ -141,6 +191,17 @@
       records:
         - Invoice INV-0042
       more_records: 2
+      facts:
+        - label: Supplier
+          value: Acme Ltd
+          authority: source
+        - label: Amount
+          value: 1234.50 EUR
+          authority: correction
+        - label: Paid
+          value: 'no'
+          authority: unverified
+      more_facts: 1
       asked_by: Tomás Rey
       due_at: '2027-03-01T09:00:00+00:00'
       url: https://app.example.test/decisions/dcn_18
@@ -183,6 +244,10 @@
     questions.*.reason: Why it is asked; may be empty.
     questions.*.records.*: The labels of the records it concerns that the reader reads, the first few.
     questions.*.more_records: How many more of those records there are than it names.
+    questions.*.facts.*.label: What one fact the reader may see is.
+    questions.*.facts.*.value: Its value as text.
+    questions.*.facts.*.authority: Where its value comes from (source, correction or unverified).
+    questions.*.more_facts: How many more of those facts there are than it shows.
     questions.*.asked_by: Who asked it; empty when no person did.
     questions.*.due_at: When an answer is due; empty when it is undated.
     questions.*.url: Where the question opens in the app.
@@ -198,6 +263,11 @@
         records:
           - Invoice INV-0042
         more_records: 2
+        facts:
+          - label: Supplier
+            value: Acme Ltd
+            authority: source
+        more_facts: 0
         asked_by: Tomás Rey
         due_at: '2027-03-01T09:00:00+00:00'
         url: https://app.example.test/decisions/dcn_18
@@ -208,6 +278,8 @@
         reason: ''
         records: []
         more_records: 0
+        facts: []
+        more_facts: 0
         asked_by: ''
         due_at: ''
         url: https://app.example.test/decisions/dcn_19
