@@ -3,7 +3,9 @@
 Copy this module into the project's ``runtime/parties/migrations/``, replace the
 placeholder dependencies with the project's own explicit leaves, and keep its
 bytes. It runs after the integrate migration that adds ``SyncStream.container``
-and before the folder column is dropped (the operations below).
+and before the folder column is dropped (the operations below). The column still
+holds the hrefs when ``migrate`` starts, so the migration declares its drop
+(``IntendedRemoveField``), which ``migrate``'s drop guard then applies.
 
 Each folder with a ``source_href`` is adopted into its directory's
 ``addressbooks`` stream: a ``RecordLink`` whose external key is the href targets
@@ -25,6 +27,7 @@ import logging
 from django.db import migrations
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
+from django_compose.operations import IntendedRemoveField
 
 ADDRESSBOOKS = "addressbooks"
 
@@ -103,6 +106,6 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RunPython(adopt_addressbooks, restore_source_hrefs),
         migrations.RemoveConstraint("folder", "uq_folder_directory_source"),
-        migrations.RemoveField("folder", "source_href"),
+        IntendedRemoveField("folder", "source_href"),
     ]
 
