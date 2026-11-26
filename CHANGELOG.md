@@ -70,8 +70,10 @@ live in code docstrings.
     and cannot be answered by email; new ones can. No data migration.
     Anyone who has seen a chatter mail's Message-ID can answer onto the record,
     so a message received on a record's chatter, email or comment, is one its
-    moderator may trash; mail sent from the record and system notes stay
-    retained, and that refusal is now a coded `ValidationError` (`retained`,
+    moderator may trash; mail sent from the record, system notes, and mail in a
+    mailbox conversation an earlier version merged into the record (a
+    colleague's own thread, still in the chatter's group) stay retained, that
+    last its owner's to remove, and that refusal is now a coded `ValidationError` (`retained`,
     "Only comments and received messages can be removed.") where it was a bare
     `ValueError`. Whether such mail should land on the record at all is open.
   - **Changed.** A record's chatter thread is never folded with a mailbox thread.

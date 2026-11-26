@@ -347,6 +347,47 @@ def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, s
         assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
 
 
+def test_mail_in_a_mailbox_thread_an_earlier_version_folded_into_a_record_stays_its_owners(desk: Any) -> None:
+    """The record's moderator removes what was received on the chatter, never a colleague's own mail in its group."""
+
+    owner = desk.owner
+    colleague = make_user("compose-folded-colleague")
+    mailbox = make_integration("compose-folded-mailbox", model=Channel, backend_class="manual", owner=colleague)
+    with system_context(reason="tests.messaging.compose.folded"):
+        doc = ChatterDoc.objects.create(title="Quote 7")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(channel=desk, record=doc, to=["client@example.test"], subject="Quote 7",
+                                   text="Here is the quote.", actor=owner)
+    private = (
+        b"From: friend@example.test\r\nTo: colleague@example.test\r\nMessage-ID: <private@example.test>\r\n"
+        b"Subject: Between us\r\n\r\nPrivate note.\r\n"
+    )
+    planted = (
+        f"From: stranger@evil.test\r\nTo: desk@example.test\r\nMessage-ID: <planted@evil.test>\r\n"
+        f"In-Reply-To: <{sent.external_id}>\r\nSubject: Re: Quote 7\r\n\r\nPay this other account.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.folded"):
+        (mail,) = Message.objects.ingest(
+            [parse_message(private, mailbox="INBOX", uid=1, uidvalidity=1)], channel=mailbox,
+        )
+        (spam,) = Message.objects.ingest([parse_message(planted, mailbox="INBOX", uid=2, uidvalidity=1)], channel=desk)
+        chatter = doc.message_thread(create=False)
+        chatter.fold([Thread._base_manager.get(pk=mail.thread_id)])  # as source identity folded one before
+    with actor_context(owner):
+        record = ChatterDoc.objects.with_actor(owner).get(pk=doc.pk)
+        rows, _count = Message.objects.for_record(record)
+        assert {row.pk: row.can_trash(moderate_access=True) for row in rows if row.pk in (mail.pk, spam.pk)} == {
+            mail.pk: False, spam.pk: True,
+        }
+        with pytest.raises(ValidationError) as retained:
+            record.message_trash(Message.objects.in_record(record, mail.public_id), reason="moderated")
+        record.message_trash(Message.objects.in_record(record, spam.public_id), reason="spam")
+        removed, _count = record.message_removed()
+    assert retained.value.code == "retained"
+    assert [message.pk for message in removed] == [spam.pk]
+    assert not Message._base_manager.get(pk=mail.pk).is_trashed
+
+
 def test_a_stored_message_keeps_the_kind_it_was_ingested_with_through_every_re_sync(desk: Any) -> None:
     """An answer stored as a comment before email answers landed as email stays one, edited or not."""
 

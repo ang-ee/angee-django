@@ -1485,9 +1485,16 @@ class Message(
         message received there came from outside, whoever sent it (an answer that
         its threading headers placed on the chatter, or anything mailed with a
         chatter mail's Message-ID), so its moderator may take it off as a comment.
+        A record's chatter thread has no channel, nor has one a record merge folded
+        in: a message whose own thread has one is mail in a mailbox's conversation
+        that an earlier version merged into the record, and stays its owner's.
         """
 
-        if self.message_type == self.MessageKind.COMMENT or self.direction == self.Direction.INBOUND:
+        if self.message_type == self.MessageKind.COMMENT:
+            return None
+        if self.thread_id is not None and cast(Thread, self.thread).channel_id is not None:
+            return "Mail in its owner's own mailbox conversation stays theirs to remove."
+        if self.direction == self.Direction.INBOUND:
             return None
         return "Only comments and received messages can be removed."
 
