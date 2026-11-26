@@ -3328,9 +3328,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         The replay rule of a keyed message write: a key whose message has been
         trashed (``is_trashed``) is refused under ``idempotency_key`` with code
         ``discarded``, never answered with the trashed row as success. It reads
-        and writes nothing; :meth:`compose` asks it on a replay, and so do keyed
-        callers outside messaging that claim their own key for a message
-        (a template's test send).
+        and writes nothing. Today :meth:`compose` (through ``_write_outgoing``)
+        and a message template's test send ask it on a replay;
+        :meth:`post_to_thread` (a chatter post) is the one keyed writer left with
+        its own copy, which refuses a trashed original as a non-field error with
+        other words and no code.
         """
 
         if original.is_trashed:

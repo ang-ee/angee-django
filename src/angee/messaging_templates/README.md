@@ -256,7 +256,9 @@ values the mail is useless without as `must_print` (`["link"]`, or
 renders anything, when the HTML body or the plain-text body does not print one of
 them (`value_not_printed`, one item per path and body), through any include and
 whether or not a condition guards the output; a value only tested in a condition
-is not printed, and a path the row does not declare is refused once. Both bodies
+is not printed, and a path the row no longer declares is refused like a path its
+text no longer prints, once, because an override may edit `variables` as well as
+the text. Both bodies
 are required because some clients show only the plain-text part. So a
 deployment's override that drops `{{ link }}`, or its declaration, is refused
 rather than sent without its link. The preview's "Nothing reads …" warning stays
@@ -297,7 +299,11 @@ deletes, so they outlive the message. Who reads system mail, and how its
 handles are recorded, is messaging's ([System mail](../messaging/README.md#system-mail)):
 a value that is a credential, such as a sign-in link, is readable by those
 readers until it expires, and deleting the message does not remove its
-fragments.
+fragments. An exception's report shows neither the values nor the rendered text:
+Django's `sensitive_variables` marks them in `send_as_system`, its shared step
+`_render_and_record` and `MessageTemplate.render`, and marks every variable of
+`TemplateWalk.render` and of each frame it calls, but Django's filter hides them
+only with `DEBUG` off.
 
 ### A test send
 

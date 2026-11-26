@@ -731,8 +731,9 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         expires, and deleting the message does not remove its fragments. So the
         values and the rendered text are marked as Django's
         ``sensitive_variables`` in the send's frames and the render's (down to
-        ``TemplateWalk.render``, whose mark covers every frame it calls): an
-        exception's report never shows them.
+        ``TemplateWalk.render``, whose mark covers every frame it calls): with
+        ``DEBUG`` off, when Django's filter works, an exception's report never
+        shows them.
         """
 
         # compose_as_system refuses a blank reason too, but only after the render, which this refusal precedes.
@@ -1434,9 +1435,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         plain-text body, through any include and whether or not a condition
         guards it; a value only tested is not printed. A path either body does
         not print is refused, one item per path and body, with the code
-        ``value_not_printed``. A path the row does not declare is refused the
-        same way, once: no body may read an undeclared value, and a deployment's
-        override can drop a declaration as well as an output. The preview warns
+        ``value_not_printed``. A path the row no longer declares is refused like a
+        path its text no longer prints, once and with the same code, because an
+        override may edit ``variables`` as well as the text. The preview warns
         of a declared value nothing reads, but it knows no caller's requirement,
         so it stays a warning; the requirement is the sender's to pass here.
         """
