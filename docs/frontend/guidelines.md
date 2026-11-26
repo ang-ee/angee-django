@@ -525,9 +525,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and keep any callbacks they close over stable; when a callback wraps
   Refine/query mutation objects that may refresh identity, expose a stable
   callback that reads the latest execution context from a ref (`useLatestRef`).
-  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
-  navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Context another
+  Explorer pages over a scoped tree (storage, knowledge) compose
+  `ScopedExplorerPane`, which owns the primary-pane navigator publication plus the
+  root loading/empty gate; addons provide row projection, route transitions, DnD
+  policy, and domain actions. An explorer page whose navigator is another surface
+  (the iam schema explorer, the agents session rail) renders it with
+  `PrimaryPanePublisher`. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list. The left pane never
   describes the record (see the shell's regions below). Page tests use
@@ -1327,9 +1330,23 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `actionFormSubmitResult(data, root)` and normalized outcomes with
   `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  A refusal's form-level messages stay several: the form-level error holds a
+  list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
+  and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
+  several as a list; never join them into one text. A record form's refused
+  save brings the person to its reason: the first shown field it names takes
+  focus (`applyFormErrors` with `focus`), else the banner does, and Save stays
+  focusable while it runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
+- What a record form's Save would write is readable before a save:
+  [nextSave](../../packages/ui/src/views/form/use-form-view-save.ts), on the
+  save surface a pane and a toolbar receive, returns the record's input and the
+  lines diff, built by Save's own function from the values, the baseline and
+  the changed fields the form holds when it is called. It validates, writes and
+  requests nothing, and each call returns a new object: a pane that previews
+  unsaved edits compares what it reads by value, and never rebuilds the mapping.
 - Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
   discriminator selection; RHF owns original and transformed values. Dialog
@@ -1757,10 +1774,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
+  `Explorer` is removed.** The console body and a list's split placement compose
+  `Workbench` over `page/SplitPanes` (v4) — `primary` is the navigator pane,
+  `children` the content, `secondary` the aside, with size/collapse persistence via
+  `autoSave`. Explorer pages do not compose it: they publish their navigator into the
+  console's primary pane (the shell-published surfaces rule above).
+  A pane scrolls its content: the library sets `overflow: auto` on it
+  ([`SplitPane`](../../packages/ui/src/page/SplitPanes.tsx)). Do not
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
@@ -2413,7 +2433,12 @@ Native form saves refresh their resource queries and authored reads of that
 model; custom commands retain their mutation owner's invalidation. Declare
 other affected models through `invalidateModels`; the
 [shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
+resolves their resource and authored-query invalidation. The save confirms as
+soon as the write answers: it starts those refreshes and does not wait for
+them, so a list of a dependent model or a read in the record's chrome may show
+the saved state a moment after the confirmation, and a read that fails or
+never answers cannot hold a save. Only a save that writes lines waits, for its
+own model's lists. A dependency between
 read models is not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no

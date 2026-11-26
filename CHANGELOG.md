@@ -10,6 +10,117 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
+  applied: the panel library (react-resizable-panels) sets `overflow: auto`
+  inline on the element that takes a pane's class, and an inline style wins
+  over any class that is not `!important`, so a pane scrolls its content.
+  Nothing computed changes. A record in the document presentation that a list
+  opens in its split placement scrolls in the content pane of the list's own
+  workbench, as one opened inline scrolls in the list's record sheet; a record
+  in the workspace presentation, or with a full-bleed pane active, scrolls
+  inside the form in either placement. The pane's docstring says so; the
+  frontend guide's `Workbench` rule names what composes it (the console body
+  and a list's split placement), and its explorer-page rule covers the pages
+  that publish their navigator with `PrimaryPanePublisher`. A test holds, for
+  both placements, which element is the open record's nearest overflow rule
+  and the classes that size it and the list's root; it computes no layout, so
+  `Views/ResourceList`, the first story of a split list, shows a tall record
+  split and inline for a browser to measure the rest. Known, not changed:
+  `Workbench`'s `scrollMode` does nothing (both values compute the same
+  layout, since the library's inline styles override the class it adds); its
+  docstring says so, the console layout no longer passes its default, and
+  removing the prop waits on callers outside the framework.
+- `@angee/refine`: A write's refresh no longer leaves an unanswered first read
+  idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
+  that a request sent before the write cannot commit after it, and awaited the
+  cancellation before the resend; in between the read was neither answered nor
+  on its way (`isFetching` and `isLoading` false with no data), and a reader
+  that waits for a first answer takes that for one that will not come. A record
+  form's confirmation, which used to come after this refresh, renders in that
+  gap. The cancellation and the resend now happen in one synchronous call: the
+  request is rejected synchronously, so the resend is a new request, and the
+  read is reverted synchronously, so nothing overwrites the resend's state.
+  `useSetAuthoredQueryData` is changed the same way, and cancels nothing when
+  its updater accepts nothing (it left such a read idle with no data). Two
+  writes whose refreshes start within a few microtasks of each other during one
+  unanswered first read now each restart it.
+- `@angee/ui`: A refused save brings the person to its reason. With the
+  record's sheet scrolled down to the field being edited, the banner at its
+  top was out of view, and focus fell to the page because Save was disabled
+  while it ran. The answer now moves focus to the first shown field it names,
+  in the form's order (`applyFormErrors` takes `focus`, through the form
+  library's `shouldFocus`; the record form's save passes it); a refusal that
+  names no shown field focuses the banner; and Save stays focusable while a
+  save runs (`aria-disabled`). The form's own required check already behaved
+  so. Not changed: a dialog's refusal, and an owner that projects issues while
+  the person edits elsewhere, move no focus. **Upgrade:** a test that expected
+  a pending Save to carry `disabled` finds `aria-disabled="true"`.
+- `@angee/ui`: **Changed API.** A refusal's form-level messages stay several.
+  `applyFormErrors` (`validation-errors.ts`) joined the form-level messages
+  and each message no rendered field claims with a space into the one
+  `root.server` text, so a save refused for three reasons read as one run-on
+  sentence on the record form's banner and in both dialogs, to the eye and to
+  a screen reader. The form-level error now holds a list (`formErrorsFromForm`
+  reads it), and `ErrorBanner` takes `messages`: one is the banner's body,
+  several are a list, one item each. `FormViewSaveSurface.saveErrors` replaces
+  `saveError`, and an action form's `formErrors` replaces `formError`; the
+  three addons that read it follow (the tasks pane, the thread composer, the
+  workflow studio's action banner). Known, not changed: the workflow studio's
+  own issue summary still sets its lines in one text, and
+  `useDottedPathFieldErrors.formSummary`, which nothing reads, still joins.
+  **Upgrade:** read `saveErrors` or `formErrors` and pass them to
+  `<ErrorBanner messages={…} />`; a test that matched a refusal's reasons as
+  one sentence finds one list item per reason.
+- `@angee/ui`: A record form confirms a save as soon as the write answers.
+  The save awaited the refresh of every dependent resource and of every
+  authored read registered on the saved model, among them the reads a record's
+  own chrome mounts on every saved form; a slow one delayed "Changes saved", a
+  failing one held it through the query's retries (about seven seconds under
+  the app's defaults), and one that never answered held it for ever while Save
+  sent no further write. The save (`use-form-view-save.ts`) now starts those
+  refreshes and does not wait for them: the form shows its own record, which
+  the write's answer carries, and a failing read reports through its own
+  query. A list of a dependent model, or an authored read of the saved model,
+  may therefore show the saved state a moment after the confirmation where it
+  showed it just before; the saved model's own lists already did. A save that
+  writes lines still waits for its own model's lists, and a record action or
+  a dialog still waits for its refreshes (`useAuthoredMutation`).
+- `@angee/ui`: A record form tells what its Save would write before a save.
+  The save surface a pane (`RecordPanelContext.form`) and a toolbar
+  (`RecordToolbarContext.form`) receive has `nextSave(): FormNextSave`,
+  `{ data, lines }`: the record's input and the lines diff that Save hands the
+  native create or update, the resource save or the form's own submit owner.
+  Save and `nextSave` build it with one function (`use-form-view-save.ts`),
+  from the values, the baseline and the changed fields the form holds when it
+  is called, so a reader that keeps `nextSave` across edits, saves and
+  discards reads what Save then sends, and a pane that previews unsaved edits
+  does not rebuild the save's mapping. Each reads its own copy of the values
+  (Save the form library's submit copy, `nextSave` a `structuredClone`), which
+  hold the same for a record form's plain values, and each call returns a new
+  object, to compare by value. Reading it validates, writes and requests
+  nothing, and promises no more than what the save would build: a form that
+  takes no edit, a save in flight, the rule check, a registered validation,
+  lines another save changed, a running "view as" preview, a revision that is
+  not available or the server may still stop that save. Save itself now reads
+  the changed fields when it runs, where it read those of the render that made
+  its handler, so within one record a `submitForm` kept across edits, saves
+  and discards builds from the current ones. Everything else it reads (the
+  mode, the fields it saves, whether the form takes an edit, the record) is
+  still that render's. The form's own Save, Enter and submit never kept one.
+- `@angee/ui`: A record form's save no longer writes into the values it
+  reads: `mutationData` (`form-view-model.ts`) copies what it takes from them,
+  as its hidden-reset branch already did. Before, a structured field saved
+  together with a dotted member it sends as another value (a cleared number as
+  `null`, a picked record as its id) had that wire value written into the
+  values the save had read, so the form stayed marked as changed after a
+  successful save, with Save and Discard still showing, and a form's own
+  submit owner received the wire value in `context.values`. Now the form is
+  clean after such a save and the owner receives what the form held. What a
+  form sends is unchanged for a record form's values, which are plain data:
+  the copy is `structuredClone`'s, as the form's undo history already makes on
+  every change. A class instance would now be sent as a plain copy without its
+  methods, and a value holding a function would throw. No widget or form holds
+  such a value, and no declared form saves such a pair today.
 - Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
   behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
   which judged only what `makemigrations` autodetects, now also judges the plan

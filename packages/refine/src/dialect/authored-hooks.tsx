@@ -170,7 +170,12 @@ export function useInvalidateAuthoredModels(): (
   }, [queryClient]);
 }
 
-/** Cancel older snapshots before accepting a complete typed result at its exact native key. */
+/**
+ * Cancel older snapshots before accepting a complete typed result at its exact native key, in one
+ * synchronous call: a first read that has not answered goes from waiting to the accepted result
+ * without a render seeing it idle with no data. An updater that accepts nothing (`undefined`)
+ * cancels nothing, so the read it declined to replace still answers.
+ */
 export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   document: TDocument,
   variables: AuthoredVariables<TDocument> | undefined,
@@ -181,8 +186,15 @@ export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   const activeProvider = useActiveDataProviderName();
   return useCallback(async (document, variables, data, options) => {
     const queryKey = authoredQueryKey(document, variables, options?.dataProviderName ?? activeProvider ?? "default");
-    await queryClient.cancelQueries({ queryKey, exact: true });
-    queryClient.setQueryData(queryKey, data);
+    // Decided before cancelling: the cached value is the same on either side of a cancellation's
+    // revert, and a read cancelled for a result that never arrives would stay idle with no data.
+    const accepted: unknown = typeof data === "function"
+      ? (data as (current: unknown) => unknown)(queryClient.getQueryData(queryKey))
+      : data;
+    if (accepted === undefined) return;
+    // Not awaited, as in `invalidateAuthoredQueries`: the cancellation reverts the read synchronously.
+    void queryClient.cancelQueries({ queryKey, exact: true });
+    queryClient.setQueryData(queryKey, accepted);
   }, [activeProvider, queryClient]);
 }
 

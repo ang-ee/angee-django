@@ -56,7 +56,12 @@ export interface WorkbenchProps {
   onPrimaryController?: (controller: CollapsiblePane | null) => void;
   /** Receives the secondary pane's collapse controller (or null on unmount). */
   onSecondaryController?: (controller: CollapsiblePane | null) => void;
-  /** Whether the content pane is clipped by the workbench or allowed to grow the document. */
+  /**
+   * Does nothing; kept only until callers outside the framework have dropped it. Both values
+   * compute the same layout: the `overflow-visible` class `"browser"` adds to the group and the
+   * content pane is overridden by the panel library's inline styles (`overflow: hidden` on the
+   * group, `overflow: auto` on each pane).
+   */
   scrollMode?: "contained" | "browser";
   className?: string;
 }

@@ -280,7 +280,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
           { icon: "arrow-up-right", label: t("studio.publish"), text: true, disabled: disabled || form.formState.isDirty || conflict !== null, onClick: () => void publishSaved() },
         ]}
       />
-      {action.formError && (!conflict || !action.saveConflict) ? <ErrorBanner description={action.formError} /> : null}
+      {!conflict || !action.saveConflict ? <ErrorBanner messages={action.formErrors} /> : null}
       {hasIssues ? <ErrorBanner description={[issueMessage, ...projected.formErrors].join("\n")} /> : null}
       {conflict ? <Alert tone="warning" title={conflict.message} actions={<>
         <Button type="button" size="sm" disabled={disabled || conflict.revision == null} onClick={() => {

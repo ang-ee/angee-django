@@ -103,7 +103,8 @@ export interface FieldDescriptor extends FieldPresentation {
    * the targets it hides are dropped from the draft.
    * On save, each preset field whose value changed writes its preset's value for every target that
    * is hidden now and was loaded with a different value, in declaration order (the later wins).
-   * `prefill` therefore also runs at save and must be pure.
+   * `prefill` therefore also runs at save, and at each read of what Save would write (a record form's
+   * `nextSave`), and must be pure.
    */
   prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */

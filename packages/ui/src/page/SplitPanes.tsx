@@ -22,7 +22,7 @@ import { tv, type VariantProps } from "../lib/variants";
 export const splitPanesVariants = tv({
   slots: {
     group: "min-h-0 min-w-0 flex-1 overflow-hidden",
-    pane: "min-h-0 min-w-0 overflow-hidden",
+    pane: "min-h-0 min-w-0",
     handle:
       "shrink-0 bg-border-subtle outline-none transition-colors hover:bg-border-strong focus-visible:focus-ring data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
   },
@@ -194,6 +194,12 @@ function asPercent(
 }
 
 /**
+ * One pane of a `SplitPanes` group. It scrolls its content: react-resizable-panels puts
+ * the pane's class on an inner block element and sets `overflow: auto` on it inline, so
+ * an overflow class on the pane applies only when it is `!important`; the pane's `style`
+ * changes it. A child that fills the pane with `h-full` and carries its own overflow rule
+ * scrolls inside itself instead, as the console's main region does; `flex-1` does not size
+ * a child here, the element being a block.
  * @kind primitive
  */
 export const SplitPane = React.forwardRef<HTMLDivElement, SplitPaneProps>(
