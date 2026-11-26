@@ -52,6 +52,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
+from django.db.models.functions import Length
 from rebac import actor_context, system_context
 
 from angee.base.fields.state import StateField
@@ -446,7 +447,13 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         """Return the row a recipient in ``language`` reads for each template name (``blocks/button``) that has one.
 
         Names are read through :meth:`MessageTemplateKind.for_template_name` and
-        resolved by :meth:`effective_rows` in one query; a name with no row is absent.
+        resolved by :meth:`effective_rows` in one query. It reads each row's
+        ``text_length`` in place of its ``source`` and ``text_source``: the characters
+        the two hold, by the database's ``Length``, which counts characters as
+        ``len()`` does on PostgreSQL and SQLite. :meth:`with_text` reads the two, so a
+        walk counts a level before it loads the level's text. ``description`` and
+        ``sample``, which a walk never reads, stay unread too. A name with no row is
+        absent.
         """
 
         identities: dict[tuple[str, str], str] = {}
@@ -455,10 +462,30 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
                 identities[identity] = name
         if not identities:
             return {}
-        rows = self.effective_rows(
+        sized = cast(Self, self.defer("source", "text_source", "description", "sample").annotate(
+            text_length=Length("source") + Length("text_source"),
+        ))
+        rows = sized.effective_rows(
             {kind for kind, _ in identities}, keys={key for _, key in identities}, language=language,
         )
         return {identities[identity]: row for identity, row in rows.items() if identity in identities}
+
+    def with_text(self, rows: Mapping[str, TemplateT]) -> dict[str, TemplateT]:
+        """Return ``rows`` (from :meth:`named_rows`) with their ``source`` and ``text_source`` read, in one query.
+
+        A row no longer read through this queryset is absent.
+        """
+
+        texts = {
+            pk: (source, text) for pk, source, text in
+            self.filter(pk__in=[row.pk for row in rows.values()]).order_by().values_list("pk", "source", "text_source")
+        }
+        read: dict[str, TemplateT] = {}
+        for name, row in rows.items():
+            if (text := texts.get(row.pk)) is not None:
+                row.source, row.text_source = text
+                read[name] = row
+        return read
 
     def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
         """The template names among ``names`` every recipient finds (:meth:`resolves`), judged in one query."""

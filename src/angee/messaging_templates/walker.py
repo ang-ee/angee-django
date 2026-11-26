@@ -242,9 +242,15 @@ class WalkedRow(Protocol):
 
 
 class RowReader(Protocol):
-    """Where a walk reads the rows it names: the model's scoped manager, or a queryset of it."""
+    """Where a walk reads the rows it names: the model's scoped manager, or a queryset of it.
+
+    :meth:`named_rows` returns each row with its ``text_length``, the characters its ``source`` and ``text_source``
+    hold, and those two unread; :meth:`with_text` reads them in one query, a row gone since absent.
+    """
 
     def named_rows(self, names: Iterable[str], *, language: str) -> Mapping[str, Any]: ...
+
+    def with_text(self, rows: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     def resolving_names(self, names: Iterable[str]) -> frozenset[str]: ...
 
@@ -407,6 +413,12 @@ def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
         sum(type(node) is VariableNode for node in nodes),
         sum(len(cast(TextNode, node).s) for node in nodes if type(node) is TextNode),
     )
+
+
+def _too_much_source(root_name: str) -> str:
+    """The refusal of a walk whose rows hold over :data:`WALK_SOURCE_LIMIT` characters, counted or about to load."""
+
+    return f"{root_name}: the rows it reaches hold over {WALK_SOURCE_LIMIT} characters of source"
 
 
 def _nested_too_deep(name: str) -> str:
@@ -1302,6 +1314,10 @@ class TemplateWalker:
         A row is fetched only at an include depth the tree reaches: the root and its layout stand at 0, a row they
         include at 1, and a target past :data:`INCLUDE_DEPTH_LIMIT` is refused in the tree's own words
         (:func:`_nested_too_deep`) before it is read, so a chain costs queries bounded by the limit, not its length.
+        A level is read in two queries: its rows with their ``text_length``, then their text, read only when the
+        walk's characters with theirs stay within :data:`WALK_SOURCE_LIMIT`, so a level wider than the cap is refused
+        before its text is fetched; a row gone between the two is not found. Each row is counted again by ``len()``
+        as it is checked, the root among them, so the cap holds for what was read.
         """
 
         checks: dict[str, _RowCheck] = {}
@@ -1316,9 +1332,7 @@ class TemplateWalker:
                 row = walk.rows[name]
                 characters += len(row.source) + len(row.text_source)
                 if characters > WALK_SOURCE_LIMIT:
-                    walk.refusals.append(
-                        f"{walk.root_name}: the rows it reaches hold over {WALK_SOURCE_LIMIT} characters of source",
-                    )
+                    walk.refusals.append(_too_much_source(walk.root_name))
                     return checks
                 check = checks[name] = self.check(row)
                 walk.refusals.extend(check.refusals)
@@ -1353,6 +1367,11 @@ class TemplateWalker:
                 walk.refusals.extend(_nested_too_deep(name) for name in too_deep)
                 return checks
             found = reader.named_rows(wanted, language=walk.language)
+            # Counted before its text is read, so a level wider than the cap costs one query of sizes, not its text.
+            if characters + sum(row.text_length for row in found.values()) > WALK_SOURCE_LIMIT:
+                walk.refusals.append(_too_much_source(walk.root_name))
+                return checks
+            found = reader.with_text(found)
             # One query a level for what a save asks of every included key, never one a target.
             resolving = reader.resolving_names(
                 [target for target in wanted if target in walk.includes]) if self.saving else frozenset()
