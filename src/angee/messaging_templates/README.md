@@ -212,7 +212,8 @@ An addon ships rows in its `install` resources, loaded through
 `MessageTemplateResource` (resources' `BaselineResource`): each is a
 **baseline**, readable by every signed-in person and written only by loads; a
 changed row in a later release re-applies to it. A row's `content_hash`
-fingerprints its kind and what it renders. A load saves rows in file order and a
+fingerprints its kind and what it renders as stored; a save naming some of those
+columns hashes the stored values of the rest, read under a lock. A load saves rows in file order and a
 save walks what the row includes, so a template's layout and every block or part
 a row includes load before it (`depends_on`).
 

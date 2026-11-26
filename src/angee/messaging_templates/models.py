@@ -961,12 +961,13 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             if isinstance(text, str) and "\r" in text:
                 setattr(self, column, text.replace("\r\n", "\n").replace("\r", "\n"))
 
-    def compute_content_hash(self) -> str:
+    def compute_content_hash(self, stored: Mapping[str, Any] | None = None) -> str:
         """Return the fingerprint of what this row is and renders now: ``sha256:`` and the canonical digest of
-        :data:`CONTENT_HASH_FIELDS`, which :meth:`save` stores as ``content_hash``."""
+        :data:`CONTENT_HASH_FIELDS`, which :meth:`save` stores as ``content_hash``; ``stored`` gives the stored value of
+        a column the instance's own value stands in for."""
 
         return "sha256:" + canonical_json_sha256({
-            field.name: field.value_from_object(self)
+            field.name: (stored or {}).get(field.name, field.value_from_object(self))
             for field in self._meta.concrete_fields if field.name in CONTENT_HASH_FIELDS
         })
 
@@ -977,7 +978,11 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         :meth:`clean` does, since a writer may validate one instance and save
         another. A save that writes a column of :data:`CONTENT_HASH_FIELDS` writes
         the hash with it, ``update_fields`` included, since a resource reload saves
-        only the columns its row states. A non-baseline row inserted with no
+        only the columns its row states; the hash of such a partial save reads the
+        stored values of the hashed columns it omits, locked, so it describes the
+        stored row; the read and the write share one transaction, with no savepoint,
+        so a failure marks the caller's transaction for rollback as Django's own save
+        does. A non-baseline row inserted with no
         ``baseline_hash`` where its baseline exists takes the baseline's
         ``content_hash``; one that holds a hash already, as a history revert
         restores it, keeps it.
@@ -985,10 +990,22 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         self._write_newlines()
         update_fields = kwargs.get("update_fields")
-        if update_fields is None or not set(CONTENT_HASH_FIELDS).isdisjoint(update_fields):
-            self.content_hash = self.compute_content_hash()
-            if update_fields is not None:
+        with transaction.atomic(savepoint=False):
+            self._derive_hashes(update_fields)
+            if update_fields is not None and not set(CONTENT_HASH_FIELDS).isdisjoint(update_fields):
                 kwargs["update_fields"] = {*update_fields, "content_hash"}
+            super().save(*args, **kwargs)
+
+    def _derive_hashes(self, update_fields: Iterable[str] | None) -> None:
+        """Set ``content_hash`` when the save writes a hashed column, and a new override's ``baseline_hash``."""
+
+        if update_fields is None or not set(CONTENT_HASH_FIELDS).isdisjoint(update_fields):
+            omitted = set() if update_fields is None else set(CONTENT_HASH_FIELDS) - set(update_fields)
+            stored = (
+                type(self).system_queryset().select_for_update().filter(pk=self.pk).values(*omitted).first()
+                if omitted and not self._state.adding else None
+            )
+            self.content_hash = self.compute_content_hash(stored)
         if self._state.adding and not self.is_baseline and not self.baseline_hash:
             shipped = (
                 type(self).system_queryset()
@@ -998,4 +1015,3 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             )
             if shipped is not None:
                 self.baseline_hash = shipped
-        super().save(*args, **kwargs)

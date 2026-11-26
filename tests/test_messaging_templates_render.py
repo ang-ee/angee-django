@@ -2648,14 +2648,15 @@ def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(pl
     schema = addon_schema(messaging_templates_schema.schemas, "console")
     inserted = {"kind": "part", "key": "inserted", "language": "en", "name": "n", "format": "markdown",
                 "source": '{% include "parts/chain0" only %}'}
+    member = create_user("messaging-templates-chain")
     with CaptureQueriesContext(connection) as q:
-        result = execute_schema(schema, _INSERT, {"object": inserted}, user=create_user("messaging-templates-chain"))
+        result = execute_schema(schema, _INSERT, {"object": inserted}, user=member)
     assert [(error.extensions or {}).get("code") for error in result.errors or ()] == ["VALIDATION"], result.errors
     counts["member insert"] = len(q)
     assert counts == CHAIN_QUERIES, counts
 
 
-CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3, "member insert": 119}
+CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3, "member insert": 88}
 """The queries each walk of a chain makes; before the gather stopped at the tree's depth, a 900 chain cost 1,018 as
 system work, 499 on the render-side judge and 5,572 on a member's insert."""
 
@@ -3223,6 +3224,27 @@ def test_the_console_stores_a_carriage_return_as_a_newline(plain: Any, kit: Any)
     with system_context(reason="tests.messaging_templates.render.crlf"):
         row.refresh_from_db()
     assert row.source == "<p>c</p>\n" and row.content_hash == row.compute_content_hash()
+
+
+def test_a_partial_save_hashes_what_the_row_stores(plain: Any) -> None:
+    """A save naming some hashed columns hashed the instance's other values too, stored or not: it now hashes the
+    stored values of the columns it omits, read under a lock, so the hash describes the stored row."""
+
+    del plain
+    row = _row("part", "partial", source="One.")
+    with system_context(reason="tests.messaging_templates.render.partial"):
+        row.source, row.text_source = "Two.", "never stored"
+        row.save(update_fields=["source"])
+        stored = MessageTemplate.objects.get(pk=row.pk)
+        assert (stored.source, stored.text_source) == ("Two.", "")
+        assert stored.content_hash == stored.compute_content_hash()
+        first, second = MessageTemplate.objects.get(pk=row.pk), MessageTemplate.objects.get(pk=row.pk)
+        second.variables = {"a": "x"}
+        second.save()
+        first.source = "Three."
+        first.save(update_fields=["source"])  # first still holds the variables second replaced
+        stored = MessageTemplate.objects.get(pk=row.pk)
+        assert stored.variables == {"a": "x"} and stored.content_hash == stored.compute_content_hash()
 
 
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(

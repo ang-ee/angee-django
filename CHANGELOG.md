@@ -123,7 +123,8 @@ live in code docstrings.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
