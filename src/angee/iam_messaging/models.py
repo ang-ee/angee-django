@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -69,6 +69,13 @@ SIGN_IN_LINK_NOT_SHOWN_MESSAGE = (
 )
 """Refusal of a link whose effective template, as the deployment wrote or edited it or a row it includes, does not show
 the link (the template's ``value_not_printed``), code ``link_not_shown``."""
+
+SIGN_IN_LINK_NOT_RENDERED_MESSAGE = (
+    "The sign-in link's email template could not be rendered for this mail, so no link was sent: preview it to see "
+    "why, and edit or delete the deployment's version of the template, or of a block or part it includes."
+)
+"""Refusal of a link whose template's render refused for any other reason, code ``link_not_rendered``: the render's
+own words can quote the values it was given, the link among them, so none of them is passed on."""
 
 logger = logging.getLogger(__name__)
 
@@ -161,10 +168,12 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         (``template_missing``), looked up for the recipient's person with
         ``MessageTemplateQuerySet.effective`` inside the send's named work; then
         whatever ``MessageTemplateManager.send_as_system`` refuses, as its
-        docstring orders it (the system channel missing or paused among it),
-        a template whose bodies do not both show the link (``must_print``)
-        refused as the deployment's fault (``link_not_shown``, logged as a
-        warning naming the row). That send renders the template with the link,
+        docstring orders it: the system channel's and compose's refusals (the
+        channel missing or paused among them) as they are, and the render's in
+        this addon's words, as the deployment's fault, each logged as a warning
+        naming the row and the refusal's code: a template whose bodies do not
+        both show the link (``must_print``) as ``link_not_shown``, any other as
+        ``link_not_rendered``. That send renders the template with the link,
         its expiry and the person's first name, and records it on messaging's system channel,
         queued for delivery when the outermost transaction commits. Only then is
         the row saved, its ``sent_at`` stamped: recorded and queued, which makes
@@ -209,19 +218,24 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
                 with actor_context(actor) if actor is not None else nullcontext():
                     templates.send_as_system(template, reason=reason, to=address, values=values, must_print=["link"])
             except ValidationError as refusal:
-                # The template addon refuses a body that hides a value with items coded ``value_not_printed`` alone
-                # (``MessageTemplate.render``); Django's own merge reads the codes of a refusal of either shape. A
-                # refusal class of the template addon's own replaces this reading once it has one.
-                if {item.code for items in refusal.update_error_dict({}).values() for item in items} != {
-                    "value_not_printed",
-                }:
+                # The render refuses with a list of coded items (``MessageTemplate.render``); the system channel and
+                # compose refuse keyed by field, and those pass as they are. Django's own merge reads either shape.
+                # A render's words can quote a value, the link among them, so none is passed on or logged: its code
+                # alone is. The template addon's typed refusals replace this reading by shape once it has them.
+                refused = refusal.update_error_dict({})
+                if set(refused) != {NON_FIELD_ERRORS}:
                     raise
+                codes = sorted({str(item.code) for item in refused[NON_FIELD_ERRORS]})
+                hidden = codes == ["value_not_printed"]
                 logger.warning(
                     "Refused a sign-in link: the message template %s (%s), row %s, or a block or part it includes, "
-                    "does not show the link.",
+                    "%s (%s).",
                     template.handler.template_name(template.key), template.language, template.public_id,
+                    "does not show the link" if hidden else "could not be rendered for it", ", ".join(codes),
                 )
-                raise ValidationError(SIGN_IN_LINK_NOT_SHOWN_MESSAGE, code="link_not_shown") from None
+                if hidden:
+                    raise ValidationError(SIGN_IN_LINK_NOT_SHOWN_MESSAGE, code="link_not_shown") from None
+                raise ValidationError(SIGN_IN_LINK_NOT_RENDERED_MESSAGE, code="link_not_rendered") from None
             link.sent_at = timezone.now()
             with system_context(reason="iam_messaging.sign_in_link.issue"):
                 if actor is not None:

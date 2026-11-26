@@ -52,6 +52,7 @@ from angee.iam_messaging.models import (
     ISSUE_SIGN_IN_LINK,
     SIGN_IN_LINK_COOLDOWN_MESSAGE,
     SIGN_IN_LINK_NO_ADDRESS_MESSAGE,
+    SIGN_IN_LINK_NOT_RENDERED_MESSAGE,
     SIGN_IN_LINK_NOT_SHOWN_MESSAGE,
     SIGN_IN_LINK_PATH,
     SIGN_IN_LINK_QUEUED_MESSAGE,
@@ -1111,13 +1112,14 @@ def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fa
             target.with_actor(iam_admin).issue_sign_in_link()
         answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert (refusal.value.code, refusal.value.messages) == ("link_not_shown", [SIGN_IN_LINK_NOT_SHOWN_MESSAGE])
+    assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
     warnings = [record.getMessage() for record in caplog.records if record.name == "angee.iam_messaging.models"
                 and record.levelno == logging.WARNING]
     with system_context(reason=READ):
         row = MessageTemplate.objects.effective("template", SIGN_IN_LINK_TEMPLATE, person=None)
     assert warnings == 2 * [  # the verb's refusal, then the mutation's
         f"Refused a sign-in link: the message template {row.handler.template_name(row.key)} ({row.language}), "
-        f"row {row.public_id}, or a block or part it includes, does not show the link."
+        f"row {row.public_id}, or a block or part it includes, does not show the link (value_not_printed)."
     ]
     assert callbacks == []
     assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": SIGN_IN_LINK_NOT_SHOWN_MESSAGE}
@@ -1128,35 +1130,62 @@ def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fa
     assert _redeem(earlier) == target
 
 
-def test_a_template_that_reads_the_link_as_a_date_is_refused_in_words_that_quote_no_secret(
-    deliverable, iam_admin, sent, settings, monkeypatch, caplog,
+DATED = '{{ link|date:"c" }}'
+"""The link read as a date: the console admits it, and the render refuses the link's value (``invalid_values``) in
+words that quote its first characters."""
+
+
+@pytest.mark.parametrize("override", [
+    pytest.param(lambda shipped: {"source": f"{shipped.source}\n\n{DATED}"}, id="in-the-body"),
+    pytest.param(lambda shipped: {"subject": f"{shipped.subject} {DATED}"}, id="in-the-subject"),
+    pytest.param(lambda shipped: {"source": f"{shipped.source}\n\n{{% with dated=link %}}{{{{ dated|date:\"c\" }}}}"
+                                            "{% endwith %}"}, id="inside-a-with-block"),
+    pytest.param(lambda shipped: {"source": f'{shipped.source}\n\n{{% include "blocks/button" with label="Again" '
+                                            'url=link|date:"c" only %}'}, id="as-a-buttons-url"),
+])
+def test_a_template_the_render_refuses_is_answered_in_the_actions_words_and_logged_by_its_code(
+    deliverable, iam_admin, sent, monkeypatch, caplog, django_capture_on_commit_callbacks, override,
 ):
-    """The template addon's one refusal of a render that quotes a value is its date check, which quotes the value's
-    first 40 characters; a link's secret starts later, after the shortest origin base accepts, the path and the
-    account's public id. Every override that would make the render itself fail on the link is refused when it is
-    saved. If the template addon quotes more, this fails, and the action maps the refusal to its own words."""
+    """The render's own words can quote the values it was given, the link among them (the date check quotes a value's
+    first 40 characters), so the action answers every refusal of the render in its own words, raised from nothing,
+    and logs the row and the refusal's code: no character of the link reaches the answer or the log."""
 
     target = _person("guest-dated")
     earlier = sent(target, iam_admin)
+    SignInLink._base_manager.filter(user=target).update(created_at=timezone.now() - timedelta(seconds=61))
     with system_context(reason=READ):
         shipped = MessageTemplate._base_manager.get(
             kind="template", key=SIGN_IN_LINK_TEMPLATE, language="en", is_baseline=True,
-        ).source
-    _override("template", SIGN_IN_LINK_TEMPLATE, source=f'{shipped}\n\n{{{{ link|date:"U" }}}}')
-    settings.ANGEE_PUBLIC_ORIGIN = "https://a.io"  # the shortest origin base accepts
+        )
+    row = _override("template", SIGN_IN_LINK_TEMPLATE, **override(shipped))
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
-    link = SignInLink.url_for(f"{target.public_id}.{SECRET}")
     with caplog.at_level(logging.DEBUG):
-        with actor_context(iam_admin), _refused(ValidationError) as refusal:
+        with (
+            django_capture_on_commit_callbacks(execute=True) as callbacks,
+            actor_context(iam_admin),
+            _refused(ValidationError) as refusal,
+        ):
             target.with_actor(iam_admin).issue_sign_in_link()
         answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
-    [item] = refusal.value.error_list
-    quoted = re.fullmatch(r"link is not a date, or a date and time with its offset: '(.*)'\.", item.message)
-    assert item.code == "invalid_values" and quoted is not None
-    assert link.startswith(quoted[1]) and len(quoted[1]) < link.index(SECRET)
-    assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": item.message}
-    assert not any(SECRET in text for text in (caplog.text, repr(refusal.value), str(answered.errors)))
+    assert (refusal.value.code, refusal.value.messages) == ("link_not_rendered", [SIGN_IN_LINK_NOT_RENDERED_MESSAGE])
+    assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
+    assert result_data(answered)["issue_user_sign_in_link"] == {
+        "ok": False, "message": SIGN_IN_LINK_NOT_RENDERED_MESSAGE,
+    }
+    warnings = [record.getMessage() for record in caplog.records if record.name == "angee.iam_messaging.models"
+                and record.levelno == logging.WARNING]
+    assert warnings == 2 * [  # the verb's refusal, then the mutation's
+        f"Refused a sign-in link: the message template {row.handler.template_name(row.key)} ({row.language}), "
+        f"row {row.public_id}, or a block or part it includes, could not be rendered for it (invalid_values)."
+    ]
+    shown = [text for text in (caplog.text, repr(refusal.value), str(answered.data), str(answered.errors))
+             if SIGN_IN_LINK_PATH in text or target.public_id in text or SECRET in text]
+    assert shown == [] and callbacks == []
     assert _redeem(earlier) == target
+    with system_context(reason="tests.iam_messaging.sign_in_link.override"):
+        row.delete()
+    with override_settings(ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN=60):  # the refused issue started no cooldown
+        assert sent(target, iam_admin)
 
 
 def _broken(state: str, channel: Any) -> None:
@@ -1178,8 +1207,8 @@ def _broken(state: str, channel: Any) -> None:
     pytest.param("system channel missing", "channel", "SYSTEM_CHANNEL_MISSING", id="system-channel-missing"),
     pytest.param("system channel paused", "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="system-channel-paused"),
     pytest.param("template missing", None, "template_missing", id="template-missing"),
-    # The send's own refusal of another code, which is not the template hiding the link and passes as it is.
-    pytest.param("no default brand kit", None, "no_brand_kit", id="the-sends-refusal-of-another-code"),
+    # The render's refusal of another code than a hidden link, answered in the action's words like every render's.
+    pytest.param("no default brand kit", None, "link_not_rendered", id="the-renders-refusal-of-another-code"),
     pytest.param("cooldown", None, None, id="within-the-cooldown"),
 ])
 def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_link_current(
@@ -1208,9 +1237,11 @@ def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_li
         result = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     if state == "template missing":
         assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE])
+        assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
     if state == "no default brand kit":
-        assert [item.code for item in refusal.value.error_list] == [code]
-        assert "does not show the link" not in caplog.text
+        assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_NOT_RENDERED_MESSAGE])
+        assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
+        assert "could not be rendered for it (no_brand_kit)." in caplog.text
     if state == "cooldown":
         assert refusal.value.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
     assert result_data(result)["issue_user_sign_in_link"]["ok"] is False
