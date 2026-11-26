@@ -1,9 +1,8 @@
 """One question, its immutable proposal, and its final verdict."""
 
-import hashlib
 from collections.abc import Iterable, Sequence
 from datetime import datetime
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -17,14 +16,13 @@ from django.utils.text import capfirst
 from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
-from rebac.errors import NoActorResolvedError
 
 from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.derived import DerivedFrom
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.permissions import actor_user_id, reader_queryset, require_rebac_queryset
-from angee.base.prefetch import ReaderBatch, ReaderMemo, prefetched
+from angee.base.prefetch import ReaderBatch, ReaderMemo
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
 from angee.decisions.contracts import (
@@ -44,10 +42,8 @@ from angee.provenance.evidence import (
 )
 
 _CONCERN_TARGET = "_decision_concern_target"
-_UNKEPT_CONCERNS = "_decision_concerns_unkept"
-"""Where a batch read without a reader or under sudo lands: no reader's answers come from it."""
 _READER = ReaderMemo("_decisions_reader_answers")
-"""A question's context from one reader's batch read (:meth:`Decision.contexts_for`)."""
+"""A question's answers from one reader's batch read: its concern labels, its context and its requester's name."""
 
 
 def _known_model(label: str) -> bool:
@@ -98,6 +94,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     remind_after = models.DateTimeField(null=True, blank=True)
     reminded_at = models.DateTimeField(null=True, blank=True)
     objects = DecisionManager()
+    _reader_concerns = ReaderBatch("concern_labels_for")
+    _reader_contexts = ReaderBatch("contexts_for")
+    _reader_requesters = ReaderBatch("requester_names_for")
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
@@ -174,35 +173,34 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         """
         return f"/decisions/{self.public_id}"
 
-    @staticmethod
-    def _concerns_attr(reader: Any) -> str | None:
-        """Where ``reader``'s batched concern links sit on a row, keyed by their subject; ``None`` when never kept.
-
-        A batch is never kept without a reader, for a reader no subject names, or under
-        sudo, whose read bypasses every reader's policy ("Batch per reader, answer per
-        row" in ``docs/backend/guidelines.md``), so it never answers another read.
-        """
-        if reader is None or is_sudo():
-            return None
-        try:
-            subject = to_subject_ref(reader)
-        except NoActorResolvedError:
-            return None
-        # A digest of the subject, never its spelling: ``auth/anonymous:*`` spelled out would
-        # end in ``__``, which a prefetch reads as a lookup separator.
-        digest = hashlib.blake2b(f"{subject.subject_type}:{subject.subject_id}".encode(), digest_size=8).hexdigest()
-        return f"_decision_concerns_{digest}"
-
     @classmethod
     def concern_records_prefetch(cls, reader: Any) -> models.Prefetch:
-        """Batch the concern links ``reader`` reads, each target as ``reader`` reads it, for :meth:`concern_labels`.
+        """Read a question list's concern labels for ``reader`` once, as a native prefetch hint.
 
-        The links and their targets are read through ``reader``'s own read scope, or
-        REBAC's ambient one without a reader (``reader_queryset``), the targets once per
-        referenced type (``DecisionRecord.record_targets_prefetch``).
+        Each listed question's :meth:`concern_labels` then answers from that batch
+        (:meth:`concern_labels_for`).
         """
         return models.Prefetch(
-            "records", queryset=cls._concern_links(reader), to_attr=cls._concerns_attr(reader) or _UNKEPT_CONCERNS,
+            "_reader_concerns", queryset=require_rebac_queryset(cls, actor=reader), to_attr="_reader_concerns_read",
+        )
+
+    @classmethod
+    def reader_prefetches(cls, reader: Any) -> tuple[models.Prefetch, ...]:
+        """Every per-reader hint a question list needs when it is read another way than through its fields.
+
+        These are the answers ``DecisionType``'s fields read. A GraphQL field declares
+        its own hint, so a selection pays only for what it selects; a list a caller
+        reads itself (the record timeline, a mail) takes these so its rows'
+        :meth:`concern_labels` and :meth:`context_for` answer from one batch each. A
+        mail that names the requester adds :meth:`requester_names_prefetch`.
+        """
+        return cls.concern_records_prefetch(reader), cls.contexts_prefetch(reader)
+
+    @classmethod
+    def requester_names_prefetch(cls, reader: Any) -> models.Prefetch:
+        """Read a question list's :meth:`requester_name` for ``reader`` once, as a native prefetch hint."""
+        return models.Prefetch(
+            "_reader_requesters", queryset=require_rebac_queryset(cls, actor=reader), to_attr="_reader_requesters_read",
         )
 
     @staticmethod
@@ -218,55 +216,137 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
 
         In link order. A record ``reader`` may not read, or whose read was revoked, is
         left out, and so is every record of a question ``reader`` may not read. A list
-        read batches the labels with :meth:`concern_records_prefetch`; a row read another
-        way reads its own concerns the same way. Each reader's batch is kept apart on the
-        row, so a row read once answers each reader from their own read; without a
-        reader (REBAC's ambient scope) or under sudo, nothing is kept and every call reads.
+        read with :meth:`concern_records_prefetch` answers from that batch; otherwise
+        this reads the row alone (:meth:`concern_labels_for`). The answer is kept per
+        reader, so a row read once answers each reader from their own read; without a
+        reader (REBAC's ambient scope) or under sudo nothing is kept and every call reads.
         """
-        attr = self._concerns_attr(reader)
-        if attr is None:
-            links = list(self._concern_links(reader).filter(decision_id=self.pk))
-        else:
-            links = prefetched(self, attr, lambda: type(self).concern_records_prefetch(reader))
-        return [str(target) for link in links if (target := getattr(link, _CONCERN_TARGET)) is not None]
+        remembered = _READER.get(self, "concerns", reader)
+        if remembered is not None:
+            return list(cast(list[str], remembered))
+        return type(self).concern_labels_for((self,), reader)[self.pk]
 
-    def facts_for(self, reader: Any) -> list[DecisionFact]:
-        """The facts of this question's context ``reader`` is shown, in stored order, as the card's grid shows them.
+    @classmethod
+    def concern_labels_for(cls, questions: Sequence[Self], reader: Any) -> dict[Any, list[str]]:
+        """Each question's :meth:`concern_labels` for ``reader``, keyed by primary key.
 
-        As :meth:`concern_labels` returns labels, the caller slices and counts. A fact
-        with an empty value (``None`` or ``""``) is left out, as the card leaves it out,
-        and so is a fact whose evidence names a record ``reader`` may not read
-        (``readable_evidence``), value and all, so a revoked read hides it. A fact whose
-        evidence names a model this deployment no longer has is left out for every
-        reader: no one can read that record, and one stale fact must not keep a question
-        from being shown. A fact's ``row`` is its widget's context (a currency) and names
-        no record, so its evidence alone is read. A reader who may not read the question
-        is shown none: the facts sit on the row itself, with no relation whose read
-        scope would hide them, so this asks the question's own read rather than trust
-        the scope the caller read the row in.
+        One read of the concern links ``reader`` reads for every listed question, and
+        one read of their targets per referenced type (``record_targets_prefetch``).
+        Each question remembers its labels for ``reader`` (a ``ReaderMemo``: never
+        without a reader or under sudo).
         """
-        if not reader_queryset(type(self), reader).filter(pk=self.pk).exists():
-            return []
-        facts = [
-            fact for fact in DecisionContext.model_validate(self.context).facts
-            if fact.value not in (None, "") and all(_known_model(reference.model) for reference in fact.evidence)
-        ]
+        labels: dict[Any, list[str]] = {question.pk: [] for question in questions}
+        for link in cls._concern_links(reader).filter(decision_id__in=list(labels)):
+            if (target := getattr(link, _CONCERN_TARGET)) is not None:
+                labels[link.decision_id].append(str(target))
+        for question in questions:
+            _READER.remember(question, "concerns", reader, labels[question.pk])
+        return labels
+
+    def context_for(self, reader: Any) -> DecisionContext:
+        """This question's context as ``reader`` is shown it: its reason, and the facts and references they may read.
+
+        Never the stored context whole: a stored reference names a record by its label
+        when it was asked, so a reference whose record ``reader`` may not read
+        (``readable_evidence``) is left out, label and all, and so is a fact whose
+        evidence names one, value and all, so a revoked read hides both. A reference
+        or a fact's evidence naming a model this deployment no longer has is left out
+        for every reader: no one can read that record, and one stale entry must not
+        keep a question from being shown. Nothing else is left out, a fact with an
+        empty value included, since a widget reads its ``row`` (a currency), which
+        names no record, so a fact's evidence alone is read. The reason and the facts
+        with no evidence are the question's own statements, shown as its other fields
+        are: the caller reads this row in ``reader``'s scope, as every GraphQL path and
+        every mail does. A list read with :meth:`contexts_prefetch` answers from that
+        batch; otherwise this reads the row alone (:meth:`contexts_for`).
+        """
+        remembered = _READER.get(self, "context", reader)
+        if remembered is not None:
+            return cast(DecisionContext, remembered)
+        return type(self).contexts_for((self,), reader)[self.pk]
+
+    @classmethod
+    def contexts_for(cls, questions: Sequence[Self], reader: Any) -> dict[Any, DecisionContext]:
+        """Each question's :meth:`context_for` ``reader``, keyed by primary key, from one ``readable_evidence`` batch.
+
+        Every listed question's references and fact evidence are read together, one
+        read per referenced model whatever the number of questions. Each question
+        remembers its answer for ``reader`` (a ``ReaderMemo``: never without a reader
+        or under sudo), so its own :meth:`context_for` answers without another read.
+        """
+        stored = {question.pk: DecisionContext.model_validate(question.context) for question in questions}
+        references = {
+            pk: [reference for reference in context.references if _known_model(reference.model)]
+            for pk, context in stored.items()
+        }
+        facts = {
+            pk: [fact for fact in context.facts if all(_known_model(reference.model) for reference in fact.evidence)]
+            for pk, context in stored.items()
+        }
         readable = {
             reference.named_record
-            for reference in readable_evidence([reference for fact in facts for reference in fact.evidence], reader)
+            for reference in readable_evidence([
+                *(reference for listed in references.values() for reference in listed),
+                *(reference for listed in facts.values() for fact in listed for reference in fact.evidence),
+            ], reader)
         }
-        return [fact for fact in facts if all(reference.named_record in readable for reference in fact.evidence)]
+        shown = {
+            pk: DecisionContext(
+                reason=context.reason,
+                facts=tuple(fact for fact in facts[pk] if all(ref.named_record in readable for ref in fact.evidence)),
+                references=tuple(reference for reference in references[pk] if reference.named_record in readable),
+            )
+            for pk, context in stored.items()
+        }
+        for question in questions:
+            _READER.remember(question, "context", reader, shown[question.pk])
+        return shown
+
+    @classmethod
+    def contexts_prefetch(cls, reader: Any) -> models.Prefetch:
+        """Read a question list's contexts for ``reader`` once, as a native prefetch hint (:meth:`contexts_for`)."""
+        return models.Prefetch(
+            "_reader_contexts", queryset=require_rebac_queryset(cls, actor=reader), to_attr="_reader_contexts_read",
+        )
+
+    def facts_for(self, reader: Any) -> list[DecisionFact]:
+        """The facts of this question's context ``reader`` is shown (:meth:`context_for`) that have a value.
+
+        In stored order. A fact with an empty value (``None`` or ``""``) is left out, as
+        the card's grid leaves it out. As :meth:`concern_labels` returns labels, the
+        caller slices and counts.
+        """
+        return [fact for fact in self.context_for(reader).facts if fact.value not in (None, "")]
 
     def requester_name(self, reader: Any) -> str:
         """The requester's name as ``reader`` reads that user, or ``""`` when there is none or ``reader`` may not.
 
         Read through ``reader``'s scope of users, as GraphQL's ``requester`` field
-        reads it (``actor_scoped_to_one``).
+        reads it (``actor_scoped_to_one``). A list read with
+        :meth:`requester_names_prefetch` answers from that batch; otherwise this reads the row alone
+        (:meth:`requester_names_for`).
         """
-        if self.requester_id is None:
-            return ""
-        requester = reader_queryset(get_user_model(), reader).filter(pk=self.requester_id).first()
-        return requester.get_full_name() if requester is not None else ""
+        remembered = _READER.get(self, "requester", reader)
+        if remembered is not None:
+            return cast(str, remembered)
+        return type(self).requester_names_for((self,), reader)[self.pk]
+
+    @classmethod
+    def requester_names_for(cls, questions: Sequence[Self], reader: Any) -> dict[Any, str]:
+        """Each question's :meth:`requester_name` for ``reader``, keyed by primary key, from one read of users.
+
+        Each question remembers its name for ``reader`` (a ``ReaderMemo``: never
+        without a reader or under sudo).
+        """
+        wanted = {question.requester_id for question in questions if question.requester_id is not None}
+        users = reader_queryset(get_user_model(), reader).filter(pk__in=wanted).in_bulk() if wanted else {}
+        names = {
+            question.pk: users[question.requester_id].get_full_name() if question.requester_id in users else ""
+            for question in questions
+        }
+        for question in questions:
+            _READER.remember(question, "requester", reader, names[question.pk])
+        return names
 
     def withdraw(self, *, actor: Any, reason: str = "") -> Self:
         """An authorized asking owner withdraws this question in a named system context.
@@ -492,16 +572,24 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         return rebuilt[0], rebuilt[1:] or None
 
     def readable_answered_for(self, reader: Any) -> dict[str, Any] | None:
-        """The represented record's reference when ``reader`` may read that record, else None."""
+        """The represented record's reference when ``reader`` may read that record, else None.
+
+        A reference naming a model this deployment no longer has names a record no one
+        reads, so it is None for every reader.
+        """
         if self.answered_for is None:
             return None
         reference = DecisionRecordReference.model_validate(self.answered_for)
-        return self.answered_for if readable_evidence([reference], reader) else None
+        return self.answered_for if _known_model(reference.model) and readable_evidence([reference], reader) else None
 
     def readable_answer_evidence(self, reader: Any) -> list[dict[str, Any]]:
-        """The answer's evidence references whose records ``reader`` may read, in stored order."""
+        """The answer's evidence references whose records ``reader`` may read, in stored order.
+
+        One naming a model this deployment no longer has is left out for every reader.
+        """
         references = [DecisionRecordReference.model_validate(item) for item in self.answer_evidence or ()]
-        return [reference.model_dump(mode="json") for reference in readable_evidence(references, reader)]
+        known = [reference for reference in references if _known_model(reference.model)]
+        return [reference.model_dump(mode="json") for reference in readable_evidence(known, reader)]
 
     def _participants(self, answering: Any) -> tuple[Any, ...]:
         """The answerer, then this question's active requester and assignees; read in the verb's system context."""

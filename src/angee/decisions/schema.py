@@ -45,6 +45,12 @@ def _concern_records(info: strawberry.Info) -> models.Prefetch:
     return Decision.concern_records_prefetch(get_current_user(info))
 
 
+def _contexts(info: strawberry.Info) -> models.Prefetch:
+    """The reader's batch of the listed questions' contexts (``Decision.contexts_prefetch``)."""
+
+    return Decision.contexts_prefetch(get_current_user(info))
+
+
 @strawberry_django.type(DecisionRecord)
 class DecisionRecordType(RecordReferenceNode):
     decision: DecisionType = actor_scoped_to_one("decision")
@@ -66,7 +72,6 @@ class DecisionType(AngeeNode):
     kind_label: str = strawberry_django.field(only=["kind"])
     requester: UserType | None = actor_scoped_to_one("requester")
     assignees: list[UserType] = actor_scoped_to_many("assignees")
-    context: JSON
     proposal: JSON
     records: list[DecisionRecordType] = actor_scoped_to_many("records")
     verdict: JSON | None
@@ -87,6 +92,11 @@ class DecisionType(AngeeNode):
     is_open: bool = strawberry_django.field(only=["verdict"])
     is_overdue: bool = strawberry_django.field(only=["verdict", "due_at"])
     permissions = permissions_field(("act",))
+
+    @strawberry_django.field(only=["context"], prefetch_related=[_contexts])
+    def context(self, info: strawberry.Info) -> JSON:
+        """The question's context as this reader is shown it (``Decision.context_for``), never the stored one whole."""
+        return cast(Any, self).context_for(get_current_user(info)).model_dump(mode="json")
 
     @strawberry_django.field(only=["answered_for"])
     def answered_for(self, info: strawberry.Info) -> JSON | None:

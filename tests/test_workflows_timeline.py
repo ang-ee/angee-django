@@ -7,9 +7,10 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.decisions.testing.models import Decision
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.runner import runner
@@ -118,6 +119,32 @@ def test_record_timeline_reads_its_runs_once_for_one_or_five_records(schema, rev
         assert [len(row["runs"]) for row in rows] == [1] * len(selected)
         costs.append(read - statements(without_runs, selected)[0])
     assert costs[0] == costs[1], costs
+
+
+def test_record_timeline_reads_its_questions_contexts_and_labels_in_one_batch(schema):
+    """Selecting each listed question's ``context`` and ``concerns_label`` costs the same for one question or three."""
+    issuer, reviewer = create_user("timeline-context-issuer"), create_user("timeline-context-reviewer")
+    record = vault_for(issuer, name="Timeline context")
+    write_relationships([RelationshipTuple(to_object_ref(record), "viewer", to_subject_ref(reviewer))])
+    document = """query($records:[TimelineRecordInput!]!) {
+      record_timeline(records: $records) { records { decisions { id %s } } }
+    }"""
+    variables = {"records": [{"model": record._meta.label, "id": record.sqid}]}
+
+    def statements(fields):
+        with CaptureQueriesContext(connection) as queries:
+            result_data(execute_schema(schema, document % fields, variables, user=reviewer))
+        return len(queries)
+
+    costs = []
+    for _ in range(3):
+        Decision.objects.ask(DecisionRequest(
+            kind="timeline_context", records=(record,), assignees=(reviewer,), requester=issuer,
+            proposal=DecisionProposal(alternatives=[{"key": "keep", "label": "Keep", "outcome": "kept"}]),
+            context=DecisionContext(reason="Check", references=(DecisionRecordReference.of(record),)),
+        ), actor=issuer)
+        costs.append((statements("context") - statements(""), statements("concerns_label") - statements("")))
+    assert costs[0] == costs[2], costs
 
 
 @pytest.mark.django_db(transaction=True)

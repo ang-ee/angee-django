@@ -46,6 +46,23 @@ live in code docstrings.
   render and before anything is written; a path through a list stays held to
   the text, and an empty list passes. `must_print` given as one bare string is a
   `TypeError`, no longer read letter by letter.
+- `angee.decisions`: **Disclosure fix: GraphQL's `context` is the question's
+  context as the reader is shown it.** It returned the stored context whole to every
+  reader of the question, so a reader whose read on a referenced record, or on a
+  fact's evidence, was never granted or was revoked still read the record's stored
+  label and the fact drawn from it. `DecisionType.context` now resolves
+  `decision.context_for(reader)`: the references whose records the reader may read
+  (`readable_evidence`), the facts whose evidence they may read, and the reason, in
+  the stored shape, so the console card parses it unchanged. An entry naming a model
+  the deployment no longer has is left out for every reader, in the answer's
+  `answered_for` and `answer_evidence` too; a fact with an empty value stays, since a
+  widget reads its `row`. A list reads every row's context in one batch
+  (`Decision.contexts_prefetch`), and a list a caller reads itself, the record
+  timeline's and the mails', takes its concern labels and contexts together
+  (`Decision.reader_prefetches`), so `context` costs the same statements
+  for one row or many. Console users see the change where a proposal
+  names a record they may not read: its relation value shows without that record's
+  stored label.
 - `angee.decisions`, `angee.decisions_messaging`: **Open decisions are mailed to
   the people they can be put to.**
   - **New in decisions.** `decision_asked` (`angee.decisions.signals`) fires once
@@ -69,8 +86,7 @@ live in code docstrings.
     is one whose evidence names a record `reader` may not read or a model the
     deployment no longer has. `DecisionFact.as_text()` is a fact's one text form,
     the card's without a widget (object keys by `title_case`, the card's
-    `titleCase`; a widget fact's bare value). GraphQL's `context` field still
-    returns the stored context whole; it does not filter facts by read.
+    `titleCase`; a widget fact's bare value).
     `Decision.objects.administrators()` and `for_administrator(person)` read the
     platform administrators among a question's deciders from both sides, so an
     administrator whose `act` an owner's `owner_managed` takes away is not put it.

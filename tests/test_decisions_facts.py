@@ -1,4 +1,4 @@
-"""A question's facts as one reader is shown them: the readable ones, in stored order, within a bound."""
+"""A question's facts as one reader is shown them: the readable ones, in stored order."""
 
 import pytest
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
@@ -90,9 +90,11 @@ def test_a_fact_whose_evidence_names_a_model_no_longer_installed_is_shown_to_no_
         assert "Archived" not in labels(row.facts_for(reader))
 
 
-def test_a_reader_who_may_not_read_the_question_is_shown_no_fact(question):
+def test_a_reader_of_no_concerned_record_is_shown_no_fact_drawn_from_one(question):
+    """The facts with no evidence are the question's own; every other one needs its record's read."""
+
     _issuer, _reviewer, outsider, _statement, row = question
-    assert row.facts_for(outsider) == []
+    assert labels(row.facts_for(outsider)) == ["Supplier", "Amount"]
 
 
 @pytest.mark.parametrize(
