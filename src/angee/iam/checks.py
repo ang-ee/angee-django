@@ -31,7 +31,7 @@ check_set_password_permissions = partial(
 ACCOUNT_DISCLOSURES = {"auth/user": ("active_account", "nonstaff_account")}
 """Who is active and who is not staff, derived from their ``_granted`` grants, which fragments extend.
 
-A fragment's verb unions into ``auth/user#active_account_granted`` or
+A fragment's action unions into ``auth/user#active_account_granted`` or
 ``#nonstaff_account_granted``. An arm unioned straight into a disclosure would
 land outside its ``& active->disclosed`` or ``- staff->disclosed``, disclosing
 every inactive or staff account to that arm's holders.

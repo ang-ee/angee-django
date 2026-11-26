@@ -1,18 +1,18 @@
 # Emailed sign-in links
 
 A person can sign in without a password through an emailed link that works once.
-This addon adds the link to IAM's account verbs: `User.issue_sign_in_link()`,
-contributed by the `UserSignInLinks` donor, extends `User.account_verbs` and
+This addon adds the link to IAM's account actions: `User.issue_sign_in_link()`,
+contributed by the `UserSignInLinks` donor, extends `User.account_actions` and
 `User.account_action_blockers` through `super()`, so the users list offers
 **Send sign-in link** (`issue_sign_in_link` in `account_actions`) exactly where
-the verb sends one. A host without this addon offers no sign-in link.
+the action sends one. A host without this addon offers no sign-in link.
 
 ## Issuing a link
 
-The verb runs under IAM's `lock_for_account_verb`: it locks the row and checks
+The action runs under IAM's `lock_for_account_action`: it locks the row and checks
 the `issue_sign_in_link` permission, which this addon's fragment declares on
 `auth/user` (platform admins) and unions into IAM's `active_account_granted`
-and `nonstaff_account_granted`. It refuses what IAM's verbs refuse (protected,
+and `nonstaff_account_granted`. It refuses what IAM's actions refuse (protected,
 service, the actor's own account), inactive accounts, any account without a
 valid email and a deployment that cannot deliver the link. It also refuses a
 second link within `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN` seconds (60 by
@@ -65,7 +65,7 @@ setting and its rule (`angee.base.origins.public_origin`): only an `https`
 origin (`http` only under `DEBUG`) with a valid host and port and no wildcard,
 user info or path builds links, and `angee.E051` reports any other set value.
 Links are also built only when `DEFAULT_FROM_EMAIL` is a valid address and
-`MAILERS["default"]` exists. Otherwise no link is offered and the verb refuses.
+`MAILERS["default"]` exists. Otherwise no link is offered and the action refuses.
 The token rides the fragment, which no browser request, access log or referrer
 carries, and Angee's browser error reporting strips fragments from what it
 records. This addon's public `/sign-in-link` route renders IAM's login page with
@@ -91,6 +91,6 @@ path for an account that cannot receive email.
 ## Permissions
 
 Platform admins send links. The permission is this addon's own declaration on
-IAM's `auth/user`; IAM's own Zed names no link verb. The fragment's arms land in
+IAM's `auth/user`; IAM's own Zed names no link action. The fragment's arms land in
 IAM's union points, so IAM's sealed disclosures (`angee.iam.E004`) keep the
-verb to active, non-staff accounts.
+action to active, non-staff accounts.

@@ -20,12 +20,12 @@ import { useIamT } from "./i18n";
 
 const USER_MODEL = "iam.User";
 
-/** Fields every account verb reads from the open user record. */
+/** Fields every account action reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
 
 /**
- * Whether the row's server projection offers verb `action`, named by its Zed permission
- * (`issue_password`, or a verb another addon contributes); the client never derives eligibility itself.
+ * Whether the row's server projection offers account action `action`, named by its Zed permission
+ * (`issue_password`, or an action another addon contributes); the client never derives eligibility itself.
  */
 export function offersAccountAction(record: Row, action: string): boolean {
   const offered = record.account_actions;
@@ -73,7 +73,7 @@ export function useChangePasswordAction(): ActionDescriptor {
   };
 }
 
-/** Set a chosen password through the account verb, including its observed revision. */
+/** Set a chosen password through the account action, including its observed revision. */
 export function useSetPasswordAction(): ActionDescriptor {
   const t = useIamT();
   const passwordForm = newPasswordForm("password", t);
@@ -200,7 +200,7 @@ export function useRenameAction(): ActionDescriptor {
   };
 }
 
-/** An `iam.User#actions-menu` child's bar: `actions` on the open account record, for IAM's and contributed verbs. */
+/** An `iam.User#actions-menu` child's bar: `actions` on the open account record, for IAM's and contributed actions. */
 export function AccountActionBar({ actions }: { actions: readonly ActionDescriptor[] }): React.ReactElement | null {
   const { record } = useRecordChromeContext();
   return record ? <RecordActionBar record={record} actions={actions} /> : null;
@@ -230,7 +230,7 @@ export function ResetPasswordRecordAction(): React.ReactElement | null {
   return <AccountActionBar actions={[action]} />;
 }
 
-/** `iam.User#actions-menu` child: set a chosen password through the set_user_password account verb. */
+/** `iam.User#actions-menu` child: set a chosen password through the set_user_password account action. */
 export function SetPasswordRecordAction(): React.ReactElement | null {
   const action = useSetPasswordAction();
   return <AccountActionBar actions={[action]} />;

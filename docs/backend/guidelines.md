@@ -814,18 +814,18 @@ data through REBAC, never a queryset bypass.
   account holds. A Person whose name a source states keeps that name when the
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
-- **Managed accounts change through IAM's account verbs.** `User.set_active`,
+- **Managed accounts change through IAM's account actions.** `User.set_active`,
   `rename`, `issue_password`, `reset_password` and `set_account_password` lock
-  the row through `User.lock_for_account_verb`, which checks the verb's own Zed
+  the row through `User.lock_for_account_action`, which checks the action's own Zed
   permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
-  projection batches the same conditions and names each verb by its permission.
-  The verbs are an open set: a donor adds its verb by extending
-  `User.account_verbs` and `account_action_blockers` through `super()`, as
+  projection batches the same conditions and names each action by its permission.
+  The actions are an open set: a donor adds its action by extending
+  `User.account_actions` and `account_action_blockers` through `super()`, as
   [`iam_messaging`](../../src/angee/iam_messaging/models.py) does for the
   emailed sign-in link, and unions its permission into
   `auth/user#active_account_granted` or `#nonstaff_account_granted`; IAM seals
-  the disclosures it derives from them (`angee.iam.E004`). These verbs refuse a protected
+  the disclosures it derives from them (`angee.iam.E004`). These actions refuse a protected
   account: staff, superusers, the actor's own and effective members of
   `iam/protected:main#member`, except Set password admits another person's protected
   account for a concrete platform-administrator user. Self

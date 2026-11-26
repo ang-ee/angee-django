@@ -24,7 +24,7 @@ export const enIamMessages: Record<string, string> = {
   "assignmentSubjects.add": "Add reviewer",
   "assignmentSubjects.unavailable": "Reviewer choices could not be loaded.",
 
-  // Users page — form-section labels and account verbs.
+  // Users page — form-section labels and account actions.
   "users.group.profile": "Profile",
   "users.group.access": "Access",
   "users.giveAccess": "Give access",

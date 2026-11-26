@@ -1,8 +1,8 @@
-"""Source models of emailed sign-in links: the single-use ``SignInLink`` and the account verb that sends one.
+"""Source models of emailed sign-in links: the single-use ``SignInLink`` and the account action that issues one.
 
-``UserSignInLinks`` adds ``issue_sign_in_link`` to IAM's account verbs through
-``User.account_verbs`` and ``User.account_action_blockers``, so the users list
-offers it exactly where the verb admits it.
+``UserSignInLinks`` adds ``issue_sign_in_link`` to IAM's account actions through
+``User.account_actions`` and ``User.account_action_blockers``, so the users list
+offers it exactly where the action admits it.
 """
 
 from __future__ import annotations
@@ -38,28 +38,28 @@ from angee.base.models.timestamps import auto_now_stamps
 from angee.base.origins import public_origin
 
 ISSUE_SIGN_IN_LINK = "issue_sign_in_link"
-"""The account verb that emails a sign-in link, named by its Zed permission on ``auth/user``."""
+"""The account action that emails a sign-in link, named by its Zed permission on ``auth/user``."""
 
 SIGN_IN_LINK_PATH = "/sign-in-link"
 """The public web route a sign-in link opens; this addon's web fragment declares the same path."""
 
 SIGN_IN_LINK_UNAVAILABLE_MESSAGE = "Sign-in links need a default mailer and ANGEE_PUBLIC_ORIGIN."
-"""Refusal of the sign-in link verb on a deployment that cannot build or send the link."""
+"""Refusal of the sign-in link action on a deployment that cannot build or send the link."""
 
 logger = logging.getLogger(__name__)
 
 
 class UserSignInLinks(Composable, extends="iam.User"):
-    """Same-row donor adding the sign-in link verb to IAM's account verbs."""
+    """Same-row donor adding the sign-in link action to IAM's account actions."""
 
     class Meta:
         abstract = True
 
     @classmethod
-    def account_verbs(cls) -> tuple[str, ...]:
-        """Offer the sign-in link after IAM's own verbs."""
+    def account_actions(cls) -> tuple[str, ...]:
+        """Offer the sign-in link after IAM's own actions."""
 
-        return (*super().account_verbs(), ISSUE_SIGN_IN_LINK)
+        return (*super().account_actions(), ISSUE_SIGN_IN_LINK)
 
     @classmethod
     def account_action_blockers(
@@ -81,7 +81,7 @@ class UserSignInLinks(Composable, extends="iam.User"):
         """Email an active, unprotected person a single-use sign-in link.
 
         Permission and eligibility are checked on the locked row, as for every
-        account verb (``User.lock_for_account_verb``), and the account needs a
+        account action (``User.lock_for_account_action``), and the account needs a
         valid email address: the link goes to ``email`` only. A link issued
         within ``ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`` seconds of the
         account's previous one is refused. The row keeps the token's keyed
@@ -95,7 +95,7 @@ class UserSignInLinks(Composable, extends="iam.User"):
 
         account: Any = self  # Composed into iam.User, which owns the lock and the actor.
         with transaction.atomic():
-            user = account.lock_for_account_verb(ISSUE_SIGN_IN_LINK, expected_revision=None)
+            user = account.lock_for_account_action(ISSUE_SIGN_IN_LINK, expected_revision=None)
             try:
                 validate_email(user.email)
             except ValidationError:

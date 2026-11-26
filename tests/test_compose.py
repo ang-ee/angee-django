@@ -302,7 +302,7 @@ def test_optional_sign_in_web_documents_follow_their_backend_addon(app: str, pac
 
 
 def test_iam_alone_serves_no_sign_in_link() -> None:
-    """The sign-in link's redemption and issue verb leave IAM's schemas with the link."""
+    """The sign-in link's redemption and issue action leave IAM's schemas with the link."""
 
     iam_schemas = import_module("angee.iam.schema").schemas
     public = addon_schema(iam_schemas, "public")._schema

@@ -1,4 +1,4 @@
-"""Self-service password changes and the administrative account verb."""
+"""Self-service password changes and the administrative account action."""
 
 import pytest
 from axes.models import AccessAttempt
@@ -231,7 +231,7 @@ def test_set_password_refuses_non_user_subjects_in_both_permission_and_eligibili
         stored = User._base_manager.get(pk=target.pk)
         assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
         assert "set_password" not in target.account_actions_for(subject)
-    for action in User.account_verbs():
+    for action in User.account_actions():
         if action != "set_password":
             assert protected.account_action_error(action, subject) == protected.account_action_error(action, None)
             assert "protected" in protected.account_action_error(action, subject)

@@ -6,7 +6,7 @@
 import { createNamespaceT } from "@angee/ui/i18n";
 
 export const enIamMessagingMessages: Record<string, string> = {
-  // The account verb on a saved user record.
+  // The account action on a saved user record.
   "users.sendSignInLink": "Send sign-in link",
   "users.sendSignInLink.confirmTitle": "Send a sign-in link?",
   "users.sendSignInLink.confirmBody": "This emails the account a link that signs them in once and expires. Any earlier link stops working. The link is never shown here.",

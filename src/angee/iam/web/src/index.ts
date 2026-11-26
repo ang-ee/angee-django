@@ -89,8 +89,8 @@ const iam = defineBaseAddon({
     // A model's access owners register their roles and visibility for the Share panel.
     "iam#access-roles": { models: true },
     "iam#access-visibility": { models: true },
-    // Account verbs on every saved user form, each offered by the row's `account_actions`;
-    // another addon adds its own verb's child here.
+    // Account actions on every saved user form, each offered by the row's `account_actions`;
+    // another addon adds its own action's child here.
     "iam.User#actions-menu": {
       "iam.set-active": {
         sequence: 5,

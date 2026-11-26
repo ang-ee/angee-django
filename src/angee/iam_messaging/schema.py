@@ -1,4 +1,4 @@
-"""GraphQL contributions of emailed sign-in links: the public redemption and the console's issue verb."""
+"""GraphQL contributions of emailed sign-in links: the public redemption and the console's issue action."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class SignInLinkMutation:
 
 @strawberry.type
 class SignInLinkAccountMutation:
-    """The account verb that emails a sign-in link, gated by the target user's ``issue_sign_in_link``."""
+    """The account action that emails a sign-in link, gated by the target user's ``issue_sign_in_link``."""
 
     @strawberry.mutation
     @action_guard("Sending the sign-in link failed.")

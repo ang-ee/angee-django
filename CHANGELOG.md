@@ -13,14 +13,14 @@ live in code docstrings.
 - **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
   single-use sign-in link leaves base IAM for its own addon, with everything
   about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
-  `issue_sign_in_link` to IAM's account verbs, `SignInLinkBackend` and
+  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
   `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
   and `issue_user_sign_in_link` mutations (names and arguments kept), the public
   `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
   kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
   the document, now `IamMessagingRedeemSignInLink`. The permission
   `auth/user#issue_sign_in_link` is the addon's own declaration
-  (`permissions.extends.zed`); IAM's Zed (revision 31) names no link verb. The
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action. The
   addon joins the template's `full` profile; a host without it, the `base`
   profile included, offers and redeems no sign-in link. A link's session records
   IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
@@ -61,23 +61,23 @@ live in code docstrings.
   storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
   and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
   **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
-- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account verbs are an
-  open set another addon extends: `User.account_verbs()` names the verbs
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
+  open set another addon extends: `User.account_actions()` names the actions
   `account_actions` offers, in offer order, and it and
   `User.account_action_blockers` (now a classmethod) are extended through
-  `super()`; a contributed verb runs under `User.lock_for_account_verb`, which
-  replaces the private `_lock_for_account_action`, and meets IAM's person-kind
+  `super()`; a contributed action runs under `User.lock_for_account_action`, the
+  private `_lock_for_account_action` made public, and meets IAM's person-kind
   and protected-account blockers before its own. `account_actions` is
-  `[String!]!` and its values are the verbs' Zed permission names
+  `[String!]!` and its values are the actions' Zed permission names
   (`issue_password`), where the `UserAccountAction` enum serialized member names
   (`ISSUE_PASSWORD`); the enum leaves the console and public schemas, and the
   web's TypeScript type `UserAccountAction` goes. `offersAccountAction` compares
   names exactly, and `@angee/iam` exports `AccountActionBar` and
-  `ACCOUNT_ACTION_FIELDS` for a contributed verb's `iam.User#actions-menu` child;
+  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
   `useIssueSignInLinkAction` is no longer exported. The disclosures
   `auth/user#active_account` and `#nonstaff_account` derive from the union points
   `active_account_granted` and `nonstaff_account_granted`, which a fragment's
-  verb extends; IAM seals the disclosures (`angee.iam.E004`). A credential
+  action extends; IAM seals the disclosures (`angee.iam.E004`). A credential
   backend marks a genuine but spent credential with
   `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
   `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.

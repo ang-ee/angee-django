@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 
 import { useIamMessagingT } from "./i18n";
 
-/** The account verb that emails a sign-in link, named by its Zed permission on `auth/user`. */
+/** The account action that emails a sign-in link, named by its Zed permission on `auth/user`. */
 export const ISSUE_SIGN_IN_LINK = "issue_sign_in_link";
 
 /** Email a person a single-use sign-in link; the link goes to their email and is never shown here. */

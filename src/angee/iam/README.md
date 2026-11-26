@@ -56,22 +56,22 @@ confirmed opening verb.
 
 ## Managed people
 
-Saved User records inherit IAM's account verbs as `iam.User#actions-menu`
+Saved User records inherit IAM's account actions as `iam.User#actions-menu`
 children: deactivate/reactivate (`set_user_active`), rename (`rename_user`,
 name fields only), give access (`issue_user_password`), reset access
 (`reset_user_password`) and set a chosen password (`set_user_password`). Set
-password confirms the new password locally; the other changing verbs take an
-explicit confirmation. The verbs are an open set: `User.account_verbs` names
+password confirms the new password locally; the other changing actions take an
+explicit confirmation. The actions are an open set: `User.account_actions` names
 them, and an addon contributes its own by extending it and
-`User.account_action_blockers` through `super()`, running its verb under
-`User.lock_for_account_verb` and adding its `iam.User#actions-menu` child
+`User.account_action_blockers` through `super()`, running its action under
+`User.lock_for_account_action` and adding its `iam.User#actions-menu` child
 (`AccountActionBar`, `offersAccountAction`), as
 [`iam_messaging`](../iam_messaging/README.md)'s Send sign-in link does. Its
 permission unions into `active_account_granted` or `nonstaff_account_granted`
-when the verb acts only on active or non-staff accounts; IAM derives
+when the action acts only on active or non-staff accounts; IAM derives
 `active_account` and `nonstaff_account` from them and seals both
-(`angee.iam.E004`). Changing verbs take the revision the client read (the issue
-verbs excepted), check their own Zed permission on `auth/user`
+(`angee.iam.E004`). Changing actions take the revision the client read (the issue
+actions excepted), check their own Zed permission on `auth/user`
 (`set_active`, `rename`, `issue_password`, `reset_password`, `set_password`;
 admin by default)
 and refuse protected accounts: the actor's own, staff, superusers and effective
@@ -79,8 +79,8 @@ members of `iam/protected:main#member`, except Set password's administrative
 admission described below. Issue and reset return the username with
 a one-time secret, shown only in the shared `useSecretReveal` prompt with a copy
 control; nothing reaches a record or query cache. Controls read the row's
-`account_actions` projection, which batches the verbs' own conditions and lists
-each offered verb by its Zed permission name.
+`account_actions` projection, which batches the actions' own conditions and lists
+each offered action by its Zed permission name.
 
 The generic update runs through `write` plus `write__<field>` gates: identity,
 credential and authority columns, a person's UI preferences and the account's
@@ -139,7 +139,7 @@ person's password across **all protected classes**: peer administrators, staff,
 superusers and holders of any elevated role, as well as ordinary accounts.
 The actor's own account still requires Change password with the current password,
 which keeps the requesting session; service and other non-person accounts remain
-refused. Issue password, Reset password and the other account verbs retain their
+refused. Issue password, Reset password and the other account actions retain their
 protected-account refusals. A successful set invalidates the target's existing
 session hashes and, through the account facts a link is bound to, retires
 outstanding sign-in links. After commit, IAM logs one

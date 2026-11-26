@@ -73,7 +73,7 @@ describe("chosen passwords are write-only action inputs", () => {
       { record: null, selectedIds: [] })).toMatchObject({ ok: false, validationErrors: { current_password: ["Try again."] } });
   });
 
-  test("set-password confirms matching inputs and calls the projected verb with the observed revision", async () => {
+  test("set-password confirms matching inputs and calls the projected action with the observed revision", async () => {
     mocks.setPassword.mockResolvedValue({ ok: true, message: "Password set." });
     const { result } = renderHook(useSetPasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
@@ -101,8 +101,8 @@ describe("chosen passwords are write-only action inputs", () => {
   });
 });
 
-describe("account verbs follow the row's server projection", () => {
-  test("a verb is offered only when the projection names it", () => {
+describe("account actions follow the row's server projection", () => {
+  test("an action is offered only when the projection names it", () => {
     expect(offersAccountAction(record, "rename")).toBe(true);
     expect(offersAccountAction(record, "issue_password")).toBe(false);
     expect(offersAccountAction({ id: "user-2" }, "rename")).toBe(false);
@@ -136,7 +136,7 @@ describe("account verbs follow the row's server projection", () => {
       { errorNotification: false },
     );
     expect(outcome).toEqual({ ok: true, message: "Account renamed." });
-    // The action form's quiet call options reach the verb, so a transport failure shows once.
+    // The action form's quiet call options reach the action, so a transport failure shows once.
     expect(mocks.rename).toHaveBeenCalledExactlyOnceWith("user-1", {
       first_name: "Ada", last_name: "Lovelace", confirmed: true, expected_revision: 4,
     }, { errorNotification: false });

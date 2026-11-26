@@ -1,4 +1,4 @@
-"""Managed people: account verbs, protected accounts, field gates and the verbs' projection."""
+"""Managed people: account actions, protected accounts, field gates and the actions' projection."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -169,10 +169,10 @@ def test_update_refuses_a_stale_expected_revision(iam_admin):
     assert _stored(target).first_name == "First"
 
 
-def test_account_verbs_other_than_set_password_refuse_protected_accounts(db):
-    """The Set password ruling leaves every sibling verb's protection unchanged."""
+def test_account_actions_other_than_set_password_refuse_protected_accounts(db):
+    """The Set password ruling leaves every sibling action's protection unchanged."""
 
-    admin = create_platform_admin("verb-admin", password=None)
+    admin = create_platform_admin("action-admin", password=None)
     targets = (
         admin,
         User.objects.create_user("staff-target", is_staff=True),
@@ -310,7 +310,7 @@ def test_consumer_role_manages_ordinary_people_through_its_fragment(db):
     assert denied.errors and _stored(target).check_password(reset["password"])
 
 
-def test_account_actions_project_each_verbs_permission_and_eligibility(db):
+def test_account_actions_project_each_actions_permission_and_eligibility(db):
     admin = create_platform_admin("projection-admin", password=None)
     manager = _manager("projection-manager")
     User.objects.create_user("with-password", password="secret")
@@ -381,7 +381,7 @@ def test_last_login_reads_through_its_field_gate(db):
         assert not signed_in.with_actor(plain).has_access("read__last_login")
 
 
-def test_verbs_require_their_permission_and_an_actor(iam_admin):
+def test_account_actions_require_their_permission_and_an_actor(iam_admin):
     target = User.objects.create_user("unmanaged", password="secret")
     plain = User.objects.create_user("plain")
     revision = _stored(target).account_revision
@@ -396,8 +396,8 @@ def test_verbs_require_their_permission_and_an_actor(iam_admin):
     assert _stored(target).is_active and _stored(target).first_name == ""
 
 
-def test_a_verb_iam_does_not_declare_meets_the_person_and_protection_blockers(db):
-    """A contributed verb is refused on every account IAM's verbs refuse, before its own blockers."""
+def test_an_action_iam_does_not_declare_meets_the_person_and_protection_blockers(db):
+    """A contributed action is refused on every account IAM's actions refuse, before its own blockers."""
 
     admin = create_platform_admin("contributed-admin", password=None)
     targets = {
@@ -409,7 +409,7 @@ def test_a_verb_iam_does_not_declare_meets_the_person_and_protection_blockers(db
         "service": User.objects.create_user("contributed-service", kind="service"),
     }
     actor = to_subject_ref(admin)
-    assert {name: target.account_action_error("contributed_verb", actor) for name, target in targets.items()} == {
+    assert {name: target.account_action_error("contributed_action", actor) for name, target in targets.items()} == {
         "person": None,
         "staff": PROTECTED_ACCOUNT_MESSAGE,
         "superuser": PROTECTED_ACCOUNT_MESSAGE,

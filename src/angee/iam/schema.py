@@ -1,7 +1,7 @@
 """GraphQL schema contributions for Angee IAM.
 
 Pure identity: the user projection, the password session login, and the REBAC
-permission hub. ``iam_messaging`` adds the sign-in link's redemption and verb. The OAuth/OIDC connection substrate
+permission hub. ``iam_messaging`` adds the sign-in link's redemption and action. The OAuth/OIDC connection substrate
 (clients, external accounts, credentials, connect/disconnect) lives in
 ``integrate``; OIDC *login* lives in ``iam_integrate_oidc``.
 """
@@ -117,7 +117,7 @@ def _view_as(info: strawberry.Info) -> ViewAs | None:
 
 
 def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
-    """Return one verb's eligibility, batching annotations within Django HTTP requests."""
+    """Return one account action's eligibility, batching annotations within Django HTTP requests."""
 
     actor = current_actor()
     request = get_request(info)
@@ -162,15 +162,15 @@ class UserType(AngeeNode):
     revision: int = strawberry_django.field(field_name="account_revision")
 
     @strawberry_django.field(
-        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in User.account_verbs()}
+        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in User.account_actions()}
     )
     def account_actions(self) -> list[str]:
-        """Account verbs the viewer may run on this row, each named by its Zed permission, from the verbs' owner."""
+        """Account actions the viewer may run on this row, each named by its Zed permission, from their owner."""
 
         user = cast(Any, self)
-        verbs = User.account_verbs()
-        if all(hasattr(user, f"_iam_{action}") for action in verbs):
-            return [action for action in verbs if getattr(user, f"_iam_{action}")]
+        actions = User.account_actions()
+        if all(hasattr(user, f"_iam_{action}") for action in actions):
+            return [action for action in actions if getattr(user, f"_iam_{action}")]
         return cast(list[str], user.account_actions_for(current_actor()))
 
     @strawberry_django.field
@@ -1015,7 +1015,7 @@ class IAMMutation:
 
 @strawberry.type
 class IAMUserAccountMutation:
-    """Account verbs gated by the target user's zed permissions and protection."""
+    """Account actions gated by the target user's zed permissions and protection."""
 
     @strawberry.mutation
     @action_guard("Setting the password failed.", camel_case_keys=False)

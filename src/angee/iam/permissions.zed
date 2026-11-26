@@ -1,7 +1,7 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 31
+// @rebac_schema_revision: 32
 
 definition auth/user {
     // Const-backed universal admin: every user points at angee/role:admin
@@ -31,13 +31,13 @@ definition auth/user {
     // from their fragments.
     permission colleague = self + list
     // Deliberate disclosures, never the columns' values, each only within the
-    // reach of the sites that rely on it. Pickers, preview and the verbs offered
+    // reach of the sites that rely on it. Pickers, preview and the actions offered
     // only to active people see who is active (an inactive account is absent).
-    // Preview, generic updates and the account verbs act only on the accounts
+    // Preview, generic updates and the account actions act only on the accounts
     // their reach shows are not staff. Protected updates need administer;
     // Set password admits platform admins and still refuses self.
     // Staff status itself is never described by these disclosures.
-    // A fragment unions its verb into the `_granted` grants; IAM derives each
+    // A fragment unions its action into the `_granted` grants; IAM derives each
     // disclosure from them and seals it (angee.iam.E004).
     permission active_account_granted = colleague + view_as + issue_password + reset_password
     permission nonstaff_account_granted = view_as + write + set_active + rename + reset_password + issue_password
@@ -70,7 +70,7 @@ definition auth/user {
     permission write__date_joined = admin->member
     permission write__last_login = admin->member
 
-    // Account verbs refuse protected accounts except Set password (see iam/protected).
+    // Account actions refuse protected accounts except Set password (see iam/protected).
     permission issue_password = admin->member
     permission reset_password = admin->member
     // Sealed: fragments cannot bypass platform-admin membership or either write gate.
@@ -95,7 +95,7 @@ definition iam/directory {
     relation reader: auth/user
 }
 
-// Accounts whose authority non-administrator updates, account verbs other than
+// Accounts whose authority non-administrator updates, account actions other than
 // Set password, and view-as never act on, beyond staff and superusers: the effective members of
 // `iam/protected:main#member`. A consumer adds its elevated role from its own
 // permissions.extends.zed with a const-backed relation unioned into `member`.

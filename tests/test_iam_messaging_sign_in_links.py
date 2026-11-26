@@ -1,4 +1,4 @@
-"""Emailed sign-in links: the account verb that sends one, its single-use redemption and the axes seam."""
+"""Emailed sign-in links: the account action that issues one, its single-use redemption and the axes seam."""
 
 import logging
 import re
@@ -84,7 +84,7 @@ def deliverable() -> Iterator[None]:
 
 @pytest.fixture
 def sent(django_capture_on_commit_callbacks: Any) -> Any:
-    """Run the email the verb defers to commit, as a committed request would."""
+    """Run the email the action defers to commit, as a committed request would."""
 
     def issue(target: Any, actor: Any) -> str:
         with django_capture_on_commit_callbacks(execute=True):
@@ -280,7 +280,7 @@ def test_an_undeliverable_deployment_offers_no_link_and_refuses(iam_admin, missi
     assert not SignInLink._base_manager.exists()
 
 
-def test_account_actions_offer_the_link_where_the_verb_acts(deliverable, iam_admin):
+def test_account_actions_offer_the_link_where_the_action_acts(deliverable, iam_admin):
     _person("guest-offered")
     _person("guest-inactive", is_active=False)
     _person("guest-staff", is_staff=True)
@@ -649,7 +649,7 @@ _SENDS = "sends"
     pytest.param("member", "active person", PermissionDenied, id="a-member-may-not"),
 ])
 def test_who_may_send_a_link_to_whom(deliverable, db, issuer, target, outcome, django_capture_on_commit_callbacks):
-    """The users list offers the link exactly where the verb sends it, and a refused issue sends nothing."""
+    """The users list offers the link exactly where the action sends it, and a refused issue sends nothing."""
 
     actor = _ISSUER[issuer]()
     account = _TARGET[target](actor)
@@ -682,7 +682,7 @@ def test_a_link_session_records_iams_session_backend_and_outlives_the_link_backe
 
 
 def test_iam_alone_declares_no_sign_in_link_permission(tmp_path: Path) -> None:
-    """IAM's own Zed names no link verb; this addon's fragment adds it and unions it into the disclosures."""
+    """IAM's own Zed names no link action; this addon's fragment adds it and unions it into the disclosures."""
 
     declaration = Path(apps.get_app_config("iam").path, "permissions.zed").read_text(encoding="utf-8")
     owned = parse_zed(declaration).get_definition("auth/user")

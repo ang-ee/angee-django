@@ -23,7 +23,7 @@ const iamMessaging = defineBaseAddon({
   ],
   i18n: { iam_messaging: enIamMessagingMessages },
   containers: {
-    // IAM's account verbs on every saved user form, this one offered by the row's `account_actions`.
+    // IAM's account actions on every saved user form, this one offered by the row's `account_actions`.
     "iam.User#actions-menu": {
       "iam_messaging.send-sign-in-link": {
         sequence: 9,
