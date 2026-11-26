@@ -1,7 +1,9 @@
 """Emailed sign-in links: the account action that issues one, its mail, its single-use redemption and the axes seam."""
 
 import functools
+import inspect
 import logging
+import pickle
 import re
 import secrets
 from collections.abc import Iterator
@@ -15,11 +17,14 @@ from urllib.parse import unquote
 import pytest
 from axes.models import AccessAttempt
 from django.apps import apps
+from django.conf import settings as django_settings
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, authenticate, get_user, get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.signals import user_login_failed
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.core import mail
+from django.core.cache import caches
+from django.core.cache.backends.locmem import LocMemCache
 from django.core.exceptions import ValidationError
 from django.core.mail.backends.base import BaseEmailBackend
 from django.db import IntegrityError, connection, transaction
@@ -1003,22 +1008,73 @@ def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_li
         assert list(Message._base_manager.values_list("pk", flat=True)) == mails
     assert SECRET not in f"{refusal.value!r} {refusal.value.messages} {result.data} {result.errors}"
     assert SECRET not in caplog.text
+    assert _cached_holding(SECRET) == []
     assert _redeem(earlier) == target
 
 
 # ---------- where the token is, and where it never is ----------
 
 
-def _held(callback: Any) -> str:
-    """What an on-commit callback holds, as text: a partial's arguments, a closure's cells and their attributes."""
+def _held(root: Any, *, depth: int = 8) -> Iterator[str]:
+    """Every text ``root`` holds, walked to ``depth``: a partial's function, arguments and keywords, a bound method's
+    object, a function's closure cells and defaults, an object's ``__dict__`` and ``__slots__``, a container's items.
 
-    held = [repr(callback)]
-    while isinstance(callback, functools.partial):
-        held += [repr(callback.args), repr(callback.keywords)]
-        callback = callback.func
-    for cell in getattr(callback, "__closure__", None) or ():
-        held += [repr(cell.cell_contents), repr(getattr(cell.cell_contents, "__dict__", ""))]
-    return " ".join(held)
+    Classes, modules and a function's globals are not walked: they hold code, not what a call was given.
+    """
+
+    seen: set[int] = set()
+    pending: list[tuple[Any, int]] = [(root, 0)]
+    while pending:
+        value, level = pending.pop()
+        if id(value) in seen or inspect.isclass(value) or inspect.ismodule(value):
+            continue
+        seen.add(id(value))
+        if isinstance(value, str):
+            yield value
+            continue
+        if isinstance(value, bytes | bytearray):
+            yield bytes(value).decode(errors="replace")
+            continue
+        if level == depth:
+            continue
+        children: list[Any] = []
+        if isinstance(value, functools.partial):
+            children += [value.func, value.args, value.keywords]
+        if inspect.isroutine(value):  # a bound method's object, a builtin's too
+            children += [getattr(value, "__self__", None), getattr(value, "__func__", None)]
+        if inspect.isfunction(value):
+            for cell in value.__closure__ or ():
+                try:
+                    children.append(cell.cell_contents)
+                except ValueError:  # an empty cell
+                    pass
+            children += [value.__defaults__, value.__kwdefaults__]
+        if isinstance(value, dict):
+            children += [*value.keys(), *value.values()]
+        elif isinstance(value, list | tuple | set | frozenset):
+            children += list(value)
+        if not inspect.isroutine(value):
+            children += list(getattr(value, "__dict__", {}).values())
+            slots = (name for kind in type(value).__mro__ for name in getattr(kind, "__slots__", ()))
+            children += [getattr(value, name) for name in slots if isinstance(name, str) and hasattr(value, name)]
+        pending.extend((child, level + 1) for child in children)
+
+
+def _cached_holding(text: str) -> list[str]:
+    """The aliases of the configured caches one of whose entries holds ``text``, its key or its stored value.
+
+    Django's cache API lists no keys, so the scan reads the store of the local-memory backend every cache of the
+    test host is, and refuses any other backend rather than pass it unread.
+    """
+
+    found = []
+    for alias in django_settings.CACHES:
+        cache = caches[alias]
+        assert isinstance(cache, LocMemCache), f"The cache {alias!r} is not one this scan can read."
+        entries = list(cache._cache.items())
+        if any(text in piece for key, stored in entries for piece in (key, *_held(pickle.loads(stored)))):
+            found.append(alias)
+    return found
 
 
 def _tables_holding(text: str) -> set[str]:
@@ -1044,7 +1100,8 @@ def test_the_token_is_stored_only_in_its_mail_never_logged_and_held_by_no_callba
         actor_context(iam_admin),
     ):
         target.with_actor(iam_admin).issue_sign_in_link()
-    assert callbacks and not any(SECRET in _held(callback) for callback in callbacks)
+    assert callbacks and not any(SECRET in piece for callback in callbacks for piece in _held(callback))
+    assert _cached_holding(SECRET) == []
     [message] = _mails(target)
     # The message's preview, and the text fragments its text and HTML parts point to; the link row keeps a digest.
     stored = {Message._meta.db_table, Fragment._meta.db_table}
@@ -1053,6 +1110,7 @@ def test_the_token_is_stored_only_in_its_mail_never_logged_and_held_by_no_callba
         assert SignInLink.url_for(f"{target.public_id}.{SECRET}") in Message._base_manager.get(pk=message.pk).preview
     assert _deliver(message)["delivered"]
     assert _tables_holding(SECRET) == stored
+    assert _cached_holding(SECRET) == []
     with system_context(reason="tests.iam_messaging.sign_in_link.delete"):
         Message._base_manager.filter(pk=message.pk).delete()
     assert _tables_holding(SECRET) == {Fragment._meta.db_table}
