@@ -22,7 +22,9 @@ In this order, in one transaction:
    characters, which rewrites the recipient table), the relations take their new
    reverse names, the two old unique constraints give way to
    ``uq_recipient_message_handle_role``, ``joined_at`` and ``left_at`` are
-   dropped, and last ``message`` becomes required. Making it required re-creates
+   dropped with whatever they hold, a drop the migration declares
+   (``IntendedRemoveField``) so that ``migrate``'s drop guard applies it, and
+   last ``message`` becomes required. Making it required re-creates
    its foreign key, which locks the message table until the migration commits, so
    it comes after the rewrite. The public id prefix (``rcp_``, was ``ptp_``) is
    the model's ``sqid_prefix``: the field is not migration state, so no operation
@@ -44,6 +46,7 @@ import logging
 from django.db import migrations, models
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
+from django_compose.operations import IntendedRemoveField
 
 from angee.base.fields.state import StateField
 from angee.base.querysets import MergeableQuerySet
@@ -144,8 +147,8 @@ class Migration(migrations.Migration):
             "recipient",
             models.UniqueConstraint(fields=("message", "handle", "role"), name="uq_recipient_message_handle_role"),
         ),
-        migrations.RemoveField("recipient", "joined_at"),
-        migrations.RemoveField("recipient", "left_at"),
+        IntendedRemoveField("recipient", "joined_at"),
+        IntendedRemoveField("recipient", "left_at"),
         # Last: re-creating the foreign key locks the message table until the commit.
         migrations.AlterField(
             "recipient",
