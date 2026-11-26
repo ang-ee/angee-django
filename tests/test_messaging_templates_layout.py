@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from angee.brandkit.testing.models import BrandKit
 from angee.messaging_templates.models import MessageTemplateKind
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWarningCode
+from angee.resources.entries import ResourceEntry
 from angee.resources.testing.models import Resource
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -252,3 +254,18 @@ def test_a_spanish_template_signs_off_in_spanish_in_the_brands_name(library: Any
         rendered = template.render({}, kit=library["kit"])
     assert "El equipo de Angee" in rendered.plain_text and "El equipo de Angee" in rendered.html
     assert '<html lang="es"' in rendered.html
+
+
+def test_the_readme_recipe_for_shipping_a_template_names_a_file_the_loader_resolves() -> None:
+    """The README's ``[tool.angee.resources]`` snippet, read by the loader's own rule: its stem names the model."""
+
+    readme = (ROOT / "src/angee/messaging_templates/README.md").read_text(encoding="utf-8")
+    snippets = re.findall(r"```toml\n(\[tool\.angee\.resources\].*?)```", readme, re.DOTALL)
+    declarations = [
+        entry for snippet in snippets for entry in tomllib.loads(snippet)["tool"]["angee"]["resources"]["install"]
+    ]
+    assert declarations
+    for declaration in declarations:
+        entry = ResourceEntry.from_declaration(apps.get_app_config("messaging_templates"), "install", declaration)
+        label = entry.model or entry.infer_model_label()
+        assert apps.get_model(label) is MessageTemplate, declaration

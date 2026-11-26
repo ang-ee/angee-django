@@ -374,9 +374,15 @@ Another addon ships a template as an `install` resource file targeting
 ```toml
 [tool.angee.resources]
 install = [
-  { path = "install/010_<addon>.messagetemplate.yaml", depends_on = "messaging_templates:install/030_messaging_templates.messagetemplate.yaml" },
+  { path = "install/010_messaging_templates.messagetemplate.yaml", depends_on = "messaging_templates:install/030_messaging_templates.messagetemplate.yaml" },
 ]
 ```
+
+The file's stem names the model its rows load, `[NNN_]<app label>.<model>`, so
+it carries the owning app's label, `messaging_templates`, never the shipping
+addon's: the loader infers `messaging_templates.MessageTemplate` from it
+(`ResourceEntry.infer_model_label`), while the file lives in, and loads with,
+the shipping addon's own resources.
 
 Each row states `kind: template`, a key `<addon label>.<name>`, `language`,
 `name`, `format`, `subject`, `preheader`, `layout: base`, `source` (and
