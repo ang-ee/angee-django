@@ -329,6 +329,17 @@ def _references(message: EmailMessage) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _parsed_address(address: str) -> str:
+    """Return an address in the form this parser emits: trimmed and lower-cased.
+
+    Every stored ``ParsedMessage.sync_hash`` covers the addresses in this form,
+    so changing it would change the hash of every message already synced; the
+    handle owner lands it on the handle any spelling of the address names.
+    """
+
+    return address.strip().lower()
+
+
 def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
     """Return the first parsed address from ``headers``, or ``None``."""
 
@@ -336,7 +347,7 @@ def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
         if address:
             return ParsedHandle(
                 platform=_EMAIL_PLATFORM,
-                value=Handle.email_value(address),
+                value=_parsed_address(address),
                 display_name=name.strip(),
             )
     return None
@@ -350,7 +361,7 @@ def _recipients(message: EmailMessage) -> tuple[ParsedRecipient, ...]:
     for header, role in _RECIPIENT_HEADERS:
         values = [str(value) for value in message.get_all(header, ())]
         for name, address in getaddresses(values):
-            cleaned = Handle.email_value(address)
+            cleaned = _parsed_address(address)
             if not cleaned or (cleaned, role) in seen:
                 continue
             seen.add((cleaned, role))

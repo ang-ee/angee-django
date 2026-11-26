@@ -2448,3 +2448,25 @@ def test_page_closure_resolves_quotes_of_a_later_record(
     quoted = Message._base_manager.get(external_id="quoted@x")
     assert Part._base_manager.filter(message=quoted, role=Part.PartRole.QUOTED).exists()
     assert MessageEdge._base_manager.filter(src=original, dst=quoted, kind="quote").exists()
+
+
+_MIXED_CASE = (
+    b"From: Client Example <Client.Example@Example.TEST>\r\n"
+    b"To: Desk <Desk@Example.test>, Other@B\xc3\xbccher.Example\r\nCc: ccd@Example.test\r\n"
+    b"Message-ID: <partb-hash@example.test>\r\nSubject: Hello\r\nDate: Wed, 25 Nov 2026 10:00:00 +0000\r\n"
+    b"Content-Type: text/plain; charset=utf-8\r\n\r\nbody\r\n"
+)
+_MIXED_CASE_SYNC_HASH = "308a07d2c6907f555f8afdd4e124d1b22f6d1192d771718d955ab2d5b941ffe7"
+"""The hash this message had when it was synced before the handle owner stopped taking a lower-cased address."""
+
+
+def test_the_parser_emits_addresses_lower_cased_so_an_already_synced_message_hashes_as_it_did() -> None:
+    """Changing the emitted form would change every stored sync hash; the handle owner lands any spelling anyway."""
+
+    parsed = parse_message(_MIXED_CASE, mailbox="INBOX", uid=1, uidvalidity=1)
+
+    assert parsed.sender is not None and parsed.sender.value == "client.example@example.test"
+    assert [(row.role, row.handle.value) for row in parsed.recipients] == [
+        ("to", "desk@example.test"), ("to", "other@bücher.example"), ("cc", "ccd@example.test"),
+    ]
+    assert parsed.sync_hash(channel_id=1, metadata={}) == _MIXED_CASE_SYNC_HASH
