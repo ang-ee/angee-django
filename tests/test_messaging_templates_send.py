@@ -404,7 +404,10 @@ def _names(source: str) -> set[str]:
     }
 
 
-SYSTEM_SEND_CALLERS: frozenset[str] = frozenset()
+SYSTEM_SEND_CALLERS: frozenset[str] = frozenset({
+    # The sign-in link's mail: its row, address and values are the server's, behind the action's own permission.
+    "src/angee/iam_messaging/models.py",
+})
 """The source modules that may call ``send_as_system``, each named system work, each added here in a reviewed change.
 
 It checks no permission of its own, so a module a person's request reaches with that person's row, address or

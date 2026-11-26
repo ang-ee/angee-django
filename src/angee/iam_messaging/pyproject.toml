@@ -10,5 +10,11 @@ dynamic = ["entry-points"]
 
 [tool.angee]
 
+# The link's mail, after the template library's layout, which loads after its blocks and parts.
+[tool.angee.resources]
+install = [
+  { path = "install/010_messaging_templates.messagetemplate.yaml", depends_on = "messaging_templates:install/030_messaging_templates.messagetemplate.yaml" },
+]
+
 [tool.angee.platform]
 category = "Foundation"
