@@ -138,12 +138,14 @@ class ModelHistory(CaptureHistory):
         no creation and has no earlier state: no earlier version in the table, nor a
         version of a tracked MTI descendant's history dated no later, which carries
         the inherited columns (a ``Person`` created through its child records its
-        ``Party`` state there). A merge that left its survivor unchanged is refused
-        when the survivor has no recorded state, or a write dated after the merge.
-        A changeset refused both ways reports its later change. Three statements
-        answer any number of changesets, whatever they hold, so a history page's
-        cost does not grow with its entries. The list asks it to offer a revert; the
-        verb asks it again under its row locks and stays the final judge.
+        ``Party`` state there). A merge that left its survivor unchanged
+        (:meth:`merge_survivors`) is refused when the survivor has no recorded state,
+        or a write dated after the merge. A changeset refused both ways reports its
+        later change. The states are read through the builders :meth:`changeset_states`
+        fetches them with (``versions_of``, ``dated_versions_of``). Three statements
+        answer any number of changesets, whatever they hold, so a history page's cost
+        does not grow with its entries. The list asks it to offer a revert; the verb
+        asks it again under its row locks and stays the final judge.
         """
 
         page = {changeset.pk: changeset for changeset in changesets}
@@ -162,44 +164,32 @@ class ModelHistory(CaptureHistory):
                 .exclude(history_change_reason=BASELINE_REASON)
             ),
         )
-        carriers = self.carriers(model)[1:]
+        carriers = [get_history_manager_for_model(table) for table in self.carriers(model)[1:]]
         unrecorded = written.exclude(history_type="+").filter(
-            ~Exists(history.filter(**same_row, history_id__lt=OuterRef("history_id"))),
+            ~Exists(history.versions_of(OuterRef(key), before=OuterRef("history_id"))),
             *(
-                ~Exists(
-                    get_history_manager_for_model(table)
-                    .filter(**{table._meta.pk.attname: OuterRef(key)}, history_date__lte=OuterRef("history_date"))
-                    .exclude(changeset_id=OuterRef("changeset_id"))
-                )
-                for table in carriers
+                ~Exists(carrier.dated_versions_of(
+                    OuterRef(key), until=OuterRef("history_date"), outside=OuterRef("changeset_id"),
+                ))
+                for carrier in carriers
             ),
         )
         blockers = dict.fromkeys(unrecorded.values_list("changeset_id", flat=True), "earlier_state_unavailable")
-        # An unchanged merge survivor has no new snapshot. Its touched owner and
-        # origin still define a boundary, without an artificial stamp-only save.
-        changeset_type = changeset_model()
-        survivor = Cast(OuterRef("origin_object_id"), output_field=model._meta.pk)
-        survivor_versions = {key: survivor}
-        merges = changeset_type._base_manager.filter(
-            pk__in=list(page),
-            activity=changeset_type.Activity.MERGE,
-            origin_content_type__in=list(ContentType.objects.get_for_models(*concrete_lineage(model)).values()),
-        ).values_list(
+        survivor = OuterRef("survivor")
+        survivors = self.merge_survivors(model, page.values()).values_list(
             "pk",
-            Exists(history.filter(changeset_id=OuterRef("pk"), **survivor_versions)),
-            Exists(model._base_manager.filter(pk=survivor)),
-            Exists(history.filter(**survivor_versions)),
+            "unchanged",
+            "standing",
+            Exists(history.versions_of(survivor)),
             Exists(
-                history.filter(**survivor_versions, history_date__gt=OuterRef("recorded_at"))
+                history.versions_of(survivor)
+                .filter(history_date__gt=OuterRef("recorded_at"))
                 .exclude(history_change_reason=BASELINE_REASON)
             ),
-            *(
-                Exists(get_history_manager_for_model(table).filter(**{table._meta.pk.attname: survivor}))
-                for table in carriers
-            ),
+            *(Exists(carrier.dated_versions_of(survivor)) for carrier in carriers),
         )
-        for pk, wrote, standing, versioned, rewritten, *carried in merges:
-            if wrote or not standing:
+        for pk, unchanged, standing, versioned, rewritten, *carried in survivors:
+            if not unchanged or not standing:
                 continue
             if not versioned and not any(carried):
                 blockers[pk] = "earlier_state_unavailable"
@@ -208,14 +198,36 @@ class ModelHistory(CaptureHistory):
         blockers.update(dict.fromkeys(later.values_list("changeset_id", flat=True), "later_change"))
         return blockers
 
+    def merge_survivors(self, model: Any, changesets: Iterable[Any]) -> models.QuerySet[Any]:
+        """The given merges whose origin is a row of this table's lineage, each annotated with that ``survivor``.
+
+        An unchanged merge survivor has no new snapshot; its touched owner and origin
+        still define a boundary, without an artificial stamp-only save. Each row says
+        whether the merge wrote no version of the survivor here (``unchanged``) and
+        whether the survivor still stands (``standing``): the boundary is the
+        survivor's when both hold. One statement, whatever the changesets hold.
+        """
+
+        changeset_type = changeset_model()
+        survivor = OuterRef("survivor")
+        return changeset_type._base_manager.filter(
+            pk__in=[changeset.pk for changeset in changesets],
+            activity=changeset_type.Activity.MERGE,
+            origin_content_type__in=list(ContentType.objects.get_for_models(*concrete_lineage(model)).values()),
+        ).annotate(
+            survivor=Cast("origin_object_id", output_field=model._meta.pk),
+            unchanged=~Exists(model.history.filter(changeset_id=OuterRef("pk")).versions_of(survivor)),
+            standing=Exists(model._base_manager.filter(pk=survivor)),
+        )
+
     def changeset_states(self, model: Any, changeset: Any) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
 
         A changeset :meth:`revert_blockers` refuses raises its refusal first, in
         words for a person; the model label and changeset are logged, never
         returned. The pre-boundary state is the latest earlier version in the table
-        or a tracked MTI descendant's history. The caller holds the operational row
-        locks throughout restoration.
+        or a tracked MTI descendant's history, read through the builders the refusal
+        reads. The caller holds the operational row locks throughout restoration.
         """
 
         if (code := self.revert_blockers(model, (changeset,)).get(changeset.pk)) is not None:
@@ -224,23 +236,18 @@ class ModelHistory(CaptureHistory):
         history = model.history
         key = model._meta.pk.attname
         rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
-        seen = set()
         for pk, grouped in groupby(rows.iterator(), key=lambda row: getattr(row, key)):
-            seen.add(pk)
             versions = list(grouped)
             first, last = versions[0], versions[-1]
-            own = history.filter(**{key: pk}, history_id__lt=first.history_id).order_by("-history_id").first()
+            own = history.versions_of(pk, before=first.history_id).first()
             carried = self.carried_version(model, pk, before=first.history_date, changeset=changeset)
             previous = max((v for v in (own, carried) if v is not None), key=lambda v: v.history_date, default=None)
             yield first, last, previous
-        origin = changeset.record_ref
-        if changeset.activity == "merge" and origin.model_label.lower() in {
-            table._meta.label_lower for table in concrete_lineage(model)
-        }:
-            pk = model._meta.pk.to_python(origin.object_id)
-            if pk not in seen and model._base_manager.filter(pk=pk).exists():
-                latest = history.filter(**{key: pk}).order_by("-history_id").first()
-                boundary = latest or self.carried_version(model, pk)
+        for survivor, unchanged, standing in self.merge_survivors(model, (changeset,)).values_list(
+            "survivor", "unchanged", "standing",
+        ):
+            if unchanged and standing:
+                boundary = history.versions_of(survivor).first() or self.carried_version(model, survivor)
                 yield boundary, boundary, boundary
 
     def carried_version(self, model: Any, pk: Any, *, before: Any = None, changeset: Any = None) -> Any:
@@ -250,13 +257,14 @@ class ModelHistory(CaptureHistory):
         boundary), excluding ``changeset``'s own.
         """
 
-        versions = []
-        for table in self.carriers(model)[1:]:
-            rows = get_history_manager_for_model(table).filter(**{table._meta.pk.attname: pk})
-            if before is not None:
-                rows = rows.filter(history_date__lte=before).exclude(changeset_id=changeset.pk)
-            if (version := rows.order_by("-history_date", "-history_id").first()) is not None:
-                versions.append(version)
+        outside = None if before is None else changeset.pk
+        versions = [
+            version
+            for table in self.carriers(model)[1:]
+            if (version := get_history_manager_for_model(table).dated_versions_of(
+                pk, until=before, outside=outside,
+            ).first()) is not None
+        ]
         return max(versions, key=lambda version: version.history_date, default=None)
 
     def redacted(

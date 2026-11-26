@@ -56,6 +56,35 @@ class ModelHistoricalQuerySet[T: models.Model](HistoricalQuerySet[T]):
     the concrete historical row to ``T``.
     """
 
+    def versions_of(self, pk: Any, *, before: Any = None) -> Self:
+        """The versions of tracked row ``pk`` in this table, those recorded before version ``before`` if given.
+
+        The latest comes first: sequence ids order one table's versions, dates may tie.
+        Each argument is a value or an ``OuterRef``, so a reader fetches what a check wraps in ``Exists``.
+        """
+
+        key = cast(_GeneratedHistory, self.model).instance_type._meta.pk.attname
+        rows = self.filter(**{key: pk})
+        if before is not None:
+            rows = rows.filter(history_id__lt=before)
+        return cast(Self, rows.order_by("-history_id"))
+
+    def dated_versions_of(self, pk: Any, *, until: Any = None, outside: Any = None) -> Self:
+        """The versions of row ``pk`` dated no later than ``until``, outside changeset ``outside``, if given.
+
+        The latest comes first by date: dates order versions across tables, as an MTI
+        descendant's versions, which carry an ancestor's columns, are read. Each
+        argument is a value or an ``OuterRef``.
+        """
+
+        key = cast(_GeneratedHistory, self.model).instance_type._meta.pk.attname
+        rows = self.filter(**{key: pk})
+        if until is not None:
+            rows = rows.filter(history_date__lte=until)
+        if outside is not None:
+            rows = rows.exclude(changeset_id=outside)
+        return cast(Self, rows.order_by("-history_date", "-history_id"))
+
 
 class _GeneratedHistory(Protocol):
     """Class attributes simple-history's history-model factory sets; stock 3.13 declares none."""
@@ -238,14 +267,11 @@ class ModelHistory(HistoricalRecords):
 
         target = last.history_object
         model = type(target)
-        key = model._meta.pk.attname
         if previous is UNLOADED:
-            previous = (
-                type(last)
-                .objects.filter(**{key: getattr(last, key)}, history_id__lt=first.history_id)
-                .order_by("-history_id")
-                .first()
-            )
+            key = model._meta.pk.attname
+            previous = get_history_manager_for_model(model).versions_of(
+                getattr(last, key), before=first.history_id,
+            ).first()
         fields = {
             field.name: field
             for field in model._meta.concrete_fields

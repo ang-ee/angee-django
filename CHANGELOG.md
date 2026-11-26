@@ -29,7 +29,11 @@ live in code docstrings.
   for an earlier state no longer recorded: `ModelHistory.revert_blockers` is the one
   rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert` and
   `Changeset.revertable`) for a whole page in three statements per touched table, and
-  by the verb under its row locks. `revert_changeset` refuses a changeset whose complete
+  by the verb under its row locks. Both read a row's earlier versions through the
+  historical queryset's `versions_of` and `dated_versions_of` (an MTI descendant's,
+  dated), the builders the verb fetches the restored state with and the history page's
+  deltas read, and a merge's unchanged survivor through `ModelHistory.merge_survivors`.
+  `revert_changeset` refuses a changeset whose complete
   write boundary is not the record's first, with its message as before, then the
   verb's refusal in band, now worded for a person and naming no model label or primary
   key: "A later change to this record prevents this revert." (code `later_change`) or

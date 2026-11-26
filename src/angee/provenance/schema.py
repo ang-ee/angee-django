@@ -379,13 +379,9 @@ class RecordHistory:
         grouped: defaultdict[Any, list[_Version]] = defaultdict(list)
         for table, predicate in self.scopes.items():
             key = table._meta.pk.attname
-            historical = get_history_manager_for_model(table).model
             predecessor = (
-                historical._base_manager.filter(
-                    **{key: models.OuterRef(key)},
-                    history_id__lt=models.OuterRef("history_id"),
-                )
-                .order_by("-history_id")
+                get_history_manager_for_model(table)
+                .versions_of(models.OuterRef(key), before=models.OuterRef("history_id"))
                 .values("history_id")[:1]
             )
             rows = (
