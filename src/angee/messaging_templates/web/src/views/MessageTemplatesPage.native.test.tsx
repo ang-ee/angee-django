@@ -698,6 +698,33 @@ test("an edit is read once it settles, as its Save would send it, under the capt
   expect(bandOutline(factsBand(), warnings)).toEqual(["warnings", "unsaved", "message", "caveat"]);
   await waitFor(() => expect(screen.getByTitle(word("preview.frameTitle")).getAttribute("srcdoc")).toContain(rendered.html));
   await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+
+  // A second edit settles over the first one's preview: that stays, under the unsaved caption, unread.
+  const reads = previewReads(requests).length;
+  fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
+  expect(within(factsBand()).getByText(word("preview.unsaved"))).toBeTruthy();
+  expect(within(factsBand()).getByText(rendered.subject)).toBeTruthy();
+  expect(busyPane().getAttribute("aria-busy")).toBe("true");
+  expect(previewReads(requests)).toHaveLength(reads);
+});
+
+test("a kit chosen while the form holds edits reads those edits in that kit", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const requests: GraphQLWireRequest[] = [];
+  const edit = unsavedPreview("subject");
+  render(<MessageTemplateStory open={ROW.passwordReset} onRequest={(request) => requests.push(request)}
+    queryClient={noRetryClient()} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  fireEvent.change(within(form).getByLabelText(word("field.subject")), { target: { value: edit.patch.subject } });
+  pause();
+  await within(factsBand()).findByText(edit.result.rendered!.subject);
+  const other = RECORDED.kits.find((kit) => kit.is_default !== true)!;
+  await choose(word("preview.kit"), String(other.display_name));
+
+  // The recording holds no preview of these edits in that kit, so the fake refuses it; the read is what counts.
+  await waitFor(() => expect(previewReads(requests).at(-1))
+    .toEqual({ template: ROW.passwordReset, brand_kit: other.id, patch: edit.patch }));
 });
 
 test("Discard returns the Preview to the saved row at once, and the next edit starts from it", async () => {
