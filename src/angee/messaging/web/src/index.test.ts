@@ -3,13 +3,22 @@ import type { ChatterTabContent, ChatterViewContext } from "@angee/ui/runtime";
 import { isValidElement } from "react";
 import { describe, expect, test } from "vitest";
 
-import messaging from "./index";
+import messaging, { MESSAGE_STATUS_TONES, NewMessageAction } from "./index";
 import { RecordChatterPane, type RecordChatterPaneProps } from "./RecordChatterPane";
 import { RecordConversationPane, type RecordConversationPaneProps } from "./RecordConversationPane";
 
 describe("messaging addon manifest", () => {
   test("satisfies the rendered-addon invariants", () => {
     expect(() => expectValidBaseAddon(messaging)).not.toThrow();
+  });
+
+  test("colours a message's delivery status in its own app, scoped to the field, and exports New message", () => {
+    // Field-scoped: the generic words claim no global status tone another addon could need.
+    expect(messaging.statusTones).not.toHaveProperty("queued");
+    expect(messaging.vocabulary).toEqual([{ app: "messaging", resources: { "messaging.Message": { fields: { status: { tones: MESSAGE_STATUS_TONES } } } } }]);
+    expect(Object.keys(MESSAGE_STATUS_TONES).sort()).toEqual(["QUEUED", "SENT", "UNCERTAIN"]);
+    expect(messaging.icons).toHaveProperty("reply");
+    expect(typeof NewMessageAction).toBe("function");
   });
 
   test("passes the shell selection to Discussion and keys its filters by target", () => {
