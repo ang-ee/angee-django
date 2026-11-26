@@ -18,6 +18,7 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.roles import grant as grant_role
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
@@ -78,7 +79,6 @@ def _message(
 def _address(message: Any, handle: Any, role: str = "to") -> Any:
     return Recipient._base_manager.create(
         message=message,
-        thread=message.thread,
         handle=handle,
         role=role,
     )
@@ -263,6 +263,8 @@ def test_a_handle_merge_keeps_correspondence_on_the_merged_handle_for_readers_to
     del db
     owner = User.objects.create_user(username="handle-merge-reader")
     with system_context(reason="test nexus handle merge"):
+        # Alice's old address and her new one: a contact administrator merges them.
+        grant_role(actor=owner, role="parties/role:contact_admin")
         alice, bob = Party._base_manager.create(display_name="Alice", created_by=owner), _party("Bob")
         old, new = (
             Handle._base_manager.create(platform="email", value=value, created_by=owner)

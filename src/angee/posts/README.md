@@ -45,8 +45,8 @@ other runs and native platform answers. The same owner predicate serves workflow
 eligibility; possibly accepted and SENT outbound deliveries still count after local
 trash because trash does not retract a public reply. Other discarded and failed
 replies do not. Reply preparation composes
-`Message.objects.compose_reply` with the final hold state at insertion and native
-idempotency replay. The actor needs readable context and channel `reply`.
+`Message.objects.compose` with the feed's handle as sender, the final hold state at
+insertion and native idempotency replay. The actor needs readable context and channel `reply`.
 Unreadable comments raise `PermissionDenied`. New attempts on answered comments
 raise `CommentAnswered`; matching replays return their existing reply first.
 `Feed.reply_hold` is operator-editable hours: null holds for approval indefinitely,
