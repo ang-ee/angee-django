@@ -825,6 +825,10 @@
        "value": "SLACK"
       },
       {
+       "description": "System mail",
+       "value": "SYSTEM"
+      },
+      {
        "description": "Public Webform",
        "value": "WEBFORM"
       }
@@ -1327,6 +1331,10 @@
          "to": "slack"
         },
         {
+         "from": "SYSTEM",
+         "to": "system"
+        },
+        {
          "from": "WEBFORM",
          "to": "webform"
         }
@@ -1560,6 +1568,10 @@
          "to": "slack"
         },
         {
+         "from": "SYSTEM",
+         "to": "system"
+        },
+        {
          "from": "WEBFORM",
          "to": "webform"
         }
@@ -1603,6 +1615,10 @@
        {
         "description": "Slack",
         "value": "SLACK"
+       },
+       {
+        "description": "System mail",
+        "value": "SYSTEM"
        },
        {
         "description": "Public Webform",
