@@ -36,6 +36,15 @@ live in code docstrings.
     `validate` raises its `ValidationError`, before a JSON Schema keyword walks
     the value, so a public web form submission whose answers nest too deeply is
     refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
   - What it closes: a caller who was not signed in could fail a GraphQL save
     with an `INTERNAL` error, before its permission check, by sending a value
     nested about a thousand levels deep (strawberry-django-hasura's input
