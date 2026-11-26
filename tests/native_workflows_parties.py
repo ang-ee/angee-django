@@ -308,7 +308,7 @@ class PartyWorkflowTests(TransactionTestCase):
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Party, actor=self.admin, allow_non_dev=True)
             for key in ("identity_sample", "duplicate_left", "duplicate_right")
         )
-        for key in ("duplicate_left_handle", "duplicate_right_handle"):
+        for key in ("duplicate_left_phone", "duplicate_right_phone"):
             ledger.load_xref(f"angee.workflows_parties.{key}", model=Handle, actor=self.admin, allow_non_dev=True)
         self.assertEqual(sample.display_name, "Directory sample")
         with actor_context(self.admin):
@@ -318,11 +318,11 @@ class PartyWorkflowTests(TransactionTestCase):
         self.assertEqual([(pair.left.pk, pair.right.pk) for pair in candidates], [(left.pk, right.pk)])
 
     def same_as_pair(self, prefix):
-        """Distinct native handles normalize to the same comparison identity."""
+        """Two handles, aliases of one Gmail mailbox, share their person-matching key."""
         left, right = self.party(f"{prefix} left"), self.party(f"{prefix} right")
         with actor_context(self.reviewer):
-            Handle.objects.create(platform="email", value=f"{prefix}@example.test", party=left)
-            Handle.objects.create(platform="email", value=f"{prefix.upper()}@example.test", party=right)
+            Handle.objects.create(platform="email", value=f"{prefix}.pair@gmail.com", party=left)
+            Handle.objects.create(platform="email", value=f"{prefix}pair@gmail.com", party=right)
         with system_context(reason="test same-as rule"):
             Party.objects.reconcile_same_as()
         return left, right

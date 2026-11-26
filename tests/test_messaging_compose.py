@@ -1014,3 +1014,70 @@ def test_a_compose_executes_a_bounded_number_of_statements_per_known_recipient(d
             Message.objects.compose(channel=desk, to=known[:size], text="Hi.", actor=desk.owner)
         counts[size] = len(queries)
     assert all(counts[size] <= ceiling for size, ceiling in STATEMENTS.items()), counts
+
+
+def test_a_compose_to_another_letter_case_of_a_contacts_address_is_addressed_as_the_contact_stores_it(
+    desk: Any,
+) -> None:
+    """One address is one handle: the contact typed first keeps its spelling, which the wire carries."""
+
+    with system_context(reason="tests.messaging.compose.spelling"):
+        contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
+    message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.spelling"):
+        assert list(Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)) == [contact.pk]
+        assert Handle._base_manager.filter(platform="email").count() == 2  # The client and the desk.
+    assert _wire(desk, message)["To"] == "Client@Example.test"
+
+
+def test_a_contact_typed_after_a_compose_lands_on_the_handle_compose_wrote_in_lower_case(desk: Any) -> None:
+    message = Message.objects.compose(channel=desk, to=["Client@Example.test"], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.spelling"):
+        (written,) = Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)
+        contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
+    assert (contact.pk, contact.value) == (written, "client@example.test")
+
+
+def test_a_providers_alias_is_a_handle_of_its_own_and_is_sent_as_typed(desk: Any) -> None:
+    """A Gmail plus-tag is the same person's address, not the same address: its own handle, its tag kept."""
+
+    with system_context(reason="tests.messaging.compose.alias"):
+        mailbox = Handle.objects.upsert(platform="email", value="ab@gmail.com")
+    message = Message.objects.compose(channel=desk, to=["a.b+promo@gmail.com"], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.alias"):
+        (handle_id,) = Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)
+    assert handle_id != mailbox.pk
+    assert _wire(desk, message)["To"] == "a.b+promo@gmail.com"
+
+
+def test_inbound_mail_from_another_letter_case_of_a_contacts_address_lands_on_the_contacts_handle(desk: Any) -> None:
+    raw = (
+        b"From: Client <client@example.test>\r\nTo: desk@example.test\r\nMessage-ID: <spelled@example.test>\r\n"
+        b"Subject: Hello\r\n\r\nbody\r\n"
+    )
+    with system_context(reason="tests.messaging.compose.inbound"):
+        contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
+        (inbound,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+    assert inbound.sender_id == contact.pk
+
+
+def test_after_the_key_repair_folds_two_spellings_a_compose_lands_on_the_older_and_keeps_its_spelling(
+    desk: Any,
+) -> None:
+    """Rows an earlier rule kept apart are one handle after the repair: the survivor's spelling is on the wire."""
+
+    with system_context(reason="tests.messaging.compose.repair"):
+        older, newer = Handle._base_manager.bulk_create(
+            Handle(
+                platform="email", value=value, normalized_value=Handle.normalize_value("email", value),
+                normalized_version=1, spelling_key="", created_by=desk.owner,
+            )
+            for value in ("Ada@Example.test", "ada@example.test")
+        )
+    assert Handle.objects.renormalize_handles().folded == 1
+
+    message = Message.objects.compose(channel=desk, to=["ADA@example.test"], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.repair"):
+        assert list(Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)) == [older.pk]
+        assert Handle._base_manager.get(pk=newer.pk).merged_into_id == older.pk
+    assert _wire(desk, message)["To"] == "Ada@Example.test"

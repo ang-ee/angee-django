@@ -890,9 +890,10 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
     ],
 )
 def test_handle_compares_an_email_domain_in_one_spelling(value: str, key: str) -> None:
-    """Both spellings of an internationalised domain are one comparison key; the value itself is never rewritten."""
+    """Both spellings of an internationalised domain are one address, by both keys; the value is never rewritten."""
 
     assert Handle.normalize_value(Handle.Platform.EMAIL, value) == key
+    assert Handle.spelling_key_of(Handle.Platform.EMAIL, value) == key
 
 
 @pytest.mark.parametrize(

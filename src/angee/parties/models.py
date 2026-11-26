@@ -84,6 +84,7 @@ from angee.parties.managers import (
     PartyManager,
     PartyStatementQuerySet,
     RelationshipManager,
+    ValueOwned,
 )
 from angee.parties.mixins import MembershipDecisionMixin, PartyAspectMixin, PartyStatementMixin
 from angee.provenance.context import current_changeset
@@ -871,7 +872,9 @@ class Handle(
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``
     — those unique constraints are the ingestion-dedup keys that make re-sync
-    idempotent. The keys are written once (:attr:`immutable_fields`): a message
+    idempotent — and a live email handle on its spelling key
+    (:meth:`spelling_key_of`), so any letter case or domain spelling of one
+    address is one live handle. The keys are written once (:attr:`immutable_fields`): a message
     reads its addresses from its handles when it is sent, so a field write of one
     would send messages already written somewhere else, and no save of one is
     admitted, whoever makes it. Only the handle owner's verbs change a key:
@@ -930,10 +933,17 @@ class Handle(
     platform = StateField(choices_enum=Platform, default=Platform.EMAIL)
     value = models.CharField(max_length=512)
     normalized_value = models.CharField(max_length=512, db_index=True, editable=False)
+    """The person-matching key (:meth:`normalize_value`): what a lookup or a suggestion of a person compares."""
     normalized_version = models.PositiveSmallIntegerField(default=0, db_index=True, editable=False)
-    """The :attr:`NORMALIZATION_VERSION` the rule had when ``normalized_value`` was computed; 0 before the rule had one.
+    """The :attr:`NORMALIZATION_VERSION` the rule had when the keys were computed; 0 before the rule had one.
 
-    Written beside the key by every write of it (:meth:`save`), never alone.
+    Written beside the keys by every write of them (:meth:`save`), never alone.
+    """
+    spelling_key = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
+    """What a live email handle is unique by (:meth:`spelling_key_of`), written beside ``normalized_value``.
+
+    ``""`` on every other platform, where ``value`` itself is the address, and on a row stored before the rule had
+    it, until the key repair (``HandleManager.renormalize_handles``) reaches it.
     """
     external_id = models.CharField(max_length=512, blank=True, default="")
     display_name = models.CharField(max_length=4096, blank=True, default="")
@@ -1010,6 +1020,16 @@ class Handle(
                 condition=~models.Q(external_id=""),
                 name="uq_handle_platform_external_id",
             ),
+            # A merged-away row keeps its survivor's key as a redirect; a row the key repair has not reached has none.
+            models.UniqueConstraint(
+                fields=("spelling_key",),
+                condition=models.Q(platform="email", merged_into__isnull=True) & ~models.Q(spelling_key=""),
+                name="uq_handle_spelling_key",
+            ),
+        )
+        indexes = (
+            # A spelling of an address merged away lands on its survivor: the lookup reads merged rows by key too.
+            models.Index(fields=("spelling_key",), condition=models.Q(platform="email"), name="ix_handle_spelling_key"),
         )
 
     def __str__(self) -> str:
@@ -1020,16 +1040,16 @@ class Handle(
     ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
     """Platforms whose value is itself an account's address: an email address, a phone number."""
 
-    NORMALIZATION_VERSION: ClassVar[int] = 1
+    NORMALIZATION_VERSION: ClassVar[int] = 2
     """The version of the normalization rule; bump it whenever the rule returns something else.
 
-    The rule is :meth:`normalize_value` and :meth:`normalize_email_domain`.
-    ``normalized_value`` is stored, so a changed rule leaves stored keys behind.
-    Each row carries the version its key was computed under
-    (:attr:`normalized_version`), and provisioning saves again the rows whose
-    version is not this one (``HandleManager.renormalize_handles``). A test pins
-    the rule's outputs beside the number, so changing an output without a bump
-    fails.
+    The rule is :meth:`spelling_key_of`, :meth:`normalize_value` and
+    :meth:`normalize_email_domain`. ``spelling_key`` and ``normalized_value`` are
+    stored, so a changed rule leaves stored keys behind. Each row carries the
+    version its keys were computed under (:attr:`normalized_version`), and
+    provisioning saves again the rows whose version is not this one
+    (``HandleManager.renormalize_handles``). A test pins the rule's outputs beside
+    the number, so changing an output without a bump fails.
     """
 
     @classmethod
@@ -1050,6 +1070,21 @@ class Handle(
         return models.Q(**{f"{prefix}platform__in": cls.ACCOUNT_PLATFORMS}) | ~models.Q(**{f"{prefix}external_id": ""})
 
     @classmethod
+    def spellings_filter(cls, values: Iterable[str]) -> models.Q:
+        """The email handles spelling any of these addresses: each one's row by the value as given, and every row,
+        live or merged away, owning its spelling key (:meth:`spelling_key_of`).
+
+        At most one live row owns a key (``uq_handle_spelling_key``);
+        ``HandleManager.find_identities`` decides which row an address lands on,
+        and :meth:`value_owner` reads the live one. One arm naming the platform,
+        so the ``(platform, value)`` key's index and the spelling key's serve it.
+        """
+
+        spelled = sorted(set(values))
+        keys = sorted({key for value in spelled if (key := cls.spelling_key_of(cls.Platform.EMAIL, value))})
+        return models.Q(platform=cls.Platform.EMAIL) & (models.Q(value__in=spelled) | models.Q(spelling_key__in=keys))
+
+    @classmethod
     def identified_connection(cls, parsed: ConnectionHandle) -> bool:
         """Whether a connection names its account by a real identifier, not by a display name only.
 
@@ -1062,21 +1097,42 @@ class Handle(
         return cls.identifies_account(parsed.platform, parsed.external_id)
 
     @classmethod
-    def normalize_value(cls, platform: str, value: str) -> str:
-        """Return the persisted comparison value for one platform/value pair.
+    def spelling_key_of(cls, platform: str, value: str) -> str:
+        """Return what makes two spellings one email handle: the address trimmed and lower-cased, its domain read by
+        :meth:`normalize_email_domain`; ``""`` on every other platform, where ``value`` itself is the address, and for
+        a value with no ``@``, which is no address and so has no other spelling.
 
-        Every platform strips surrounding whitespace and lowercases. Email keeps
-        that rule and additionally collapses dots and plus-tags in Gmail local
-        parts for both ``gmail.com`` and ``googlemail.com`` domains, and compares
-        a domain in one spelling (:meth:`normalize_email_domain`), so both
-        spellings of an internationalised domain are one address while ``value``
-        keeps what was typed. Phone and
+        ``lower()``, not ``casefold()``: ``Straße@`` and ``STRASSE@`` stay two
+        addresses. A provider's alias (a Gmail dot or plus-tag) is an address of
+        its own, which only the person-matching key (:meth:`normalize_value`)
+        groups. A live email handle is unique by it (``uq_handle_spelling_key``).
+        The key is stored: changing what this returns means bumping
+        :attr:`NORMALIZATION_VERSION`.
+        """
+
+        if platform != cls.Platform.EMAIL:
+            return ""
+        local, at, domain = (value or "").strip().lower().rpartition("@")
+        return f"{local}@{cls.normalize_email_domain(domain)}" if at else ""
+
+    @classmethod
+    def normalize_value(cls, platform: str, value: str) -> str:
+        """Return the person-matching key for one platform/value pair: what groups the handles of probably one person.
+
+        Every platform strips surrounding whitespace and lowercases. An email
+        address starts from its spelling key (:meth:`spelling_key_of`, its domain
+        in one spelling) and additionally collapses dots and plus-tags in Gmail
+        local parts for both ``gmail.com`` and ``googlemail.com`` domains, so a
+        provider's aliases match one person while each stays a handle of its own.
+        Phone and
         WhatsApp values parse without an assumed region and format as E.164; values
         require a leading country code and must be possible and valid. Anything
         unparseable, invalid, or region-unknown falls back to its digits so
         punctuation still does not fork the same contact point. iMessage carries
         either kind of address, so it routes by value shape — the email rule when
-        the value contains ``@``, the phone rule otherwise.
+        the value contains ``@``, the phone rule otherwise. It is read where a
+        person is looked up or suggested, never to decide which handle an address
+        lands on.
 
         The key is stored: changing what this returns for any value means
         bumping :attr:`NORMALIZATION_VERSION`, so provisioning saves the stored
@@ -1085,10 +1141,10 @@ class Handle(
 
         normalized = (value or "").strip().lower()
         if platform in (cls.Platform.EMAIL, cls.Platform.IMESSAGE) and "@" in normalized:
-            local, _, domain = normalized.rpartition("@")
+            local, _, domain = cls.spelling_key_of(cls.Platform.EMAIL, normalized).rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
-            return f"{local}@{cls.normalize_email_domain(domain)}"
+            return f"{local}@{domain}"
         if platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP, cls.Platform.IMESSAGE):
             try:
                 number = parse(normalized, None)
@@ -1099,13 +1155,31 @@ class Handle(
             return "".join(character for character in normalized if character.isdigit())
         return normalized
 
+    @classmethod
+    def is_fallback_key(cls, platform: str, key: str) -> bool:
+        """Whether a person-matching key is the phone rule's fallback, a value's bare digits, not a number it read.
+
+        The phone rule (phone, WhatsApp, an iMessage value with no ``@``) gives an
+        E.164 number, which starts with ``+``; a value it cannot read as a valid
+        number falls back to its digits, which distinct numbers share
+        (``1-800-FLOWERS`` and ``1-800-COLLECT`` are both ``1800``). Such a key
+        still groups handles for a suggestion, and names no one address, so a
+        person's merge never takes it for another spelling (:meth:`validate_merge`).
+        """
+
+        phone_rule = platform in (cls.Platform.PHONE, cls.Platform.WHATSAPP) or (
+            platform == cls.Platform.IMESSAGE and "@" not in key
+        )
+        return phone_rule and not key.startswith("+")
+
     @staticmethod
     def normalize_email_domain(domain: str) -> str:
         """Return the one spelling an email domain compares by: lower-cased, each punycode label read as Unicode.
 
-        The one rule for a domain, whoever compares one: a handle's comparison key
-        (:meth:`normalize_value`) and a domain stored as typed elsewhere, such as
-        ``Organization.domain``, read through it on both sides. The standard
+        The one rule for a domain, whoever compares one: a handle's spelling key
+        (:meth:`spelling_key_of`) and person-matching key (:meth:`normalize_value`)
+        and a domain stored as typed elsewhere, such as ``Organization.domain``,
+        read through it on both sides. The standard
         library's ``idna`` codec reads an ``xn--`` label, as Django's ``punycode``
         writes one with it; a label the codec cannot read stays as typed.
 
@@ -1125,12 +1199,12 @@ class Handle(
 
     @staticmethod
     def email_value(address: str) -> str:
-        """Return the form an email address is stored in as a handle's ``value``: trimmed and lower-cased.
+        """Return an email address trimmed and lower-cased: the form compose and inbound mail still pass when they land
+        an address.
 
-        Every writer that lands an email address on a handle passes it in this
-        form, so one address lands on one handle whoever writes it. The handle
-        owner stores what it is given; :meth:`normalize_value` keeps the
-        comparison key.
+        The handle owner lands any letter case or domain spelling on the one
+        handle (:meth:`spelling_key_of`), so this form decides nothing; it is
+        removed with its callers.
         """
 
         return (address or "").strip().lower()
@@ -1173,34 +1247,74 @@ class Handle(
         return " ".join((value or "").split()).casefold()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the handle while keeping ``normalized_value`` in lockstep, with the version of its rule beside it.
+        """Persist the handle with its keys in lockstep, and never as a second live handle of an email address.
 
-        The key is computed on an insert, on a full save, and whenever a partial
-        save names ``platform``, ``value`` or either key column; the two key
-        columns are then written together, so ``normalized_version`` always says
-        which rule ``normalized_value`` came from.
+        The keys (``spelling_key``, ``normalized_value``) are computed on an
+        insert, on a full save, and whenever a partial save names ``platform``,
+        ``value`` or a key column; the key columns are then written together with
+        ``normalized_version``, which always says which rule they came from.
+        Before anything is written, an insert, a keyed save, or a save naming
+        ``merged_into`` (a revert restoring a merged-away row) that would keep this
+        row a live email handle beside the one owning its spelling key
+        (:meth:`value_owner`) raises :class:`ValueOwned` on ``value``, so the
+        caller's transaction stays usable. ``uq_handle_spelling_key`` is the
+        backstop for what that read cannot see (a concurrent insert,
+        ``bulk_create``).
         """
 
         update_fields = kwargs.get("update_fields")
-        key_fields = ("normalized_value", "normalized_version")
+        key_fields = ("spelling_key", "normalized_value", "normalized_version")
         keyed = update_fields is None or {"platform", "value", *key_fields}.intersection(update_fields)
         if self._state.adding or keyed:
+            self.spelling_key = self.spelling_key_of(self.platform, self.value)
             self.normalized_value = self.normalize_value(self.platform, self.value)
             self.normalized_version = self.NORMALIZATION_VERSION
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
+        if (self._state.adding or keyed or "merged_into" in (update_fields or ())) and (
+            owner := self.value_owner()
+        ) is not None:
+            raise ValueOwned({"value": ValidationError(
+                "Handle %(owner)s is this address; a second live handle of it is not kept.",
+                code="value_owned",
+                params={"owner": public_id_of(owner)},
+            )})
         super().save(*args, **kwargs)
 
+    def value_owner(self) -> Handle | None:
+        """Return the other live email handle owning this row's spelling key, or ``None``.
+
+        It reads nothing off email, for a merged-away row (a redirect keeps its
+        survivor's key) or for an unkeyed one. :meth:`save` refuses to keep this
+        row live and keyed beside it (:class:`ValueOwned`).
+        """
+
+        if self.platform != self.Platform.EMAIL or self.merged_into_id is not None or not self.spelling_key:
+            return None
+        live = type(self)._base_manager.filter(self.spellings_filter([self.value]), merged_into__isnull=True)
+        return live.exclude(pk=self.pk).order_by("pk").first()
+
+    def spells(self, value: str) -> bool:
+        """Whether ``value`` is this handle's address: its own ``value``, or on email another letter case or domain
+        spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column)."""
+
+        key = self.spelling_key_of(self.platform, value)
+        return value == self.value or bool(key) and key == self.spelling_key_of(self.platform, self.value)
+
     def validate_merge(self, merged: Sequence[Any]) -> None:
-        """A contact alias keeps its platform and the directory identity lock order; a person merges a spelling.
+        """A contact alias keeps its platform and the directory identity lock order; a person merges an alias.
 
         Every later message to a merged handle's address goes to the kept one. So a
         person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
-        binds the kept handle to its actor) admits only another spelling of the kept
-        address, the same ``normalized_value``, unless that actor is a contact
-        administrator: an effective member of ``parties/role:contact_admin``, as
-        platform administrators are. Anyone else merges the contacts, which says two
-        addresses reach one person and moves no address. System work (``fold``, as
+        binds the kept handle to its actor) admits only another spelling or alias of
+        the kept address, the same person-matching key, unless that actor is a
+        contact administrator: an effective member of ``parties/role:contact_admin``,
+        as platform administrators are. The key is computed from each row's value
+        (:meth:`normalize_value`), never read from the stored column, which the key
+        repair may not have reached, and a phone rule's fallback (a value's bare
+        digits, :meth:`is_fallback_key`) names no one address, so it is never another
+        spelling. Anyone else merges the contacts, which says two addresses reach one
+        person and moves no address. System work (``fold``, as
         ``HandleManager.reidentify`` folds an ``@lid`` into its number) merges any two
         handles on one platform.
         """
@@ -1209,9 +1323,13 @@ class Handle(
         if any(row.platform != self.platform for row in merged):
             raise ValidationError("Only handles on the same platform can be merged.")
         actor, elevated = self.effective_actor()
+        key = self.normalize_value(self.platform, self.value)
+        spelled = not self.is_fallback_key(self.platform, key) and all(
+            self.normalize_value(row.platform, row.value) == key for row in merged
+        )
         if (
             not elevated
-            and any(row.normalized_value != self.normalized_value for row in merged)
+            and not spelled
             and not subject_has_role(actor, ObjectRef("parties/role", "contact_admin"))
         ):
             raise ValidationError(
