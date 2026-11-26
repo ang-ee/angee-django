@@ -196,10 +196,7 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         selected = self.key_for(key if key is not None else default)
         if not selected and default is not None:
             selected = self.key_for(default)
-        try:
-            return resolve_impl_class(self.base_class, selected)
-        except ImproperlyConfigured as error:
-            raise ImproperlyConfigured(f"{self}: {error}") from error
+        return resolve_impl_class(self.base_class, selected, owner=str(self))
 
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
