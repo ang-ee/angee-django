@@ -265,7 +265,11 @@ Django's default mailer, `MAILERS["default"]`, is messaging's
 [`SystemMailer`](email.py), contributed by [`autoconfig.py`](autoconfig.py): it
 records each email Django sends (a password reset, `sendtestemail`, a link an
 addon mails) on the system channel, and messaging delivers it through the
-transport. A deployment states only the transport:
+transport. A consumer that sends its organisation's own mail may instead send it
+straight through the `transport` mailer by name (`TRANSPORT_MAILER_ALIAS`): that
+mail is outside messaging, which neither records, delivers nor retries it. This
+is a deliberate exception, and it ends when named system work can compose on an
+ordinary channel. A deployment states only the transport:
 
 ```yaml
 MAILERS:
