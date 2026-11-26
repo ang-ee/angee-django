@@ -256,8 +256,11 @@ test("a save the server refuses shows its row-wide reasons in the Save failed ba
   for (const words of refusal.error.extensions.validationErrors?.layout ?? []) {
     await expectFieldError(within(form).getByLabelText(word("field.layout")), words);
   }
-  // The refused save brings the person to the field it refused.
-  await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
+  // A refusal that carries a reason no field shows brings the person to the banner, which holds that reason and
+  // names the refused field (the record form's rule).
+  await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("alert"));
+  expect(document.activeElement?.textContent).toContain(refusal.error.extensions.formErrors![0]);
+  expect(document.activeElement?.textContent).toContain(word("field.layout"));
   expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([refusal.set]);
 });
 
