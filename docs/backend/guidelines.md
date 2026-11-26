@@ -466,9 +466,10 @@ Use these owners instead of maintaining another contract in an addon:
   over, and the addon that stopped providing a key states the remedy in
   `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
   read as text; no value the field prepares writes a key its choices do not
-  name (a history copy records it), while an expression (`F`, `Subquery`,
-  `Cast`, `Case`, or a `Value` without the field as its output) is not checked;
-  resolving the key raises naming the field, the key and the setting. Every
+  name, or a key spelled other than the registry's (a history copy records its
+  row's key), while any other expression (`F`, `Subquery`, `Cast`, `Case`, or a
+  `Value` inside one) is not checked; a lookup forgives what a person or a URL
+  may spell. Resolving the key raises naming the field, the key and the setting. Every
   Angee GraphQL schema reads such a key as null
   ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
   the console labels "Not registered", and the row cannot be saved until an

@@ -18,10 +18,12 @@ live in code docstrings.
   one raised `ValidationError` ("Value '…' is not a valid choice."), so no
   query that read such a row could finish. Writing the column with such a key
   stays refused in every value the field prepares (a plain value in an insert,
-  an update, `QuerySet.update`, `bulk_update`, or a `Value` whose output field
-  is the column's), except by a history copy, which records its row's key; an
-  expression (`F`, `Subquery`, `Cast`, `Case`, or a `Value` without the field
-  as its output) is not checked. A save that leaves the column out
+  an update, `QuerySet.update`, `bulk_update`, or a `Value`'s literal), except
+  by a history copy, which records its row's key; any other expression (`F`,
+  `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not checked. A write
+  stores a key only as the registry spells it: the member's name (`"LOCAL"`)
+  or a padded key (`" local "`) is refused, as on main, though a lookup reads
+  both as the key. A save that leaves the column out
   (`save(update_fields=...)`) succeeds from code; a GraphQL update or a model
   form saves the whole row and is refused naming the column. Input
   (`full_clean`, a model form, a deserialized fixture, so a dump of such a row,

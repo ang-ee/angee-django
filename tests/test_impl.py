@@ -17,7 +17,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
-from django.db.models import Value
+from django.db.models import Case, F, Value, When
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
@@ -1586,20 +1586,67 @@ def test_a_lookup_reads_spaces_and_a_member_name_as_the_key() -> None:
 
 
 @pytest.mark.django_db
-def test_a_value_typed_as_the_field_is_refused_and_an_expression_writes_unchecked() -> None:
-    """The refusal covers what the field prepares; a bare ``Value`` is an expression it never sees, so it writes."""
+def test_a_top_level_value_is_written_as_its_literal_and_any_other_expression_unchecked() -> None:
+    """A ``Value``'s literal is a value the field prepares; ``F``, ``Case`` or a ``Value`` inside one is unchecked."""
 
     backend_model = apps.get_model("storage", "Backend")
     field = backend_model._meta.get_field("backend_class")
     with system_context(reason="test.impl.expression.write"):
         row = backend_model.objects.create(slug="expressed", label="Expressed", backend_class="local")
         rows = backend_model._base_manager.filter(pk=row.pk)
-        with pytest.raises(ValidationError) as refused, transaction.atomic():
-            rows.update(backend_class=Value("retired", output_field=field))
-        assert "backend_class" in refused.value.message_dict
-        rows.update(backend_class=Value("retired"))
+        for refused in (Value("retired"), Value("retired", output_field=field), Value("LOCAL")):
+            with pytest.raises(ValidationError) as refusal, transaction.atomic():
+                rows.update(backend_class=refused)
+            assert refusal.value.message_dict == {"backend_class": [f"Value {refused.value!r} is not a valid choice."]}
+        rows.update(backend_class=Value("local"))
+        rows.update(backend_class=F("backend_class"))
+        assert rows.get().backend_class == "local"
+        rows.update(backend_class=Case(When(pk=row.pk, then=Value("retired")), output_field=field))
 
     assert rows.get().backend_class == "retired"
+
+
+@pytest.mark.django_db
+def test_a_write_stores_only_the_registry_key_as_spelled_while_a_lookup_forgives() -> None:
+    """Every write path refuses the member's name and a padded key with the field's refusal; a lookup reads both."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.spelling.write"):
+        row = backend_model.objects.create(slug="spelled", label="Spelled", backend_class="local")
+        rows = backend_model._base_manager.filter(pk=row.pk)
+
+        def save(spelling: str) -> None:
+            row.backend_class = spelling
+            row.save()
+
+        def bulk_update(spelling: str) -> None:
+            row.backend_class = spelling
+            backend_model._base_manager.bulk_update([row], ["backend_class"])
+
+        writes = {
+            "create": lambda spelling: backend_model.objects.create(slug="new", label="New", backend_class=spelling),
+            "save": save,
+            "update": lambda spelling: rows.update(backend_class=spelling),
+            "bulk_create": lambda spelling: backend_model._base_manager.bulk_create(
+                [backend_model(slug="bulk", label="Bulk", backend_class=spelling)]
+            ),
+            "bulk_update": bulk_update,
+            "update_or_create": lambda spelling: backend_model.objects.update_or_create(
+                slug="spelled", defaults={"backend_class": spelling}
+            ),
+        }
+        for spelling in ("LOCAL", " local "):
+            for path, write in writes.items():
+                with pytest.raises(ValidationError) as refusal, transaction.atomic():
+                    write(spelling)
+                refused = {"backend_class": [f"Value {spelling!r} is not a valid choice."]}
+                assert refusal.value.message_dict == refused, path
+        row.refresh_from_db()
+        assert [list(rows.filter(backend_class=spelling)) for spelling in ("LOCAL", " local ")] == [[row], [row]]
+        rows.update(backend_class="local")
+
+    assert backend_model._base_manager.filter(slug__in=("new", "bulk")).count() == 0
+    assert rows.get().backend_class == "local"
 
 
 @pytest.mark.django_db

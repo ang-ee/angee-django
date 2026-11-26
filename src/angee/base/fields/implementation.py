@@ -35,6 +35,11 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     text; no value the field prepares writes one, and resolving it raises. Its
     GraphQL read is null, so the row's list and record still answer; the row
     saves again once a registered implementation is chosen.
+
+    Reads forgive and writes do not: a lookup matches what a person or a URL
+    may spell (``" local "``, the member's name ``"LOCAL"``), while a write
+    stores only the registry's key as the registry spells it, so a typo in
+    code keeps failing loudly.
     """
 
     def __init__(
@@ -150,8 +155,9 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         ``" base "`` and the member's name ``"BASE"`` both prepare as ``base``,
         so a filter finds the rows that store a key whichever spelling it is
         given, and one on a key the choices no longer name finds those rows too;
-        :meth:`get_db_prep_save` refuses to write such a key. Input keeps
-        :meth:`to_python`'s stricter conversion.
+        :meth:`get_db_prep_save` refuses to write either such a key or a
+        spelling other than the registry's. Input keeps :meth:`to_python`'s
+        stricter conversion.
         """
 
         if value in self.empty_values:
@@ -160,27 +166,32 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         return self.choices_enum(key) if self.has_key(key) else key
 
     def get_db_prep_save(self, value: Any, connection: Any) -> Any:
-        """Refuse writing a key outside this field's choices, in every value the field prepares.
+        """Refuse writing anything but a key the choices name, spelled as the registry spells it.
 
-        That is a plain value in an insert, an update, ``QuerySet.update`` or
-        ``bulk_update``, and a ``Value`` whose output field is this one. An
-        expression is not checked: ``F``, ``Subquery``, ``Cast``, ``Case``, or
-        a ``Value`` without this field as its output writes what it computes.
-        The write runs after the save's REBAC gates, so a caller who may not
-        save the row gets that refusal. A stored row saves a key its choices
-        name, even once the registry dropped it; a save that leaves the column
-        out writes nothing here. A history copy records its row's key and a
-        historical migration field keeps whatever it stored.
+        That holds for every value the field prepares: a plain value in an
+        insert, an update, ``QuerySet.update`` or ``bulk_update``, and a
+        ``Value``'s literal, top-level or typed as this field. ``" local "`` and
+        the member's name ``"LOCAL"`` are refused as any unknown key is, though
+        a lookup reads them as ``local`` (:meth:`get_prep_value`). Any other
+        expression (``F``, ``Subquery``, ``Cast``, ``Case``, or a ``Value``
+        inside one) is not checked: it writes what it computes. The write runs
+        after the save's REBAC gates, so a caller who may not save the row gets
+        that refusal. A stored row saves a key its choices name, even once the
+        registry dropped it; a save that leaves the column out writes nothing
+        here. A history copy records its row's key and a historical migration
+        field keeps whatever it stored.
         """
 
+        written = value.value if isinstance(value, models.Value) else value
+        spelled = written.value if isinstance(written, Enum) else written
         if (
             self.refuses_unknown_keys
             and self.base_class is not None
-            and not hasattr(value, "as_sql")
-            and value not in self.empty_values
-            and not self.has_key(value)
+            and not hasattr(written, "as_sql")
+            and written not in self.empty_values
+            and spelled not in tuple(member.value for member in self.choices_enum)
         ):
-            raise ValidationError({self.name: self.invalid_key(value)})
+            raise ValidationError({self.name: self.invalid_key(written)})
         return super().get_db_prep_save(value, connection)
 
     def resolve_class(self, key: Any, *, default: str | None = None) -> type[T]:
