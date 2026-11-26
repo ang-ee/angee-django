@@ -154,6 +154,140 @@ live in code docstrings.
   and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
   answers as it answers any missing actor: `Authentication required.` with
   `UNAUTHENTICATED`.
+
+- `@angee/ui`: **Changed API.** A list resolves its group axes once:
+  `buildColumns` takes them as `BuildColumnsOptions.axes` from the table state
+  (`useResourceViewTableState`), which also gives them to the table's grouping
+  and its headers, instead of resolving `groupStack` a second time from the
+  same inputs. Nothing a list renders or reads changes.
+
+- `@angee/ui`: **Changed API.** A pane list's Order select shows what the
+  headers show and chooses through the header's press rule. It read the first
+  key of the list's state, so a grouped list's select checked the grouping key
+  and an inherited order checked nothing, and a choice set its column alone.
+  `listOrderChoice` (beside `pressedSorting` in `list-body/cell-utils.tsx`,
+  exported with `ListOrderChoice` from `@angee/ui/views/resource-view-list-body`)
+  gives it the first key the rows follow, chooses through `pressedSorting` with
+  the chosen direction on the column the header presses, offers only columns
+  their header can sort whose key no group shares, and changes nothing when the
+  choice is what it shows. `ResourceToolbarProps.sorting` and `onSortingChange`
+  are replaced by `order` (`order={listOrderChoice(table)}`), which the list
+  view's and the collection tree's panes feed from their table.
+
+- `@angee/ui`: one rule for every press on a list header: it never drops the
+  keys a group of the list shares that the order holds. A press on a
+  tie-breaker, on the shown key
+  when it is not the order's last, or on a column the order does not hold set
+  that column alone, so a list grouped in the browser lost its grouping key and
+  reordered its groups. Now `pressedSorting` (the `headerSort` owner in
+  `list-body/cell-utils.tsx`) keeps those keys ahead of the pressed column
+  (`status:asc,title:asc`) and, behind them, is the table's single-sort toggle
+  over the keys the rows follow, a tie-breaker still sorting in its first
+  direction; the groups keep their order on the server, and in the browser
+  wherever the list's order leads with the keys its groups share; a list grouped
+  in the browser by a field its order does not lead with still reorders its
+  groups on a press: by the pressed column where its order does not hold the
+  grouping key, and into the grouping key's own order where the order holds it
+  behind another key, since the press moves it ahead. The URL and a reload keep
+  the order. A grouping
+  column's press turns its key in place and drops the keys the rows follow, as
+  before; other grouping levels' keys now stay at their levels, and its key
+  turns back to ascending rather than being removed. `breaksTies` is no longer
+  exported from the module.
+
+- `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
+  order the list declares, and only an explicit `sort: null` clears it.
+  Applying such a view cleared the order, opening the same shipped view as a
+  route default kept it, and the view showed active under any order. Now
+  applying it sets the order the collection declares under the view's preset
+  (`inheritedResourceViewSorting`: the shipped view's own `sort`, else the
+  list's declared order), opening its preset gives the same, and it shows
+  active only while the list holds that order (`inheritedSorting` on the view
+  context, read by the search model's active items), so a view of the
+  inherited order and an unordered one are never active together. A view saved
+  while the list's view holds no order of its own stores no `sort` and keeps
+  inheriting; a list mounted by `ListView` or `ResourceList` seeds its declared
+  order, so a view saved there stores it; one saved over a cleared order stores
+  `null`. Upgrade, no code needed: a shipped
+  view without a `sort`, picked in the switcher, keeps the list's declared
+  order; a view saved from a cleared order stores `sort: null`; a view without
+  a `sort` is active only on the inherited order; and a view saved before this
+  change from a cleared list now restores the declared order (clear the order
+  and save it again to keep it unordered).
+
+- `@angee/ui`: **Changed contract.** A list keeps its whole sort order in the
+  URL and in a saved view. Both kept only the first key, so on a list grouped
+  by status and ordered by status then rank, a press on Rank turned it
+  descending and the URL cut the order back to status alone: Rank showed "not
+  sorted" and the order was lost on reload, on a shared link and in a saved
+  view. The URL's `sort` now holds every key as a comma list
+  (`sort=status:asc,rank:desc`); a one-key link reads as before, and a link
+  whose order cannot be read (an empty or three-part key, a field the resource
+  cannot sort by, or one named twice) reads nothing and offers the reset. A
+  saved view's `sort`, a shipped view's and `ResourceViewInitialState.sort` are
+  one `{ field, dir }` or a list of them; a list is written only for several
+  keys, so a one-key view is stored byte for byte as before, and a view saved
+  over several keys shows active right after saving and restores them all. The
+  grouping keys stay in the stored order as the table holds it: in the browser
+  their direction orders the groups. The favorites document
+  (`resource-view.favorites`) is version 2: a version 1 document reads and is
+  written as version 2 at its next change, and a tab on an earlier bundle reads
+  a version 2 document as unknown once it receives it (a live update or a
+  reload), so it then shows no saved views and writes none rather than dropping
+  a view whose order it cannot read.
+
+- `@angee/ui`: **Changed contract.** An action or mutation dialog the server
+  refuses says each reason once, where the reason is (a `content` editor's
+  reason excepted). The server joins every reason into the outcome's message (a
+  refused target's message is the verb's summary), and the dialog showed that
+  message on its banner beside the reasons it joins. Now, in a `MutationDialog`
+  fed an action
+  outcome and in an `ActionFormDialog`, typed or schema-driven:
+  a refusal of one field shows its sentence under the field only and the banner
+  names the field ("Please fix the highlighted fields: To.") without repeating
+  it. Focus goes to that field (with several, the first in the dialog's order)
+  when it is a text field of a `MutationDialog` or of a typed-argument
+  `ActionFormDialog`; a schema-driven or definition `ActionFormDialog` holds
+  its fields in a fieldset it disables while the submit runs, so a browser
+  cannot focus a native input there and focus goes to the banner naming the
+  field (a checkbox or switch still takes it). A refusal of a field and a
+  reason about the whole action shows that
+  reason on the banner, without the `__all__:` prefix it carried, beside the
+  line naming the field, and the banner takes focus; a reason about the whole
+  action alone shows once; a refused
+  target shows its reason ("You are not allowed to modify this task.") instead
+  of the verb's summary ("Send failed."); a refusal that carries only a
+  message, a domain refusal in band included, still shows that message. A
+  reason under a field the dialog does not render (a hidden field, a field its
+  `showWhen` hides for the values, a field of another schema branch than the
+  one chosen) shows on the banner once, as `key: reason`; before, an
+  `ActionFormDialog` bound it to the field nobody saw, so only the server's
+  joined message told it, and a `MutationDialog` said it twice. A reason under
+  a name only an `ActionFormDialog`'s `content` editor holds shows under that
+  editor and on the banner. A row's direct submit (`useDescriptorRowActions`
+  with `valuesFromRow`) refused for its fields only toasts under the verb's
+  label, not its id (the id still stands in when the label is not text). The
+  adapter, `actionOutcomeSubmitResult`, keeps field
+  reasons under their keys,
+  moves the `__all__` reasons to the form level as they are, and uses the
+  message only when the outcome carries no reason, the rule `runActionResult`
+  applies; `ActionFormDialog` tells the binder the fields it renders when the
+  answer lands. `ActionFormDefinition.fieldNames` is removed and
+  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.fieldNames`
+  also takes a function of the form's values. Unchanged: a record form's save
+  refusal, which the server already splits into field and form reasons and
+  which never passes through the adapter, and the record bar's toast for a
+  refused verb, titled by the verb's label, whose body is the outcome's
+  reasons, or its message when it carries none.
+  Not in this change: focus reaching a field that is disabled or replaced while
+  the submit runs: a native input of a schema-driven or definition
+  `ActionFormDialog`, and a select, combobox, date, time, tag or relation input
+  in any dialog; nor a member of a rows, object or list field, which has no
+  control of its own to focus. Until then the banner takes focus, which names
+  the field but no longer repeats its reason.
+  Nor inline action forms that claim no field (`useActionForm`'s empty
+  default), whose banner still repeats a field's reason as `key: reason`, nor a
+  raised domain error reading "Request failed." or its code.
 - `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
   Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
   `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so

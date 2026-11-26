@@ -19,19 +19,14 @@ the date's sort, since one group holds many of its values. The new
 share, and a header's `aria-sort` and its sort button read that one rule.
 
 A press on a column that only breaks ties sorts it in its first direction
-(ascending, for a list's columns) as a fresh single-key order, so every other
-key goes, a grouping key's included; the table's toggle would have turned one
-held ascending to descending. On a list grouped in the browser the groups then
-lose the grouping key's order: TanStack orders them by the pressed column's
-value on each group (a text column compares each group's first record, a number
-column the group's sum) and leaves them in the rows' order for any other
-column. A server-grouped list keeps its groups in place, since the groups read
-keeps its own order. The press is decided from the table's state when it happens: while
+(ascending, for a list's columns) as the only key behind the keys a group of the
+list shares, which no press drops, so every other key goes; the table's toggle
+would have turned one held ascending to descending. The press is decided from the table's state when it happens: while
 a read is in flight the list shows the headers of its last settled read, and a
 second press there is the toggle's next step, not the first press again. Every
-other press is the table's own toggle, as before: on a header that shows a sort,
-on a column the order does not hold (its first press sorts ascending), and on a
-grouping column. On a list grouped in the browser, a grouping column's key
+other press is the table's own toggle behind those keys: on a header that shows a sort
+and on a column the order does not hold; a grouping column's press turns its key between
+ascending and descending in place. On a list grouped in the browser, a grouping column's key
 orders the groups, and its press turns them: `[status asc, rank asc]` grouped by
 status becomes `[status desc]`, and the open group comes before the closed one.
 On a server-grouped list the same press sets the same order, but the groups read
@@ -39,10 +34,8 @@ keeps asking for the groups in their own order, so the groups do not move; it
 asks for each group's records in `status desc` alone, so they no longer follow
 the rank tie-breaker, and the Rank header turns to "not sorted".
 
-A press on the order's last key behind a grouping key flips that key in place
-where the list's state holds several keys. A list whose state lives in the URL
-keeps one sort key, as a saved view does, so there the press keeps only the
-grouping key and the pressed column reads "not sorted"; this is unchanged.
+A press on the order's last key behind a grouping key flips that key in place,
+and the URL and a saved view keep the whole order it leaves.
 
 What does not change: the table's sorting holds the whole order, so every read
 asks for each key and a list sorted in the browser keeps its tie-breakers; no

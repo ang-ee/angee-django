@@ -55,13 +55,13 @@ import {
   formWritablePaths,
   hiddenDraftPaths,
   hiddenResetWrites,
-  isFieldControlVisible,
   missingDraftValues,
   mutationData,
   pathWritable,
   recordToValues,
   resolveField,
   seedPreset,
+  shownFields,
   visibleFields,
   type FormValues,
   type LinesSeed,
@@ -717,7 +717,7 @@ export function useFormViewSave({
     // record does not display declares, one the save cannot write and one the record redacts
     // among them.
     const values = form.getValues();
-    const shown = visibleFields(checkFields, values).filter((field) => isFieldControlVisible(field, values));
+    const shown = shownFields(checkFields, values);
     return applyFormErrors(form, result, {
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),

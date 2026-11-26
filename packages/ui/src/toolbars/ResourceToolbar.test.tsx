@@ -37,7 +37,7 @@ test("pane controls retain contributed search, utilities, chips and native radio
   });
   render(<AppRuntimeProvider runtime={{ containers }}><PaneToolbarHost>
     <ResourceToolbar search={search} pager={{ total: 50, page: 1, pageSize: 20 }} pane={{ selector: "Inbox", scope: "People" }}
-      sorting={[{ id: "title", desc: true }]} sortOptions={[{ value: "title", label: "Title" }]} onSortingChange={sort}
+      order={{ shown: { field: "title", desc: true }, offers: () => true, choose: sort }} sortOptions={[{ value: "title", label: "Title" }]}
       utilityActions={<ResourceViewUtilities modelBacked={false}
         value={{ resource: "notes.Note", fields: [], selectable: false, refresh: vi.fn() }} />} />
   </PaneToolbarHost></AppRuntimeProvider>);
@@ -51,7 +51,7 @@ test("pane controls retain contributed search, utilities, chips and native radio
   expect((await screen.findByRole("menuitemradio", { name: "Title, descending" })).getAttribute("aria-checked")).toBe("true");
   expect(screen.getByRole("menuitemradio", { name: "Status" }).getAttribute("aria-checked")).toBe("true");
   fireEvent.click(screen.getByRole("menuitemradio", { name: "Title, ascending" }));
-  expect(sort).toHaveBeenCalledWith([{ id: "title", desc: false }]);
+  expect(sort).toHaveBeenCalledWith("title", false);
 });
 function toolbar(props: Partial<ResourceToolbarProps> = {}) {
   return render(<ResourceToolbar pager={PAGER} search={searchFixture()} onViewChange={vi.fn()} {...props} />);

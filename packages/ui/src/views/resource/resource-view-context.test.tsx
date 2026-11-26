@@ -173,6 +173,26 @@ describe("ResourceViewProvider favorites", () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  test("a version 1 document's views read, and its next write records version 2 with the whole order", async () => {
+    const captured = captureRef();
+    const persist = vi.fn(async (_preferences: RuntimeUserPreferences) => undefined);
+    const old = { id: "favorite:old", label: "Old", sort: { field: "title", dir: "asc" } };
+    renderFavoriteHarness({
+      captured,
+      persist,
+      resource: "notes.Note",
+      preferences: { [RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY]: { version: 1, models: { "notes.Note": [old] } } },
+    });
+    expect(captured.current?.savedFavorites).toEqual([old]);
+    act(() => captured.current?.setSorting([{ id: "status", desc: false }, { id: "title", desc: true }]));
+    act(() => captured.current?.saveFavorite?.("Ordered"));
+    await waitFor(() => expect(persist).toHaveBeenCalledOnce());
+    expect(persist.mock.calls[0]![0][RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY]).toEqual({ version: 2, models: { "notes.Note": [
+      old,
+      { id: "favorite:ordered", label: "Ordered", pageSize: 50, sort: [{ field: "status", dir: "asc" }, { field: "title", dir: "desc" }] },
+    ] } });
+  });
+
   test("rejects malformed entries in the versioned preferences document", () => {
     const captured = captureRef();
     renderFavoriteHarness({

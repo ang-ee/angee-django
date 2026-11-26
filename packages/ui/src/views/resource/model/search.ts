@@ -6,7 +6,7 @@ import { Filter, isResourceViewFilter } from "./filter";
 import { QueryParseError, groupAxisId, groupSpecsFrom } from "@angee/metadata";
 import * as v from "valibot";
 import type { ResourceViewFilter, ResourceViewGroup, ResourceViewInitialState, ResourceViewSort } from "./filter";
-import { createResourceViewState, type ResourceViewState } from "./state";
+import { createResourceViewState, sortingFromResourceViewSort, type ResourceViewState } from "./state";
 import { normalisePageSize } from "../page-size";
 import { isStorageDate } from "../../../widgets/date-format";
 const RESOURCE_VIEW_SEARCH_SHAPE = {
@@ -48,9 +48,9 @@ export function resourceViewStateToSearch(
   if (stableSerialize(state.columnVisibility) !== stableSerialize(base.columnVisibility)) search.columns = JSON.stringify(state.columnVisibility);
   if (state.pagination.pageIndex !== base.pagination.pageIndex) search.page = state.pagination.pageIndex + 1;
   if (state.pagination.pageSize !== defaultResourceViewPageSize(initial)) search.pageSize = state.pagination.pageSize;
-  const sort = state.sorting?.[0];
-  const sortValue = sort ? `${sort.id}:${sort.desc ? "desc" : "asc"}` : "";
-  if (stableSerialize(state.sorting) !== stableSerialize(base.sorting)) search.sort = sortValue;
+  if (stableSerialize(state.sorting) !== stableSerialize(base.sorting)) {
+    search.sort = (state.sorting ?? []).map(({ id, desc }) => `${id}:${desc ? "desc" : "asc"}`).join(",");
+  }
   const filterValue = stableSerialize(state.filter);
   if (Filter.from(state.filter).hasEntries()) {
     if (filterValue !== stableSerialize(base.filter)) search.filter = JSON.stringify(state.filter);
@@ -108,7 +108,7 @@ export function resourceViewSearchToState(
         pageIndex: page === null ? base.pagination.pageIndex : Math.max(0, Math.floor(page) - 1),
         pageSize: normalisePageSize(parseSearchInteger(search.pageSize) ?? base.pagination.pageSize),
       },
-      sorting: isClearedSearchValue(search.sort) ? [] : sort ? [{ id: sort.field, desc: sort.dir === "desc" }] : base.sorting,
+      sorting: isClearedSearchValue(search.sort) ? [] : sort ? sortingFromResourceViewSort(sort) : base.sorting,
       filter: isClearedSearchValue(search.filter) ? {} : parseSearchFilter(search.filter) ?? base.filter,
       groupStack,
       mode: parseSearchMode(search.mode) ?? base.mode,
@@ -160,10 +160,11 @@ export function isClearedSearchValue(value: unknown): boolean {
   return value === "";
 }
 
-export function parseSearchSort(value: unknown): ResourceViewSort | null {
-  if (value == null) return null;
+/** `?sort=` is the whole order, a comma list of `field:asc` or `field:desc`; one key reads as it always has. */
+export function parseSearchSort(value: unknown): readonly ResourceViewSort[] | null {
+  if (value == null || value === "") return null;
   if (typeof value !== "string") throw new QueryParseError("sort", "expected a string");
-  return parseResourceViewSort(value);
+  return value.split(",").map(parseResourceViewSort);
 }
 
 export function parseSearchFilter(value: unknown): ResourceViewFilter | null {
@@ -235,10 +236,11 @@ export function todayCalendarAnchor(): string {
   return format(new Date(), CALENDAR_ANCHOR_FORMAT);
 }
 
-function parseResourceViewSort(value: string): ResourceViewSort | null {
+function parseResourceViewSort(value: string): ResourceViewSort {
   const [field, dir, extra] = value.split(":");
-  if (!value) return null;
-  if (!field || extra !== undefined || (dir !== "asc" && dir !== "desc")) throw new QueryParseError("sort", "expected field:asc or field:desc");
+  if (!field || extra !== undefined || (dir !== "asc" && dir !== "desc")) {
+    throw new QueryParseError("sort", "expected a comma list of field:asc or field:desc");
+  }
   return { field, dir };
 }
 

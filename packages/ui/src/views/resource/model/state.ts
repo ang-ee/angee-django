@@ -1,7 +1,7 @@
 import type { PaginationState, RowSelectionState, SortingState, VisibilityState } from "@tanstack/react-table";
-import { QueryParseError, type ResourceQuery } from "@angee/metadata";
+import { QueryParseError, type QuerySort, type ResourceQuery } from "@angee/metadata";
 import { DEFAULT_CALENDAR_VIEW_MODE, DEFAULT_RESOURCE_VIEW_PAGE_SIZE, type CalendarViewMode, type ResourceViewKind } from "./capabilities";
-import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState } from "./filter";
+import { Filter, type ResourceViewFilter, type ResourceViewGroup, type ResourceViewInitialState, type ResourceViewSort } from "./filter";
 import { normaliseGroupStack, normaliseSourceKeys, todayCalendarAnchor } from "./search";
 import { normalisePageSize } from "../page-size";
 
@@ -39,9 +39,7 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
       pageIndex: Math.max(0, Number.isFinite(initial.page) ? Math.floor(initial.page!) - 1 : 0),
       pageSize: normalisePageSize(initial.pageSize ?? DEFAULT_RESOURCE_VIEW_PAGE_SIZE),
     },
-    sorting: initial.sort === undefined
-      ? initial.sorting
-      : initial.sort ? [{ id: initial.sort.field, desc: initial.sort.dir === "desc" }] : [],
+    sorting: initial.sort === undefined ? initial.sorting : sortingFromResourceViewSort(initial.sort),
     rowSelection: Object.fromEntries(Array.from(initial.selectedIds ?? [], (id) => [id, true])),
     filter: Filter.from(initial.filter).value,
     groupStack,
@@ -50,6 +48,25 @@ export function createResourceViewState(initial: ResourceViewInitialState = {}):
     anchor: initial.anchor ?? todayCalendarAnchor(),
     hiddenSources: normaliseSourceKeys(initial.hiddenSources ?? []),
   };
+}
+
+/** A stored order as native sorting: one key, or the whole order as a list; `null` clears it. */
+export function sortingFromResourceViewSort(sort: ResourceViewSort | readonly ResourceViewSort[] | null): SortingState {
+  return (sort === null ? [] : "field" in sort ? [sort] : sort).map(({ field, dir }) => ({ id: field, desc: dir === "desc" }));
+}
+
+/**
+ * Native sorting as a stored order: one key as its object, as every saved view has stored
+ * it, and several as a list in order; `null` for none.
+ */
+export function resourceViewSortFromSorting(sorting: SortingState): ResourceViewSort | ResourceViewSort[] | null {
+  const sorts = sorting.map(({ id, desc }): ResourceViewSort => ({ field: id, dir: desc ? "desc" : "asc" }));
+  return sorts.length === 0 ? null : sorts.length === 1 ? sorts[0]! : sorts;
+}
+
+/** Native sorting as the resource query's sort keys (`ResourceQuery.sortFrom`), every key in order. */
+export function querySortFromSorting(sorting: SortingState): QuerySort[] {
+  return sorting.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" }));
 }
 
 /**
@@ -70,7 +87,7 @@ export function validateResourceViewState(
     const groupStack = query.groupsFrom(state.groupStack).map((axis) => axis.spec);
     const repeated = appliesRepeated ? undefined : groupStack.find((level) => level.repeated);
     if (repeated) throw new QueryParseError(`groups.${repeated.field}.repeated`, "this list cannot list only repeated values");
-    query.sortFrom(state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" })));
+    query.sortFrom(state.sorting && querySortFromSorting(state.sorting));
     return { ...state, filter, groupStack };
   } catch (error) {
     return { ...state, queryError: error instanceof Error ? error : new Error("Invalid query state.") };
