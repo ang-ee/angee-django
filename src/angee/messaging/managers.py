@@ -28,7 +28,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from email.utils import getaddresses
 from functools import partial, reduce
@@ -103,7 +103,7 @@ from angee.messaging.constants import (
     RECONCILE_BACKOFF,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import header_text
+from angee.messaging.email import SystemChannelBackend, header_text
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -3103,7 +3103,8 @@ _OUTGOING_ACTOR = SubjectRef.of("messaging/system", "outgoing")
 """Non-user attribution for handles messaging lands on nobody's behalf: a handle it creates there has no creator.
 
 A channel's own sender handle is the channel's, not the first composer's; a recipient a
-person types keeps that person as creator, by the handle owner's rule.
+person types keeps that person as creator, by the handle owner's rule; a recipient of
+system mail (:meth:`MessageManager.compose_as_system`) is nobody's.
 """
 
 
@@ -3228,6 +3229,53 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             return self._write_outgoing(
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
+
+    def compose_as_system(
+        self,
+        *,
+        reason: str,
+        to: Sequence[str] = (),
+        cc: Sequence[str] = (),
+        bcc: Sequence[str] = (),
+        subject: str = "",
+        text: str = "",
+        html: str = "",
+    ) -> MessageT:
+        """Write one email on the system channel as named system work, queued for delivery; return the row unbound.
+
+        For mail the framework sends on no person's behalf (Django's own mail,
+        through the system mailer): the caller's gate authorized it, and no grant
+        is consulted. It runs in the caller's context and transaction, through
+        the writer :meth:`compose` uses: the rows record the causing actor as
+        ``created_by`` (empty with none), which grants nothing on them, and join
+        the caller's changeset; a handle it creates, the system sender's or a
+        recipient's, has no creator. It is sent from the system channel's sender,
+        the deployment's ``DEFAULT_FROM_EMAIL``.
+
+        Refusals come before any write, in this order: a blank ``reason``
+        (``ValueError``); compose's checks of the arguments (more recipients than
+        ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
+        ``cc``, ``bcc``, ``subject`` or ``text``); system mail not configured,
+        from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
+        ``channel``), none of which writes a permission audit row; then, after
+        the lookup's own audit row, :class:`SystemChannelMissing` and a channel
+        that is not connected (``OUTBOUND_EMAIL_CHANNEL_MISSING``). Each call is
+        a new message with its own Message-ID.
+        """
+
+        if not reason.strip():
+            raise ValueError("System mail requires a named reason.")
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        outgoing = self._validate_outgoing(
+            channel=None, parent=None, record=None, sender=None, to=to, cc=cc, bcc=bcc, subject=subject,
+            text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
+        )
+        SystemChannelBackend.default_sender()
+        channel = apps.get_model("messaging", "Channel").objects.system_channel()
+        return self._write_outgoing(
+            replace(outgoing, channel=channel), actor=None, fingerprint={}, idempotency_key=None, admit=None,
+            reason=reason,
+        )
 
     def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
         """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
@@ -3372,10 +3420,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         self,
         outgoing: _Outgoing,
         *,
-        actor: Any,
+        actor: Any | None,
         fingerprint: Mapping[str, Any],
         idempotency_key: str | None,
         admit: Callable[[], None] | None,
+        reason: str = "messaging.compose",
     ) -> MessageT:
         """Claim, replay, read what present state decides, admit, write and hand off; it consults no grant.
 
@@ -3384,15 +3433,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         and changed content raises ``CreationKeyConflict``. An answer's envelope
         (:meth:`Message.reply_envelope`) or a new email's sender is read next and
         its addresses checked; a refusal there rolls the claim back. Then
-        ``admit()`` runs, and the rows are written under ``system_context``: the
-        thread, the sender handle, the row with its Message-ID (minted as Django
-        mints one for an email, a client token otherwise) and preview, its title,
-        body and attachment parts, its recipients, the thread's counter, and a
-        queued message's hand-off (:meth:`Message.deliver`, published when the
-        outermost transaction commits).
+        ``admit()`` runs, and the rows are written under ``system_context``
+        named ``reason``: the thread, the sender handle, the row with its
+        Message-ID (minted as Django mints one for an email, a client token
+        otherwise) and preview, its title, body and attachment parts, its
+        recipients, the thread's counter, and a queued message's hand-off
+        (:meth:`Message.deliver`, published when the outermost transaction commits).
+
+        With no ``actor`` it is system work (:meth:`compose_as_system`): its rows
+        take the ambient, causing actor as ``created_by``, or none, every handle
+        lands under the non-user attribution, and the row is returned unbound.
         """
 
-        actor_ref = to_subject_ref(actor)
+        actor_ref = to_subject_ref(actor) if actor is not None else None
         created_by_id = actor_user_id(actor_ref)
         handle_model = apps.get_model("parties", "Handle")
         email = outgoing.kind == self.model.MessageKind.EMAIL
@@ -3430,7 +3483,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 _require_landable(handle_model, (("channel", sender_address[1]),))
             if admit is not None:
                 admit()
-            with system_context(reason="messaging.compose"):
+            with system_context(reason=reason):
                 external_id = make_msgid(domain=DNS_NAME).strip("<>") if email else str(uuid4())
                 if outgoing.parent is not None:
                     thread_id = outgoing.parent.thread_id
@@ -3463,14 +3516,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     apps.get_model("messaging", "Part").objects.attach_files(
                         message, outgoing.attachments, position=position + 1, created_by_id=created_by_id,
                     )
-                rows = self._land_addressees(recipients, created_by_id=created_by_id)
+                # A person's recipients keep that person as their creator; system work's have none.
+                with actor_context(_OUTGOING_ACTOR) if actor is None else nullcontext():
+                    rows = self._land_addressees(recipients, created_by_id=created_by_id)
                 self._write_recipients(message, rows, created_by_id=created_by_id)
                 self.advance_thread(message)
                 if outgoing.queued:
                     message.deliver()
             if idempotency_key is not None:
                 require_changeset().record_created(message)
-        return message.with_actor(actor)
+        return message if actor is None else message.with_actor(actor)
 
     @staticmethod
     def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
