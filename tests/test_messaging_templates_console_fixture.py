@@ -33,8 +33,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
 from django.apps import apps
-from django.db import transaction
+from django.db import connection, transaction
 from django_compose.components import enabled_apps
 from rebac import system_context, to_object_ref, to_subject_ref
 
@@ -45,6 +46,11 @@ from angee.messaging_templates.models import MessageTemplateKind
 from angee.resources.testing.models import Resource
 from tests.conftest import create_platform_admin, create_user
 from tests.test_messaging_templates_console import _narrowed
+
+pytestmark = pytest.mark.skipif(connection.vendor != "sqlite", reason=(
+    "fixtures.recorded.json is the SQLite test host's recording (docs/checks.md); "
+    "a PostgreSQL host offers the similar and notSimilar filters on string fields."
+))
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "src/angee/messaging_templates/web/src/fixtures.recorded.json"
