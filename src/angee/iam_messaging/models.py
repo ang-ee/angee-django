@@ -33,6 +33,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.timestamps import auto_now_stamps
 from angee.base.origins import PublicOriginUnavailable, configured_public_origin
+from angee.messaging_templates.engine import VALUE_NOT_PRINTED
 
 ISSUE_SIGN_IN_LINK = "issue_sign_in_link"
 """The account action that emails a sign-in link, named by its Zed permission on ``auth/user``."""
@@ -68,7 +69,7 @@ SIGN_IN_LINK_NOT_SHOWN_MESSAGE = (
     "edit or delete the deployment's version of the template, or of a block or part it includes."
 )
 """Refusal of a link whose effective template, as the deployment wrote or edited it or a row it includes, does not show
-the link (the template's ``value_not_printed``), code ``link_not_shown``."""
+the link (the template's ``VALUE_NOT_PRINTED``), code ``link_not_shown``."""
 
 SIGN_IN_LINK_NOT_RENDERED_MESSAGE = (
     "The sign-in link's email template could not be rendered for this mail, so no link was sent: preview it to see "
@@ -226,7 +227,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
                 if set(refused) != {NON_FIELD_ERRORS}:
                     raise
                 codes = sorted({str(item.code) for item in refused[NON_FIELD_ERRORS]})
-                hidden = codes == ["value_not_printed"]
+                hidden = codes == [VALUE_NOT_PRINTED]
                 logger.warning(
                     "Refused a sign-in link: the message template %s (%s), row %s, or a block or part it includes, "
                     "%s (%s).",

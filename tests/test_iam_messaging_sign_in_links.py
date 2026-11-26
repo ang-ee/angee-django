@@ -63,6 +63,7 @@ from angee.iam_messaging.models import (
 from angee.iam_messaging.testing.models import SignInLink
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Fragment, Handle, Message, Person
+from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_PRINTED
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
 from tests.conftest import addon_schema, create_platform_admin
@@ -692,9 +693,10 @@ DEBUG_ORIGINS = [
     *(pytest.param(origin, printed, True, id=f"{origin}-debug-on") for origin, printed in DEBUG_ORIGINS),
 ])
 def test_every_public_origin_base_accepts_gives_a_link_the_mail_can_carry(origin, printed, debug):
-    """The template's link rule admits the deployment's own origin whatever its host, so the send's
-    ``value_not_linkable`` cannot come from a link ``url_for`` builds, and the send does not map it. If base's
-    accessor and the rule ever part, this fails, and the send maps that refusal then. No database."""
+    """The template's link rule admits the deployment's own origin whatever its host, so the render's
+    ``VALUE_NOT_LINKABLE`` cannot come from a link ``url_for`` builds (were it to, the action answers it as any
+    refusal of the render, ``link_not_rendered``). If base's accessor and the rule ever part, this fails. No
+    database."""
 
     token = f"usr_probe.{SECRET}"
     with override_settings(ANGEE_PUBLIC_ORIGIN=origin, DEBUG=debug):
@@ -1120,7 +1122,7 @@ def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fa
         row = MessageTemplate.objects.effective("template", SIGN_IN_LINK_TEMPLATE, person=None)
     assert warnings == 2 * [  # the verb's refusal, then the mutation's
         f"Refused a sign-in link: the message template {row.handler.template_name(row.key)} ({row.language}), "
-        f"row {row.public_id}, or a block or part it includes, does not show the link (value_not_printed)."
+        f"row {row.public_id}, or a block or part it includes, does not show the link ({VALUE_NOT_PRINTED})."
     ]
     assert callbacks == []
     assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": SIGN_IN_LINK_NOT_SHOWN_MESSAGE}
@@ -1177,7 +1179,7 @@ def test_a_template_the_render_refuses_is_answered_in_the_actions_words_and_logg
                 and record.levelno == logging.WARNING]
     assert warnings == 2 * [  # the verb's refusal, then the mutation's
         f"Refused a sign-in link: the message template {row.handler.template_name(row.key)} ({row.language}), "
-        f"row {row.public_id}, or a block or part it includes, could not be rendered for it (invalid_values)."
+        f"row {row.public_id}, or a block or part it includes, could not be rendered for it ({INVALID_VALUES})."
     ]
     shown = [text for text in (caplog.text, repr(refusal.value), str(answered.data), str(answered.errors))
              if SIGN_IN_LINK_PATH in text or target.public_id in text or SECRET in text]
