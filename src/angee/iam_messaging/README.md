@@ -90,7 +90,13 @@ and the system channel paused by an administrator
 (`OUTBOUND_EMAIL_CHANNEL_MISSING`, under `channel`).
 
 `sent_at` means recorded and queued, not delivered, and the new link is current
-from then on. Two consequences follow:
+from then on, in the same transaction as its mail. The action says no more than
+that ("Sign-in link queued for the account's email."): the mail's delivery is the
+recorded message's to show, on the system channel, where administrators read it
+as sent, failed or uncertain; the person sees nothing until a mail arrives.
+Sending again issues a new link, which retires the one before it, so the link of
+a mail that failed, or that was uncertain and did arrive, no longer signs in.
+Two consequences follow:
 
 - a link whose delivery later fails is still marked sent, and it replaces the
   link that worked, so the person holds no working link until an administrator

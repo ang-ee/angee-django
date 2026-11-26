@@ -52,6 +52,7 @@ from angee.iam_messaging.models import (
     SIGN_IN_LINK_NO_ADDRESS_MESSAGE,
     SIGN_IN_LINK_NOT_SHOWN_MESSAGE,
     SIGN_IN_LINK_PATH,
+    SIGN_IN_LINK_QUEUED_MESSAGE,
     SIGN_IN_LINK_TEMPLATE,
     SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE,
     SIGN_IN_LINK_UNAVAILABLE_MESSAGE,
@@ -430,7 +431,7 @@ def test_graphql_issue_and_redeem_sign_the_person_in_once(deliverable, iam_admin
         issued = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert result_data(issued)["issue_user_sign_in_link"] == {
         "ok": True,
-        "message": "Sign-in link sent to the account's email.",
+        "message": SIGN_IN_LINK_QUEUED_MESSAGE,
     }
     token = _token(_written(target).body)
     answered = token.partition(".")[2] in str(issued.data)

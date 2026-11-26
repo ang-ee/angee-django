@@ -45,6 +45,9 @@ SIGN_IN_LINK_UNAVAILABLE_MESSAGE = (
 )
 """Refusal of the sign-in link action where :meth:`SignInLink.deliverable` is false; its remedy is the README's."""
 
+SIGN_IN_LINK_QUEUED_MESSAGE = "Sign-in link queued for the account's email."
+"""The action's answer: the link is recorded and its mail queued; delivery is the system channel's to show."""
+
 SIGN_IN_LINK_NO_ADDRESS_MESSAGE = "This account has no valid email address to send a sign-in link to."
 """Refusal of an account whose address system mail cannot be sent to (messaging's ``clean_system_recipient``)."""
 

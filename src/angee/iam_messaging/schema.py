@@ -16,7 +16,7 @@ from angee.graphql.ids import PublicID
 from angee.iam.auth import SESSION_BACKEND, authenticate_once
 from angee.iam.schema import LoginPayload, UserType
 from angee.iam_messaging.auth import sign_in_credentials
-from angee.iam_messaging.models import ISSUE_SIGN_IN_LINK
+from angee.iam_messaging.models import ISSUE_SIGN_IN_LINK, SIGN_IN_LINK_QUEUED_MESSAGE
 
 User = cast(type[Any], get_user_model())
 
@@ -54,11 +54,15 @@ class SignInLinkAccountMutation:
     @strawberry.mutation
     @action_guard("Sending the sign-in link failed.")
     def issue_user_sign_in_link(self, info: strawberry.Info, id: PublicID) -> ActionResult:
-        """Email the account a single-use sign-in link after the account owner's checks; the link is never returned."""
+        """Email the account a single-use sign-in link after the account owner's checks; the link is never returned.
+
+        Success means recorded and queued, not delivered: the answer says so, and the mail's delivery shows on the
+        system channel.
+        """
 
         user = authorized_permission_target(info, User, id, ISSUE_SIGN_IN_LINK)
         user.issue_sign_in_link()
-        return ActionResult(ok=True, message="Sign-in link sent to the account's email.")
+        return ActionResult(ok=True, message=SIGN_IN_LINK_QUEUED_MESSAGE)
 
 
 schemas = {
