@@ -604,9 +604,11 @@ state, owned by `@angee/ui`.
 **Idempotency key (client)** — the request identity a keyed write carries, one
 per **draft**: what one surface writes to one target (a record's chatter box,
 the dialog for one action on one record, a new-record form), named by its
-scope. `useIdempotencyKeys` mints it at the draft's first attempt and keeps it
-for the app runtime until a confirmed answer ends the draft, so every retry of
-it, edited or not, is written once by the server.
+**draft scope**, which one surface holds at a time; a create form's scope
+names the surface hosting it. `useIdempotencyKeys` mints the key at the
+draft's first attempt and keeps it for the app runtime until a confirmed
+answer ends the draft, so every retry of it, edited or not, is written once by
+the server; a conflict (the key spent on other content) starts a new draft.
 
 **Settings place** — the one synthetic destination in every console that groups
 every menu node declared with `group:"platform"`, at any depth. Its rail entry

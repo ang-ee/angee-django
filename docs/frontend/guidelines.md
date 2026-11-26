@@ -1511,13 +1511,24 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - A keyed write (one the server replays by its idempotency key) takes its key
   from [`useIdempotencyKeys`](../../packages/ui/src/lib/idempotency-key.ts):
   one key per draft, named by its scope (the surface and what it writes to),
-  minted at the draft's first attempt and kept until a confirmed answer ends it
-  or the surface starts another draft. What an error says never releases the
-  key: a resend, edited or not, carries it, and the server replays the write or
-  answers `CREATION_KEY_CONFLICT` for an earlier version it wrote, which the
-  caller resolves. A dialog takes its draft as `idempotencyScope`. Never hold a
-  key in component state, and promise "it will not go out twice" only from this
-  page.
+  minted at the draft's first attempt and kept until a confirmed answer ends it,
+  or the person gives the draft up with nothing possibly written. What an error
+  says never releases the key: a resend, edited or not, carries it. The server
+  replays the write for the same content and answers `CREATION_KEY_CONFLICT` for
+  other content under a spent key; the owner then starts a new draft at the
+  next send, and the caller only says what happened. That conflict must reach
+  `send` as a thrown conflict: a caller that words it rethrows it as an
+  `AuthoredEnvelopeError` with the code, never returns it as an answer. A
+  dialog takes its draft as `idempotencyScope`. Never hold a key in component
+  state, and promise "it will not go out twice" only from this page.
+- One draft scope belongs to one surface at a time: two holding it at once
+  would send one key for two writes. A surface that holds a draft says so with
+  `useIdempotencyDraftOwner` (the dialogs, the record form and the composers
+  do), and development fails at once, naming the scope, when two hold it. A
+  create form names its draft under the surface hosting it (`useDraftScope`):
+  the record form provides its own scope, and a relation field's dialog its
+  `relation` slot, so a create opened from another form never shares a draft
+  with it. Name a scope after its target, never after a component.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:

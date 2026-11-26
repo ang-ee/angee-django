@@ -1,6 +1,7 @@
 ---
 "@angee/ui": minor
 "@angee/refine": minor
+"@angee/app": minor
 ---
 
 A write from a dialog or a composer is safe to retry, and a dialog keeps a
@@ -8,27 +9,43 @@ pending write and typed values.
 
 - `useIdempotencyKeys()` (`@angee/ui`, beside `createClientKey`) keeps one
   idempotency key per draft of a keyed write, for the app runtime:
-  `send(scope, fire, confirmed?)`, `discard(scope)` and `restart(scope)`. A
-  draft is named by its scope (the surface and what it writes to); its key is
-  minted at its first attempt and lasts until a confirmed answer ends it, or the
-  surface restarts it, or the person discards it with nothing possibly
-  written. No error releases it, so a resend, edited or not, is written once
-  by the server, which answers `CREATION_KEY_CONFLICT` for an earlier version it
-  wrote; the caller says so and restarts. `useIdempotencyKeyState(scope)`
-  reads what the draft can tell (`{ outcome, uncertain }`), re-rendering only
-  its reader. The store lives on the root `AppRuntimeProvider`, is forgotten on
-  a change of signed-in person (not on entering a preview) and is never
-  persisted, so a retry writes once from this page only. `MutationDialog` takes
-  `idempotencyScope` and passes the key as its submission's third argument; an
-  action takes `idempotencyScope` and its `submit` reads
-  `context.idempotencyKey`. The record form's create, chatter's post,
-  knowledge's note and vault clone, the project from a template, the
-  dashboards' create and duplicate, and the workflow start sit on it.
+  `send(scope, fire, confirmed?)` and `discard(scope)`. A draft is named by its
+  scope (the surface and what it writes to); its key is minted at its first
+  attempt and lasts until a confirmed answer ends it, or the person discards it
+  with nothing possibly written (no attempt lost, none on its way). No error
+  releases it, so a resend, edited or not, is written once by the server, which
+  replays the same content and answers `CREATION_KEY_CONFLICT` for other
+  content under the spent key: the draft's next send then starts a new draft,
+  and the caller only says what happened. `useIdempotencyKeyState(scope)` reads
+  what the draft can tell (`{ outcome, uncertain }`), re-rendering only its
+  reader. The store lives on the root `AppRuntimeProvider`, is forgotten on a
+  change of signed-in person (not on entering a preview) and is never
+  persisted, so a retry writes once from this page only. The record form's
+  create, chatter's post, knowledge's note and vault clone, the project from a
+  template, the dashboards' create and duplicate, and the workflow start sit on
+  it; chatter and notes read again after a conflict, so the earlier version
+  shows.
+- One draft scope belongs to one surface at a time. `useIdempotencyDraftOwner(scope)`
+  holds it while the surface is mounted (an open dialog, the record form's
+  create, a composer that can post), and in development two surfaces holding
+  one scope throw at their next render, naming it; a strict-mode remount or a
+  form replacing its predecessor in one commit holds it once.
+  `useDraftScope(own)` names a surface's scope under the one its host provides
+  (`DraftScopeProvider`): the record form provides its own
+  (`record.create:<provider>:<resource>`, or `record.edit:…:<id>`), and a
+  relation field's dialog its `relation` slot, so a create form opened from
+  another form, down any chain, never shares its draft.
+- `MutationDialog` with `idempotencyScope` (`KeyedMutationDialogProps`) calls
+  its submission with the draft's key as a required `string` third argument;
+  without one (`MutationDialogProps`, as before) it is called with none.
+  `submitMutationDialog` takes the dialog's draft (`MutationDialogDraft`) and a
+  keyed one's key. An action takes `idempotencyScope`, which may
+  answer `null` when the context names no draft (no record to act on), and its
+  `submit` reads `context.idempotencyKey`.
 - `@angee/refine`: `errorFromAuthoredEnvelope` (and so `useAuthoredMutation`'s
   `errorFrom`) throws an `AuthoredEnvelopeError` carrying the envelope's `code`,
-  where it threw a plain `Error`. `hasGraphQLAnswer(error)` says whether a
-  failed request got the server's GraphQL answer. `boundedGraphQLTransportError`
-  keeps `response.errors` only when the server's response held a GraphQL errors
+  where it threw a plain `Error`. `boundedGraphQLTransportError` keeps
+  `response.errors` only when the server's response held a GraphQL errors
   list: a network failure, a cancelled request or a gateway's own page carries
   none.
 - `failedWriteOutcome(error)` (`@angee/refine`) says what a failed write's
@@ -70,9 +87,18 @@ Upgrade:
 - An open `MutationDialog` or typed-args `ActionFormDialog` renders under the
   app's router and `ModalsHost`, as every app page provides both, and says so as
   it opens when one is missing. `createUiTestProviders` (`@angee/ui/testing`)
-  now always provides `ModalsHost`, and `router: true` (or
-  `{ initialEntries }`) renders under a memory router kept in `routers`: a test
-  that opens a real dialog passes `router`.
+  and `ShellPageTestProviders` (`@angee/app/testing`) render the same app shell,
+  `AppShellTestProviders` (`@angee/ui/testing`): both always provide
+  `ModalsHost`, and `router: true` (or `{ initialEntries }`) renders under a
+  memory router (kept in `routers`; `onRouter` receives it): a test that opens
+  a real dialog passes `router`.
+- A keyed `MutationDialog` submission reads its third argument as a `string`;
+  one that asserted it drops the assertion. A caller that turned a
+  `CREATION_KEY_CONFLICT` into an answer rethrows it (an
+  `AuthoredEnvelopeError` with the code and its own words), and one that
+  called `restart` after a conflict drops the call. Two surfaces holding one
+  draft scope at once fail in development: give one its own scope, or nest it
+  under its host with `useDraftScope`.
 - A test that dismissed a dialog mid-submission finds it open; one that
   dismissed it with typed values finds the unsaved-changes question; one that
   read Cancel's `disabled` while it sends finds `aria-disabled="true"`. A
