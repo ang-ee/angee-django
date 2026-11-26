@@ -87,6 +87,7 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
+    attendee_key,
 )
 from angee.calendar.choices import (
     AttendeeResponse,
@@ -735,10 +736,8 @@ class CalendarEventManager(_CalendarEventManagerBase):
 
         Text is trimmed and cut to its column, an untitled event takes
         :data:`UNTITLED_EVENT`, a conference URL that is not a web address is
-        dropped, and attendees are deduplicated on the handle owner's
-        person-matching key (``Handle.normalize_value``), so a provider's two
-        aliases on one invitation are one attendee, as before (whether they should
-        be two, by the spelling key, is open for a ruling), collapsed by
+        dropped, and attendees are deduplicated on
+        :func:`~angee.calendar.backends.attendee_key`, collapsed by
         :meth:`EventAttendee.collapse`, and capped at :data:`ATTENDEES_PER_EVENT`,
         the organizer first. Each attendee keeps the address the source gave; only
         dedup and the projection read that key.
@@ -754,11 +753,10 @@ class CalendarEventManager(_CalendarEventManagerBase):
             URLValidator(schemes=("http", "https"))(url)
         except ValidationError:
             url = ""
-        handles: Any = apps.get_model("parties", "Handle")
         attendees: dict[str, ParsedAttendee] = {}
         for attendee in parsed.attendees:
             address = attendee.address.strip()
-            normalized = handles.normalize_value(handles.Platform.for_value(address), address)
+            normalized = attendee_key(address)
             if not normalized:
                 continue
             first = attendees.get(normalized)
