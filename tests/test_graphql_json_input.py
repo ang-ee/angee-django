@@ -15,12 +15,16 @@ from graphql import build_schema, print_type
 from rebac import system_context
 from strawberry.scalars import JSON
 
-from angee.base.serialization import MAX_JSON_DEPTH, MAX_JSON_MEMBERS
+from angee.agents import schema as agents_schema
+from angee.base.serialization import MAX_JSON_DEPTH, MAX_JSON_MEMBERS, json_bound_violation
+from angee.graphql import schema as graphql_schema
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.webforms import schema as webforms_schema
 from angee.webforms.testing.models import Form, FormVersion
 from tests.conftest import addon_schema
+
+EMBEDDED_VARIABLE = "A JSON literal cannot embed a variable: pass the whole value as a variable."
 
 SAVE_VERSION = """
   mutation($form: ID!, $definition: JSON!) {
@@ -107,8 +111,8 @@ def test_a_deep_json_input_is_refused_before_any_permission_check_or_query(form:
 
 
 @pytest.mark.django_db
-def test_a_variable_repeated_inside_a_literal_counts_each_time_and_is_refused_before_any_query(form: Any) -> None:
-    """References to one variable expand the value a later walk meets, so each counts against the member bound."""
+def test_a_variable_repeated_inside_a_literal_is_refused_before_any_query(form: Any) -> None:
+    """A literal that embeds a variable is refused, however often it repeats it, before the save runs."""
 
     shared = [{"value": f"c{index}", "text": "Choice"} for index in range(20_000)]
     document = SAVE_VERSION.replace(
@@ -119,10 +123,62 @@ def test_a_variable_repeated_inside_a_literal_counts_each_time_and_is_refused_be
 
     assert refused.data is None
     assert refused.errors is not None
-    assert [error.extensions for error in refused.errors] == [{"code": "BAD_USER_INPUT"}]
-    assert f"holds more than {MAX_JSON_MEMBERS} members" in refused.errors[0].message
+    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert EMBEDDED_VARIABLE in refused.errors[0].message
     assert refused_statements == 0
     assert not stored_versions(form)
+
+
+@pytest.mark.django_db
+def test_a_variable_embedded_in_a_literal_on_many_aliased_fields_is_refused_before_any_field_runs() -> None:
+    """Each aliased field would measure, and later expand, the embedded variable again; none runs."""
+
+    aliases = " ".join(f"a{index}: resolve_session_for_view(view: [$v]) {{ agent_id }}" for index in range(2_000))
+    shared = [{"value": f"c{index}"} for index in range(10_000)]
+
+    with ExitStack() as stack:
+        captures = [stack.enter_context(CaptureQueriesContext(connection)) for connection in connections.all()]
+        refused = execute_schema(
+            addon_schema(agents_schema.schemas, "console"), f"query Probe($v: JSON!) {{ {aliases} }}", {"v": shared},
+        )
+
+    assert refused.data is None
+    assert refused.errors is not None
+    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert EMBEDDED_VARIABLE in refused.errors[0].message
+    assert sum(len(capture) for capture in captures) == 0
+
+
+def test_a_whole_variable_on_many_aliased_fields_is_measured_once_and_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    measured: list[object] = []
+
+    def measure(value: Any, **bounds: Any) -> str | None:
+        measured.append(value)
+        return json_bound_violation(value, **bounds)
+
+    monkeypatch.setattr(graphql_schema, "json_bound_violation", measure)
+    shared = [{"value": f"c{index}"} for index in range(10_000)]
+    aliases = " ".join(f"a{index}: echo(value: $v)" for index in range(2_000))
+
+    admitted = echo_schema().execute_sync(f"query Echo($v: JSON!) {{ {aliases} }}", variable_values={"v": shared})
+
+    assert admitted.errors is None
+    assert admitted.data is not None
+    assert len(admitted.data) == 2_000
+    assert admitted.data["a1999"] == shared
+    assert measured == [shared]
+
+
+def test_a_json_literal_that_embeds_a_variable_is_refused_where_the_variable_is() -> None:
+    refused = echo_schema().execute_sync('query Echo($v: JSON!) { echo(value: {kept: "x", sent: [$v]}) }')
+
+    assert refused.data is None
+    assert refused.errors is not None
+    assert [error.formatted for error in refused.errors] == [{
+        "message": EMBEDDED_VARIABLE,
+        "locations": [{"line": 1, "column": 56}],
+        "extensions": {"code": "BAD_USER_INPUT"},
+    }]
 
 
 @pytest.mark.parametrize("nested", [nested_list, nested_object])

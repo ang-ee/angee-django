@@ -135,7 +135,14 @@ def validator(schema: dict[str, Any] | bool) -> Draft202012Validator:
 
 
 def validate(schema: dict[str, Any] | bool | Draft202012Validator, value: Any) -> None:
-    """Raise one Django validation error containing the native ordered messages."""
+    """Raise one Django validation error containing the native ordered messages.
+
+    A value past a JSON bound (``json_bound_violation``) is refused before the
+    validator walks it, as ``validation_issues`` refuses it.
+    """
+    violation = json_bound_violation(value)
+    if violation:
+        raise ValidationError([f"The value {violation}."])
     checked = schema if isinstance(schema, Draft202012Validator) else validator(schema)
     errors = [f"{error.json_path}: {error.message}" for error in checked.iter_errors(value)]
     if errors:

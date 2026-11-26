@@ -463,6 +463,22 @@ def test_field_validation_refuses_a_value_past_the_json_bounds_before_a_keyword_
     }
 
 
+def test_validation_refuses_a_value_past_the_json_bounds_before_a_keyword_walks_it():
+    deep: Any = "answer"
+    for _ in range(MAX_JSON_DEPTH):
+        deep = [deep]
+    schema = {"type": "array", "uniqueItems": True}
+
+    with pytest.raises(ValidationError, match="non-unique"):
+        validate(schema, [deep[0], deep[0]])
+    with pytest.raises(ValidationError) as refused:
+        validate(schema, [deep, deep])
+    assert refused.value.messages == [f"The value nests deeper than {MAX_JSON_DEPTH} levels."]
+    with pytest.raises(ValidationError) as refused:
+        validate(schema, [0] * (MAX_JSON_MEMBERS + 1))
+    assert refused.value.messages == [f"The value holds more than {MAX_JSON_MEMBERS} members."]
+
+
 def test_union_preserves_distinct_local_reference_roots_without_mutation():
     """The same definition name can mean different things in separate alternatives."""
     number = {"$ref": "#/$defs/Value", "$defs": {"Value": {"type": "integer"}}}

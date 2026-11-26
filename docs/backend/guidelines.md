@@ -1806,8 +1806,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
   arrays and objects may enclose a member, and how many members it holds as an
   expanding walk counts them, a repeated reference counted each time. A value
   past either is refused as `BAD_USER_INPUT` while the request is coerced, so
-  no resolver, permission check or query runs for it. `validation_issues`
-  applies the same bounds before a JSON Schema keyword walks a value. A body or
+  no resolver, permission check or query runs for it. A `JSON` literal cannot
+  embed a variable; a client passes the whole value as one variable, which
+  graphql-core coerces once per operation. `validation_issues` and `validate`
+  apply the same bounds before a JSON Schema keyword walks a value. A body or
   WebSocket message too deep for Python's JSON decoder is malformed JSON
   (`decode_json`), answered as Strawberry answers any other. A domain
   bound stays with its owner: `GraphQLSchemas.resource_filter` bounds a stored

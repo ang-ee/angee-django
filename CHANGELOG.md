@@ -25,9 +25,17 @@ live in code docstrings.
     `BAD_USER_INPUT` while the request is coerced, before any resolver,
     permission check or query runs; a literal's refusal names its location.
     Output and the printed SDL are Strawberry's own.
-  - `validation_issues` refuses a value past either bound under `__all__`
-    before a JSON Schema keyword walks it, so a public web form submission
-    whose answers nest too deeply is refused as `invalid_submission`.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
   - What it closes: a caller who was not signed in could fail a GraphQL save
     with an `INTERNAL` error, before its permission check, by sending a value
     nested about a thousand levels deep (strawberry-django-hasura's input
@@ -41,8 +49,9 @@ live in code docstrings.
     addon's own caps admit, a web form definition of 200 questions with 200
     two-language choices each, holds about 200,000 members and fills Django's
     default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
-    resource condition keeps its own depth bound of 12, measured by the same
-    walk.
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
   - A request body or WebSocket message nested too deeply for Python's JSON
     decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
     `decode_json` in `angee.base.serialization`: the GraphQL view answers
