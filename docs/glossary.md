@@ -236,7 +236,8 @@ permission on `auth/user`. IAM owns the set and its shared refusals
 
 **Sign-in link** — a single-use link an administrator emails a person so they
 sign in once without a password; it expires, a newer link retires it, and it
-is never sent to a protected account. Owned by
+is never sent to a protected account. Its mail is the message template
+`iam_messaging.sign_in_link`, sent as **System mail**. Owned by
 [`angee.iam_messaging`](../src/angee/iam_messaging/README.md); a host without
 that addon has none.
 

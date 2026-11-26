@@ -10,6 +10,32 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.iam_messaging`: **Changed behaviour.** The emailed sign-in link is mailed
+  from a message template, as system mail. The addon ships the template
+  `iam_messaging.sign_in_link` in English and Spanish (`install` resources, in the
+  template library's `base` layout), and `SignInLinkManager.issue` picks the row
+  for the person's languages and sends it through
+  `MessageTemplate.objects.send_as_system` under the reason
+  `iam_messaging.sign_in_link.send`: recorded on messaging's system channel and
+  queued in the action's transaction, then the link is stored with `sent_at`.
+  Nothing is written before the last refusal, and the token is held by no
+  on-commit callback: the hard-coded English body, `SIGN_IN_LINK_SUBJECT` and the
+  send after commit (`SignInLink.send`) are removed, and `SignInLinkManager.issue`
+  returns the link alone. The addon now requires `angee-messaging`,
+  `angee-messaging-templates` and `angee-parties`, so a host that enables it
+  enables them and what they require, the brand kit among it. A link is offered
+  where `ANGEE_PUBLIC_ORIGIN` is set and system mail is configured
+  (`SystemChannelBackend.system_mail_configured()`: a transport mailer and a
+  default sender messaging accepts), no longer wherever a default mailer exists;
+  a system channel missing or paused, or the template missing, is refused in band
+  with nothing written (`SYSTEM_CHANNEL_MISSING`, `OUTBOUND_EMAIL_CHANNEL_MISSING`,
+  `template_missing`). `sent_at` means recorded and queued: a link whose delivery
+  later fails, or drops mid-send and stays uncertain, still replaces the link
+  before it. The fragment's comment now says the action's holders read the
+  recorded link on the system channel (revision 3). **Upgrade:** provision loads
+  the template rows (the `install` tier of `resources load`) and syncs the
+  fragment at revision 3; links are offered once the host states
+  `MAILERS.transport` and a valid `DEFAULT_FROM_EMAIL`. No migration.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None)` renders one effective template (the caller picks it for its
@@ -322,7 +348,7 @@ live in code docstrings.
     and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
     and, with the addon, its initial migration. After migrating, the host
     provisions, which syncs the permissions: IAM's schema at revision 32 and,
-    with the addon, its fragment at revision 2.
+    with the addon, its fragment at revision 3.
   - Until the rows are gone, both commands refuse, on django-compose
     0.1.0.dev14, which the framework requires since the composer upgrade below:
     - `makemigrations`, on the databases of the environment that authors the
