@@ -197,7 +197,7 @@ def test_behind_an_external_id_another_spelling_rewrites_nothing_and_a_moved_add
         spelled = Handle.objects.upsert(platform="email", value="ada@example.test", external_id="acct-ada")
         assert (spelled.pk, Handle._base_manager.get(pk=account.pk).value) == (account.pk, "Ada@Example.test")
         assert Handle.history.filter(id=account.pk).count() == versions
-        # Before the key repair reaches the row, its own value decides (``Handle.spells``), in the one read of the id.
+        # Before the key repair reaches the row, its own value decides (``Handle.is_spelling_of``), in one read.
         Handle._base_manager.filter(pk=account.pk).update(spelling_key="", normalized_version=1)
         with CaptureQueriesContext(connection) as queries:
             Handle.objects.upsert(platform="email", value="ADA@example.test", external_id="acct-ada")

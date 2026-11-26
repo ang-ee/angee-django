@@ -276,7 +276,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 and (
                     need.source_message.sender_id in senders
                     # The handle's address in any letter case or domain spelling, as the handle owner lands one.
-                    or any(canonical.spells(address) for address in need.reply_to_addresses())
+                    or any(canonical.is_spelling_of(address) for address in need.reply_to_addresses())
                 )
             ]
             repliers = {need.task_id: need.requester_account_id() for need in requests if need.task_id is not None}

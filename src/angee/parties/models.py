@@ -1242,7 +1242,7 @@ class Handle(
 
     @staticmethod
     def normalize_display_name(value: str) -> str:
-        """Return the comparison key used by cross-platform display-name pooling."""
+        """Return the display-name pooling key: what cross-platform display-name pooling compares."""
 
         return " ".join((value or "").split()).casefold()
 
@@ -1303,7 +1303,7 @@ class Handle(
         live = type(self)._base_manager.filter(platform=self.Platform.EMAIL, spelling_key=key, merged_into__isnull=True)
         return live.exclude(pk=self.pk).order_by("pk").first()
 
-    def spells(self, value: str) -> bool:
+    def is_spelling_of(self, value: str) -> bool:
         """Whether ``value`` is this handle's address: its own ``value``, or on email another letter case or domain
         spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column)."""
 

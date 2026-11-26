@@ -490,7 +490,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         ``external_id`` is the one change of a write-once key
         (``Handle.immutable_fields``) this verb makes, and only when the address
         moved: another spelling of the row's own address rewrites nothing
-        (``Handle.spells``). It never changes ``platform`` or ``external_id``, and
+        (``Handle.is_spelling_of``). It never changes ``platform`` or ``external_id``, and
         it rewrites nothing when another row already holds the new address (a
         spelling merged into the matched row): the call then lands on the matched
         row, which keeps its address. Only a moved address costs that extra read.
@@ -542,7 +542,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if (
             external_id
             and handle.external_id == external_id
-            and not handle.spells(value)
+            and not handle.is_spelling_of(value)
             and (platform, value) not in self.find_identities([(platform, value)])
         ):
             # The source's stable id matched: the address behind it moved, and the row follows it.
@@ -619,7 +619,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         """Return the existing handle :meth:`upsert` lands an identity on, or ``None`` when it would create one.
 
         The ``external_id`` match wins, unless its ``value`` is no spelling of the
-        reported one (``Handle.spells``, computed from the row's ``value``) and the
+        reported one (``Handle.is_spelling_of``, computed from the row's ``value``) and the
         reported address lands on a contact point a different row already owns
         (:meth:`find_identities`): a WhatsApp ``@lid`` handle whose sender resolved
         to an ``+E164`` a phone-JID handle holds. The value *is* the contact point,
@@ -633,7 +633,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if not external_id:
             return self.find_identities([(platform, value)]).get((platform, value))
         handle = self.filter(platform=platform, external_id=external_id).first()
-        if handle is None or not handle.spells(value):
+        if handle is None or not handle.is_spelling_of(value):
             owner = self.find_identities([(platform, value)]).get((platform, value))
             if owner is not None:
                 return owner
@@ -1854,7 +1854,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         An address more parties are linked to is shared (a switchboard, a family
         line) and left out, as is one that a ``shared`` handle has (a sender the
         shared-sender providers name, :meth:`shared_sender_ids`). The candidate
-        addresses are found in SQL first, grouped by platform and normalized value,
+        addresses are found in SQL first, grouped by platform and person-matching key,
         and only their links are read. ``addresses`` narrows the read to those.
         Each link names the source it is attributed to (:class:`SamePersonLink`).
         """
@@ -3926,7 +3926,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return lookup
 
     def lapsed_holders(self, platform: str, values: Collection[str]) -> dict[str, set[Any]]:
-        """Return, by normalized value, the keys of the trashed people who still hold an address of ``platform``.
+        """Return, by person-matching key, the keys of the trashed people who still hold an address of ``platform``.
 
         Such a person (trashed, never merged away) has an applied, current
         statement of a handle of the address in some spelling or alias: a restore makes
@@ -4371,7 +4371,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return set(asserted.filter(handle__platform=email).values_list("handle__normalized_value", flat=True))
 
     def contact_handle_ids(self, contacts: Iterable[ParsedContact | ParsedOrganization]) -> set[Any]:
-        """Return the handles the contacts' emails and phones name, every spelling or alias of each (by person key).
+        """Return the handles the contacts' emails and phones name, every spelling or alias of each.
 
         A provider's alias of an address (a Gmail dot or plus-tag) is a row of its
         own, and a row the key repair has not reached may still spell another's
@@ -4589,7 +4589,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         a blank one keeps the handle's); the Party row is the assertion's evidence.
         An email alias of ``through``'s address (its person-matching key) lands on that handle, the one an
         adoption found ``party`` by, never on a second row of another alias.
-        An email or phone whose ``(platform, normalized value)`` is in ``claims``
+        An email or phone whose ``(platform, person-matching key)`` is in ``claims``
         is someone else's (:meth:`_contested_addresses`): it is stated as a claim for review, below
         ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
         handle's display fields stay its holder's. ``replaces`` are the links of
@@ -4643,7 +4643,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> tuple[set[tuple[str, str]], list[tuple[Any, Handle | None]]]:
         """Return the contact's addresses ``source`` may only claim for ``person``, and the parties they name instead.
 
-        Claims are ``(platform, normalized value)`` pairs. A phone number names one
+        Claims are ``(platform, person-matching key)`` pairs. A phone number names one
         account as an email does (``Handle.identifies_account``): one another live
         party is linked to (:meth:`same_person_links` with ``every_address``: a
         holding, or a standing statement by a source that states its own record)
