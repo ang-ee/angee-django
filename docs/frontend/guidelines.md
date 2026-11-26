@@ -1502,8 +1502,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
   [`DialogForm`](../../packages/ui/src/fragments/DialogForm.tsx) owns that rule
-  for every form dialog: it refuses dismissal while `pending` and asks before
-  discarding while `dirty`; a dialog never guards its own `onOpenChange`.
+  for every form dialog: it refuses dismissal while `pending` (Close and Cancel
+  stay focusable and say why), asks before discarding while `dirty`, and asks
+  before a route move while it holds either, through the unsaved-changes guard;
+  its owner's `holdsWork` says no once an accepted submit moves on. A dialog
+  never guards its own `onOpenChange`, and an answer that lands after it went
+  away is still reported (`useLateAnswerReport`).
 - A keyed write (one the server replays by its idempotency key) takes its key
   from [`useIntentKeys`](../../packages/ui/src/lib/intent-key.ts): one key per
   write intent for the page's lifetime, released by the write's answer and kept

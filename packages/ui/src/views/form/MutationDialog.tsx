@@ -2,7 +2,7 @@ import * as React from "react";
 import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { stringValue as wireStringValue, type AuthoredMutateOptions } from "@angee/refine";
 
-import { DialogForm } from "../../fragments/DialogForm";
+import { DialogForm, type DialogFormFooterContext } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { Button } from "../../ui/button";
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
@@ -17,7 +17,7 @@ import {
   markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
-import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
+import { useLateAnswerReport } from "./late-answer";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
@@ -149,7 +149,8 @@ interface MutationDialogBaseProps<
   /** Controlled visibility. Omit with `trigger` to let the dialog own it. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /** Native trigger; when supplied, the dialog owns open state and focus pairing. */
+  /** Native trigger; when supplied, the dialog owns open state and focus pairing. Passing none
+   *  while the dialog is open keeps it open and mounted until it closes. */
   trigger?: React.ReactElement;
   title: React.ReactNode;
   description?: React.ReactNode;
@@ -186,11 +187,11 @@ interface MutationDialogBaseProps<
  * else in the dialog. Every call it makes for its caller (`validate`, `onSubmit`,
  * `mutation`) gets the `AuthoredMutateOptions` that keep refine from toasting it besides.
  * While a submission runs the dialog cannot be dismissed, and dismissing typed values asks
- * first (`DialogForm`); a route move asks first in both cases (the unsaved-changes guard).
- * A submission accepted after the dialog went away still toasts its message; only the
- * dialog's own close and `onSubmitted` are skipped. Holding typed values it asks through the
- * app's `ModalsHost`, and holding typed values or a running submission it guards route moves
- * through the router; every app page provides both.
+ * first; a route move asks first in both cases (`DialogForm`, so it renders under the app's
+ * router and `ModalsHost`, as every app page does). An answer that lands after the dialog went
+ * away is still reported (`useLateAnswerReport`); only the dialog's own close and `onSubmitted`
+ * are skipped. A `trigger`-owned dialog stays mounted while open when its owner keeps rendering
+ * it without a trigger: hide the trigger by passing none, not by unmounting the dialog.
  * @kind surface
  */
 export function MutationDialog<
@@ -274,6 +275,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   });
   const session = React.useRef(0);
   const submittingRef = React.useRef(false);
+  // Set when an accepted submit closes the dialog: its `onSubmitted` may move on in the same tick,
+  // before the close renders, and the dialog then holds nothing a move would lose.
+  const acceptedRef = React.useRef(false);
   const openRef = useLatestRef(open);
   const previousOpen = React.useRef(open);
   React.useEffect(() => {
@@ -281,6 +285,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       previousOpen.current = open;
       session.current += 1;
       submittingRef.current = false;
+      acceptedRef.current = false;
       form.reset(initialDialogValues(fields, initialValues));
       form.clearErrors();
     }
@@ -298,14 +303,18 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const dirty = form.formState.isDirty;
-  const holdsWork = React.useCallback(() => openRef.current && (form.formState.isDirty || submittingRef.current), [form, openRef]);
-  const footer = (dismiss: () => void) => (
+  const holdsWork = React.useCallback(
+    () => openRef.current && !acceptedRef.current && (form.formState.isDirty || submittingRef.current),
+    [form, openRef],
+  );
+  const reportLate = useLateAnswerReport();
+  const footer = ({ dismiss, dismissRefusal }: DialogFormFooterContext) => (
     <>
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        disabled={submitting}
+        disabledReason={dismissRefusal}
         onClick={dismiss}
       >
         {cancelLabel ?? t("dialog.cancel")}
@@ -336,6 +345,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     const submittedSession = session.current;
     form.clearErrors();
     let accepted: { result: Extract<FormSubmitResult<TResult>, { status: "ok" }>; values: TValues } | undefined;
+    // Whether the write was sent: an answer that lands after the dialog went away is still reported.
+    let sent = false;
+    const current = () => mounted.current && session.current === submittedSession;
     try {
       const submittedValues = parseValues(collected);
       const validation = await validate?.(submittedValues, SURFACE_RENDERS_FAILURE);
@@ -346,11 +358,12 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         return;
       }
       const submission = (mutation ? { mutation, mutationResult } : { onSubmit }) as MutationDialogSubmission<TValues, TResult, TData>;
+      sent = true;
       const result = await submitMutationDialog(submission, submittedValues, errorOptions.fallback);
-      if (!mounted.current || session.current !== submittedSession) {
-        // The dialog went away while the write ran: an accepted write is still reported, so
-        // nobody writes it again unaware; its close and `onSubmitted` are the dialog's own.
-        if (result.status === "ok" && result.message) toast.success({ title: result.message });
+      if (!current()) {
+        // The dialog went away while the write ran: its answer is still reported, so nobody
+        // writes it again, or trusts it went out, unaware; its close and `onSubmitted` are the dialog's own.
+        reportLate(result, errorOptions.fallback);
         return;
       }
       if (applyFormErrors(form, result, errorOptions)) {
@@ -359,14 +372,17 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       }
       accepted = { result, values: submittedValues };
     } catch (cause) {
-      if (mounted.current && session.current === submittedSession) {
+      if (current()) {
         applyFormErrors(form, formSubmitError(cause, errorOptions.fallback), errorOptions);
         await allowRootErrorRetry();
+      } else if (sent) {
+        reportLate({ thrown: cause }, errorOptions.fallback);
       }
     } finally {
       if (session.current === submittedSession) submittingRef.current = false;
     }
     if (accepted) {
+      if (closeOnSubmit) acceptedRef.current = true;
       if (accepted.result.message) toast.success({ title: accepted.result.message });
       if (closeOnSubmit) onOpenChange(false);
       onSubmitted?.(accepted.result.data, accepted.values);
@@ -386,6 +402,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       onOpenChange={onOpenChange}
       pending={submitting}
       dirty={dirty}
+      holdsWork={holdsWork}
       title={title}
       description={description}
       footer={footer}
@@ -394,20 +411,12 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       placement={placement}
       trigger={trigger}
     >
-      {open && (dirty || submitting) ? <LeaveGuard holdsWork={holdsWork} /> : null}
       <ActionFormProvider {...{ ...form, registerFieldValidation }}>
         <DescriptorFieldList fields={fields} unregisterHidden />
       </ActionFormProvider>
       <ErrorBanner messages={errors} />
     </DialogForm>
   );
-}
-
-/** A route move would unmount the dialog: while it holds typed values or a running submission, the
- * move asks first, with the unsaved-changes guard. Mounted only then, so a dialog at rest needs no router. */
-function LeaveGuard({ holdsWork }: { holdsWork: () => boolean }): null {
-  useUnsavedChangesNavigationGuard({ isDirty: true, isDirtyNow: holdsWork, readOnly: false });
-  return null;
 }
 
 /** A dialog's errors for the rules its fields fail, each field's found by `fieldRuleErrors` and

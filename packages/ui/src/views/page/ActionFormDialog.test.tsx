@@ -24,6 +24,8 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
 import { useState, type ReactElement } from "react";
 import { useFormContext, useFormState } from "react-hook-form";
@@ -1124,6 +1126,50 @@ describe("ActionFormDialog", () => {
     // The accepted close is the dialog's own: it asks nothing, though a value was picked.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("an accepted action whose onSucceeded navigates moves on, asking nothing, though a value was typed", async () => {
+    const seen: { router?: ReturnType<typeof useRouter> } = {};
+    function Following(): ReactElement {
+      const navigate = useNavigate();
+      seen.router = useRouter();
+      const [open, setOpen] = useState(true);
+      return <>
+        <ActionFormDialog action={registerReviewAction(vi.fn().mockResolvedValue({ ok: true, message: "Review registered." }))}
+          context={context} open={open} onOpenChange={setOpen} onSucceeded={() => { void navigate({ to: "/reviews" }); }} />
+      </>;
+    }
+    renderDialog(registerReviewAction(vi.fn()), undefined, undefined, { dialog: <Following /> });
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), { target: { value: "500" } });
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(seen.router!.history.location.pathname).toBe("/reviews"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("an accepted action whose dialog went away while it ran still toasts its message", async () => {
+    let answer!: (outcome: { ok: boolean; message: string }) => void;
+    const submit = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { answer = resolve; }));
+    function Pane(): ReactElement {
+      const [shown, setShown] = useState(true);
+      return <>
+        <button type="button" onClick={() => setShown(false)}>Leave the pane</button>
+        {shown ? <Harness action={registerReviewAction(submit)} /> : null}
+      </>;
+    }
+    renderDialog(registerReviewAction(submit), undefined, undefined, { dialog: <Pane /> });
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Leave the pane", hidden: true }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => { answer({ ok: true, message: "Review registered." }); });
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
   });
 
   test("Cancel with typed values asks first, and Stay keeps them", async () => {

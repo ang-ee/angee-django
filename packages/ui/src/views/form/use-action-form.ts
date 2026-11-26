@@ -10,6 +10,7 @@ import {
   SURFACE_RENDERS_FAILURE, applyFormErrors, formErrorsFromForm, serverErrorsFromForm, formSubmitError, type FormSubmitResult,
 } from "./validation-errors";
 import { useFieldValidation, type FieldValidationForm } from "./use-field-validation";
+import { useLateAnswerReport, type LateAnswer } from "./late-answer";
 
 /** RHF owns collection and validation; the callback owns the authored submission. */
 export interface UseActionFormOptions<TValues extends FieldValues, TData = unknown, TSubmitValues extends FieldValues = TValues> {
@@ -57,6 +58,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
 ): UseActionFormResult<TValues, TSubmitValues> {
   const t = useUiT();
   const toast = useToast();
+  const reportLate = useLateAnswerReport();
   const { registerFieldValidation, validateFields } = useFieldValidation();
   const form = useForm<TValues, unknown, TSubmitValues>({
     defaultValues: options.defaultValues, resolver: options.resolver, ...(options.mode ? { mode: options.mode } : {}),
@@ -84,9 +86,16 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
         if (validateEditors()) return;
         const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
+        let thrown: LateAnswer | undefined;
         const result = await Promise.resolve().then(() => submit(collected, SURFACE_RENDERS_FAILURE))
-          .catch((cause) => formSubmitError(cause, fallback));
-        if (!mounted.current) return;
+          .catch((cause) => { thrown = { thrown: cause }; return formSubmitError(cause, fallback); });
+        if (!mounted.current) {
+          // The form went away while the write ran: its answer is still reported, so nobody
+          // writes it again, or trusts it went out, unaware.
+          if (thrown) reportLate(thrown, fallback);
+          else if (result.status !== "ok" || toastSuccess) reportLate(result, fallback);
+          return;
+        }
         if (applyFormErrors(form, result, { fieldNames: fieldNames ?? [], fallback })) return;
         if (toastSuccess && result.message) toast.success({ title: result.message });
         succeeded = true;
@@ -94,7 +103,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
       }, () => { validateEditors(); })();
     } finally { submittingRef.current = false; }
     return succeeded;
-  }, [clearErrors, form, handleSubmit, preview, t, toast, validateFields]);
+  }, [clearErrors, form, handleSubmit, preview, reportLate, t, toast, validateFields]);
   const clearFieldError = React.useCallback((name: string) => clearErrors(name as Path<TValues>), [clearErrors]);
   return {
     form: enhancedForm, run,

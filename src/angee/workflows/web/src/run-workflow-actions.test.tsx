@@ -25,6 +25,8 @@ vi.mock("@tanstack/react-router", async (original) => ({
 
 const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://record-workflows", queryClientConfig: { defaultOptions: { queries: { retry: false } } },
+  // Under a router, as an app page is: a form dialog guards route moves while it holds work.
+  router: true,
 });
 type Workflows = DocumentType<typeof StartableRecordWorkflowsDocument>;
 const offered: Workflows = { workflow: [

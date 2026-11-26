@@ -100,6 +100,9 @@ function ActionArgsDialog({
   // or not), while a value that breaks a rule from the opening disables the submit silently until
   // its field is edited. A resolver reports constraints at submit.
   const validateConstraints = !definition?.resolver;
+  // Set when an accepted submit closes the dialog: `onSucceeded` may move on in the same tick,
+  // before the close renders, and the dialog then holds nothing a move would lose.
+  const accepted = React.useRef(false);
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
@@ -121,6 +124,7 @@ function ActionArgsDialog({
       return result && "status" in result ? result : actionOutcomeSubmitResult(result);
     },
     onSuccess: (_values, outcome) => {
+      if (!inline) accepted.current = true;
       onSucceeded?.(outcome);
       if (!inline) onOpenChange(false);
     },
@@ -172,10 +176,11 @@ function ActionArgsDialog({
       onOpenChange={onOpenChange}
       pending={submitting}
       dirty={form.formState.isDirty}
+      holdsWork={() => !accepted.current && (form.formState.isDirty || form.formState.isSubmitting)}
       title={action.label}
       size={definition?.size}
-      footer={(dismiss) => <>
-        <Button type="button" variant="ghost" size="sm" onClick={dismiss} disabled={submitting}>
+      footer={({ dismiss, dismissRefusal }) => <>
+        <Button type="button" variant="ghost" size="sm" onClick={dismiss} disabledReason={dismissRefusal}>
           {t("dialog.cancel")}
         </Button>
         {submitButton}

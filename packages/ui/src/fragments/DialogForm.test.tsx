@@ -5,7 +5,7 @@ import { useState, type ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import { PaneRow, PaneRows } from "../communication/pane-list";
-import { ModalsHost } from "../feedback";
+import { createUiTestProviders } from "../testing";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { RadioGroupItem, RadioGroupRoot } from "../ui/radio-group";
@@ -398,15 +398,17 @@ describe("where the primary pointer is coarse", () => {
 });
 
 describe("a dismissal", () => {
-  /** A dialog whose open state its owner holds, with `pending` and `dirty` as given and a Cancel through `dismiss`. */
-  function OwnedDialog({ pending = false, dirty = false }: { pending?: boolean; dirty?: boolean }) {
+  // The app's providers a dialog that holds work renders under: the router it guards and the ModalsHost it asks through.
+  const { Provider } = createUiTestProviders({ router: true });
+  /** A dialog whose open state its owner holds, with `pending`, `dirty` and `holdsWork` as given and a Cancel through `dismiss`. */
+  function OwnedDialog({ pending = false, dirty = false, holdsWork }: { pending?: boolean; dirty?: boolean; holdsWork?: () => boolean }) {
     const [open, setOpen] = useState(true);
-    return <DialogForm open={open} onOpenChange={setOpen} title="Edit" pending={pending} dirty={dirty}
-      footer={(dismiss) => <button type="button" onClick={dismiss}>Cancel</button>}>
+    return <DialogForm open={open} onOpenChange={setOpen} title="Edit" pending={pending} dirty={dirty} holdsWork={holdsWork}
+      footer={({ dismiss }) => <button type="button" onClick={dismiss}>Cancel</button>}>
       <input aria-label="Name" />
     </DialogForm>;
   }
-  const renderOwned = (props: { pending?: boolean; dirty?: boolean }) => render(<ModalsHost><OwnedDialog {...props} /></ModalsHost>);
+  const renderOwned = (props: { pending?: boolean; dirty?: boolean; holdsWork?: () => boolean }) => render(<OwnedDialog {...props} />, { wrapper: Provider });
   const question = "Unsaved changes - leave without saving?";
 
   test.each(["Escape", "Close", "Cancel"] as const)("by %s is refused while a submission is pending", async (by) => {
@@ -443,10 +445,70 @@ describe("a dismissal", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  test("one question at a time: a second Escape while it asks raises no second question", async () => {
+    renderOwned({ dirty: true });
+    const dialog = await screen.findByRole("dialog", { name: "Edit" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await screen.findByRole("alertdialog", { name: question });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Edit" })).toBeTruthy();
+  });
+
+  test("Stay returns focus to the field the person was in", async () => {
+    renderOwned({ dirty: true });
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    await waitFor(() => expect(document.activeElement).toBe(name));
+    fireEvent.keyDown(name, { key: "Escape" });
+    fireEvent.click(await screen.findByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(name));
+  });
+
+  test("a dirty form whose owner says it holds no work (an accepted submit moving on) closes without asking", async () => {
+    renderOwned({ dirty: true, holdsWork: () => false });
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit" })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("a dialog that guards its work, opened outside ModalsHost, says so as it opens, not at the first keystroke", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() => render(<DialogForm open onOpenChange={() => undefined} title="Edit" dirty={false}>
+        <input aria-label="Name" />
+      </DialogForm>)).toThrow("useConfirm must be used under ModalsHost.");
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("a dialog that guards its work, opened outside the router, says so as it opens", () => {
+    const { Provider: Unrouted } = createUiTestProviders();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(() => render(<DialogForm open onOpenChange={() => undefined} title="Edit" dirty={false}>
+        <input aria-label="Name" />
+      </DialogForm>, { wrapper: Unrouted })).toThrow("useUnsavedChangesNavigationGuard must be used under the app's router.");
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("guard: a dialog that does not guard its work needs neither: it opens and closes outside both", async () => {
+    render(<EditDialog><input aria-label="Name" /></EditDialog>);
+    await openDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   test("guard: a close the owner makes itself through `open` is no dismissal: a dirty form closes without asking", async () => {
-    const owned = (open: boolean) => <ModalsHost><DialogForm open={open} onOpenChange={() => undefined} title="Edit" dirty>
+    const owned = (open: boolean) => <Provider><DialogForm open={open} onOpenChange={() => undefined} title="Edit" dirty>
       <input aria-label="Name" />
-    </DialogForm></ModalsHost>;
+    </DialogForm></Provider>;
     const view = render(owned(true));
     await screen.findByRole("dialog", { name: "Edit" });
     view.rerender(owned(false));

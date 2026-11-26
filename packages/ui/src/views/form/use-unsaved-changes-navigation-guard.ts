@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useBlocker, type ShouldBlockFn } from "@tanstack/react-router";
+import { useBlocker, useRouter, type ShouldBlockFn } from "@tanstack/react-router";
 
 import { useConfirm } from "../../feedback";
 import { useUiT } from "../../i18n";
@@ -17,12 +17,15 @@ export function pathnameChanges({ current, next }: UnsavedChangesMove): boolean 
   return current.pathname !== next.pathname;
 }
 
-/** Ask whether to discard unsaved content, with the shared question: Leave resolves true, Stay false. */
-export function useUnsavedChangesQuestion(): () => Promise<boolean> {
+/** Ask whether to leave what a form holds, with the shared question: Leave resolves true, Stay
+ * false. Asked while a submission runs, it says that the submission goes on, not that changes
+ * are unsaved. */
+export function useUnsavedChangesQuestion(): (whilePending?: boolean) => Promise<boolean> {
   const confirm = useConfirm();
   const t = useUiT();
-  return React.useCallback(() => confirm({
-    title: t("form.unsavedLeaveTitle"),
+  return React.useCallback((whilePending = false) => confirm({
+    title: t(whilePending ? "form.pendingLeaveTitle" : "form.unsavedLeaveTitle"),
+    ...(whilePending ? { body: t("form.pendingLeaveBody") } : {}),
     cancel: t("form.stay"),
     confirm: t("form.leave"),
     danger: true,
@@ -30,7 +33,8 @@ export function useUnsavedChangesQuestion(): () => Promise<boolean> {
 }
 
 /** Owns both in-app and before-unload protection for a dirty editable form. A move
- * `leaves` calls leaving asks first; by default every move leaves.
+ * `leaves` calls leaving asks first; by default every move leaves. It renders under the app's
+ * router and `ModalsHost`, and says so at mount when either is missing.
  * @owner FormView
  */
 export function useUnsavedChangesNavigationGuard({
@@ -38,22 +42,29 @@ export function useUnsavedChangesNavigationGuard({
   isDirtyNow,
   readOnly,
   leaves,
+  pendingNow,
 }: {
   isDirty: boolean;
+  /** Whether the form holds what a move would lose now, read live when a move is asked. */
   isDirtyNow: () => boolean;
   readOnly: boolean;
   /** Whether a route move abandons the form; omit for every move. `pathnameChanges` keeps search moves. */
   leaves?: (move: UnsavedChangesMove) => boolean;
+  /** Whether a submission runs now: the question then says it goes on, not that changes are unsaved. */
+  pendingNow?: () => boolean;
 }): () => Promise<boolean> {
   const ask = useUnsavedChangesQuestion();
+  if (!useRouter({ warn: false })) {
+    throw new Error("useUnsavedChangesNavigationGuard must be used under the app's router.");
+  }
   const requestLeave = React.useCallback(async () => {
     // Read the live store, not the captured render value. A successful save resets
     // the form (isDirty → false) and navigates in the same tick, before the React
     // re-render flushes — a stale `true` here would wrongly block the post-save
     // redirect with a phantom "unsaved changes" prompt.
     if (readOnly || !isDirtyNow()) return true;
-    return ask();
-  }, [ask, isDirtyNow, readOnly]);
+    return ask(pendingNow?.() ?? false);
+  }, [ask, isDirtyNow, pendingNow, readOnly]);
 
   const shouldBlockFn = React.useCallback<ShouldBlockFn>(async (move) =>
     (leaves?.(move) ?? true) && !(await requestLeave()), [leaves, requestLeave]);
