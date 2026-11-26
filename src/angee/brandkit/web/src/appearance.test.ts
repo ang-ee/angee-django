@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { themes as angeeThemes } from "@angee/theme-angee/themes";
+import { themes as fyltrThemes } from "@angee/theme-fyltr/themes";
+import { themes as ledgerThemes } from "@angee/theme-ledger/themes";
 import { themes as stockThemes } from "@angee/theme-stock/themes";
 import {
   createThemeCustomizationOptions,
@@ -13,6 +15,8 @@ import { brandKitOptions } from "./appearance";
 
 const stock = stockThemes[0]! as ThemeDefinition<unknown>;
 const angee = angeeThemes[0]! as ThemeDefinition<unknown>;
+const fyltr = fyltrThemes[0]! as ThemeDefinition<unknown>;
+const ledger = ledgerThemes[0]! as ThemeDefinition<unknown>;
 
 /** A customisable theme of a deployment's own, with an authored palette and authored tokens beside it. */
 const house = defineTheme({
@@ -55,6 +59,16 @@ const BUILD = {
 
 const valueOf = (options: ReturnType<typeof brandKitOptions>) => parseThemeCustomization(options?.value);
 
+// `createApp` asks the kit about a theme only when its options accept the host appearance source.
+test.each([
+  { theme: stock, accepts: true },
+  { theme: angee, accepts: true },
+  { theme: fyltr, accepts: false },
+  { theme: ledger, accepts: false },
+])("the shipped theme $theme.id accepts the host appearance source: $accepts", ({ theme, accepts }) => {
+  expect(theme.options?.acceptsHostAppearanceSource).toBe(accepts);
+});
+
 describe("brandKitOptions: what each kind of host wears", () => {
   test.each([
     { host: "the Angee theme with the shipped Angee kit", theme: angee, kit: SHIPPED_KIT },
@@ -85,7 +99,6 @@ describe("brandKitOptions: what each kind of host wears", () => {
     expect(tokens.shared).toMatchObject(theme.tokens.shared);
   });
 
-  // The architect's ruling on build options changes this row and the one branch in `brandKitOptions`.
   test("a build that states options keeps its font, radius, density, elevation and logo, and wears the kit's colours", () => {
     const options = brandKitOptions(stock, CLAY, BUILD);
     expect(valueOf(options)).toEqual({ ...CLAY, font: "inter", radius: "soft", density: "compact", elevation: "flat", logo: "brand" });

@@ -247,15 +247,18 @@ const LOGO_KEYS = new Set(["theme", "brand", "accent", "mono", "star", "corner"]
  * Build the bounded option contract shared by customizable theme addons.
  * Defaults describe the authored base; equal values emit no overrides, so the
  * base theme remains byte-for-byte authoritative until a user changes a field.
+ * `acceptsHostAppearanceSource` defaults to true; `defineTheme` refuses a non-boolean.
  */
 export function createThemeCustomizationOptions(defaults, configuration = {}) {
   const normalizedDefaults = parseThemeCustomization(defaults);
   const version = configuration.version ?? 1;
   if (!Number.isSafeInteger(version) || version < 1) throw new TypeError("Theme customization version must be a positive integer.");
+  const { acceptsHostAppearanceSource = true } = configuration;
   return {
     version,
     defaults: normalizedDefaults,
     capability: "palette-customization",
+    acceptsHostAppearanceSource,
     parse: parseThemeCustomization,
     resolve(value) {
       return resolveThemeCustomization(parseThemeCustomization(value), normalizedDefaults);
@@ -582,6 +585,7 @@ function assertThemeOptions(id, options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) throw new TypeError(`Theme ${id} options must be an object.`);
   if (!Number.isSafeInteger(options.version) || options.version < 1) throw new TypeError(`Theme ${id} options version must be a positive integer.`);
   if (options.capability !== undefined && options.capability !== "palette-customization") throw new TypeError(`Theme ${id} options capability is unsupported.`);
+  if (options.acceptsHostAppearanceSource !== undefined && typeof options.acceptsHostAppearanceSource !== "boolean") throw new TypeError(`Theme ${id} options acceptsHostAppearanceSource must be a boolean.`);
   if (typeof options.parse !== "function" || typeof options.resolve !== "function") throw new TypeError(`Theme ${id} options must provide parse and resolve functions.`);
   options.parse(options.defaults);
 }
