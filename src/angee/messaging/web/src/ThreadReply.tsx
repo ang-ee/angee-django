@@ -27,6 +27,8 @@ import { StreamComposer } from "./StreamComposer";
 const BOX_RENDERS_FAILURE = { errorNotification: false } as const;
 
 export interface ThreadReplyProps {
+  /** The conversation the box writes in: its draft (`replyScope`) whichever of its emails it answers. */
+  threadId: string;
   /** The email answered; the answer goes on its thread, to its Reply-To, from its channel. */
   parent: ThreadTranscriptRow;
   /** Which route moves abandon the unsent text: those ask first, every other move keeps it. */
@@ -42,13 +44,13 @@ export interface ThreadReplyProps {
 /**
  * The reply box docked under a conversation: the quoted email, the channel it goes out from, and
  * the text, which takes focus. Send (Ctrl/Cmd+Enter) answers the email through `compose_message`
- * with the draft's idempotency key (`replyScope`), so sending again from this page writes it
- * once; a resolved answer is toasted by `useActionResultRun`, a failure is told from what it says
+ * with the conversation's draft key (`replyScope`), so sending again from this page writes it
+ * once, to whichever of its emails the box answers now; a resolved answer is toasted by `useActionResultRun`, a failure is told from what it says
  * (`failedWriteOutcome`): a lost answer, a version written earlier and an attempt that may already
  * have been sent in the box's live note, a refusal in a toast, an unsent request by the
  * connection boundary alone. Under a preview the box is read-only and sends nothing.
  */
-export function ThreadReply({ parent, leaves, onSent, onShowLatest, onClose }: ThreadReplyProps): React.ReactElement {
+export function ThreadReply({ threadId, parent, leaves, onSent, onShowLatest, onClose }: ThreadReplyProps): React.ReactElement {
   const t = useMessagingT();
   const uiT = useUiT();
   const toast = useToast();
@@ -56,7 +58,7 @@ export function ThreadReply({ parent, leaves, onSent, onShowLatest, onClose }: T
   const preview = useRuntimeViewAs();
   const readOnly = Boolean(preview.viewAs || preview.pending);
   const keys = useIdempotencyKeys();
-  const scope = replyScope(parent.id);
+  const scope = replyScope(threadId);
   const state = useIdempotencyKeyState(scope);
   const compose = useComposeMessage();
   const [text, setText] = React.useState("");
@@ -66,7 +68,7 @@ export function ThreadReply({ parent, leaves, onSent, onShowLatest, onClose }: T
   const textRef = useLatestRef(text);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const author = senderDisplayName(parent.sender, t("message.author"));
-  useIdempotencyDraftOwner(readOnly ? null : scope, `the reply box of message ${parent.id}`);
+  useIdempotencyDraftOwner(readOnly ? null : scope, `the reply box of conversation ${threadId}`);
   const requestLeave = useUnsavedChangesNavigationGuard({
     isDirty: text.trim() !== "" || sending,
     isDirtyNow: () => textRef.current.trim() !== "" || sendingRef.current,

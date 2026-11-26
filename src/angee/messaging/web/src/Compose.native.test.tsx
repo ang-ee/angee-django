@@ -398,6 +398,21 @@ test("Reply on another email retargets the box and keeps its text; Cancel asks f
   await waitFor(() => expect(document.activeElement).toBe(within(target).getByRole("button", { name: /^Reply to / })));
 });
 
+test("after a lost answer, Reply on another email keeps the conversation's draft: the note stays, the same key goes, and a conflict is told", async () => {
+  const { sends } = mount({ surface: "transcript", seat: "ana", lose: true });
+  let box = await openReply("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  await within(box).findByText(ui("form.answerLostResend"));
+  box = await openReply("Who can see this?");
+  expect(within(box).getByRole("status").textContent).toBe(ui("form.answerLostResend"));
+  submitReply(within(box).getByRole("textbox", { name: M["composer.messageLabel"] }) as HTMLTextAreaElement);
+  // The first reply was written: the same key with another parent is the conflict, told; nothing is written twice.
+  expect(await within(box).findByText(word("compose.sentEarlier"))).toBeTruthy();
+  const [first, second] = sends();
+  expect(second).toMatchObject({ parent: MESSAGE.unaddressed, idempotency_key: first?.idempotency_key });
+});
+
 test("a request refused before it was sent is left to the connection boundary: no note, no toast", async () => {
   const { fixture } = mount({ surface: "transcript", seat: "ana" });
   const box = await openReply("Please add me.");

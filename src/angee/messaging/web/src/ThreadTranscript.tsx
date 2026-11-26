@@ -186,6 +186,7 @@ export function ThreadTranscript({
       {reply && replying ? (
         <ThreadReply
           key={threadId}
+          threadId={threadId}
           parent={replying}
           leaves={reply.leaves}
           onShowLatest={showLatest}

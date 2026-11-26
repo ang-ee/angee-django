@@ -20,9 +20,13 @@ const COMPOSE_MODELS = ["messaging.Message", "messaging.Thread"] as const;
 /** The draft of the New message dialog: one new email at a time, from its first Send until it is written. */
 export const NEW_EMAIL_SCOPE = "messaging.new-email";
 
-/** The draft of an answer to the message `parent`, from its first Send until it is written. */
-export function replyScope(parent: string): string {
-  return `messaging.reply:${parent}`;
+/**
+ * The draft of the reply box of the conversation `thread`, from its first Send until it is written:
+ * Reply on another email of it retargets the same draft, so a resend after a lost answer carries the
+ * same key, and `compose` answers an earlier version it wrote with a conflict rather than writing twice.
+ */
+export function replyScope(thread: string): string {
+  return `messaging.reply:${thread}`;
 }
 
 export type ComposeVariables = AuthoredVariables<typeof MessagingComposeMessage>;
