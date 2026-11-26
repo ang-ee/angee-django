@@ -649,9 +649,8 @@ live in code docstrings.
     kit as the default takes the flag from the previous one, and the default can
     be neither unticked nor deleted, on any delete path. A conditional unique
     constraint refuses a second default written past the save.
-    `BrandKit.objects.default()` and the console's `default_brand_kit` query
-    return it, or `None` before any kit exists, after a write past `save()` and
-    `clean()`, and for an actor who reads no kit.
+    `BrandKit.objects.default()` returns it, or `None` before any kit exists,
+    after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
     layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
     `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's
