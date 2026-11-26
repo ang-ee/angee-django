@@ -1464,9 +1464,11 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
         """Email ``token``'s link to the account and record the send.
 
         The message is rendered here and handed to Django's default mailer as
-        plain text; neither it nor the token is stored or logged. Once the
-        mailer accepts it, ``sent_at`` is stamped, which makes it the account's
-        current link, and ``sign_in_link_sent`` fires. A mailer failure
+        plain text, once the issuing transaction commits. Where that mailer
+        records mail, the link is stored with it, and "accepted" means recorded;
+        neither the link nor the token is logged. Once the mailer accepts it,
+        ``sent_at`` is stamped, which makes it the account's current link, and
+        ``sign_in_link_sent`` fires. A mailer failure
         propagates and leaves ``sent_at`` empty, so the previously sent link
         keeps working.
         """
