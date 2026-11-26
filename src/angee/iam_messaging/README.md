@@ -75,7 +75,9 @@ The link is system mail ([messaging's System mail](../messaging/README.md#system
 under the reason `iam_messaging.sign_in_link.send` and records it on messaging's
 system channel, queued, in the action's transaction, with the administrator who
 asked as the cause. Messaging delivers it through the transport mailer once that
-transaction commits; Django's default mailer is not on its path.
+transaction commits; Django's default mailer is not on its path. The account
+stores its address lower case; the handle owner lands it on the existing handle
+of that address in any letter case, and the mail carries that handle's spelling.
 
 A link is offered only where it can be built and its mail sent, read from
 settings alone (`SignInLink.deliverable()`): the deployment's public origin

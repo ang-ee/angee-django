@@ -59,7 +59,7 @@ from angee.iam_messaging.models import (
 )
 from angee.iam_messaging.testing.models import SignInLink
 from angee.messaging.tasks import deliver_message
-from angee.messaging.testing.models import Fragment, Message, Person
+from angee.messaging.testing.models import Fragment, Handle, Message, Person
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
 from tests.conftest import addon_schema, create_platform_admin
@@ -183,12 +183,12 @@ def _person(username: str, **attrs: Any) -> Any:
 
 
 def _mails(target: Any) -> list[Any]:
-    """The system mail recorded to ``target``'s address, oldest first."""
+    """The system mail recorded to ``target``'s address in any letter case, oldest first."""
 
     with system_context(reason=READ):
         return list(
             Message._base_manager.select_related("channel")
-            .filter(recipients__handle__value=target.email).order_by("pk"),
+            .filter(recipients__handle__value__iexact=target.email).order_by("pk"),
         )
 
 
@@ -969,6 +969,49 @@ def test_a_link_whose_insert_fails_after_its_mail_leaves_no_mail_and_nothing_que
     assert callbacks == [] and _mails(target) == []
     with system_context(reason=READ):
         assert not SignInLink._base_manager.filter(user=target).exists()
+
+
+# ---------- an address's spelling ----------
+
+
+def _handles(address: str) -> list[str]:
+    with system_context(reason=READ):
+        return list(Handle._base_manager.filter(value__iexact=address).values_list("value", flat=True))
+
+
+def test_an_account_whose_address_a_handle_spells_otherwise_is_mailed_at_the_handles_spelling(
+    deliverable, iam_admin, sent,
+):
+    """The account stores its address lower case; the handle owner lands it on the handle as first spelled."""
+
+    with system_context(reason="tests.iam_messaging.sign_in_link.handle"):
+        Handle.objects.upsert(platform=Handle.Platform.EMAIL, value="Guest.Case@Example.COM")
+    target = _person("guest.case")
+    assert target.email == "guest.case@example.com"
+    token = sent(target, iam_admin)
+    assert _handles(target.email) == ["Guest.Case@Example.COM"]
+    assert _written(target).to == ["Guest.Case@Example.COM"]
+    assert _redeem(token) == target
+
+
+def test_two_accounts_whose_addresses_differ_only_in_case_share_one_handle_and_keep_their_own_links(
+    deliverable, iam_admin, sent,
+):
+    """Only a write past the user model's lower-casing (``update()``) stores a second spelling; the person-email
+    constraint compares stored values, so both accounts exist. Pinned, not decided: which key an account's address
+    and a handle share is the architect's question."""
+
+    first = _person("guest-twin")
+    second = _person("guest-twin-two")
+    with system_context(reason="tests.iam_messaging.sign_in_link.spelling"):
+        User._base_manager.filter(pk=second.pk).update(email="Guest-Twin@Example.com")
+    second.refresh_from_db()
+    first_token, second_token = sent(first, iam_admin), sent(second, iam_admin)
+    assert _handles(first.email) == ["guest-twin@example.com"]
+    assert [message.pk for message in _mails(first)] == [message.pk for message in _mails(second)]
+    assert _written(second).to == ["guest-twin@example.com"]
+    assert _redeem(second_token) == second
+    assert _redeem(first_token) == first
 
 
 # ---------- what is refused, before anything is written ----------
