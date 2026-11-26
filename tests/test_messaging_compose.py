@@ -347,6 +347,25 @@ def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, s
         assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
 
 
+def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_so(desk: Any, settings: Any) -> None:
+    """Admitted, as inbound mail stores such senders, and refused at delivery with the reason a person can act on."""
+
+    settings.MAILERS = MAILERS
+    typed = Message.objects.compose(channel=desk, to=["jörg@example.test"], text="Hi.", actor=desk.owner, queued=True)
+    answer = Message.objects.compose(
+        parent=_receive(desk, "utf8-local", sender="jörg@example.test"), text="Answer.", actor=desk.owner, queued=True,
+    )
+    for message in (typed, answer):
+        assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["status"] == "failed"
+        with system_context(reason="tests.messaging.compose.utf8_local"):
+            message.refresh_from_db()
+            assert message.local_metadata["delivery_error"] == (
+                "jörg@example.test cannot be delivered: this mail transport cannot carry an address whose part "
+                "before the @ is outside ASCII. Send to another address of this contact."
+            )
+    assert not mail.outbox
+
+
 def test_a_mail_sent_from_a_records_chatter_is_answered_and_its_answer_answered_by_email(
     desk: Any, settings: Any,
 ) -> None:

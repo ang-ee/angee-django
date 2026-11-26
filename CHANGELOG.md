@@ -99,7 +99,9 @@ live in code docstrings.
     domain in ASCII (IDNA) form and the stored address keeps what was typed.
     **Known limit:** an address whose local part is outside ASCII is still
     admitted and written, and its delivery fails, as no transport here speaks
-    SMTPUTF8. A channel's own sender handle is landed with no
+    SMTPUTF8; the stored reason names the address and says so, where it said
+    "The email could not be rendered.". A rendering failure the backend states
+    itself (an attachment that is unavailable) keeps its own reason too. A channel's own sender handle is landed with no
     creator, under a non-user attribution (`messaging/system:outgoing`): the
     first person to compose on a channel no longer holds read, write and delete
     on it, so cannot rename, re-address or delete the desk's sender. A recipient

@@ -74,7 +74,8 @@ written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
 one whose local part is outside ASCII is admitted but cannot be delivered, as
-no transport here speaks SMTPUTF8. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
+no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
+naming the address. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
 addresses across `to`, `cc`
 and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)

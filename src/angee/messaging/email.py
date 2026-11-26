@@ -112,6 +112,9 @@ class AnymailEmailChannelBackend(ChannelBackend):
             raise IntegrationError("Outbound email delivery is not configured.")
         try:
             email = self.email_message(message)
+        except IntegrationError:
+            # Rendering has not entered the transport; its own reason is the one to keep.
+            raise
         except Exception as error:
             # Rendering has not entered the transport, so it cannot have sent mail.
             raise IntegrationError("The email could not be rendered.") from error
@@ -308,11 +311,16 @@ def _mailbox(name: str, address: str) -> str:
     another name or address. An internationalised domain is written in its ASCII
     (IDNA) form, as Django writes one in the headers it builds, so every
     transport is given an address it can carry; the stored address keeps what
-    was typed. A local part outside ASCII still cannot be written: no transport
-    here speaks SMTPUTF8.
+    was typed. A local part outside ASCII cannot be written, as no transport here
+    speaks SMTPUTF8: the delivery fails with that reason.
     """
 
     local, at, domain = address.rpartition("@")
+    if at and not local.isascii():
+        raise IntegrationError(
+            f"{address} cannot be delivered: this mail transport cannot carry an address whose part before "
+            "the @ is outside ASCII. Send to another address of this contact.",
+        )
     if at and not domain.isascii():
         address = f"{local}@{punycode(domain)}"
     return formataddr((header_text(name), address))
