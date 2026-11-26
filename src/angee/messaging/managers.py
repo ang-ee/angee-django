@@ -94,12 +94,14 @@ from angee.messaging.backends import (
     OutboundEmailNotConfigured,
     PairingActionError,
     ParsedPart,
+    SystemChannelMissing,
 )
 from angee.messaging.constants import (
     DELIVERY_TASK_EXPIRES,
     MAX_DELIVERY_ATTEMPTS,
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
+    SYSTEM_CHANNEL_XREF,
 )
 from angee.messaging.email import header_text
 from angee.messaging.events import message_ingested
@@ -356,6 +358,21 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
     ingested and forecasts the same scope for the delete-confirmation preview — one
     owner for both the destructive path and its forecast, so the preview cannot drift.
     """
+
+    def system_channel(self) -> ChannelT:
+        """Return the system channel, messaging's install row, read as named system work; its one lookup.
+
+        Elevated, because the ledger loads its target through the actor-scoped
+        manager and administrators alone read the row; the row serves system work
+        and is never handed to a viewer. Absent, it refuses with
+        :class:`SystemChannelMissing` (``SYSTEM_CHANNEL_MISSING``, under ``channel``).
+        """
+
+        with system_context(reason="messaging.system_channel"):
+            try:
+                return apps.get_model("resources", "Resource").objects.resolve(SYSTEM_CHANNEL_XREF, model=self.model)
+            except ValueError as error:
+                raise SystemChannelMissing from error
 
     def create_disconnected(
         self,

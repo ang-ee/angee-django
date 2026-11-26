@@ -76,6 +76,18 @@ class OutboundEmailChannelMissing(DomainError, ValidationError):
         )
 
 
+class SystemChannelMissing(DomainError, ValidationError):
+    """The system channel's install row is absent: resources never loaded, or the row deleted until the next load."""
+
+    code = "SYSTEM_CHANNEL_MISSING"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(self, {"channel": ValidationError(
+            "The system channel is not installed. Run `manage.py resources load` (provision runs it).",
+            code=self.code,
+        )})
+
+
 class DeliveryUncertain(IntegrationError):
     """A provider may have accepted an effect; retry needs reconciliation or acknowledgement.
 

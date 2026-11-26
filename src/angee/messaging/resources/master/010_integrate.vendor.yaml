@@ -1,0 +1,6 @@
+# The vendor of channels that speak plain email; adopted by slug, so an existing
+# row is linked instead of duplicated.
+- xref: email
+  slug: email
+  display_name: Email
+  website_url: https://www.rfc-editor.org/rfc/rfc5322
