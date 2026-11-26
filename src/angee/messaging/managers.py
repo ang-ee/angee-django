@@ -4610,7 +4610,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
-            # Record chatter and public posts share the native COMMENT kind.
+            # Public posts and record chatter are COMMENTs, except an email its own threading
+            # headers placed on a record's chatter; the kind is decided here once (a re-sync keeps it).
             "message_type": (
                 self.model.MessageKind.COMMENT
                 if thread is not None and (
