@@ -196,7 +196,7 @@ export const enMessagingMessages: Record<string, string> = {
   "compose.send": "Send",
   "compose.sending": "Sending…",
   "compose.notSent": "Message not sent.",
-  "compose.sentEarlier": "An earlier version of this message was already sent. Send again to send this one as a new message.",
+  "compose.sentEarlier": "A message you sent earlier from this page was already sent. Send again to send this one.",
   "compose.mayAlreadyBeSent": "An earlier attempt may already have been sent: check your messages before writing it again.",
   "compose.replyMayAlreadyBeSent": "An earlier attempt may already have been sent: check the conversation before writing it again.",
   "compose.reply": "Reply",

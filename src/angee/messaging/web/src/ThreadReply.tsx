@@ -122,6 +122,7 @@ export function ThreadReply({ threadId, parent, leaves, onSent, onShowLatest, on
     onClose();
   };
 
+  // A lost answer says so itself; an earlier attempt that may have been sent is said after any later answer.
   const note = state?.outcome === "unconfirmed" ? uiT("form.answerLostResend")
     : state?.outcome === "conflict" ? t("compose.sentEarlier")
       : mayAlreadyBeSent(state) ? t("compose.replyMayAlreadyBeSent") : null;

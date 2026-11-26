@@ -65,10 +65,10 @@ export function composeOutcome(data: ComposeData | undefined): FailedWriteOutcom
 }
 
 /**
- * Whether an earlier attempt of a draft may already have been sent, beside what its last answer
- * said: an attempt's answer was lost, and the last one was neither that lost answer (told by
- * itself) nor a conflict (whose earlier version was sent).
+ * Whether an earlier attempt of a draft may already have been sent: an attempt's answer was lost,
+ * and no conflict has since said that it was. It holds across a closed and reopened surface, where
+ * the lost answer's own words did not stay.
  */
 export function mayAlreadyBeSent(state: IdempotencyKeyState | null): boolean {
-  return Boolean(state?.uncertain) && state?.outcome !== "unconfirmed" && state?.outcome !== "conflict";
+  return Boolean(state?.uncertain) && state?.outcome !== "conflict";
 }

@@ -229,6 +229,28 @@ test("closed and opened again after a lost answer, the dialog's draft keeps its 
   expect(second?.idempotency_key).toBe(first?.idempotency_key);
 });
 
+test("reopened after a lost and dismissed mail, New message says an earlier attempt may already have been sent, and another mail is told the truth", async () => {
+  const { sends } = mount({ surface: "new-message", seat: "ana", lose: true });
+  let dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  await banner(dialog);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: word("compose.newMessage") })).toBeNull());
+  dialog = await openNewMessage();
+  expect(within(dialog).getByText(word("compose.mayAlreadyBeSent")).closest("[role=status]")).toBeTruthy();
+  address(dialog, word("compose.to"), "ana");
+  fill(dialog, { text: "Hello." });
+  await send(dialog);
+  // Another mail under the kept key: the conflict, in words true for it; the note gives way to them.
+  expect(await within(dialog).findByText(word("compose.sentEarlier"))).toBeTruthy();
+  expect(within(dialog).queryByText(word("compose.mayAlreadyBeSent"))).toBeNull();
+  const [first, second] = sends();
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+});
+
 test("an edited send after a lost one is told the earlier version was sent, and the next send is a new draft", async () => {
   const { sends } = mount({ surface: "new-message", seat: "ana", lose: true });
   const dialog = await openNewMessage();
