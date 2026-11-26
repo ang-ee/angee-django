@@ -5,26 +5,25 @@ from __future__ import annotations
 
 import ast
 import email.policy
-import importlib.util
+from contextlib import nullcontext
 from email import message_from_bytes
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import PermissionDenied, actor_context, current_actor, system_context
+from rebac import PermissionDenied, actor_context, anonymous_actor, current_actor, is_sudo, system_context
 from rebac.models import PermissionAuditEvent
 
 from angee.brandkit.testing.models import BrandKit
 from angee.jobs.enqueue import celery_app
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
-from angee.messaging.managers import ChannelManager
+from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Handle, Message, Part, Recipient
 from angee.messaging_templates.testing.models import MessageTemplate
@@ -246,8 +245,11 @@ def _paused(channel: Any) -> None:
     ],
 )
 def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_nothing_written(
-    mailing: None, plain: Any, settings: Any, sent: list[str], state: str | None, to: str, key: str, code: str,
+    mailing: None, plain: Any, settings: Any, sent: list[str], django_capture_on_commit_callbacks: Any,
+    state: str | None, to: str, key: str, code: str,
 ) -> None:
+    """Nothing written, and nothing handed to delivery: the on-commit callbacks run, and none was registered."""
+
     del mailing, plain
     if state != "missing":
         channel = _install()
@@ -256,9 +258,9 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
     if state == "unconfigured":
         settings.MAILERS = {}
     row = _greeting()
-    with _refused(ValidationError, key=key, code=code):
+    with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError, key=key, code=code):
         _send(row, {"name": "Ana", "title": "Welcome"}, to=to)
-    assert sent == []
+    assert (callbacks, sent) == ([], [])
 
 
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
@@ -273,27 +275,44 @@ def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) 
 # ---------- under which context it renders and records ----------
 
 
-def test_with_no_actor_at_all_it_renders_every_row_and_records_the_message_with_no_creator(
-    system_channel: Any,
+@pytest.mark.parametrize("caller", ["no actor", "anonymous"])
+def test_without_a_signed_in_caller_the_documented_recipe_renders_and_records_under_one_reason(
+    system_channel: Any, caller: str,
 ) -> None:
+    """No actor, or the anonymous subject an unauthenticated request carries: the render still reads every row.
+
+    The recipe the verb documents, run as written: the lookup inside the caller's own named work, then the send,
+    so the template rows are elevated under the caller's reason alone, never the library's own.
+    """
+
     del system_channel
-    with system_context(reason="tests.messaging_templates.send.load"):
-        row = MessageTemplate.system_queryset().effective("template", _greeting().key, language="en")
-    assert current_actor() is None
-    message = _send(row, {"name": "Ana", "title": "Welcome"})
+    key, audits = _greeting().key, _audits()
+    with nullcontext() if caller == "no actor" else actor_context(anonymous_actor()):
+        with system_context(reason=REASON):
+            row = MessageTemplate.objects.effective("template", key, person=None)
+        assert (current_actor() is None) is (caller == "no actor")
+        message = _send(row, {"name": "Ana", "title": "Welcome"})
     assert _stored(message)[0] == "Welcome from Acme"
     with system_context(reason="tests.messaging_templates.send.read"):
         assert Message._base_manager.get(pk=message.pk).created_by_id is None
+    written = _audits()[len(audits):]
+    assert written[:2] == [(PermissionAuditEvent.KIND_SUDO_BYPASS, REASON)] * 2
+    assert not any(reason.startswith("messaging_templates.") for _, reason in written), written
 
 
-def test_a_signed_in_caller_is_the_creator_of_what_it_causes_and_reads_none_of_it(system_channel: Any) -> None:
+def test_a_signed_in_caller_is_the_creator_of_what_it_causes_and_reads_none_of_it(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The bypass is the render's alone: the message is recorded in the caller's context, which reads nothing."""
 
     del system_channel
     member = create_user("messaging-templates-send-cause")
     row = _loaded(member)
+    elevated: list[bool] = []
+    _recording(monkeypatch, MessageManager, "compose_as_system", lambda manager, **values: elevated.append(is_sudo()))
     with actor_context(member):
         message = _send(row, {"name": "Ana", "title": "Welcome"}, to="new-reader@example.test")
+    assert elevated == [False]
     with system_context(reason="tests.messaging_templates.send.read"):
         stored: Any = Message._base_manager.select_related("thread").get(pk=message.pk)
         parts = list(Part._base_manager.filter(message=stored))
@@ -343,22 +362,22 @@ def test_it_renders_in_the_rows_language_and_the_projects_time_zone(system_chann
     assert text == "Hola, Ana.\n\nA las 12:30.\n\nHasta pronto."
 
 
-STATEMENTS = 169
-"""Statements one send to a known address executes after a warm one: the measured count is the ceiling."""
+def test_a_send_costs_its_render_compose_as_system_and_one_row_fact_read(system_channel: Any) -> None:
+    """The verb repeats nothing: a send to a known address executes the statements of its render, of
+    ``compose_as_system`` for the same payload, and the one structural read of the row's side."""
 
-
-def test_a_send_to_a_known_address_executes_a_fixed_number_of_statements(system_channel: Any) -> None:
     del system_channel
-    row = _greeting()
-    addresses = ("first@example.test", "second@example.test")
-    for address in addresses:
-        _send(row, {"name": "Ana", "title": "Welcome"}, to=address)
-    counts = []
-    for address in addresses:
-        with CaptureQueriesContext(connection) as queries:
-            _send(row, {"name": "Ana", "title": "Welcome"}, to=address)
-        counts.append(len(queries))
-    assert counts[0] == counts[1] <= STATEMENTS, counts
+    row, values, address = _greeting(), {"name": "Ana", "title": "Welcome"}, "known@example.test"
+    _send(row, values, to=address)
+    with CaptureQueriesContext(connection) as render, system_context(reason=REASON):
+        rendered = row.render(values)
+    with CaptureQueriesContext(connection) as compose:
+        Message.objects.compose_as_system(
+            reason=REASON, to=[address], subject=rendered.subject, text=rendered.plain_text, html=rendered.html,
+        )
+    with CaptureQueriesContext(connection) as send:
+        _send(row, values, to=address)
+    assert len(send) == len(render) + len(compose) + 1, (len(send), len(render), len(compose))
 
 
 # ---------- server code only ----------
@@ -371,28 +390,23 @@ def _names(source: str) -> set[str]:
     }
 
 
-def _schema_sources() -> dict[str, str]:
-    """Every installed app's ``schema`` module and every module of the GraphQL addon, by name, as source."""
+SYSTEM_SEND_CALLERS: frozenset[str] = frozenset()
+"""The source modules that may call ``send_as_system``, each named system work, each added here in a reviewed change.
 
-    found: dict[str, str] = {}
-    for app_config in apps.get_app_configs():
-        try:
-            spec = importlib.util.find_spec(f"{app_config.name}.schema")
-        except ModuleNotFoundError:
-            spec = None
-        if spec is not None and spec.origin:
-            found[spec.name] = Path(spec.origin).read_text(encoding="utf-8")
-    graphql = Path(apps.get_app_config("graphql").path)
-    found.update({str(path): path.read_text(encoding="utf-8") for path in sorted(graphql.rglob("*.py"))})
-    return found
+It checks no permission of its own, so a module a person's request reaches with that person's row, address or
+values (a resolver, an MCP tool, a view, a task fed by a request) is no caller of it."""
 
 
-def test_no_graphql_schema_reaches_the_system_send() -> None:
-    """It checks no permission of its own, so no resolver may call it."""
+def test_only_the_listed_modules_call_the_system_send() -> None:
+    """Every module under ``src`` and ``examples`` that names ``send_as_system`` in code, not prose, is listed."""
 
-    scanned = _schema_sources()
-    assert "angee.messaging_templates.schema" in scanned
-    assert [name for name, source in scanned.items() if "send_as_system" in _names(source)] == []
+    root = Path(__file__).resolve().parents[1]
+    callers = {
+        str(path.relative_to(root))
+        for base in ("src", "examples") for path in sorted((root / base).rglob("*.py"))
+        if "send_as_system" in (source := path.read_text(encoding="utf-8")) and "send_as_system" in _names(source)
+    }
+    assert callers == SYSTEM_SEND_CALLERS
 
 
 # ---------- the test send ----------
@@ -435,7 +449,10 @@ def test_an_administrators_test_send_reaches_their_own_handle_marked_as_a_test(s
 def test_a_non_administrator_learns_nothing_and_causes_no_render_read_or_audit_row(
     mailing: None, plain: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, host: str,
 ) -> None:
-    """A member and the system channel's own replier, on a host with the channel, without it, or without mail."""
+    """A member and the system channel's own replier, on a host with the channel, without it, or without mail.
+
+    ``preview`` is asked before the row's side, so a block or an overridden default is refused the same way.
+    """
 
     del mailing, plain
     member = create_user("messaging-templates-test-member")
@@ -444,15 +461,19 @@ def test_a_non_administrator_learns_nothing_and_causes_no_render_read_or_audit_r
         grant(_install(), "replier", replier)
     if host == "unconfigured":
         settings.MAILERS = {}
-    row = _sampled()
+    shipped = _greeting(key="tests.shipped", is_baseline=True, sample=SAMPLE)
+    _greeting(key="tests.shipped", sample=SAMPLE)
+    with system_context(reason="tests.messaging_templates.send.load"):
+        rows = [_sampled(), _row("block", "card"), MessageTemplate._base_manager.get(pk=shipped.pk)]
     looked_up: list[Any] = []
     _recording(monkeypatch, ChannelManager, "system_channel", lambda manager: looked_up.append(manager))
     walked = _walks(monkeypatch)
     for actor in (member, replier):
-        audits = _audits()
-        with _refused(PermissionDenied):
-            MessageTemplate.objects.send_test(row, actor=actor)
-        assert _audits() == audits
+        for row in rows:
+            audits = _audits()
+            with _refused(PermissionDenied):
+                MessageTemplate.objects.send_test(row, actor=actor)
+            assert _audits() == audits, row.kind
     assert (walked, looked_up) == ([], [])
 
 
