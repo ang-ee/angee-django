@@ -1,10 +1,10 @@
-import { useCallback, useRef, type ReactElement } from "react";
+import { useCallback, type ReactElement } from "react";
 
 import { extractActionOutcome } from "@angee/refine";
 
 import {
-  Action, Column, createClientKey, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
-  useAuthoredResourceMutation, type ActionDescriptor } from "@angee/ui";
+  Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
+  useAuthoredResourceMutation, useIntentKeys, type ActionDescriptor } from "@angee/ui";
 import { KnowledgeCreateVaultFrom, PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
@@ -18,7 +18,8 @@ const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
-  const pendingClone = useRef<{ template: string; name: string; key: string } | null>(null);
+  // A retry of the same clone carries its key, so the server creates one vault; another name or template is a new request.
+  const cloneKeys = useIntentKeys("knowledge.vault-from-template");
   const [createFrom] = useAuthoredResourceMutation(KnowledgeCreateVaultFrom, {
     invalidateModels: CLONE_MODELS,
     shouldInvalidate: (data) => data?.create_vault_from.ok === true,
@@ -30,17 +31,12 @@ export function KnowledgeSettingsPage(): ReactElement {
         return { ok: false, message: t("vault.cloneFailed") };
       }
       const name = values.name.trim();
-      if (pendingClone.current?.template !== template || pendingClone.current.name !== name) {
-        pendingClone.current = { template, name, key: createClientKey() };
-      }
-      const data = await createFrom({
-        template, name, owned: true, idempotency_key: pendingClone.current.key,
-      }, options);
-      const outcome = extractActionOutcome(data, "create_vault_from");
-      if (outcome?.ok) pendingClone.current = null;
-      return outcome;
+      const data = await cloneKeys.run({ template, name }, (key) => createFrom({
+        template, name, owned: true, idempotency_key: key,
+      }, options));
+      return extractActionOutcome(data, "create_vault_from");
     },
-    [createFrom, t],
+    [cloneKeys, createFrom, t],
   );
   return (
     <SettingsShell maxWidth="1100" gap="6">

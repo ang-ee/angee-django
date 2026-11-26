@@ -1,8 +1,8 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
 import { useAuthoredQuery } from "@angee/refine";
-import { createClientKey, useAuthoredResourceMutation, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
-import { useMemo, useRef, type ReactElement } from "react";
+import { useAuthoredResourceMutation, useIntentKeys, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { useMemo, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
 import {
@@ -54,7 +54,8 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
   const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
-  const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
+  // A retry of the same note carries its key, so the server inserts it once; an edited draft is a new request.
+  const noteKeys = useIntentKeys("knowledge.record-note");
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
@@ -86,10 +87,7 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       if (!body) throw new Error(t("notes.bodyRequired"));
       if (!writableVault) throw new Error(t("notes.createError"));
       const input = { model_label: target.modelLabel, record_id: target.recordId, vault: writableVault.id, body, role };
-      const fingerprint = JSON.stringify(input);
-      if (pendingNote.current?.fingerprint !== fingerprint) pendingNote.current = { fingerprint, key: createClientKey() };
-      await createNote({ ...input, idempotency_key: pendingNote.current.key }, options);
-      pendingNote.current = null;
+      await noteKeys.run(input, (key) => createNote({ ...input, idempotency_key: key }, options));
       return { ok: true, message: t("notes.added") };
     },
   } : undefined;

@@ -36,6 +36,7 @@ vi.mock("@angee/messaging", () => ({
   },
 }));
 
+import { boundedGraphQLTransportError } from "@angee/refine";
 import { RecordNotesStream, recordNotesTab } from "./RecordNotesStream";
 import { KnowledgeRecordNotes, KnowledgeVault, KnowledgeVaultForResource, RECORD_BINDING_MODEL } from "./data/documents";
 
@@ -157,6 +158,21 @@ test("a transport retry reuses its receipt key; changing the draft starts a new 
   expect(sdk.createNote.mock.calls[1]![0].idempotency_key).toBe(first);
   await expect(submit({ body: "Changed" }, context)).rejects.toThrow("Offline");
   expect(sdk.createNote.mock.calls[2]![0].idempotency_key).not.toBe(first);
+});
+
+test("a keyed insert refused with a validation error released its key: the same note sent again carries a new one", async () => {
+  sdk.createNote.mockReset()
+    .mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+      message: "Fix the highlighted fields.", extensions: { code: "VALIDATION", validationErrors: { body: ["Too long."] }, formErrors: [] },
+    }] } }))
+    .mockResolvedValueOnce({ create_record_note: { id: "binding_new", page: "pg_new" } });
+  render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
+  const submit = lastChildSource().createAction!.submit;
+  const context = { record: null, selectedIds: [] };
+  await expect(submit({ body: "Refused draft" }, context)).rejects.toThrow("Fix the highlighted fields.");
+  await submit({ body: "Refused draft" }, context);
+  const [first, second] = sdk.createNote.mock.calls.map(([variables]) => variables.idempotency_key);
+  expect(second).not.toBe(first);
 });
 
 test("notes destinations use canonical resource identity instead of a display name", () => {

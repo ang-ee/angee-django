@@ -3,7 +3,7 @@ import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import {
-  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, createClientKey, errorMessage, textRoleVariants, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, errorMessage, textRoleVariants, useIntentKeys, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
 } from "@angee/ui";
 import {
   StorageUploadTasks,
@@ -224,7 +224,8 @@ export function RecordThreadConversation({
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const postAttempt = React.useRef<{ intent: string; idempotencyKey: string } | null>(null);
+  // A retry of the same post carries its key, so the server writes it once; an edited post is a new request.
+  const postKeys = useIntentKeys("messaging.record-message");
 
   const recipientOptions = React.useMemo(
     () =>
@@ -394,14 +395,7 @@ export function RecordThreadConversation({
           autofollowRecipients:
             selectedPostKind === "COMMENT" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
         };
-        // Retain identity after a failed response; an edited submission starts a new request.
-        const intent = JSON.stringify(input);
-        if (postAttempt.current?.intent !== intent) {
-          postAttempt.current = { intent, idempotencyKey: createClientKey("message") };
-        }
-        const attempt = postAttempt.current;
-        await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
-        if (postAttempt.current === attempt) postAttempt.current = null;
+        await postKeys.run(input, (idempotencyKey) => postMessage({ ...input, idempotencyKey }));
         setReplyToMessage(null);
         setWindow({ scope, latest: true });
         return true;
@@ -415,7 +409,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, scope, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postKeys, postMessage, scope, t],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {

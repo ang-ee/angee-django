@@ -19,6 +19,7 @@ import { TasksPage } from "./views/TasksPage";
 
 // Keep the real declarations/parsers; only transport hooks and the page mount are replaced.
 const transfer = vi.hoisted(() => vi.fn());
+const fromTemplate = vi.hoisted(() => vi.fn());
 const mounted = vi.hoisted(() => ({ props: null as ResourceListProps | null, list: null as ListViewProps | null }));
 vi.mock("@angee/ui", async () => {
   const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
@@ -28,10 +29,13 @@ vi.mock("@angee/ui", async () => {
     ListView: (props: ListViewProps) => { mounted.list = props; return null; },
     useEnumOptions: () => [],
     useActionResultMutation: () => [vi.fn(), {}],
-    useActionOutcomeMutation: (field: string) => [field === "transfer_project_ownership" ? transfer : vi.fn(), {}],
+    useActionOutcomeMutation: (field: string) => [
+      field === "transfer_project_ownership" ? transfer : field === "create_project_from_template" ? fromTemplate : vi.fn(), {},
+    ],
     useRecordActionMutation: () => [vi.fn(), {}],
     useAuthoredResourceMutation: () => [vi.fn(), {}],
-    useActionResultRun: () => vi.fn(),
+    // Settle as the real owner does for a failure: report it, resolve nothing.
+    useActionResultRun: () => (run: () => Promise<unknown>) => run().catch(() => undefined),
     useRecordAction: (run: unknown) => run,
   };
 });
@@ -123,6 +127,24 @@ describe("composable standard project and task declarations", () => {
     expect(visible.map(({ id }) => id)).toEqual(expected);
     expect(visible.find((action) => action.primary)?.id).toBe(primary);
     expect(actions.find(({ id }) => id === "pause")?.placement).toBe("menu");
+  });
+
+  test("Create from template sends the same key again after a lost answer, and a new one after a refused result", async () => {
+    const { result } = renderHook(useProjectFormDeclaration);
+    const create = parsePageActions(propsOf<FormProps>(result.current).children).find(({ id }) => id === "create-from-template")!;
+    // The declaration's run is the record action the mock hands back unwrapped: it takes the template id.
+    const run = create.run as unknown as (id: string) => Promise<void>;
+    fromTemplate.mockReset()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ ok: false, message: "The template changed." })
+      .mockResolvedValueOnce({ ok: true, message: "Project created.", id: "prj_new" });
+    await run("prj_template");
+    await run("prj_template");
+    await run("prj_template");
+    const keys = fromTemplate.mock.calls.map(([, variables]) => (variables as { idempotency_key: string }).idempotency_key);
+    expect(fromTemplate.mock.calls.map(([id]) => id)).toEqual(["prj_template", "prj_template", "prj_template"]);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[1]);
   });
 
   test.each(["OPEN", "PAUSED", "DROPPED", "DONE"])("a %s template offers only Create from template", (status) => {

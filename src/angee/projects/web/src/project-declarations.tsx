@@ -1,7 +1,6 @@
 import {
   Action,
   Column,
-  createClientKey,
   Facet,
   Field,
   Form,
@@ -15,6 +14,7 @@ import {
   useActionOutcomeMutation,
   useActionResultMutation,
   useActionResultRun,
+  useIntentKeys,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
@@ -78,18 +78,11 @@ export function useProjectFormDeclaration(
     invalidateModels: [PROJECT_MODEL],
   });
   const settleCreation = useActionResultRun({ linkTo: PROJECT_MODEL });
-  // A retry of the same template reuses its key, so the server replays one creation.
-  const pendingCreation = React.useRef<{ template: string; key: string } | null>(null);
+  // A retry of the same template carries its key, so the server replays one creation.
+  const creationKeys = useIntentKeys("projects.project-from-template");
   const createProject = useRecordAction(async (id) => {
-    if (pendingCreation.current?.template !== id) {
-      pendingCreation.current = { template: id, key: createClientKey("project-template") };
-    }
-    const { key } = pendingCreation.current;
-    await settleCreation(async () => {
-      const outcome = await createFromTemplate(id, { idempotency_key: key });
-      if (outcome?.ok) pendingCreation.current = null;
-      return outcome;
-    });
+    await settleCreation(() => creationKeys.run({ template: id },
+      (key) => createFromTemplate(id, { idempotency_key: key })));
   });
   const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate", "transfer"];
   const standardActions = <>

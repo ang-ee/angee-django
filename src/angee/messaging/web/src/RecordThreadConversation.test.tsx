@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   recipientData: { colleagues: [] as unknown[] } as unknown,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   failOps: new Set<string>(),
+  /** Result data a mutation answers with, by operation; `{}` when none is queued. */
+  answers: {} as Record<string, unknown[]>,
   useAuthoredQuery: vi.fn(),
   upload: vi.fn(),
   uploadTasks: [] as Array<{ id: string; name: string; status: "uploading" | "failed" | "done" }>,
@@ -32,19 +34,26 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: mocks.useAuthoredQuery,
-  useAuthoredMutation: (document: unknown) => {
-    const op = operationName(document);
-    const mutate = vi.fn(async (vars: Record<string, unknown>) => {
-      mocks.mutateCalls.push({ op, vars });
-      if (mocks.failOps.has(op)) throw new Error("Network down");
-      return {};
-    });
-    return [mutate, { fetching: false }];
-  },
-}));
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
+  return {
+    ...actual,
+    useAuthoredQuery: mocks.useAuthoredQuery,
+    useAuthoredMutation: (document: unknown, options?: { errorFrom?: (data: unknown, vars: unknown) => unknown }) => {
+      const op = operationName(document);
+      const mutate = vi.fn(async (vars: Record<string, unknown>) => {
+        mocks.mutateCalls.push({ op, vars });
+        if (mocks.failOps.has(op)) throw new Error("Network down");
+        const data = mocks.answers[op]?.shift() ?? {};
+        // The hook's own envelope check, as the caller declared it.
+        const refusal = actual.errorFromAuthoredEnvelope(options?.errorFrom?.(data, vars) as never);
+        if (refusal) throw refusal;
+        return data;
+      });
+      return [mutate, { fetching: false }];
+    },
+  };
+});
 
 vi.mock("@angee/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/storage")>()),
@@ -147,6 +156,7 @@ beforeEach(() => {
   mocks.onUploaded = null;
   mocks.mutateCalls = [];
   mocks.failOps = new Set();
+  mocks.answers = {};
   mocks.recipientData = { colleagues: [] };
   mocks.threadData = threadPayload([message()]);
   mocks.threadError = null;
@@ -549,6 +559,27 @@ describe("RecordThreadConversation", () => {
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
     expect(posts[1]?.vars.idempotencyKey).toBe(first?.vars.idempotencyKey);
+  });
+
+  test("an in-band refusal is the server's answer: the same post sent again carries a new key; a refusal of who may post keeps it", async () => {
+    mocks.answers = { MessagingPostRecordMessage: [
+      { post_record_message: { error: "The thread is closed.", error_code: "BAD_MESSAGE" } },
+      { post_record_message: { error: "You may not post here.", error_code: "PERMISSION_DENIED" } },
+      { post_record_message: { error: "You may not post here.", error_code: "PERMISSION_DENIED" } },
+    ] };
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    const send = async (message: string) => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(message));
+    };
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello" } });
+    await send("The thread is closed.");
+    await send("You may not post here.");
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage")).toHaveLength(3));
+    const keys = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage").map((call) => call.vars.idempotencyKey);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(keys[2]).toBe(keys[1]);
   });
 
   test("only a moderator's comment carries the remove control", () => {

@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   action: null as ActionDescriptor | null,
   options: null as AuthoredMutationOptions<CloneData> | null,
   mutation: vi.fn(),
-  key: vi.fn(),
   canonicalize: vi.fn(),
   invalidates: vi.fn(),
 }));
@@ -42,7 +41,6 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   Form: ({ children }: { children?: ReactNode }) => <>{children}</>,
   List: ({ children }: { children?: ReactNode }) => <>{children}</>,
   DrawerResourceList: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  createClientKey: mocks.key,
 }));
 
 import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
@@ -51,8 +49,6 @@ beforeEach(() => {
   mocks.submit = null;
   mocks.action = null;
   mocks.options = null;
-  let sequence = 0;
-  mocks.key.mockReset().mockImplementation(() => `clone-key-${++sequence}`);
   mocks.mutation.mockReset().mockResolvedValue({ create_vault_from: { ok: false, message: "Try again" } });
   mocks.canonicalize.mockReset().mockReturnValue(["knowledge.vault", "knowledge.page", "knowledge.markdownpage"]);
   mocks.invalidates.mockReset().mockReturnValue([]);
@@ -63,38 +59,39 @@ async function submit(name = "Copy", template = "vlt_template") {
   return mocks.submit({ name }, { record: { id: template }, selectedIds: [] }, { errorNotification: false });
 }
 
-test("failed responses and transport retries retain the same idempotency key", async () => {
+/** The key each clone request carried, in order. */
+const sentKeys = () => mocks.mutation.mock.calls.map(([variables]) => (variables as { idempotency_key: string }).idempotency_key);
+
+test("a lost answer keeps the key for the same clone; a refused result releases it", async () => {
   render(<KnowledgeSettingsPage />);
   expect(mocks.action).toMatchObject({ id: "create-from-template", placement: "menu" });
-  const rejected = await submit(" Copy ");
-  expect(rejected).toMatchObject({ ok: false });
   mocks.mutation.mockRejectedValueOnce(new Error("Offline"));
-  await expect(submit()).rejects.toThrow("Offline");
-  await submit();
-  expect(mocks.key).toHaveBeenCalledTimes(1);
-  for (const [variables] of mocks.mutation.mock.calls) {
-    expect(variables).toEqual({ template: "vlt_template", name: "Copy", owned: true, idempotency_key: "clone-key-1" });
-  }
+  await expect(submit(" Lost ")).rejects.toThrow("Offline");
+  expect(await submit("Lost")).toMatchObject({ ok: false });
+  await submit("Lost");
+  const [lost, retried, afterRefusal] = sentKeys();
+  expect(retried).toBe(lost);
+  expect(afterRefusal).not.toBe(retried);
+  expect(mocks.mutation).toHaveBeenNthCalledWith(1, { template: "vlt_template", name: "Lost", owned: true, idempotency_key: lost },
+    { errorNotification: false });
 });
 
-test("success clears the retry identity so another clone gets a new key", async () => {
+test("success releases the key so another clone gets a new one", async () => {
   mocks.mutation.mockResolvedValue({ create_vault_from: { ok: true, id: "vlt_created", message: "Created" } });
   render(<KnowledgeSettingsPage />);
-  expect(await submit()).toEqual({ ok: true, id: "vlt_created", message: "Created" });
-  await submit();
-  expect(mocks.mutation).toHaveBeenNthCalledWith(1, expect.objectContaining({ idempotency_key: "clone-key-1" }), { errorNotification: false });
-  expect(mocks.mutation).toHaveBeenNthCalledWith(2, expect.objectContaining({ idempotency_key: "clone-key-2" }), { errorNotification: false });
+  expect(await submit("Created")).toEqual({ ok: true, id: "vlt_created", message: "Created" });
+  await submit("Created");
+  const [first, second] = sentKeys();
+  expect(second).not.toBe(first);
 });
 
 test("changing the name or template starts a new creation request", async () => {
+  mocks.mutation.mockRejectedValue(new Error("Offline"));
   render(<KnowledgeSettingsPage />);
-  await submit();
-  await submit("Changed");
-  await submit("Changed", "vlt_other");
-  expect(mocks.key).toHaveBeenCalledTimes(3);
-  expect(mocks.mutation).toHaveBeenLastCalledWith({
-    template: "vlt_other", name: "Changed", owned: true, idempotency_key: "clone-key-3",
-  }, { errorNotification: false });
+  await expect(submit("Kept")).rejects.toThrow("Offline");
+  await expect(submit("Changed")).rejects.toThrow("Offline");
+  await expect(submit("Changed", "vlt_other")).rejects.toThrow("Offline");
+  expect(new Set(sentKeys()).size).toBe(3);
 });
 
 test("successful clones invalidate metadata-canonical model names", () => {
