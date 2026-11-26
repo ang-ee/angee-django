@@ -223,6 +223,7 @@ describe("record action helpers", () => {
             resource: "agents.Skill",
           },
         ],
+        errorNotification: false,
       },
     );
     expect(dataMocks.mutate).toHaveBeenCalledWith("src_1");
@@ -402,6 +403,7 @@ describe("useRecordChromeActionMutation", () => {
         { dataProviderName: "console", invalidates: ["list"], resource: "messaging.Channel" },
         { dataProviderName: "console", invalidates: ["list"], resource: "integrate.Integration" },
       ],
+      errorNotification: false,
     });
     expect(dataMocks.mutate).toHaveBeenCalledWith("chn_1");
     expect(dataMocks.settle).toHaveBeenCalledOnce();

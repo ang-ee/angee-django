@@ -1858,7 +1858,8 @@ test("nested server errors and root failures share the native form store", async
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
-  expect(f.surface().saveErrors).toEqual(["Cannot save", "lines.0.title: Invalid line"]);
+  // The form-level reason, the line naming the refused field the form shows, then the reason no field shows.
+  expect(f.surface().saveErrors).toEqual(["Cannot save", "form.fixHighlightedFieldsNamed", "lines.0.title: Invalid line"]);
   expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
@@ -2408,4 +2409,34 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
     expect(custom.mock.calls.filter(([params]) => params.meta?.gqlQuery === currentSummary)).toHaveLength(2);
   }
   expect(unrelatedTitle).toBe("Before");
+});
+
+test.each([
+  { where: "a field of the sheet", title: false },
+  { where: "the form's title", title: true },
+])("a record form's relation offers inline edit of its selected record, and `relationEdit: null` declines it, on $where", async ({ title }) => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const rows: Record<string, Row> = {
+    "note-1": { id: "note-1", title: "Child", parent: { id: "note-2", title: "Parent note" } },
+    "note-2": { id: "note-2", title: "Parent note" },
+  };
+  const form = (relationEdit?: null) => <Provider resources={[resource]}
+    dataProvider={{ getOne: async ({ id }) => ({ data: rows[String(id)] ?? {} }),
+      getList: async () => ({ data: [rows["note-2"]!], total: 1 }) }}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <FormView resource="notes.Note" id="note-1" fields={[
+        ...(title ? [] : [{ name: "title", label: "Title", title: true }]),
+        { name: "parent", label: "Parent", kind: "relation", widget: "many2one", ...(title ? { title: true } : {}), ...(relationEdit === null ? { relationEdit } : {}) },
+      ]} />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>;
+
+  const view = render(form());
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(await screen.findByRole("button", { name: "Edit record" })).toBeTruthy();
+  view.unmount();
+
+  render(form(null));
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
 });

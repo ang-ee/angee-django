@@ -220,6 +220,18 @@ export interface AngeeApp {
 }
 
 /**
+ * Whether the app retries a failed read: TanStack's three retries, for a failure a retry can
+ * fix (`retryableQueryError`): a public GraphQL answer (a refusal, a permission, a conflict) is
+ * not retried, since a retry repeats it. A surface that builds its own query client, as the
+ * workshop's fixture does, passes this so its reads fail as the app's do.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function retryAppQuery(failureCount: number, error: unknown): boolean {
+  return failureCount < 3 && retryableQueryError(error);
+}
+
+/**
  * The app-owned react-query client config. createApp builds ONE `QueryClient`
  * from this and shares it with both `<Refine reactQuery.clientConfig>` and the
  * route gate's `beforeLoad`, so the auth gate and the in-app identity read hit
@@ -240,8 +252,7 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      // TanStack's three retries, for failures a retry can fix.
-      retry: (failureCount, error) => failureCount < 3 && retryableQueryError(error),
+      retry: retryAppQuery,
       placeholderData: keepPreviousData,
       staleTime: 30_000,
       gcTime: 600_000,
