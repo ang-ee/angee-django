@@ -51,7 +51,10 @@ button, ignore notice and signature. The row a person reads is picked for them
 by `MessageTemplate.objects.effective("template", ..., person=...)`: their
 person's languages, then the deployment's default. A deployment edits the text
 as an override of the shipped row, as for any message template
-([message templates](../messaging_templates/README.md)). The template reads
+([message templates](../messaging_templates/README.md)), and the override must
+keep `link`: one that drops it saves with only the preview's "Nothing reads
+link." warning, and every link sent after that is a mail without its link that
+still retires the link before it. The template reads
 three values, which the server builds: `link`, the single-use link; `expires_at`,
 when it stops working, printed in the deployment's time zone; and
 `person.first_name`, the account's first name, the one value a person typed,
