@@ -1,4 +1,5 @@
 import { containerChildren, expectValidBaseAddon } from "@angee/app/testing";
+import { statusTone } from "@angee/ui";
 import type { ChatterTabContent, ChatterViewContext } from "@angee/ui/runtime";
 import { isValidElement } from "react";
 import { describe, expect, test } from "vitest";
@@ -16,7 +17,10 @@ describe("messaging addon manifest", () => {
     // Field-scoped: the generic words claim no global status tone another addon could need.
     expect(messaging.statusTones).not.toHaveProperty("queued");
     expect(messaging.vocabulary).toEqual([{ app: "messaging", resources: { "messaging.Message": { fields: { status: { tones: MESSAGE_STATUS_TONES } } } } }]);
-    expect(Object.keys(MESSAGE_STATUS_TONES).sort()).toEqual(["QUEUED", "SENT", "UNCERTAIN"]);
+    // What tells the states apart: Queued and Sent are not alarms, Uncertain is not Failed.
+    expect(MESSAGE_STATUS_TONES).toEqual({ QUEUED: "info", SENT: "success", UNCERTAIN: "warning" });
+    expect(statusTone("FAILED", { ...MESSAGE_STATUS_TONES })).toBe("danger");
+    expect(statusTone("UNCERTAIN", { ...MESSAGE_STATUS_TONES })).toBe("warning");
     expect(messaging.icons).toHaveProperty("reply");
     expect(typeof NewMessageAction).toBe("function");
   });

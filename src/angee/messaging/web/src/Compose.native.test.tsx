@@ -491,7 +491,7 @@ test("each message written here and going out shows its delivery; synced and rec
     "We are on it.": ["Queued"],
     "Done: you are in.": ["Sent"],
     "Your access is ready.": ["Failed", word("transcript.attempts", { count: 2 }), word("transcript.deliveryDetails")],
-    "Checking with the team.": ["Queued", word("transcript.nextTry"), "1 attempt", word("transcript.deliveryDetails")].slice(0, 3),
+    "Checking with the team.": ["Queued", word("transcript.nextTry"), "1 attempt"],
     "One more thing.": ["Uncertain", "1 attempt", word("transcript.deliveryDetails")],
     "Reminder.": ["Draft", word("transcript.sendsAt")],
   };
@@ -501,6 +501,19 @@ test("each message written here and going out shows its delivery; synced and rec
   }
   // Cleo reads no sender of what went out: each names the channel it went out from.
   expect(within(await row("We are on it.")).getByText("Support desk")).toBeTruthy();
+  // Delivery details only where delivery went wrong: Failed and Uncertain, not Queued, a retry, Sent or Draft.
+  for (const text of ["We are on it.", "Checking with the team.", "Done: you are in.", "Reminder."]) {
+    expect(within(await row(text)).queryByRole("link", { name: word("transcript.deliveryDetails") })).toBeNull();
+  }
+  // When it goes out or is tried again is the recorded time, as a machine-readable time.
+  const transcript = RECORDED.seats.cleo.transcripts.support;
+  if (!("data" in transcript)) throw new Error("Cleo's Support transcript is not recorded.");
+  for (const [text, id] of [["Reminder.", MESSAGE.scheduled], ["Checking with the team.", MESSAGE.retrying]] as const) {
+    const due = transcript.data.thread_message_feed.messages.find((message) => message.id === id)?.scheduled_at;
+    expect(due).toBeTruthy();
+    const times = [...(await row(text)).querySelectorAll("time")].map((time) => Date.parse(time.dateTime));
+    expect(times).toContain(Date.parse(String(due)));
+  }
   const failed = within(await row("Your access is ready.")).getByRole("link", { name: word("transcript.deliveryDetails") });
   expect(failed.getAttribute("href")).toContain(MESSAGE.failed);
   for (const text of ["Sent from the desk's own mail client.", "Please add me."]) {
