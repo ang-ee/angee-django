@@ -11,6 +11,8 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
@@ -198,6 +200,55 @@ def test_the_handle_owners_verbs_change_its_keys_and_the_comparison_key_follows(
     with actor_context(administrator):
         rewrite.with_actor(administrator).revert()
     assert _keys(lid) == _keyed("whatsapp", "111@lid", "111@lid")
+
+
+def test_an_account_id_given_as_a_number_is_the_id_its_row_stores_as_text(db: None) -> None:
+    """A source that gives its account id as a number lands on the row holding that id, changing nothing."""
+
+    del db
+    with system_context(reason="tests.parties.write_once.numeric_id"):
+        held = Handle.objects.upsert(platform="telegram", value="@someone", external_id="424242")
+        again = Handle.objects.upsert(platform="telegram", value="@someone", external_id=424242)
+    assert again.pk == held.pk
+    assert _keys(held) == _keyed("telegram", "@someone", "424242")
+
+
+def test_an_address_a_merged_spelling_holds_lands_on_the_row_its_account_id_names(db: None) -> None:
+    """The id's row keeps its address when the new one is a spelling merged into it: nothing collides or moves."""
+
+    del db
+    with system_context(reason="tests.parties.write_once.merged_spelling"):
+        account = Handle.objects.upsert(platform="whatsapp", value="+14155552681", external_id="acct-b")
+        spelling = Handle.objects.upsert(platform="whatsapp", value="+14155552682")
+        account.fold([spelling])
+        landed = Handle.objects.upsert(platform="whatsapp", value="+14155552682", external_id="acct-b")
+        assert Handle._base_manager.filter(pk=account.pk).exists()  # The caller's transaction is still usable.
+    assert landed.pk == account.pk
+    assert _keys(account) == _keyed("whatsapp", "+14155552681", "acct-b")
+    assert _keys(spelling) == _keyed("whatsapp", "+14155552682")
+    assert Handle._base_manager.get(pk=spelling.pk).merged_into_id == account.pk
+
+
+def test_an_upsert_with_nothing_to_change_runs_one_statement_and_only_a_moved_address_reads_who_holds_it(
+    db: None,
+) -> None:
+    """The read of who holds a moved address runs on the move alone: a call that changes nothing stays one read."""
+
+    del db
+    unchanged = (
+        {"platform": "email", "value": "budget@example.test", "display_name": "B"},
+        {"platform": "whatsapp", "value": "+14155552691", "external_id": "acct-h", "display_name": "W"},
+        {"platform": "telegram", "value": "@budget", "external_id": 515151},
+    )
+    with system_context(reason="tests.parties.write_once.statements"):
+        for values in unchanged:
+            Handle.objects.upsert(**{**values, "external_id": str(values.get("external_id", ""))})
+        for values in unchanged:
+            with CaptureQueriesContext(connection) as queries:
+                Handle.objects.upsert(**values)
+            assert len(queries) == 1, [query["sql"] for query in queries.captured_queries]
+        moved = Handle.objects.upsert(platform="whatsapp", value="+14155552692", external_id="acct-h")
+    assert _keys(moved) == _keyed("whatsapp", "+14155552692", "acct-h")
 
 
 HANDLE_SEED = "- _xref: client\n  platform: email\n  value: client@example.test\n"

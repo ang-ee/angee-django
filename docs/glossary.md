@@ -484,7 +484,8 @@ that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
 Its ingestion keys (`platform`, `value`, `external_id`) are written once: only
-the handle owner's verbs change one, never a field write.
+the handle owner's verbs change one, and history's revert restores earlier keys;
+never a field write.
 The Handle's controller records the **control** fact (who may act through it), while
 **PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
 member); neither fact implies the other. A **suggestion** is an asserted

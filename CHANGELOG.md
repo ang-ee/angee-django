@@ -30,7 +30,11 @@ live in code docstrings.
   owner's verbs change one: `HandleManager.upsert` rewrites `value` when a
   source's `external_id` matched and the account behind it moved, and
   `HandleManager.reidentify` rewrites or folds a handle; history's revert restores
-  earlier keys as they were. Display fields stay writable as before. A resource
+  earlier keys as they were. `upsert` no longer rewrites the value onto an address
+  another row holds (a spelling merged into the row the account id names), which
+  raised `IntegrityError` on every later message from that account: the call lands
+  on that row, which keeps its address. An `external_id` given as a number is
+  matched and stored as its text. Display fields stay writable as before. A resource
   row that names another address under an xref a load already wrote is refused
   (`ResourceLoadError`). **Upgrade:** a caller that set `platform`, `value` or
   `external_id` on an existing handle and saved it lands the new address as its

@@ -469,7 +469,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         not the key it matched on). Rewriting ``value`` behind a matched
         ``external_id`` is the one change of a write-once key
         (``Handle.immutable_fields``) this verb makes: it never changes ``platform``
-        or ``external_id``.
+        or ``external_id``, and it rewrites nothing when another row already holds
+        the new address (a spelling merged into the matched row): the call then lands
+        on the matched row, which keeps its address. Only a moved address costs that
+        extra read. An ``external_id`` given as a number is matched and stored as its
+        text.
 
         ``created_by_id`` stamps the creator, who holds the handle's access. Control
         is deliberately excluded from the generic refresh loop; :meth:`claim_control`
@@ -492,6 +496,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if {"normalized_value", "normalized_version"}.intersection(fields):
             raise TypeError("Handle.normalized_value and its version are maintained by Handle.save().")
         external_id = str(fields.get("external_id") or "")
+        if "external_id" in fields:
+            # Matched and stored as text: an account id a source gives as a number is that id.
+            fields["external_id"] = external_id
         normalized_value = self.clean_identity(platform=platform, value=value, external_id=external_id)
         for name in ("display_name", "label"):
             if fields.get(name):
@@ -515,7 +522,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 handle = self.find_identity(platform=platform, value=value, external_id=external_id)
                 if handle is None:
                     raise
-        if external_id and handle.external_id == external_id:
+        if external_id and handle.external_id == external_id and (
+            handle.value == value or not self.model._base_manager.filter(platform=platform, value=value).exists()
+        ):
             # The source's stable id matched: the address behind it moved, and the row follows it.
             self._refresh(
                 handle,
@@ -524,7 +533,8 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 allow_immutable=("value",),
             )
         else:
-            # The value matched, not the external id: never rewrite it here.
+            # The value matched, not the external id, or another row holds the address the id's row would move to (a
+            # spelling merged into it): never rewrite either key here.
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
             self._refresh(handle, {"normalized_value": normalized_value, **refresh}, fill_only=fill_only)
         return handle
