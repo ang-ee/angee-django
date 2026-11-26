@@ -274,6 +274,7 @@ export function FormViewRecordHeader({
               relation={titleRelation}
               filters={currentTitleField.filters}
               selectedOption={titleSelectedOption}
+              edit={currentTitleField.relationEdit}
               placeholder={currentTitleField.placeholder ?? t("relation.placeholder")}
               aria-label={fieldAriaLabel(currentTitleField)}
             />
@@ -805,6 +806,7 @@ function BoundFieldRow({
             relation={relation}
             filters={field.filters}
             selectedOption={selectedOption}
+            edit={field.relationEdit}
             aria-label={fieldAriaLabel(field)}
           />
         ) : relationList ? (

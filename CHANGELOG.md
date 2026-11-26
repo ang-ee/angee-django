@@ -10,6 +10,156 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A relation field can decline inline edit of its selected
+  record with `relationEdit: null` (a form's field, a dialog's field, an
+  authored line field; `edit={null}` on `RelationFieldWidget`, beside
+  `create={null}`); it is otherwise offered whenever the related resource has
+  editable fields. `SURFACE_RENDERS_FAILURE`, the call options of a surface
+  that shows a submission's failure itself, is exported.
+- `@angee/app`: The app's rule for retrying a failed read is exported as
+  `retryAppQuery` (three retries, for a failure a retry can fix; a refusal is
+  not retried). The workshop's shared runtime fixture passes it to its query
+  client, so a story about a refused read shows its error at once, where the
+  data library's default retried the refusal three times. The fixture's
+  other query defaults are still the data library's.
+- `@angee/ui`: **Changed API.** A record pane can name a field as the form
+  does. `RecordPanelContext` gains `fieldLabel(name)` beside `focusField`, the
+  label the form's save banner names a refused field by. `RecordIssues` gains
+  an optional `fieldLabel` prop: an issue that names a field is titled by the
+  label and the control that focuses the field is described by it, so two
+  reports with the same words under two fields read apart on screen and to a
+  screen reader. It also gains an optional `polite` prop, for issues about
+  edits not yet submitted: one polite live region that stays in the page with
+  no issues too, in place of an alert per danger issue. In the save banner's
+  field line, a field whose label is not text is named by its name, where the
+  line printed `[object Object]`. Code that builds a `RecordPanelContext` by
+  hand adds `fieldLabel`.
+- `@angee/ui`: **Changed API.** A keyboard user sees when a mail in
+  `MessageHtmlFrame` has focus. Focus inside the sandboxed frame matches
+  neither the frame's `:focus-visible` nor its wrapper's `:focus-within`, so
+  the page cannot draw a ring, and nothing on screen showed that a mail had
+  keyboard focus. The framed document draws it. Its body is a tab stop of its
+  own, whether or not the mail scrolls, so a mail with links gains one stop:
+  the mail itself, before its first link. While the body or anything in the
+  mail has keyboard focus, a ring fixed to the frame's edges stays as the
+  arrow, page, space and end keys scroll the mail, and stays beside a link's
+  own ring, also in a mail that removes its links' outline: 2px of the theme's
+  `--border-focus` outside, made opaque, and 2px of white or black inside,
+  whichever contrasts with it, so one edge holds 3:1 on a white mail and on a
+  near-black one (on a mid-grey mail neither edge may reach it). A click on
+  the mail's text or on a link shows no ring until the next key press; a
+  click into a field of the mail shows it, as the field shows its own. The
+  ring is the root's own
+  `::after`, in an unnamed cascade layer, starting from `all: initial`, every
+  declaration important: a mail's CSS on `body`, `body::after` or `*::after`,
+  a transform, filter or containment on the body, and an important rule on
+  `html::after` at any specificity leave it in place. A mail that makes the
+  root itself a containing block for fixed boxes (on `html`: a transform or
+  one of its single properties, `perspective`, `will-change: transform`,
+  layout or paint containment, `content-visibility`; from a style sheet or
+  the mail's own `<html style>`) still detaches it: the ring then follows
+  the document, and its bottom edge scrolls out of view; a `clip-path` on
+  the root clips it, and a mail's own popover or modal dialog covers it. A
+  mail's own `html::after` is not shown while the frame has focus. The theme's
+  color is used only if the browser parses it as a color and its functions
+  are closed; otherwise the framed document's own accent. The framed document
+  carries the frame's title, which the accessibility tree gives it as its
+  name. The ring's color is read from the page when the document is
+  assembled: a theme, brand or light/dark switch reloads an open mail, which
+  returns to its top and shows no ring until the next Tab; an ordinary render
+  keeps it. A browser without CSS relative color syntax draws the theme's
+  color as it is, then a black and a white line inside it; one without
+  `:has()` (before Chrome 105, Safari 15.4, Firefox 121) draws no ring, as
+  before this change.
+  `@angee/ui/lib/use-motion-tokens` is removed and
+  `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
+  beside `useRootTokens`, the one reader of the root's resolved tokens, which
+  keeps its record while no value changes. **Upgrade:** import
+  `useMotionTokens` from `@angee/ui/lib/use-root-tokens`.
+- `@angee/ui`: The toast region is named in the app's language. `ToastProvider`
+  passed no label to the toast library's viewport, so the region was always
+  the library's English default, "Notifications"; it now reads the `ui`
+  namespace's new `toast.region` key.
+- `@angee/ui`: A failed request of a verb bound with `useRecordActionMutation`,
+  or settled through `useActionResultMutation` or
+  `useRecordChromeActionMutation`, is told once. These hooks toast a failed
+  request themselves, and the data layer raised its own "Something went wrong"
+  beside it. They now turn the data layer's own error notice off for their
+  verb. `useActionOutcomeMutation`, which leaves the outcome to its caller, is
+  unchanged: a caller of it that shows the failure itself and does not turn
+  the notice off still tells a failed request twice.
+- `@angee/ui`: A number shown as a percentage or a progress bar holds `null`
+  when it holds nothing, where it held the empty text. `percent` and
+  `progressBar` join the number widgets (`NUMBER_WIDGETS`) in the one rule for
+  a form field's empty value (`emptyValueForField`) and in every reader of
+  that set, so they behave as `integer` and `float` do. Declared by one of
+  them alone, an untouched field reaches an action's `submit` and a
+  `MutationDialog`'s `parseValues` as `null` where it was `""`; a record
+  form's create leaves it out, and its edit sends a stored empty text, or a
+  member the record lacks, as `null`; the presence control treats it as a
+  number, with its own control and no "Set value". No control of theirs writes
+  the empty text. The number and date widget rows are read before the kinds,
+  so under these two widgets a `boolean`, `switch`, `object` or `array` kind
+  now holds `null`, as it already did under `integer` and `float`; a `string`
+  kind keeps `""` but its empty text is left out of a create and sent as
+  `null` on an edit. No declared descriptor has such a pair, and no declared
+  form changes on screen or in what it sends. Not changed: a progress bar
+  shows `0` while it holds `null`; the `boolean`, `booleanToggle` and
+  `booleanBadge` widgets with no kind hold `""` until a field's type reaches
+  its descriptor, and the `money` widget, which the money addon's fragment
+  registers, holds `""` until a widget can declare the kind of value it holds.
+  **Upgrade:** code that tested a field declared by `percent` or `progressBar`
+  alone for the empty text tests for `null`.
+- `@angee/ui`: A form no longer refuses its own seed. An optional field with a
+  bound whose empty value is `null` and whose declared type does not refuse
+  that `null` (a field declared by a number, date or time widget alone, or of
+  kind `any`) was seeded with it and then refused as "This field is
+  required.": on a record form's create and on its edit of a record that lacks
+  the field, in a `MutationDialog`, and for such a member of an object field.
+  The rule that judges a held value (`structuredFieldErrors`, at the field's
+  own path and each member's) now composes the seed rule: the `null` a form
+  gives a field that holds nothing is not held against it for holding the key.
+  A required field and a presence-required one answer for a `null` as before
+  (refused, unless the field may be null); a value outside its bound is
+  refused; a typed number that is not nullable is not seeded with `null` and
+  is unchanged; a list item that holds nothing is still refused. At a field's
+  own path no declared form has the shape; an untyped member of an object
+  field, which the server's form projection emits for a JSON field, has it
+  without a bound. Known limit: an edit of a
+  record that lacks such a field as a member of a JSON value sends the member
+  as `null`, as it already does without a bound, which a server member typed
+  as a plain number with a default refuses.
+- `@angee/refine`: A caller's write cancels a refetch that no enabled observer
+  watches. `invalidateAuthoredQueries` cancelled only reads with no data and
+  refetched only active reads, so a read that had data and was still
+  refetching after its last observer had left, or whose observers are all
+  disabled, committed its pre-write answer after the write and cleared the
+  invalid mark; returning within the stale time showed that answer with no
+  refetch. The refetch is now cancelled: the read keeps the data it had, stays
+  invalid and refetches when an enabled observer mounts. A refresh asked of an
+  on-demand read just before the write is dropped with it.
+- `@angee/ui`: A form section that holds only hidden fields shows nothing. A
+  `hidden` field keeps its value and renders no control, but a group whose
+  fields were all hidden still counted as having something to show: the sheet
+  drew its heading over an empty grid, and a pane group listed an empty pane.
+  It is now empty, as a section with no field is; its values are saved as
+  before.
+- `@angee/ui`: **Changed API.** A refused save that carries a reason no field
+  shows brings the person to the banner. A refusal naming a shown field and
+  also carrying a form-level reason focused the field and left the banner,
+  with the form-level reason, out of view. With a reason no field shows (a
+  form-level one, or one of a field the form does not display) the banner now
+  takes focus and also carries the line naming the refused fields, which it
+  showed only without a form-level reason; with field reasons only, the first
+  shown field takes focus, as before. `applyFormErrors` decides which, for a
+  surface that passes it `focus` and a `fieldSummary` (today the record form;
+  the two dialogs pass neither yet and are unchanged). Its `focus` option,
+  added in this release as `true`, is now a function, the surface's way of
+  focusing its banner, given by the new `useRefusalBannerFocus`, exported with
+  `formErrorsFromForm`; the record form exposes the banner's props as
+  `saveBanner`. **Upgrade:** replace
+  `focus: true` with that hook's `focusBanner` and spread its `banner` on the
+  surface's `ErrorBanner`.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.
@@ -415,7 +565,8 @@ live in code docstrings.
   record form's own rule is deleted. A lines editor's new cell keeps its own
   rule (`emptyCellValue`). First match wins, after a declared `format` (the
   entry above): an explicit `string` kind holds
-  `""` whatever its widget; the `integer` and `float` widgets and the date and
+  `""` whatever its widget; the number widgets (`integer`, `float`, and
+  since then `percent` and `progressBar`) and the date and
   time widgets hold `null`; the list widgets and a relation list `[]`; the
   `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
   for an `array` kind, `null` for an untyped value and `{}` otherwise; then
@@ -444,9 +595,9 @@ live in code docstrings.
   `string` kind with only its widget to tell it from text) seeds `""`, so a
   record form's edit that changed a sibling member sends `""` for it where it
   sent `null`; one that declares its format holds `null` (the entry above),
-  and no form declares such a member today. Not changed, and known: the other boolean widgets
-  (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
-  `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
+  and no form declares such a member today. Not changed, and known: the
+  `boolean`, `booleanToggle`, `booleanBadge` and `money` widgets with no kind
+  still hold `""` (`percent` and `progressBar` have changed since). **Upgrade:** a
   `submit` or a `parseValues` that tested an untouched date, time or number
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and

@@ -193,6 +193,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     displayRecord,
     loadError,
     saveErrors,
+    saveBanner,
     saveConflict,
     declaredActions,
     genericActions,
@@ -237,14 +238,6 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     publishBreadcrumbLabel,
   );
   const awaitingRecord = !isCreate && displayRecord == null && loading;
-  // A refused save brings the person to its reason, as the form's own check does: the answer has moved
-  // focus to the first shown field it names (`applyFormErrors`); any other refusal focuses its banner,
-  // which a sheet scrolled down to the edited field would leave out of view.
-  const saveBannerRef = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
-    if (saveErrors.length === 0 || document.activeElement?.getAttribute("aria-invalid") === "true") return;
-    saveBannerRef.current?.focus();
-  }, [saveErrors]);
   if (!isCreate && !awaitingRecord && displayRecord == null) {
     if (loadError) return <ErrorBanner title={t("form.loadFailed")}
       description={errorMessage(loadError, t("form.loadFailed"))}
@@ -417,8 +410,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
     <ErrorBanner
-      ref={saveBannerRef}
-      tabIndex={-1}
+      {...saveBanner}
       messages={saveErrors}
       title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
       actions={saveConflict ? (

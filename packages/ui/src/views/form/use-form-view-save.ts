@@ -67,7 +67,7 @@ import {
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, formErrorsFromForm, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, type FormSubmitResult,
+  applyFormErrors, formErrorsFromForm, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalBannerFocus, type FormSubmitResult,
 } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
@@ -210,6 +210,8 @@ export interface FormViewSaveSurface {
   pending: boolean;
   /** The form-level messages of the last refused or failed save, each its own entry; empty when there is none. */
   saveErrors: readonly string[];
+  /** Spread on the banner that renders `saveErrors`: a refused save brings the person to it or to its first refused field. */
+  saveBanner: ReturnType<typeof useRefusalBannerFocus>["banner"];
   saveConflict: boolean;
   serverFieldErrors: Record<string, readonly string[]>;
   clearServerFieldError: (name: string) => void;
@@ -552,6 +554,7 @@ export function useFormViewSave({
   }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveErrors = formErrorsFromForm(form.formState.errors);
+  const { banner: saveBanner, focusBanner: focusSaveBanner } = useRefusalBannerFocus(saveErrors);
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
   const customSubmit = useMutation({
@@ -683,9 +686,9 @@ export function useFormViewSave({
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
-      focus: true,
+      focus: focusSaveBanner,
     }) ? null : result;
-  }, [checkFields, fieldByName, form, linesField, t]);
+  }, [checkFields, fieldByName, focusSaveBanner, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -1024,6 +1027,7 @@ export function useFormViewSave({
     formIsDirty,
     pending,
     saveErrors,
+    saveBanner,
     saveConflict,
     serverFieldErrors,
     clearServerFieldError,

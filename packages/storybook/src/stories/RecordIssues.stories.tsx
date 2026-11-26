@@ -34,3 +34,20 @@ function FocusExample() {
 }
 
 export const FieldFocus: Story = { render: () => <FocusExample /> };
+
+const FIELD_LABELS: Record<string, string> = { variables: "Variables", sample: "Sample values" };
+
+/** Two issues with the same words under two fields: each is titled by its field's label. */
+export const FieldLabels: Story = {
+  args: {
+    items: [
+      { id: "variables", tone: "danger", message: "Give an object.", field: "variables" },
+      { id: "sample", tone: "danger", message: "Give an object.", field: "sample" },
+    ],
+    onFocusField: () => undefined,
+    fieldLabel: (field: string) => FIELD_LABELS[field],
+  },
+};
+
+/** Issues about edits not yet submitted: one polite region, in the page with no issues too; none is an alert. */
+export const Polite: Story = { args: { polite: true } };
