@@ -25,10 +25,14 @@ live in code docstrings.
   asks the send to show the link (`must_print=["link"]`), so a template override
   that drops the link from either body, or shows it only under a condition false
   for the person, is refused in band (`link_not_shown`, "…edit or delete the
-  template's override."), nothing written, the earlier link still current, and a
-  warning names the row. The action answers "Sign-in link queued for the
-  account's email." (it said "sent"): its mail's delivery is the recorded
-  message's to show on the system channel. Whether an account's address can
+  deployment's version of the template, or of a block or part it includes."),
+  nothing written, the earlier link still current, and a warning names the
+  template, its language and its row's public id. The action answers "Sign-in
+  link queued for the account's email." (it said "sent"), and so do the
+  cooldown's refusal and the log: its mail's delivery is the recorded message's
+  to show on the system channel. A missing template's refusal names no command
+  ("This deployment has not installed the sign-in link's email template; its
+  operator loads its resources (provision does)."). Whether an account's address can
   receive its link is messaging's `Message.objects.clean_system_recipient`, no
   longer Django's `validate_email`: an administrator sees the account's own
   refusal for an address outside ASCII before the @ (as before) and now also for
