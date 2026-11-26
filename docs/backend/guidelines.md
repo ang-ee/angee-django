@@ -1736,7 +1736,10 @@ retains its native routing contract.
   when the load found none to adopt. Put such rows in their own entry, so other rows keep their policy: adding
   `create_only` to a shipped entry changes its rows' hashes, so each existing row is
   re-applied once (without the create-only fields). An adoption field cannot be
-  create-only, and grant entries take none.
+  create-only, and grant entries take none. A column an adapter's owner verb applies
+  on every changed row is never create-only: the adapter names it in
+  `AngeeResource.never_create_only`, which adds to its parents', and the load refuses
+  an entry listing it (web forms' `publish`, workflows' `draft` and `publish`).
 - **Demo resource tiers are additive across installed addons.** A deployment that
   needs demo rows but not one permissive seed must exclude that exact entry with
   `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;

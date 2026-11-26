@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
+  resource adapter names the columns its owner verb applies on every changed row in
+  `AngeeResource.never_create_only`, a mapping of each column to why, which adds to
+  its parents'. The load refuses an entry listing one under `create_only` before any
+  row, and rolls back, as for any entry configuration error. Web forms' refusal of
+  `publish` moved there with its message. A workflow entry may no longer list `draft`
+  or `publish`: under `create_only: [draft]` a changed row (a rename, or the entry
+  newly gaining it) published the draft staff held, with no publisher, so a run as
+  the workflow principal was admitted on staff's content, and a stored draft that
+  could not be published failed every load; under `create_only: [publish]` a changed
+  row published although the entry declared `publish: false`. **Upgrade:** remove
+  `draft` and `publish` from a workflow entry's `create_only`; no shipped entry lists
+  either.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.

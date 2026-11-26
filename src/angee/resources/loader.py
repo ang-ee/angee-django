@@ -84,6 +84,12 @@ class AngeeResource(resources.ModelResource):
     }
     """Widget map that accepts native JSON values from structured files."""
 
+    never_create_only: ClassVar[Mapping[str, str]] = {}
+    """Columns this adapter's owner verb applies on every changed row, each with why it is never ``create_only``.
+
+    A subclass adds to its parents' columns; an entry listing one is refused before any row loads.
+    """
+
     def __init__(
         self,
         *,
@@ -139,12 +145,19 @@ class AngeeResource(resources.ModelResource):
         return functools.partial(widget, model=model)
 
     def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
-        """Validate headers and reset any batch-planning state before importing."""
+        """Validate headers and ``create_only`` names, and reset any batch-planning state before importing."""
 
         del kwargs
         self._validate_catalogue_tier()
         self._validate_headers(list(dataset.headers or []))
         self._validate_headers(list(self.entry.create_only), declared="create_only field(s)")
+        declared = {
+            name: reason
+            for base in reversed(type(self).__mro__)
+            for name, reason in vars(base).get("never_create_only", {}).items()
+        }
+        if refused := sorted(set(self.entry.create_only) & set(declared)):
+            raise ResourceLoadError(f"{self.entry.display}: " + " ".join(declared[name] for name in refused))
         self._hash_skips = set()
         self._creating.clear()
         self._instances.clear()

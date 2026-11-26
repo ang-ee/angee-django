@@ -69,6 +69,16 @@ class WorkflowDefinitionResource(AngeeResource):
     """Delegate declaration persistence to the workflow's save/publish owner."""
 
     publish = fields.Field(column_name="publish", readonly=True, default=True, widget=widgets.BooleanWidget())
+    never_create_only = {
+        "draft": (
+            "draft is installed and published on every changed row, so it is never create_only: under "
+            "create_only a changed row would publish the draft staff hold."
+        ),
+        "publish": (
+            "publish applies on every changed row, so it is never create_only: under create_only a changed "
+            "row would publish whatever the entry declares."
+        ),
+    }
 
     def _extensions_for(self, key: str) -> tuple[SourcedWorkflowExtension, ...]:
         """Return this load's contributions, retaining the published set for a narrow load."""
