@@ -6,6 +6,7 @@ import type { DataResourceFieldMetadata, DataResourceLinesMetadata, DataResource
 import { testDataResource } from "@angee/metadata/testing";
 import type { ReactNode } from "react";
 import { useForm } from "react-hook-form";
+import { boundedGraphQLTransportError } from "@angee/refine";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -79,8 +80,9 @@ function harness(list: readonly DataResourceMetadata[] = resources) {
     getOne: vi.fn(async () => ({ data: { id: "people-new", display_name: "Ada" } })),
   };
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const notify = vi.fn();
   function Wrapper({ children }: { children?: ReactNode }) {
-    return <Provider resources={list} dataProvider={dataProvider}>
+    return <Provider resources={list} dataProvider={dataProvider} notificationProvider={{ open: notify, close: vi.fn() }}>
       <RouterContextProvider router={router}>
         <ModalsHost><ToastProvider>
           <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>{children}</AppRuntimeProvider>
@@ -88,7 +90,7 @@ function harness(list: readonly DataResourceMetadata[] = resources) {
       </RouterContextProvider>
     </Provider>;
   }
-  return { create, Wrapper };
+  return { create, notify, Wrapper };
 }
 
 test("an MTI parent creates through its creatable concrete kinds; a plain model creates itself", () => {
@@ -286,6 +288,26 @@ test("a quick create on a keyed root sends its draft's key through the create ro
   expect(keys[0]).toEqual(expect.any(String));
   expect(keys[1]).toBe(keys[0]);
   expect(keys[2]).not.toBe(keys[0]);
+});
+
+test.each([
+  ["a lost answer says it may have been sent and that sending again sends it once", () => new TypeError("Failed to fetch"),
+    { message: "Save failed", description: "No answer came back, so it may have been sent. Sending again from this page sends it once." }],
+  ["a spent key says an earlier attempt created a record", () => boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+    message: "This idempotency key was already used for different content.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }),
+  { message: "Created earlier",
+    description: "An earlier attempt to create from this field already created a record; find it among the existing ones before creating again." }],
+  ["any other failure keeps the data layer's notice", () => boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+    message: "Name is taken.", extensions: { code: "VALIDATION", validationErrors: { name: ["Name is taken."] }, formErrors: [] } }] } }),
+  { message: expect.stringContaining("There was an error creating") }],
+])("a keyed quick create tells its failure in its own words: %s", async (_name, failure, notice) => {
+  const { create, notify, Wrapper } = harness([...resources, label]);
+  create.mockRejectedValueOnce(failure());
+  render(<Wrapper><RelationMultiFieldWidget value={[]} onChange={vi.fn()} fieldName="labels"
+    relation={{ resource: "labels.Label", labelField: "name", canCreate: true }} aria-label="Labels" /></Wrapper>);
+  fireEvent.input(screen.getByRole("combobox", { name: "Labels" }), { target: { value: "Urgent" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Create “Urgent”" }));
+  await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: "error", ...notice })));
 });
 
 test("two relation fields' quick creates keep their drafts apart: a lost one is retried under its own key after the other field's", async () => {

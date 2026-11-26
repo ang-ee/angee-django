@@ -789,6 +789,7 @@ export const enUiMessages: Record<string, string> = {
   "relation.noMatches": "No matches.",
   "relation.create": "Create “{query}”",
   "relation.createAndEdit": "Create and edit…",
+  "relation.quickCreatedEarlier": "An earlier attempt to create from this field already created a record; find it among the existing ones before creating again.",
   "relation.follow": "Open record",
   "relation.edit": "Edit record",
   "relation.createTitle": "New {model}",

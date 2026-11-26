@@ -8,7 +8,7 @@ import {
   useSchemaFieldMetadata,
   type Row,
 } from "@angee/metadata";
-import { refineFieldsFromPaths } from "@angee/refine";
+import { failedWriteOutcome, refineFieldsFromPaths } from "@angee/refine";
 import { useCreate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { useUiT } from "../../i18n";
@@ -73,12 +73,14 @@ const QUICK_CREATE_FIELDS = refineFieldsFromPaths(["id"]);
  * saves through, and its public id returned; anything more opens the create form. A root
  * that takes an idempotency key gets the draft's, as the create form's does: the quick
  * create of `fieldName` is one draft (`relation:<field>`), so a retry after a lost answer
- * is written once.
+ * is written once, and it tells a lost answer or a spent key in its own words; any other
+ * failure keeps the data layer's notice.
  */
 export function useRelationQuickCreate(
   create: RelationCreateConfig | undefined,
   fieldName?: string,
 ): ((query: string) => Promise<string | undefined>) | undefined {
+  const t = useUiT();
   const metadata = useModelMetadata(create?.resource ?? "");
   const resource = metadata?.resource ?? null;
   const keys = useIdempotencyKeys();
@@ -101,10 +103,19 @@ export function useRelationQuickCreate(
     const result = keyed
       ? await keys.send(draftScope, (idempotencyKey) => mutateAsync({
           values, meta: { fields: QUICK_CREATE_FIELDS, gqlVariables: { idempotency_key: idempotencyKey } },
+          errorNotification: (error) => {
+            const outcome = failedWriteOutcome(error);
+            if (outcome === "conflict") {
+              return { type: "error", message: t("form.createdEarlierTitle"), description: t("relation.quickCreatedEarlier") };
+            }
+            return outcome === "unconfirmed"
+              ? { type: "error", message: t("form.saveFailed"), description: t("form.answerLostResend") }
+              : undefined;
+          },
         }))
       : await mutateAsync({ values });
     return rowPublicId(result.data as Row) ?? undefined;
-  }, [defaultValues, draftScope, keyed, keys, mutateAsync, prefillField]);
+  }, [defaultValues, draftScope, keyed, keys, mutateAsync, prefillField, t]);
   return quick ? quickCreate : undefined;
 }
 

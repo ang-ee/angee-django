@@ -34,7 +34,9 @@ pending write and typed values.
   their own words. The relation picker's quick create ("Create “name”") sits on it too
   when its create root takes a key, as one draft per relation field, so a
   retry after a lost answer no longer writes the record twice
-  (`useRelationQuickCreate` takes the field's name).
+  (`useRelationQuickCreate` takes the field's name); it tells a lost answer
+  and a spent key in its own words, and any other failure through the data
+  layer's notice as before.
 - One draft scope belongs to one surface at a time. `useIdempotencyDraftOwner(scope, holder)`
   holds it while the surface is mounted (an open keyed dialog, a composer that
   can post, and every create form, keyed or not), and in development two
