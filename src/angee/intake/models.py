@@ -262,8 +262,8 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 role=attachment_model.AttachmentRole.SOURCE,
                 content_type=ContentType.objects.get_for_model(task_model),
             ).values("object_id")
-            senders = set(type(sender)._base_manager.redirect_group(sender.canonical()).values_list("pk", flat=True))
-            address = str(sender.canonical().value or "").strip().lower()
+            canonical = sender.canonical()
+            senders = set(type(sender)._base_manager.redirect_group(canonical).values_list("pk", flat=True))
             candidates = (
                 self.model._base_manager.filter(task_id__in=models.Subquery(bound), task__stage__category=triage)
                 .select_related("party", "source_message")
@@ -273,7 +273,11 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 need
                 for need in candidates
                 if need.source_message is not None
-                and (need.source_message.sender_id in senders or address in need.reply_to_addresses())
+                and (
+                    need.source_message.sender_id in senders
+                    # The handle's address in any letter case or domain spelling, as the handle owner lands one.
+                    or any(canonical.is_spelling_of(address) for address in need.reply_to_addresses())
+                )
             ]
             repliers = {need.task_id: need.requester_account_id() for need in requests if need.task_id is not None}
         tasks = task_model.work.sudo(reason="intake.need.requester_reply.wake")

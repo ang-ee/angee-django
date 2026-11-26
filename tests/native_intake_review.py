@@ -345,6 +345,38 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
         self.assertFalse(self.Need._base_manager.filter(source_message=answer).exists())
 
+    @override_settings(
+        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
+        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
+    )
+    def test_an_answer_in_another_domain_spelling_of_the_reply_to_wakes_the_task(self):
+        """The answer lands on the handle a contact stored in the Unicode spelling, and still answers the request."""
+
+        channel = self.channel()
+        with system_context(reason="tests.intake.review.domain_spelling"):
+            stored = apps.get_model("parties", "Handle").objects.upsert(
+                platform="email", value="requester@bücher.example",
+            )
+        request = email(
+            channel,
+            "relayed-idn@example.test",
+            sender="relay@example.test",
+            headers=(("Reply-To", "Requester <requester@xn--bcher-kva.example>"),),
+        )
+        task = self.clarify(self.Need._base_manager.get(source_message=request))
+        question = apps.get_model("messaging", "Message")._base_manager.get(direction="outbound")
+
+        with woken() as events:
+            answer = email(
+                channel,
+                "idn-answer@example.test",
+                sender="requester@xn--bcher-kva.example",
+                subject="Dates",
+                in_reply_to=question.external_id,
+            )
+        self.assertEqual(answer.sender_id, stored.pk)
+        self.assertEqual(events, [(task.pk, "reply", answer.pk)])
+
     def test_a_requester_reachable_neither_way_is_refused_and_gets_no_account(self):
         need = self.need(email="", party=self.party(self.reader))
         before = self.task(need).revision
