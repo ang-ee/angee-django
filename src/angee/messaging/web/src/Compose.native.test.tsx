@@ -426,6 +426,21 @@ test("a reply sent from an anchored conversation returns to the latest and gives
   await waitFor(() => expect(document.activeElement).toBe(transcriptList()));
 });
 
+test("focus moved out of the transcript before the latest window renders stays where the person put it", async () => {
+  const { fixture } = mount({ surface: "transcript", seat: "ana", anchor: `message:${MESSAGE.request}` });
+  const box = await openReply("Please add me.");
+  const release = fixture().holdNextAnswer();
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  await within(box).findByRole("button", { name: word("compose.sending") });
+  // While it sends, the person moves on to a control outside the transcript: the pane's toolbar.
+  const elsewhere = screen.getByRole("button", { name: word("copies.showAll") });
+  act(() => elsewhere.focus());
+  await act(async () => release());
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  await row("Thanks, adding you now.");
+  expect(document.activeElement).toBe(elsewhere);
+});
+
 test("Reply is offered on the emails of a channel the seat may send on, and nowhere else", async () => {
   const reader = mount({ surface: "transcript", seat: "ana", conversation: "sales" });
   expect(await row("A quote, please.")).toBeTruthy();
