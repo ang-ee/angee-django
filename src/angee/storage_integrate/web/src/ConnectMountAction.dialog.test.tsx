@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
-import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
-import { useState, type ReactElement, type ReactNode } from "react";
+import { AppRuntimeProvider, ToastProvider, defaultWidgets } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -89,11 +88,8 @@ describe("ConnectMountAction's dialog", () => {
   });
 });
 
-/** The app's providers the dialog renders under: the router and `ModalsHost` it asks through, and the toasts. */
-function AppProviders({ children }: { children?: ReactNode }): ReactElement {
-  const [router] = useState(() => createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) }));
-  return <RouterContextProvider router={router}><ModalsHost><ToastProvider>{children}</ToastProvider></ModalsHost></RouterContextProvider>;
-}
+// The app's providers a form dialog renders under: the router and ModalsHost it guards and asks through.
+const { Provider } = createUiTestProviders({ router: true });
 
 const settle = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 0); }));
 const useThisFolder = () => screen.getByRole("button", { name: "Use this folder" });
@@ -101,10 +97,10 @@ const useThisFolder = () => screen.getByRole("button", { name: "Use this folder"
 /** Open the dialog with a name, the first account and its root folder chosen. */
 async function openWithFolder(): Promise<void> {
   render(
-    <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+    <ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
       <ConnectMountAction backendClass="remote_source" i18nPrefix="remote.mount.connect" />
-    </AppRuntimeProvider>,
-    { wrapper: AppProviders },
+    </AppRuntimeProvider></ToastProvider>,
+    { wrapper: Provider },
   );
   fireEvent.click(screen.getByRole("button", { name: "remote.mount.connect.button" }));
   fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Team" } });

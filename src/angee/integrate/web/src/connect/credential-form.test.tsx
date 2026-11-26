@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ActionFormDialog, AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
+import { ActionFormDialog, AppRuntimeProvider, ToastProvider, defaultWidgets } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { ActionContext, ActionDescriptor, FieldDescriptor, FormSubmit, RecordActionRunner, UseRecordActionOptions } from "@angee/ui";
 import * as React from "react";
@@ -156,9 +156,9 @@ describe("credentialCreateForm", () => {
     const action = mocks.actions.find(({ id }) => id === "replace-secret")!;
     const material = "first line\nsecond line\nthird line\n";
     const record = { id: "credential-1", replacement_fields: [name] };
-    render(<Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ModalsHost><ToastProvider>
+    render(<Provider router><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
       <ActionFormDialog action={action} context={{ record, selectedIds: [] }} open onOpenChange={vi.fn()} />
-    </ToastProvider></ModalsHost></AppRuntimeProvider></Provider>);
+    </ToastProvider></AppRuntimeProvider></Provider>);
     const input = screen.getByRole<HTMLTextAreaElement>("textbox");
     expect(input.tagName).toBe("TEXTAREA");
     fireEvent.change(input, { target: { value: material } });

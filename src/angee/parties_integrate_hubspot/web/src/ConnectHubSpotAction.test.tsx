@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 
 import { testDataResource } from "@angee/metadata/testing";
-import { AppRuntimeProvider, ModalsHost, ToastProvider, createAngeeI18nInstance, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, ToastProvider, createAngeeI18nInstance, defaultWidgets } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { useList } from "@refinedev/core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -48,17 +47,16 @@ function Directories(): React.ReactElement {
 }
 
 function renderAction(): void {
-  // The app's router and ModalsHost: the dialog guards route moves and asks before discarding typed values.
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  // Under a router, as an app page is: the dialog guards route moves while it holds work.
   render(
-    <RouterContextProvider router={router}><Provider dataProvider={{ custom: mocks.custom, getList: mocks.getList }}>
+    <Provider router dataProvider={{ custom: mocks.custom, getList: mocks.getList }}>
       <AppRuntimeProvider runtime={{ i18n, widgets: defaultWidgets }}>
-        <ModalsHost><ToastProvider>
+        <ToastProvider>
           <Directories />
           <ConnectHubSpotAction />
-        </ToastProvider></ModalsHost>
+        </ToastProvider>
       </AppRuntimeProvider>
-    </Provider></RouterContextProvider>,
+    </Provider>,
   );
 }
 

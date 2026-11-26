@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -30,6 +29,7 @@ vi.mock("../SubjectControl", () => ({
 }));
 
 import { AppRuntimeProvider, InAppLinkProvider, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 import { OverviewPage } from "./OverviewPage";
 
@@ -138,11 +138,12 @@ function overviewData(): unknown {
   };
 }
 
+// Under a router, as an app page is: a grant dialog guards route moves while it holds work.
+const { Provider } = createUiTestProviders({ router: true });
+
 function renderPage(children: ReactNode): ReturnType<typeof render> {
-  // The router a page renders under: a grant dialog guards route moves while it holds work.
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   return render(
-    <RouterContextProvider router={router}><AppRuntimeProvider
+    <AppRuntimeProvider
       runtime={{
         icons: baseIcons,
         widgets: defaultWidgets,
@@ -152,6 +153,7 @@ function renderPage(children: ReactNode): ReturnType<typeof render> {
       <ToastProvider>
         <ModalsHost><InAppLinkProvider navigate={mocks.navigate}>{children}</InAppLinkProvider></ModalsHost>
       </ToastProvider>
-    </AppRuntimeProvider></RouterContextProvider>,
+    </AppRuntimeProvider>,
+    { wrapper: Provider },
   );
 }

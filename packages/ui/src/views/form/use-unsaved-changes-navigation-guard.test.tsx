@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { ModalsHost } from "../../feedback";
+import { createUiTestProviders } from "../../testing";
 import { pathnameChanges, useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./use-unsaved-changes-navigation-guard";
 
 afterEach(cleanup);
@@ -15,10 +14,11 @@ function DirtyForm({ leaves }: { leaves?: (move: UnsavedChangesMove) => boolean 
   return null;
 }
 
+const { Provider, routers } = createUiTestProviders({ router: { initialEntries: ["/threads?thread=one"] } });
+
 function renderGuard(leaves?: (move: UnsavedChangesMove) => boolean) {
-  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/threads?thread=one"] }) });
-  render(<RouterContextProvider router={router}><ModalsHost><DirtyForm leaves={leaves} /></ModalsHost></RouterContextProvider>);
-  return router;
+  render(<DirtyForm leaves={leaves} />, { wrapper: Provider });
+  return routers.at(-1)!;
 }
 
 /** Start a move and let the guard decide; resolves once the move is decided. */
