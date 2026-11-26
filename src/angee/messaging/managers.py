@@ -287,7 +287,16 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         an empty selection with its coded reason.
         """
 
-        return self.filter(
+        return self.filter(self.outbound_email_rule(backend_class=backend_class))
+
+    def outbound_email_rule(self, *, backend_class: str | None = None) -> models.Q:
+        """:meth:`outbound_email` as a condition, for an expression that decides it per row.
+
+        It reads the backend registry and settings, never a row, so it builds on
+        any selection of this model, an empty one included.
+        """
+
+        return models.Q(
             backend_class__in=self._outbound_email_backends(backend_class), lifecycle=IntegrationLifecycle.CONNECTED,
         )
 
@@ -3139,6 +3148,16 @@ _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     """Owns idempotent ingest, outgoing messages (:meth:`compose`), insert deltas and state-change recounts."""
 
+    @staticmethod
+    def recipient_limit() -> int:
+        """The most addresses one composed message takes across ``to``, ``cc`` and ``bcc`` together.
+
+        The deployment's ``ANGEE_MESSAGING_MAX_RECIPIENTS``: :meth:`compose`
+        refuses more, and the console reads it to state the bound.
+        """
+
+        return int(settings.ANGEE_MESSAGING_MAX_RECIPIENTS)
+
     def compose(
         self,
         *,
@@ -3168,7 +3187,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         It runs as its actor and refuses an elevated call. Its shape is checked
         first, reading nothing: its anchor, and at most
-        ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses across ``to``, ``cc`` and
+        :meth:`recipient_limit` addresses across ``to``, ``cc`` and
         ``bcc`` and ``ANGEE_MESSAGING_MAX_ATTACHMENTS`` attachments, each refused
         (``too_many``) under the argument that crosses it. Who may write it is
         decided next: :meth:`Message.require_reply` for an answer, else
@@ -3199,7 +3218,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )})
         if parent is None and channel is None:
             raise ValidationError({"channel": ValidationError("Choose the channel to send from.", code="required")})
-        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        _require_at_most(self.recipient_limit(), "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
         _require_at_most(settings.ANGEE_MESSAGING_MAX_ATTACHMENTS, "attachments", (("attachments", attachments),))
         values = dict(local or {})
         intent = {

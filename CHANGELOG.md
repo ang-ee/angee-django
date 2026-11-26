@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`: **The console reads where one may send a new message, which
+  messages were written here, and the recipient bound.**
+  - **New.** The channels filter `sendable`
+    (`channels(where: {sendable: {_eq: true}})`): the channels the reader may send
+    a new email on, their `reply` on a channel that can send email now.
+    `ChannelQuerySet.outbound_email_rule` is that condition (connected, on a
+    backend whose outbound email is configured), which `outbound_email` filters by.
+  - **New.** `MessageType.is_locally_written` (`Message.is_locally_written`):
+    whether messaging wrote the message and owns its delivery, rather than
+    syncing it from its source.
+  - **New.** The console root `message_recipient_limit`, the most addresses
+    `compose_message` takes, read with `compose` from
+    `MessageManager.recipient_limit()`, the one reader of
+    `ANGEE_MESSAGING_MAX_RECIPIENTS`.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
 - `angee.messaging`: **The console composes a message and reads back its
   delivery.**
   - **New.** The console mutation `compose_message`, a keyed verb over

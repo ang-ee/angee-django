@@ -38,7 +38,12 @@ from angee.graphql.actions import (
     resolve_action_target,
     session_user,
 )
-from angee.graphql.capabilities import PermissionsExtension, held_permissions, permissions_field
+from angee.graphql.capabilities import (
+    PermissionsExtension,
+    held_permissions,
+    permission_expression,
+    permissions_field,
+)
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     SortAlias,
@@ -331,6 +336,12 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
         """Project the same held predicate used by delivery verbs and filters."""
 
         return cast(Any, self).is_held
+
+    @strawberry_django.field(only=["status"])
+    def is_locally_written(self) -> bool:
+        """Whether messaging wrote this message and owns its delivery, rather than syncing it from its source."""
+
+        return cast(Any, self).is_locally_written
 
     @strawberry_django.field(
         only=[
@@ -1214,6 +1225,12 @@ class MessagingQuery:
         row = instance_for_id(Message, id, queryset=Message.objects.inbox().scoped())
         return MessageTextType(body_text=row.body_text(max_bytes=4096)) if row is not None else None
 
+    @strawberry.field(name="message_recipient_limit")
+    def message_recipient_limit(self) -> int:
+        """The most addresses ``compose_message`` takes across ``to``, ``cc`` and ``bcc`` (``recipient_limit``)."""
+
+        return Message.objects.recipient_limit()
+
     @strawberry.field
     def thread_message_feed(
         self,
@@ -1812,6 +1829,19 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
         return preview
 
 
+def _sendable_expression(queryset: models.QuerySet[Any]) -> models.Expression:
+    """The channels the actor may send a new email on: their ``reply``, on a channel that can send email now."""
+
+    return models.Case(
+        models.When(
+            cast(ChannelQuerySet[Any], queryset).outbound_email_rule(),
+            then=permission_expression(queryset, Channel.reply_permission),
+        ),
+        default=models.Value(False),
+        output_field=models.BooleanField(),
+    )
+
+
 _CHANNEL_RESOURCE = hasura_model_resource(
     ChannelType,
     model=Channel,
@@ -1826,8 +1856,11 @@ _CHANNEL_RESOURCE = hasura_model_resource(
         "sync_stage",
         "last_sync_completed_at",
         "updated_at",
+        # `sendable`: the channels the actor may send a new email on, as a new message offers them.
+        "sendable",
         *_CHANNEL_EXTENSION_FILTER_FIELDS,
     ],
+    filter_expressions={"sendable": _sendable_expression},
     sortable=[
         "display_name",
         "backend_class",

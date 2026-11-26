@@ -386,7 +386,11 @@ addresses, the message's `Recipient` rows, one per handle and envelope role
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
 hand-off, decided for the caller by read on the message it answers and `reply` on
 its channel, or by `reply` on the channel and post on the record it is sent on.
-The console composes through the `compose_message` mutation.
+The console composes through the `compose_message` mutation, offers a new email
+on the channels its `sendable` filter keeps (`reply` on a channel
+`ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
+`MessageManager.recipient_limit`, as `message_recipient_limit`. A message
+messaging wrote, rather than synced, is `Message.is_locally_written`.
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 

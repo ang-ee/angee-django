@@ -62,8 +62,10 @@ Each typed recipient is one entry, as
 [`MessageManager.clean_recipient`](managers.py) reads it and as `compose` lands
 it: a bare address or one explicit `Name <address>`. An entry a mail library
 would read as another address or as several, or one carrying a NUL byte, is
-refused (`invalid`) under its role, never re-read. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc`
-and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
+refused (`invalid`) under its role, never re-read. A message takes at most
+[`MessageManager.recipient_limit()`](managers.py) addresses across `to`, `cc`
+and `bcc` (`ANGEE_MESSAGING_MAX_RECIPIENTS`, 50) and
+`ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both settings
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
 under the argument that crosses the bound, before anything is read. A
 `scheduled_at` without an offset is refused (`naive_datetime`), never read in
@@ -83,8 +85,13 @@ says why). It answers `parent` or sends on `channel`, takes a required
 message, fresh or replayed. Readers of a message read back its `status`,
 `scheduled_at` and [`Message.delivery_attempts`](models.py); those who hold
 `send_held` also read why delivery last failed,
-[`Message.delivery_error`](models.py), as they read `delivery_actions`. A
-channel's `permissions` answer `reply`.
+[`Message.delivery_error`](models.py), as they read `delivery_actions`. Every
+reader reads `is_locally_written`, which tells a message messaging wrote from own
+mail synced from its source ([`Message.is_locally_written`](models.py)). A
+channel's `permissions` answer `reply`; the channels filter `sendable` keeps
+the channels the reader may send a new email on, `reply` on a channel
+[`ChannelQuerySet.outbound_email_rule`](managers.py) admits; and
+`message_recipient_limit` states the recipient bound.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
