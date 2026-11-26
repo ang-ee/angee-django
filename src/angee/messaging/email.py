@@ -553,8 +553,16 @@ def _dedupe(addresses: Any) -> list[str]:
 
 
 def _bare_address(address: str) -> str:
+    """Return which address one written mailbox names, for sending each address once.
+
+    Which mailboxes are one address is the handle owner's spelling key
+    (``Handle.spelling_key_of``); a mailbox with no ``@`` is only itself.
+    """
+
     parsed = getaddresses([address])
-    return parsed[0][1].strip().casefold() if parsed else ""
+    bare = parsed[0][1].strip() if parsed else ""
+    handle_model = apps.get_model("parties", "Handle")
+    return handle_model.spelling_key_of(handle_model.Platform.EMAIL, bare) or bare
 
 
 def _rfc_message_id(external_id: str) -> str:

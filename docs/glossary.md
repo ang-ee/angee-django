@@ -369,8 +369,9 @@ integrate's shared stream engine; activity and history classify each record
 against the feed's live horizon. See [public feeds](../src/angee/posts/README.md).
 
 **Delivery settlement** — messaging's reflection of provider acceptance or refusal
-into the outbound message's status, provider identity and retry schedule. See
-[the delivery owner](../src/angee/messaging/delivery.py).
+into the outbound message's status, provider identity and retry schedule, with
+its attempts (`delivery_attempts`) and, for whoever may act on it, why it last
+failed (`delivery_error`). See [the delivery owner](../src/angee/messaging/delivery.py).
 
 **Chatter** — a record's own conversation: the thread a `ThreadAttachment` with
 the `chatter` role binds to one record, read through that record's read
@@ -421,6 +422,11 @@ it is created. See [messaging's contracts](../src/angee/messaging/README.md).
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
 hand-off, decided for the caller by read on the message it answers and `reply` on
 its channel, or by `reply` on the channel and post on the record it is sent on.
+The console composes through the `compose_message` mutation, offers a new email
+on the channels its `sendable` filter keeps (`reply` on a channel
+`ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
+`MessageManager.recipient_limit`, as `message_recipient_limit`. A message
+messaging wrote, rather than synced, is `Message.is_locally_written`.
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
@@ -519,6 +525,10 @@ documents, facts and revisions against an explicit file or message target.
 that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
+Its ingestion keys (`platform`, `value`, `external_id`) are written once: only
+the handle owner's verbs change one, and history's revert restores earlier keys
+unless the restored row would be a second live handle of an address; never a
+field write.
 The Handle's controller records the **control** fact (who may act through it), while
 **PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
 member); neither fact implies the other. A **suggestion** is an asserted
@@ -528,6 +538,23 @@ preferred no-value dismisses it durably. Applied directory/person statements
 and confirmations publish to a card. Other sources remain inferences even at
 full confidence. Reads follow Party authorization, with separate Handle and
 evidence gates.
+
+**Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
+for an email address, the address lower-cased (not case-folded) with its domain
+in the one spelling the email backend sends it in (IDNA 2003); none for a value
+with no `@`, which is no address, nor on any other platform, where the value
+itself is the address. A live email handle is unique by it.
+
+**Person-matching key** — what groups the handles of probably one person
+(`Handle.normalize_value`), stored as a handle's `normalized_value`: derived from
+its value, trimmed and lower-cased on every platform, an email address's domain
+in one spelling with Gmail's dots and plus-tags dropped, a phone number in E.164
+(else its bare digits, a fallback that names no one number). It is read where a
+person is looked up or suggested and decides which spellings or aliases a person
+may merge. Which handle an address lands on is the spelling key's, except at two
+sites still open for a ruling, where it picks the handle a provider's alias lands
+on: a directory adoption's handle that found the person, and a claimant's email
+handle.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

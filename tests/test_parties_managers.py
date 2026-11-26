@@ -13,7 +13,7 @@ from rebac import system_context
 
 from angee.base.managers import AngeeManager
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
-from angee.messaging.testing.models import Handle, Organization, Party
+from angee.messaging.testing.models import Handle, Organization, Party, Person
 from angee.parties.managers import PartyQuerySet
 from tests.tables import model_tables
 
@@ -63,15 +63,12 @@ def test_handle_upsert_refuses_normalization_that_exceeds_its_field(db: None, ve
     assert not Handle._base_manager.exists()
 
 
-def test_clean_identity_returns_the_comparison_key_upsert_stores(db: None) -> None:
-    """The check and the write agree on the key, and the check alone writes no row."""
+def test_clean_identity_validates_an_identity_and_writes_nothing(db: None) -> None:
+    """The check upsert runs before it writes, run alone: an identity it would land passes, and no row is written."""
 
     del db
-    key = Handle.objects.clean_identity(platform="email", value="Person@Example.test")
+    assert Handle.objects.clean_identity(platform="email", value="Person@Example.test") is None
     assert not Handle._base_manager.exists()
-    with system_context(reason="test handle comparison key"):
-        handle = Handle.objects.upsert(platform="email", value="Person@Example.test")
-    assert handle.normalized_value == key
 
 
 def test_a_fill_only_name_fills_a_blank_handle_and_never_renames_a_named_one(db: None) -> None:
@@ -108,6 +105,146 @@ def test_find_identities_reads_a_batch_in_one_statement_with_each_arm_naming_its
     assert found == {("telegram", "ada"): ada, ("email", "ada@example.test"): mail}
     (statement,) = queries.captured_queries
     assert statement["sql"].count('."platform" = ') == 2
+
+
+SPELLINGS = [
+    # (platform, spellings, the spelling key of each, the person-matching key of each, one handle)
+    ("email", ("ada@example.test", "  Ada@Example.TEST ", "ADA@example.test"), ("ada@example.test",) * 3,
+     ("ada@example.test",) * 3, True),
+    ("email", ("ada@Bücher.example", "ada@xn--bcher-kva.example", "ada@XN--BCHER-KVA.example"),
+     ("ada@bücher.example",) * 3, ("ada@bücher.example",) * 3, True),
+    # IDNA 2003, as the email backend sends a domain: an IDNA 2008 punycode label carrying ß does not read back, so it
+    # stays as typed, a domain of its own; ß itself is sent as ss.
+    ("email", ("ada@xn--strae-oqa.example", "ada@straße.example"), ("ada@xn--strae-oqa.example", "ada@strasse.example"),
+     ("ada@xn--strae-oqa.example", "ada@strasse.example"), False),
+    ("email", ("ada@straße.example", "ada@strasse.example", "ada@STRASSE.example"), ("ada@strasse.example",) * 3,
+     ("ada@strasse.example",) * 3, True),
+    ("email", ("ada@bücher.example", "ada@bu\u0308cher.example"), ("ada@bücher.example",) * 2,
+     ("ada@bücher.example",) * 2, True),
+    ("email", ("ada@example.test", "ada@\uff45xample.test"), ("ada@example.test",) * 2, ("ada@example.test",) * 2,
+     True),
+    ("email", ("a.b@gmail.com", "ab@gmail.com", "A.B+promo@GMail.com"),
+     ("a.b@gmail.com", "ab@gmail.com", "a.b+promo@gmail.com"), ("ab@gmail.com",) * 3, False),
+    ("email", ("ab@googlemail.com", "ab@gmail.com"), ("ab@googlemail.com", "ab@gmail.com"),
+     ("ab@googlemail.com", "ab@gmail.com"), False),
+    ("email", ("ada+news@example.test", "ada@example.test"), ("ada+news@example.test", "ada@example.test"),
+     ("ada+news@example.test", "ada@example.test"), False),
+    ("email", ('"Ada Example"@example.test', '"ADA EXAMPLE"@example.test'), ('"ada example"@example.test',) * 2,
+     ('"ada example"@example.test',) * 2, True),
+    ("email", ("jörg@example.test", "JÖRG@example.test"), ("jörg@example.test",) * 2, ("jörg@example.test",) * 2, True),
+    # lower(), not casefold(): two addresses.
+    ("email", ("Straße@example.test", "STRASSE@example.test"), ("straße@example.test", "strasse@example.test"),
+     ("straße@example.test", "strasse@example.test"), False),
+    ("imessage", ("Ada@Example.test", "ada@example.test"), ("", ""), ("ada@example.test",) * 2, False),
+    ("phone", ("+1 787 555 0100", "+17875550100"), ("", ""), ("+17875550100",) * 2, False),
+]
+
+
+@pytest.mark.parametrize(("platform", "spellings", "spelling_keys", "person_keys", "one"), SPELLINGS)
+def test_a_spelling_lands_on_the_stored_handle_exactly_when_their_spelling_keys_agree(
+    db: None, platform: str, spellings: tuple[str, ...], spelling_keys: tuple[str, ...],
+    person_keys: tuple[str, ...], one: bool,
+) -> None:
+    """The spelling key decides which handle an address lands on; the person-matching key only groups a person's."""
+
+    del db
+    assert tuple(Handle.spelling_key_of(platform, spelling) for spelling in spellings) == spelling_keys
+    assert tuple(Handle.normalize_value(platform, spelling) for spelling in spellings) == person_keys
+    first, *others = spellings
+    with system_context(reason="test spelling decision table"):
+        stored = Handle.objects.upsert(platform=platform, value=first)
+        asked = [*((platform, spelling) for spelling in spellings), ("telegram", "x")]
+        with CaptureQueriesContext(connection) as queries:
+            found = Handle.objects.find_identities(asked)
+        landed = [Handle.objects.upsert(platform=platform, value=spelling) for spelling in others]
+    assert len(queries) == 1 and queries.captured_queries[0]["sql"].count('."platform" = ') == 2
+    assert found == ({(platform, spelling): stored for spelling in spellings} if one else {(platform, first): stored})
+    assert all((handle.pk == stored.pk) is one for handle in landed)
+    assert Handle._base_manager.get(pk=stored.pk).value == first
+    assert Handle._base_manager.get(pk=stored.pk).spelling_key == spelling_keys[0]
+
+
+def test_a_spelling_lands_on_the_exact_row_then_the_live_owner_then_the_oldest_merged_owner(db: None) -> None:
+    """The lookup's order; and a row the key repair has not reached answers its own exact spelling."""
+
+    del db
+    with system_context(reason="test spelling lookup order"):
+        live = Handle.objects.upsert(platform="email", value="Ada@Example.test")
+        # A row an earlier rule left unkeyed, of the same address: its own spelling is its own row.
+        unkeyed = Handle._base_manager.create(platform="email", value="bo@example.test")
+        Handle._base_manager.filter(pk=unkeyed.pk).update(value="ADA@example.test", spelling_key="")
+        survivor = Handle.objects.upsert(platform="email", value="cy@work.example")
+        merged = Handle.objects.upsert(platform="email", value="Cy@Example.test")
+        survivor.fold([merged])
+        # Upgraded data: an older spelling was merged into another address while a newer one stayed live, its own row
+        # under the earlier rule; the key repair keys both. The live one is the address's handle, not the redirect.
+        redirected, kept_live = (
+            Handle._base_manager.bulk_create([
+                Handle(platform="email", value=value, normalized_value=value.lower(), normalized_version=1)
+            ])[0]
+            for value in ("dee@example.test", "Dee@Example.test")
+        )
+        Handle.objects.upsert(platform="email", value="dee@work.example").fold([redirected])
+        Handle.objects.renormalize_handles()
+        found = Handle.objects.find_identities(
+            [
+                ("email", "ADA@example.test"), ("email", "ada@EXAMPLE.test"), ("email", "cy@example.test"),
+                ("email", "DEE@example.test"),
+            ],
+        )
+    assert found == {
+        ("email", "ADA@example.test"): unkeyed,
+        ("email", "ada@EXAMPLE.test"): live,
+        # A spelling of an address merged away lands on its survivor, as the exact spelling does.
+        ("email", "cy@example.test"): survivor,
+        ("email", "DEE@example.test"): kept_live,
+    }
+
+
+def test_behind_an_external_id_another_spelling_rewrites_nothing_and_a_moved_address_lands_on_its_owner(
+    db: None,
+) -> None:
+    """The account id's row wins unless the reported address is another one that a different row owns."""
+
+    del db
+    with system_context(reason="test spelling behind an external id"):
+        account = Handle.objects.upsert(platform="email", value="Ada@Example.test", external_id="acct-ada")
+        versions = Handle.history.filter(id=account.pk).count()
+        reported = Handle.objects.find_identity(platform="email", value="ada@example.test", external_id="acct-ada")
+        assert reported == account
+        spelled = Handle.objects.upsert(platform="email", value="ada@example.test", external_id="acct-ada")
+        assert (spelled.pk, Handle._base_manager.get(pk=account.pk).value) == (account.pk, "Ada@Example.test")
+        assert Handle.history.filter(id=account.pk).count() == versions
+        # Before the key repair reaches the row, its own value decides (``Handle.is_spelling_of``), in one read.
+        Handle._base_manager.filter(pk=account.pk).update(spelling_key="", normalized_version=1)
+        with CaptureQueriesContext(connection) as queries:
+            Handle.objects.upsert(platform="email", value="ADA@example.test", external_id="acct-ada")
+        assert len(queries) == 1
+        assert Handle._base_manager.values_list("value", "spelling_key").get(pk=account.pk) == ("Ada@Example.test", "")
+        contact = Handle.objects.upsert(platform="email", value="bo@example.test")
+        moved = Handle.objects.find_identity(platform="email", value="BO@example.test", external_id="acct-ada")
+    assert moved == contact
+
+
+@pytest.mark.parametrize("signed_in", ["ada@example.com", "Ada@Example.com"], ids=["exact", "another letter case"])
+def test_an_account_signing_in_with_a_contacts_address_in_any_letter_case_takes_that_handle(
+    db: None, signed_in: str,
+) -> None:
+    """Its own sign-in address is the account's: control and holding move to its person, on the contact's row."""
+
+    del db
+    User = get_user_model()
+    with system_context(reason="test sign-in on a contact's address"):
+        typist = User.objects.create_user(username="contact-typist")
+        contact = Party.objects.create(display_name="Ada (contact)", created_by=typist)
+        handle = Handle.objects.upsert(platform="email", value="ada@example.com", created_by_id=typist.pk)
+        Party.objects.assert_handle(contact, handle, asserted_by=typist)
+        account = User.objects.create_user(username="ada-account", email=signed_in)
+        claimed = Handle.objects.claim_control(account, platform="email", value=signed_in, asserted_by=account)
+        person = Person.objects.for_user(account)
+        claimed.refresh_from_db()
+    assert claimed.pk == handle.pk and Handle._base_manager.count() == 1
+    assert (claimed.value, claimed.controller_id, claimed.party_id) == ("ada@example.com", account.pk, person.pk)
 
 
 @pytest.fixture
