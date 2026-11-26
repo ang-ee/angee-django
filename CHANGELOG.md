@@ -10,6 +10,26 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **The keyboard focus ring is drawn.** `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) were plain classes inside
+  `@layer utilities`; Tailwind gives a variant to a registered utility only,
+  so `focus-visible:focus-ring`, `focus:focus-ring`, `focus-within:focus-ring`
+  and `data-[popup-open]:focus-ring` compiled to nothing, and no link, button,
+  input or other control that asks for a ring showed a focus indicator. Both
+  are declared with `@utility` now, as `selected` is. A visible change
+  everywhere the stylesheet is used: the 3px ring (`--ring`, `--ring-danger`
+  on an invalid control) appears on every control that asked for one. A test
+  compiles the workshop's stylesheet entry with Tailwind and holds a rule for
+  each variant the packages spell (`packages/storybook/scripts/styles.test.mjs`).
+  No other plain class of the framework or its products is composed through a
+  variant. Known, not changed: a ring is cut where its control touches the
+  edge of a container that clips (tabs in a tab list, the path buttons of a
+  breadcrumb, a pane's resize handle); a control with its own ring inside a
+  field that rings on focus within shows two; a tab panel and the code editor
+  take focus with no indicator; and the stock ring is the brand colour at 30
+  percent, about 1.5 to 1 against its surface. **Upgrade:** check your own
+  screens with the keyboard; a class of your own composed through a variant
+  needs `@utility` too.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
@@ -135,10 +155,14 @@ live in code docstrings.
   carried over. On a stack whose `operator-schema` job does not wait for
   `provision`, the first chained restart after this upgrade can fail `rebac.E009`
   on the retired `messaging/participant` type until provision's sync has run; run
-  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
-  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
-  stays while retained migrations import it; a host upgrading from an earlier
-  release applies the template through a 3.x release first.
+  the chain once more. If a provision run stops before its sync (for example at
+  its migration check, when a newly enabled addon has no migrations yet), the same
+  check stops every management command, `makemigrations` included; author the
+  pending migrations with `--skip-checks` until provision has synced. Upgrade
+  cutoff: the template ships through the 3.x releases and is removed in 4.0, and
+  `angee.base.querysets.MergeableQuerySet.survivor_id` stays while retained
+  migrations import it; a host upgrading from an earlier release applies the
+  template through a 3.x release first.
 - `@angee/ui`: A record form's create no longer displays a field its save
   cannot write that holds an empty object. What a record form displays reads
   its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a
