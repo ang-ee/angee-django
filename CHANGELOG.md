@@ -10,6 +10,29 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, `@angee/refine`: **Changed API.** A write from a dialog or a
+  composer is safe to retry. `useIntentKeys(scope)` (beside `createClientKey`)
+  keeps one request identity per write intent for the page's lifetime and
+  settles it by the answer: released by any answer, kept while the answer is
+  lost, the request was never sent, or the server refused who may write; never
+  released by an unmount, forgotten on a change of signed-in person, never
+  persisted (a retry writes once from this page only). Chatter's post,
+  knowledge's note and vault clone, and the project-from-template action move
+  onto it and drop their own key refs; a refused result now releases their key.
+  `errorFromAuthoredEnvelope` throws an `AuthoredEnvelopeError` with the
+  envelope's `code`; `hasGraphQLAnswer` says whether a failed request got the
+  server's answer, and a bounded transport error keeps `response.errors` only
+  then. `DialogForm` takes `pending` (no dismissal while a submission runs) and
+  `dirty` (a dismissal asks first, with the shared unsaved-changes question),
+  and its `footer` may take `dismiss`; `ActionFormDialog` drops its own guard
+  for it, and every `MutationDialog` and typed-args action dialog behaves so.
+  A `MutationDialog` also asks before a route move while it holds typed values
+  or a running submission, and still toasts a submission accepted after it went
+  away. `MessageActions` shows on a coarse pointer. The unsaved-changes guard
+  takes `leaves` in place of `allowSearchChanges`. **Upgrade:**
+  `allowSearchChanges: true` becomes `leaves: pathnameChanges`; a test that
+  types into a real dialog renders it under `ModalsHost`, and one that types
+  into or submits a real `MutationDialog` under a router as well.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
