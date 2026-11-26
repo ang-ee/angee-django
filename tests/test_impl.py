@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import pickle
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Literal
@@ -280,6 +281,51 @@ def test_registry_enum_identity_tracks_keys_and_preserves_names() -> None:
         assert expanded is not enum
         assert expanded.choices == [("base", "base"), ("refined", "refined")]
     assert impl_choices_enum(_EnumImpl) is enum
+
+
+@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
+def test_an_implementation_key_pickles_as_its_own_member() -> None:
+    """A runtime-built enum has no module name to pickle by, yet a key and a query filtering on it pickle."""
+
+    member = ImplClassField(_EnumImpl).to_python("base")
+    assert pickle.loads(pickle.dumps(member)) is member
+    query = VcsBridge.objects.filter(backend_class="stub").query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
+
+
+def test_an_implementation_key_unpickles_as_the_member_it_was_after_its_mapping_changed() -> None:
+    """Unpickling reads no settings: a key keeps its member, and the field over the new mapping accepts it."""
+
+    with override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"}):
+        member = ImplClassField(_EnumImpl).to_python("base")
+    with override_settings(
+        ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl", "refined": "tests.test_impl._EnumRefinedImpl"}
+    ):
+        field = ImplClassField(_EnumImpl)
+        current = field.to_python("base")
+        unpickled = pickle.loads(pickle.dumps(member))
+        assert current is not member
+        assert unpickled is member
+        assert field.to_python(unpickled) is current
+
+
+_IMPL_SELECTORS = sorted(
+    f"{model._meta.label}.{field.name}"
+    for model in apps.get_models()
+    for field in model._meta.concrete_fields
+    if isinstance(field, ImplClassField)
+)
+
+
+@pytest.mark.parametrize("selector", _IMPL_SELECTORS)
+def test_a_query_on_every_key_of_an_installed_selector_pickles(selector: str) -> None:
+    """Django's documented query pickling holds for every installed model's implementation keys."""
+
+    label, name = selector.rsplit(".", 1)
+    model = apps.get_model(label)
+    keys = [member.value for member in model._meta.get_field(name).choices_enum]
+    query = model._base_manager.filter(**{f"{name}__in": keys}).query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
 
 
 @override_settings(ANGEE_STORAGE_BACKEND_CLASSES={"local": "angee.storage.backends.LocalBackend"})

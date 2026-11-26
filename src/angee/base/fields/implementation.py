@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copyreg
 from collections.abc import Sequence
 from enum import Enum
 from functools import cache, partialmethod
@@ -209,9 +210,25 @@ def impl_choices_enum(base_class: type[RegistryBase]) -> type[models.TextChoices
 
 @cache
 def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[models.TextChoices]:
-    """Share enum identity across projections while settings changes select new keys."""
+    """Share enum identity across projections while settings changes select new keys.
+
+    The enum is built at runtime, so no module holds it by name, as one holds a
+    ``TextChoices`` whose members pickle by reference. Each member pickles
+    instead, through :func:`copyreg.pickle`, as its registry, key set and value
+    (:func:`_impl_choice`), and unpickles as that member without reading
+    settings. A queryset, or a compiled permission statement, filtering on an
+    implementation key then pickles too.
+    """
 
     core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
     camel = "".join(part.capitalize() for part in core.split("_") if part)
     members = [(key.upper(), (key, key)) for key in keys]
-    return models.TextChoices(f"{camel or 'Impl'}Impl", members)
+    enum = models.TextChoices(f"{camel or 'Impl'}Impl", members)
+    copyreg.pickle(enum, lambda member: (_impl_choice, (registry_setting, keys, member.value)))
+    return enum
+
+
+def _impl_choice(registry_setting: str, keys: tuple[str, ...], value: str) -> models.TextChoices:
+    """Return the member ``value`` of the enum over ``keys``: how an implementation key unpickles."""
+
+    return _impl_choices_enum(registry_setting, keys)(value)
