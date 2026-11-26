@@ -169,14 +169,28 @@ def test_a_spelling_lands_on_the_exact_row_then_the_live_owner_then_the_oldest_m
         survivor = Handle.objects.upsert(platform="email", value="cy@work.example")
         merged = Handle.objects.upsert(platform="email", value="Cy@Example.test")
         survivor.fold([merged])
+        # Upgraded data: an older spelling was merged into another address while a newer one stayed live, its own row
+        # under the earlier rule; the key repair keys both. The live one is the address's handle, not the redirect.
+        redirected, kept_live = (
+            Handle._base_manager.bulk_create([
+                Handle(platform="email", value=value, normalized_value=value.lower(), normalized_version=1)
+            ])[0]
+            for value in ("dee@example.test", "Dee@Example.test")
+        )
+        Handle.objects.upsert(platform="email", value="dee@work.example").fold([redirected])
+        Handle.objects.renormalize_handles()
         found = Handle.objects.find_identities(
-            [("email", "ADA@example.test"), ("email", "ada@EXAMPLE.test"), ("email", "cy@example.test")],
+            [
+                ("email", "ADA@example.test"), ("email", "ada@EXAMPLE.test"), ("email", "cy@example.test"),
+                ("email", "DEE@example.test"),
+            ],
         )
     assert found == {
         ("email", "ADA@example.test"): unkeyed,
         ("email", "ada@EXAMPLE.test"): live,
         # A spelling of an address merged away lands on its survivor, as the exact spelling does.
         ("email", "cy@example.test"): survivor,
+        ("email", "DEE@example.test"): kept_live,
     }
 
 
