@@ -368,6 +368,10 @@ is read is closed on it:
 | its integration's owner, after an administrator transfers it | grants nothing |
 | a workflow trigger's principal | enabling a trigger on it is refused before any grant (`not_offered`) |
 
+A system message is trashed only through the shared trash verb, which decides
+`delete` on it: administrators alone. A record's moderation never takes one off
+(`Message.trash_error`): it sits in the system channel's own thread.
+
 A grant on one system thread or message (thread `reader`, message `reader`, a
 spaces group or project bound to the thread) is not sealed: each needs an
 administrator's own act, because system threads are ownerless and channel
