@@ -689,7 +689,7 @@ def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str,
 
 
 @pytest.mark.parametrize(("entry", "expected"), [
-    ("Customer@Example.COM", ("", "customer@example.com")),
+    ("Customer@Example.COM", ("", "Customer@Example.COM")),
     ("Name <a@example.test>", ("Name", "a@example.test")),
     ('"Doe, Jane" <jane@example.test>', ("Doe, Jane", "jane@example.test")),
     ("jörg@example.test", ("", "jörg@example.test")),
@@ -720,7 +720,7 @@ def test_an_entry_is_refused_or_lands_exactly_the_address_it_names(entry: str) -
         assert "to" in error.error_dict
         return
     (addressee,) = outgoing.recipients
-    typed = Handle.email_value(entry.strip())
+    typed = entry.strip()
     assert addressee.address == typed or typed.endswith(f"<{addressee.address}>")
 
 
@@ -808,7 +808,7 @@ def test_the_channels_sender_handle_has_no_creator_and_a_typed_contact_keeps_its
 
 
 def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: Any) -> None:
-    """The channel's sender, a typed recipient and ingest store an address in the handle owner's one form."""
+    """The channel's sender, a typed recipient and ingest each land an address on its one handle, as first written."""
 
     del db
     settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
@@ -817,7 +817,8 @@ def test_every_writer_lands_an_email_address_on_one_handle(db: None, settings: A
     with system_context(reason="tests.messaging.compose.case"):
         Message.objects.ingest([ParsedMessage(
             external_id="<case@example.test>", platform="email", subject="Hello",
-            sender=ParsedHandle(platform="email", value=Handle.email_value(" Client@Example.TEST ")),
+            # The form the IMAP parser emits: trimmed and lower-cased.
+            sender=ParsedHandle(platform="email", value="client@example.test"),
             recipients=(ParsedRecipient(handle=ParsedHandle(platform="email", value="desk@example.test")),),
             body=ParsedPart(text="Hello."),
         )], channel=channel)
@@ -1147,12 +1148,32 @@ def test_a_compose_to_another_letter_case_of_a_contacts_address_is_addressed_as_
     assert _wire(desk, message)["To"] == "Client@Example.test"
 
 
-def test_a_contact_typed_after_a_compose_lands_on_the_handle_compose_wrote_in_lower_case(desk: Any) -> None:
-    message = Message.objects.compose(channel=desk, to=["Client@Example.test"], text="Hi.", actor=desk.owner)
+def test_a_new_recipient_is_stored_and_sent_as_typed_and_every_other_spelling_lands_on_it(desk: Any) -> None:
+    """A handle compose creates first keeps the typed spelling, which the wire carries; a contact typed later in
+    another letter case, and a later compose, land on it."""
+
+    message = Message.objects.compose(channel=desk, to=["Ada@Example.com"], text="Hi.", actor=desk.owner)
     with system_context(reason="tests.messaging.compose.spelling"):
         (written,) = Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)
-        contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
-    assert (contact.pk, contact.value) == (written, "client@example.test")
+        contact = Handle.objects.upsert(platform="email", value="ada@example.com")
+    later = Message.objects.compose(channel=desk, to=["ADA@example.COM"], text="Again.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.spelling"):
+        assert list(Recipient._base_manager.filter(message=later).values_list("handle_id", flat=True)) == [written]
+    assert (contact.pk, contact.value) == (written, "Ada@Example.com")
+    assert _wire(desk, message)["To"] == _wire(desk, later)["To"] == "Ada@Example.com"
+
+
+def test_a_channels_sender_is_landed_as_configured(db: None, settings: Any) -> None:
+    """The desk's configured address is its sender handle's spelling, written on the wire as configured."""
+
+    del db
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    channel = make_integration("compose-sender-case", model=Channel, backend_class="email",
+                               config={"from_email": "Desk <Desk@Example.TEST>"})
+    message = Message.objects.compose(channel=channel, to=["client@example.test"], text="Hi.", actor=channel.owner)
+    with system_context(reason="tests.messaging.compose.sender"):
+        assert Message._base_manager.get(pk=message.pk).sender.value == "Desk@Example.TEST"
+    assert _wire(channel, message)["From"] == "Desk <Desk@Example.TEST>"
 
 
 def test_a_providers_alias_is_a_handle_of_its_own_and_is_sent_as_typed(desk: Any) -> None:

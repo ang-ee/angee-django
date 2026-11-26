@@ -65,11 +65,12 @@ would read as another address or as several, or whose name or address a mail
 header would not carry as read (a NUL byte, a control character, an
 encoded-word opener: [`header_text`](email.py), the rule every subject and
 display name the email backend writes takes), is refused (`invalid`) under its
-role, never re-read. `compose` lands every address in lower case, as inbound
-mail does, on the handle the handle owner finds for it
+role, never re-read. `compose` lands every address as typed, the channel's
+sender as configured, on the handle the handle owner finds for it
 (`HandleManager.find_identities`): any letter case or domain spelling of a
 stored address is that handle, and a message to it is addressed as the handle
-stores it; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
+stores it, so an address with no handle yet is stored, shown and addressed as
+typed; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;

@@ -3243,10 +3243,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         write stores, a control character, or an encoded-word opener, which a mail
         library decodes into another address or name. The handle owner then decides
         whether the address can be one and can be stored on a handle
-        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
-        nothing, so a caller can ask it before expensive work, and ``compose``
-        lands exactly what it returns. The refusal is ``invalid``, naming the
-        entry as typed.
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). The
+        address is returned as typed: the handle owner lands any letter case or
+        domain spelling of a stored address on its handle, and a handle compose
+        creates first keeps the typed spelling. It reads nothing, so a caller can
+        ask it before expensive work, and ``compose`` lands exactly what it
+        returns. The refusal is ``invalid``, naming the entry as typed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3261,7 +3263,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})
-        address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
         return name, address
 
@@ -3428,7 +3429,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             elif email:
                 sender_address = outgoing.channel.outbound_sender()
             if sender_address is not None:
-                sender_address = (sender_address[0], handle_model.email_value(sender_address[1]))
                 _require_landable(handle_model, (("channel", sender_address[1]),))
             if admit is not None:
                 admit()
