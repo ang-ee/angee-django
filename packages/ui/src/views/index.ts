@@ -109,7 +109,7 @@ export {
   type FormSpecWire,
 } from "./form/form-spec-schema";
 export { structuredFieldErrors, textValue, type FieldRuleError } from "./form/field-values";
-export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
+export { pathnameChanges, useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,
