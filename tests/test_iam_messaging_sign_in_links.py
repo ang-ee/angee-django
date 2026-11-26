@@ -1405,25 +1405,32 @@ def test_an_error_report_of_a_failing_redemption_shows_the_token_in_no_frame(
     assert _reported(failed.value, below="redeem" if entry == "the-manager" else "authenticate") == ([], [])
 
 
-def test_a_failing_redemption_through_the_mutation_answers_and_logs_no_token(
-    deliverable, iam_admin, sent, settings, monkeypatch, caplog,
+@pytest.mark.parametrize("mutation", ["redeem_sign_in_link", "issue_user_sign_in_link"])
+def test_an_unexpected_failure_through_a_mutation_is_logged_with_no_traceback_and_no_token(
+    deliverable, iam_admin, sent, settings, monkeypatch, caplog, mutation,
 ):
-    """GraphQL never hands a resolver's failure to Django's reporter: the schema logs its class, path and frames, with
-    no locals and no exception value, and answers ``INTERNAL``; neither holds the token."""
+    """No log record of a resolver's unexpected failure carries a traceback, so no report (an ``AdminEmailHandler``'s
+    included) is built from one: Angee's schema logs the class, path and frames as text and detaches the exception
+    before Strawberry logs the error. With the token a variable, no record and no answer holds it."""
 
     settings.DEBUG = False
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
     target = _person("guest-mutation-report")
-    sent(target, iam_admin)
-    with _failing(_link_read), caplog.at_level(logging.ERROR, logger="angee.graphql.schema"):
-        answered = execute_schema(_schema("public"), REDEEM, {"token": f"{target.public_id}.{SECRET}"},
-                                  request=_request())
+    with caplog.at_level(logging.DEBUG):
+        if mutation == "redeem_sign_in_link":
+            sent(target, iam_admin)
+            with _failing(_link_read):
+                answered = execute_schema(_schema("public"), REDEEM, {"token": f"{target.public_id}.{SECRET}"},
+                                          request=_request())
+        else:
+            with _failing(_link_insert):
+                answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert [(error.message, error.extensions) for error in answered.errors or ()] == [
         ("An unexpected error occurred.", {"code": "INTERNAL"}),
     ]
-    logged = "Unexpected GraphQL resolver error (DatabaseError)" in caplog.text
+    assert f"Unexpected GraphQL resolver error (DatabaseError) at path ['{mutation}']" in caplog.text
+    assert [record.name for record in caplog.records if record.exc_info] == []
     shown = SECRET in caplog.text or SECRET in str(answered.data)
-    assert logged
     assert not shown
 
 
