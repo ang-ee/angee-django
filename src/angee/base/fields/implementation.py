@@ -215,9 +215,15 @@ def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[mod
     The enum is built at runtime, so no module holds it by name, as one holds a
     ``TextChoices`` whose members pickle by reference. Each member pickles
     instead, through :func:`copyreg.pickle`, as its registry, key set and value
-    (:func:`_impl_choice`), and unpickles as that member without reading
-    settings. A queryset, or a compiled permission statement, filtering on an
-    implementation key then pickles too.
+    (:func:`_impl_choice`), and unpickles without reading settings, as that very
+    member in any process with the same key set. A queryset, a loaded row, or a
+    compiled permission statement holding an implementation key then pickles too.
+
+    A process whose registry holds other keys unpickles a member of an enum over
+    the pickling process's keys: it equals and hashes as its key, and the field's
+    ``to_python`` maps it onto the current member, or refuses a key the registry
+    no longer names. A pickler with a private ``dispatch_table`` that leaves out
+    copyreg's does not see the reduction and refuses the member.
     """
 
     core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
@@ -229,6 +235,10 @@ def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[mod
 
 
 def _impl_choice(registry_setting: str, keys: tuple[str, ...], value: str) -> models.TextChoices:
-    """Return the member ``value`` of the enum over ``keys``: how an implementation key unpickles."""
+    """Return the member ``value`` of the enum over ``keys``: how an implementation key unpickles.
+
+    Every stored pickle of a key names this function by its dotted path, and
+    cache entries outlive a deploy: keep the name, or leave an alias when it moves.
+    """
 
     return _impl_choices_enum(registry_setting, keys)(value)

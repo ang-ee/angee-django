@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import pickle
+import subprocess
+import sys
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Literal
@@ -309,6 +312,32 @@ def test_an_implementation_key_unpickles_as_the_member_it_was_after_its_mapping_
         assert field.to_python(unpickled) is current
 
 
+def test_a_row_holding_an_implementation_key_pickles() -> None:
+    """A loaded row holds its key as the member, and the row pickles with it."""
+
+    field = VcsBridge._meta.get_field("backend_class")
+    member = field.from_db_value("stub", None, None)
+    assert pickle.loads(pickle.dumps(VcsBridge(backend_class=member))).backend_class is member
+
+
+def test_an_implementation_key_unpickles_in_a_process_without_settings() -> None:
+    """Another interpreter, with no settings and no enum built yet, restores the key."""
+
+    member = VcsBridge._meta.get_field("backend_class").from_db_value("stub", None, None)
+    probe = (
+        "import pickle, sys\n"
+        "from django.conf import settings\n"
+        "key = pickle.loads(sys.stdin.buffer.read())\n"
+        "assert not settings.configured\n"
+        "print(type(key).__name__, key.value, key.label)\n"
+    )
+    env = {name: value for name, value in os.environ.items() if name != "DJANGO_SETTINGS_MODULE"}
+    result = subprocess.run(
+        [sys.executable, "-c", probe], input=pickle.dumps(member), capture_output=True, env=env, check=True
+    )
+    assert result.stdout.decode().split() == [type(member).__name__, "stub", "stub"]
+
+
 _IMPL_SELECTORS = sorted(
     f"{model._meta.label}.{field.name}"
     for model in apps.get_models()
@@ -319,7 +348,11 @@ _IMPL_SELECTORS = sorted(
 
 @pytest.mark.parametrize("selector", _IMPL_SELECTORS)
 def test_a_query_on_every_key_of_an_installed_selector_pickles(selector: str) -> None:
-    """Django's documented query pickling holds for every installed model's implementation keys."""
+    """A query on all of an installed selector's keys pickles back to the same SQL.
+
+    It compares SQL only, so it proves every selector's keys reduce at all; the
+    tests above pin what a key unpickles as.
+    """
 
     label, name = selector.rsplit(".", 1)
     model = apps.get_model(label)
