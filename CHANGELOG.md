@@ -54,8 +54,9 @@ live in code docstrings.
   not registered, so this list cannot be grouped by backend class until that
   is resolved."; the library's message, which names the stored value, goes to
   the server's log. The console shows the words once on the grouped list and
-  the board, and in that facet's own section of the search panel while the
-  other facets keep counting. **Known gap:** no "Not registered" group, lane or
+  the board; a refused facet now says why, above the options its last read
+  still holds, in the search panel and its shortcut, with no notice (each
+  facet was already its own read, so the others kept counting before too). **Known gap:** no "Not registered" group, lane or
   facet bucket. Such a row's other fields save,
   through the generic update too (it runs `full_clean()` and saves the whole
   row), and it keeps its key; choosing an unregistered key is refused under the

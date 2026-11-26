@@ -63,6 +63,7 @@ export function useRelationFacets(
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => ({
     field: facet.field, label: facet.label,
+    ...(result.errors[facet.field] ? { error: result.errors[facet.field]!.message } : {}),
     // A declared facet on a scalar axis (an enum) matches its options locally; only a
     // relation axis looks its options up remotely.
     source: facet.axis.declaration.kind === "relation" ? "relation" : "scalar",
@@ -79,7 +80,7 @@ export function useRelationFacets(
         label: facetOptionLabel(facet, option, metadata, t), filter,
         ...(value === undefined ? {} : { value }) }];
     }),
-  })), [facets, metadata, result.facets, t]);
+  })), [facets, metadata, result.errors, result.facets, t]);
 }
 
 function facetOptionLabel(

@@ -23,6 +23,7 @@ through a relation (`channel.backend_class`), renders as before.
 A list grouped by such a column, a board laned by it and a facet counted on it
 still cannot be read for such a row: the server refuses, publicly and in words
 naming the column, and the list and the board show those words once, without
-retrying, while the search panel shows them in that facet's own section and the
-other facets keep their counts. There is no "Not registered" group, lane or
-facet bucket yet. A filter chip offers only registered implementations.
+retrying. A refused facet says why above the options its last read still holds;
+each facet was already its own read, so the other facets kept counting before
+too. There is no "Not registered" group, lane or facet bucket yet. A filter chip
+offers only registered implementations.

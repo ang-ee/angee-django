@@ -69,6 +69,7 @@ function TextShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: 
 function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: Extract<SearchShortcut, { kind: "facet" }> }) {
   const facet = search.catalog.facets.find((item) => item.field === shortcut.field)!;
   const label = shortcut.label ?? facet.label;
+  const errorId = React.useId();
   const active = search.active.find((item) => item.kind === "facet" && item.field === shortcut.field);
   const activeOptions = active?.kind === "facet" ? active.options : [];
   const options = [...facet.options, ...activeOptions.filter((option) => !facet.options.some((known) => known.id === option.id))];
@@ -87,8 +88,9 @@ function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut:
       <SelectIcon />
     </Toolbar.Button>
     <SelectPortal><SelectPositioner sideOffset={4}><SelectContent size="sm">
-      {facet.error ? <p role="status" className="px-2 py-1 text-xs text-fg-muted">{facet.error}</p> : null}
-      <SelectList>
+      {facet.error ? <p id={errorId} className="px-2 py-1 text-xs text-fg-muted">{facet.error}</p> : null}
+      {/* The popup is presentation; the listbox is what a screen reader reaches, so it carries the refusal. */}
+      <SelectList aria-describedby={facet.error ? errorId : undefined}>
         {options.map((option) => <SelectItem key={option.id} value={option.id}><SelectItemText>{option.label}</SelectItemText><SelectItemIndicator /></SelectItem>)}
       </SelectList>
     </SelectContent></SelectPositioner></SelectPortal>

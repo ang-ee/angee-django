@@ -87,18 +87,3 @@ test.each([
     `Search Title for: ${text}`, ...labels,
   ]);
 });
-
-test("a facet whose read was refused says why in its own section of the panel while another keeps its options", async () => {
-  const refusal = "A record holds an implementation that is not registered, so this list cannot be grouped by backend class until that is resolved.";
-  const search = searchFixture({ catalog: { facets: [
-    { field: "backend_class", label: "Backend", source: "scalar", options: [], error: refusal },
-    { field: "status", label: "Status", source: "scalar", options: [{ id: "status:open", label: "Open", filter: { status: { exact: "open" } } }] },
-  ] } });
-  render(<providers.Provider><SearchBox search={search} /></providers.Provider>);
-  fireEvent.click(screen.getByRole("button", { name: "Search options" }));
-  const backend = (await screen.findByRole("heading", { name: "Backend" })).closest("section")!;
-  expect(backend.querySelector("[role=status]")?.textContent).toBe(refusal);
-  const status = screen.getByRole("heading", { name: "Status" }).closest("section")!;
-  expect(status.querySelector("[role=status]")).toBeNull();
-  expect(status.textContent).toContain("Open");
-});

@@ -1,7 +1,10 @@
 ---
 "@angee/refine": minor
+"@angee/ui": patch
 ---
 
-`useAngeeFacets` returns each facet's own read's error as `errors`, by facet id,
-beside the one `error` it already returned, so a facet whose read is refused
-says why while the other facets keep their counts.
+`useAngeeFacets` also returns `errors`: each active facet's own read or decode
+error, or `null`, by facet id; `error` stays the first of them. A hand-built or
+mocked result must include `errors`. A facet's read opens no notice; the search
+panel and the facet shortcut show a refused facet's words above the options its
+last read still holds, and the shortcut's list is described by them.

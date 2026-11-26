@@ -236,7 +236,7 @@ test("one failed group request checks auth and notifies once across consumers", 
   expect(f.custom).toHaveBeenCalledTimes(1);
 });
 
-test("a failed facet read checks auth and notifies", async () => {
+test("a failed facet read checks auth and opens no notice: the facet says why where it is shown", async () => {
   const error = Object.assign(new Error("denied"), { statusCode: 401 });
   const f = fixture(vi.fn().mockRejectedValue(error));
   const { result } = renderHook(() => useAngeeFacets(TARGET, {
@@ -245,7 +245,7 @@ test("a failed facet read checks auth and notifies", async () => {
   }), { wrapper: f.wrapper });
   await waitFor(() => expect(result.current.error).toBe(error));
   await waitFor(() => expect(f.onError).toHaveBeenCalledTimes(1));
-  expect(f.notify).toHaveBeenCalledTimes(1);
+  expect(f.notify).not.toHaveBeenCalled();
   expect(f.custom).toHaveBeenCalledTimes(1);
 });
 
