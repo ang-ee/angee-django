@@ -11,15 +11,21 @@ preheader and layout, and, to a reader who may preview it, the rows naming its
 kind and key (``backlinks``), a read for one record's page. ``can_override`` and
 ``can_keep_override`` answer, for the reader, what the two verbs below ask first
 (``MessageTemplate.override_refusal`` and ``keep_override_refusal``);
-``can_override`` is a read for one record's page. ``override_message_template``
-starts the deployment's override of a shipped default and
-``keep_message_template_override`` keeps an override over a default that
-changed; both return an ``ActionResult`` naming the override.
-Both refuse as the framework's actions do: a signed-out caller gets the session's
-GraphQL error, and a caller who may not create or write the override gets a
+``can_override`` is a read for one record's page; ``can_send_test`` answers
+what the test send asks first (``MessageTemplate.send_test_refusal``), the row's
+side alone. ``override_message_template`` starts the deployment's override of a
+shipped default and ``keep_message_template_override`` keeps an override over a
+default that changed; both return an ``ActionResult`` naming the override.
+``send_message_template_test`` sends a row with its sample to the caller's own
+address on the system channel (``MessageTemplateManager.send_test``) and returns
+an ``ActionResult`` naming the message. The verbs refuse as the framework's
+actions do: a signed-out caller gets the session's GraphQL error, and a caller
+who may not create or write the override, or preview the row, gets a
 ``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
 not a shipped default and an override of none are refused in band (``ok: false``,
-with the codes ``not_a_baseline`` and ``no_baseline``). A row's
+with the codes ``not_a_baseline`` and ``no_baseline``), and so is what refuses a
+test send after its permission (``not_a_template``, ``not_effective``,
+``no_test_address``, the render's codes, and the system channel's). A row's
 ``is_effective``, ``is_overridden``, ``has_updated_default`` and
 ``overrides_default`` are read from its siblings and filter through the model's
 ``hasura_filter_expressions``.
@@ -179,6 +185,21 @@ class MessageTemplateType(AngeeNode):
 
         return parent.keep_override_refusal() is None
 
+    @strawberry_django.field(
+        only=["kind"],
+        annotate={"_is_effective": lambda info: _row_fact("is_effective")},
+        extensions=[PermissionsExtension(("preview",))],
+    )
+    def can_send_test(parent: strawberry.Parent[MessageTemplateModel]) -> bool:
+        """Whether ``send_message_template_test`` admits the reader on this row: what the verb asks first.
+
+        The row's side alone: a test send it admits may still be refused in band,
+        for an account with no address, the system channel or its transport, or
+        the sample's render.
+        """
+
+        return parent.send_test_refusal() is None
+
 
 class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for message templates: create belongs to the manager factory."""
@@ -214,9 +235,18 @@ _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
 )
 
 
+def _brand_kit(info: strawberry.Info, brand_kit: PublicID | None) -> Any:
+    """The kit a caller names, read through their own scope (``not_found`` for one they do not read), or ``None``
+    for the default kit."""
+
+    return None if brand_kit is None else require_instance_for_id(
+        BrandKit, brand_kit, queryset=BrandKit.objects.with_actor(session_user(info)),
+    )
+
+
 @strawberry.type
 class MessageTemplateMutation:
-    """Verbs that start from a shipped default."""
+    """Verbs on a row: overriding a shipped default, keeping an override, and a test send."""
 
     @strawberry.mutation
     @action_guard("Override message template failed.")
@@ -236,6 +266,18 @@ class MessageTemplateMutation:
         MessageTemplate.objects.keep_override(override)
         return ActionResult(ok=True, message="Override kept.", id=override.sqid)
 
+    @strawberry.mutation
+    @action_guard("Send message template test failed.")
+    def send_message_template_test(
+        self, info: strawberry.Info, template: PublicID, brand_kit: PublicID | None = None,
+    ) -> ActionResult:
+        """Send the row with its sample to the caller's own address, on the system channel, in the named kit or the
+        default one."""
+
+        row = authorized_permission_target(info, MessageTemplate, template, "read")
+        message = MessageTemplate.objects.send_test(row, actor=session_user(info), kit=_brand_kit(info, brand_kit))
+        return ActionResult(ok=True, message="A test of this message template is queued.", id=message.sqid)
+
 
 @strawberry.type
 class MessageTemplatePreviewQuery:
@@ -248,10 +290,7 @@ class MessageTemplatePreviewQuery:
         """Render the row with its sample in the named kit, or the default one, and say what it warns about."""
 
         row = authorized_permission_target(info, MessageTemplate, template, "read")
-        kit = None if brand_kit is None else require_instance_for_id(
-            BrandKit, brand_kit, queryset=BrandKit.objects.with_actor(session_user(info)),
-        )
-        return row.preview(kit=kit)
+        return row.preview(kit=_brand_kit(info, brand_kit))
 
 
 schemas = {

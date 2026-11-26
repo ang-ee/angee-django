@@ -40,6 +40,9 @@ every row, and nobody but a resource load writes a baseline (``permissions.zed``
 **Sending.** :meth:`MessageTemplateManager.send_as_system` renders an effective
 template as named system work and records it on messaging's system channel, for
 mail the framework sends on no person's request; messaging delivers it.
+:meth:`MessageTemplateManager.send_test` is an administrator's test send of a
+row with its sample to their own address, rendered under them and recorded on
+the same channel.
 """
 
 from __future__ import annotations
@@ -86,6 +89,7 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, Angee
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
+    from angee.iam.models import User
     from angee.messaging.models import Message
     from angee.parties.models import Person
 
@@ -162,6 +166,11 @@ NO_BRAND_KIT_MESSAGE = "No brand kit is the default, and a message renders in a 
 SHIPPED_DEFAULT_MESSAGE = "A shipped default has this kind, key and language: override it instead."
 NOT_A_TEMPLATE_MESSAGE = "Only a template is sent: a layout, block or part reaches a mail inside a template."
 NOT_EFFECTIVE_MESSAGE = "This shipped default is overridden: the override is what renders, so send it instead."
+NO_TEST_ADDRESS_MESSAGE = "Your account has no email address to send the test to."
+
+TEST_SUBJECT_PREFIX = "[Test] "
+"""What a test send's subject starts with (:meth:`MessageTemplateManager.send_test`), so the administrator who asked
+tells it from the mail its recipients get."""
 
 LAYOUT_PREVIEW = PreviewFrame(
     subject="A message in this layout",
@@ -609,7 +618,7 @@ _MessageTemplateManagerBase = AngeeHistoryManager.from_queryset(MessageTemplateQ
 
 class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManagerBase[TemplateT]):
     """Owns the writes that start a row or an override (the deployment's own row, overriding a shipped default and
-    keeping an override over it) and the sends of a template (:meth:`send_as_system`)."""
+    keeping an override over it) and the sends of a template (:meth:`send_as_system`, :meth:`send_test`)."""
 
     def send_as_system(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
@@ -649,6 +658,36 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         return cast("Message", apps.get_model("messaging", "Message").objects.compose_as_system(
             reason=reason, to=[to], subject=rendered.subject, text=rendered.plain_text, html=rendered.html,
         ))
+
+    def send_test(self, row: TemplateT, *, actor: User, kit: BrandKit | None = None) -> Message:
+        """Send ``row`` with its ``sample`` to ``actor``'s own account address, on the system channel: a test send.
+
+        An administrator's tool, decided by ``preview`` alone, as a preview is,
+        and run as ``actor``. In order: :meth:`MessageTemplate.send_test_refusal`
+        (``PermissionDenied`` before anything else is read, then the row's side,
+        :meth:`MessageTemplate.send_refusal`); an account with no email address
+        (``no_test_address``); the render under ``actor``'s own scope, which
+        reads the rows and the kit any signed-in reader reads and writes no
+        permission audit row; then ``compose_as_system``, under the reason
+        ``messaging_templates.message_template.send_test``, with the rendered
+        subject after :data:`TEST_SUBJECT_PREFIX`, which refuses as
+        :meth:`send_as_system` says. Nothing is written before a refusal.
+        ``actor`` is the message's ``created_by``. Administrators alone read the
+        system channel, and they read samples and account addresses already, so
+        a test send discloses nothing new; ``actor``'s existing handle for the
+        address receives it, as compose finds one.
+        """
+
+        with actor_context(actor):
+            if (refusal := row.send_test_refusal()) is not None:
+                raise refusal
+            if not actor.email:
+                raise ValidationError(NO_TEST_ADDRESS_MESSAGE, code="no_test_address")
+            rendered = row.render(row.sample, kit=kit)
+            return cast("Message", apps.get_model("messaging", "Message").objects.compose_as_system(
+                reason="messaging_templates.message_template.send_test", to=[actor.email],
+                subject=TEST_SUBJECT_PREFIX + rendered.subject, text=rendered.plain_text, html=rendered.html,
+            ))
 
     def override(self, baseline: TemplateT) -> TemplateT:
         """Return the deployment's override of ``baseline``, created from it when there is none.
@@ -1019,8 +1058,26 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             return ValidationError(NO_BASELINE_MESSAGE, code="no_baseline")
         return None
 
+    def send_test_refusal(self) -> Exception | None:
+        """What refuses the acting reader's test send of this row (:meth:`MessageTemplateManager.send_test`).
+
+        ``PermissionDenied`` unless the reader holds ``preview`` on the row
+        (:func:`~angee.graphql.capabilities.held_permissions`, the list's own
+        projection when it carries one), an administrator's tool; else
+        :meth:`send_refusal`; ``None`` when nothing does. The verb asks
+        it first, and the console projects ``can_send_test`` from it: the row's
+        side alone, so a test send it admits may still be refused in band, for an
+        account with no address, the system channel or its transport, or the
+        sample's render.
+        """
+
+        if "preview" not in held_permissions(self, ("preview",)):
+            return PermissionDenied(f"Denied: the current actor lacks 'preview' on {to_object_ref(self)}.")
+        return self.send_refusal()
+
     def send_refusal(self) -> ValidationError | None:
-        """What refuses sending this row (:meth:`MessageTemplateManager.send_as_system`): the row's side of a send.
+        """What refuses sending this row (:meth:`MessageTemplateManager.send_as_system`, and a test send after its
+        permission): the row's side of a send.
 
         ``not_a_template`` unless its kind is a mail
         (:attr:`MessageTemplateKindHandler.carries_message_fields`), since a

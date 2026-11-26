@@ -227,6 +227,34 @@ commits; the message is returned unbound. The causing actor, if any, is its
 `created_by`, which grants nothing, and administrators alone read the system
 channel's threads and messages (messaging's permission schema seals the channel).
 
+### A test send
+
+`MessageTemplate.objects.send_test(row, *, actor, kit=None)` is an
+administrator's check of a row before it goes out: the row rendered with its
+`sample` and sent to `actor`'s own account address. It is decided by `preview`
+alone, as a preview is, and it is a user's request, so it runs as `actor`, never
+elevated:
+
+1. `MessageTemplate.send_test_refusal()`: without `preview`, `PermissionDenied`
+   before anything else is read, whatever the host's channel or mail settings;
+   then the row's side, as above;
+2. an account with no email address: `no_test_address`;
+3. the render, under `actor`'s own scope (every row and kit a render reads is
+   readable by any signed-in reader), so a refused test writes no permission
+   audit row;
+4. `compose_as_system` under the reason
+   `messaging_templates.message_template.send_test`, with the rendered subject
+   after `[Test] ` (`TEST_SUBJECT_PREFIX`), refusing as above.
+
+What a test send stores, on the system channel: one queued email message, its
+title, text and HTML parts, and a new thread titled `[Test] <subject>` with no
+owner, all with `actor` as `created_by`; one `to` recipient on the handle the
+address lands on, the administrator's existing one when it has one. The mail
+holds the row's sample values and the administrator's address. Administrators
+alone read the system channel and they already read every sample and account
+address, so a test discloses nothing new; their inbox lists its thread.
+Messaging delivers it through the transport mailer.
+
 This addon requires messaging, so a host that installs it also enables messaging
 and what messaging requires, with messaging's mail settings: Django's default
 mailer is messaging's system mailer, and a host's own `MAILERS["default"]` takes
@@ -329,8 +357,8 @@ deployment's override of a baseline; a deployment's own row has none) and
 ## Access
 
 Every signed-in actor reads message templates; platform admins create, edit and
-delete the deployment's own rows and overrides, read every sample and preview
-every row. Nobody but a resource load writes a baseline
+delete the deployment's own rows and overrides, read every sample, and preview
+and test-send every row. Nobody but a resource load writes a baseline
 ([permissions](permissions.zed): `messaging_templates/message_template`).
 
 ## Console
@@ -381,6 +409,24 @@ page.
 named kit or the default one, to a caller who may preview it. It refuses as the
 verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
 reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
+
+`send_message_template_test(template, brand_kit)` is the test send
+([A test send](#a-test-send)) of a row, in the named kit or the default one, to
+the caller's own address; it returns an `ActionResult` whose `id` is the
+message's. It refuses as the verbs do: a signed-out caller gets the session's
+GraphQL error and a caller who may not preview the row a `PERMISSION_DENIED`
+GraphQL error; the rest comes back in band (`ok: false`) with its code: a
+layout, block or part (`not_a_template`), an overridden shipped default
+(`not_effective`), an account with no address (`no_test_address`), a kit the
+caller does not read (`not_found`), the system channel missing
+(`SYSTEM_CHANNEL_MISSING`) or not connected (`OUTBOUND_EMAIL_CHANNEL_MISSING`)
+and system mail not configured (`OUTBOUND_EMAIL_NOT_CONFIGURED`), each keyed
+`channel` in `validation_errors`, an address compose refuses (keyed `to`), and a
+render refusal, whose messages name each path; `ActionResult` keeps no code for
+a refusal raised as a list, as `invalid_values` is, so its `code` is null. A
+row projects `can_send_test`, what the verb asks first;
+it rides the list's statement, and it is the row's side alone, so a test it
+admits may still be refused in band for the account, the channel or the sample.
 Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
 (`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
 says), which a page sets as `dir` on the subject, preheader and plain text it

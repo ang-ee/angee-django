@@ -26,6 +26,20 @@ live in code docstrings.
     address, subject or body under its argument, system mail not configured, the
     system channel missing or not connected). Entering the system context writes
     its permission audit row at once, even when the render then refuses.
+  - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
+    kit=None)` sends a row with its `sample` to `actor`'s own account address on
+    the system channel, the subject after `[Test] ` (`TEST_SUBJECT_PREFIX`). It
+    is decided by `preview` alone (`MessageTemplate.send_test_refusal()`, which
+    then asks `send_refusal()`), refuses an account with no address
+    (`no_test_address`), and renders under `actor`, never elevated, so a
+    refused test writes no permission audit row. The console gets
+    `send_message_template_test(template, brand_kit)`, an `ActionResult` naming
+    the message (a signed-out caller gets the session's error, a caller who may
+    not preview the row `PERMISSION_DENIED`, the rest in band with its code), and
+    `MessageTemplateType.can_send_test`, what it asks first, riding the list's
+    statement. A test's thread and message are the system channel's, which only
+    administrators read. **Upgrade:** regenerate the console schema and its
+    codegen.
   - **Changed.** A row fact read on a row the list did not annotate
     (`is_effective`, `is_overridden`, `has_updated_default`,
     `overrides_default`) is a structural read through the base manager and writes

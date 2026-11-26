@@ -1,4 +1,5 @@
-"""A message template sent: as named system work (``send_as_system``), recorded on messaging's system channel."""
+"""A message template sent on messaging's system channel: as named system work (``send_as_system``), and as an
+administrator's test send (``send_test``)."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, current_actor, system_context
+from rebac import PermissionDenied, actor_context, current_actor, system_context
 from rebac.models import PermissionAuditEvent
 
 from angee.brandkit.testing.models import BrandKit
@@ -28,7 +29,8 @@ from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Handle, Message, Part, Recipient
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker
-from tests.conftest import create_user
+from tests.conftest import create_platform_admin, create_user
+from tests.messaging_campaign import grant
 from tests.test_messaging_compose import _refused
 from tests.test_messaging_system_mail import LOCMEM, SENDER, _install
 from tests.test_messaging_templates_render import ANGEE, _mail, _recording, _render, _row
@@ -55,20 +57,28 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture
-def mailing(plain: Any, settings: Any, sent: list[str]) -> None:
-    """A transport mailer and a valid default sender, a minimal layout and the default kit; no system channel yet."""
+def mailing(kit: Any, settings: Any, sent: list[str]) -> None:
+    """A transport mailer, a valid default sender and the default kit; no system channel yet."""
 
-    del plain, sent
+    del kit, sent
     settings.MAILERS = {"transport": LOCMEM}
     settings.DEFAULT_FROM_EMAIL = SENDER
 
 
 @pytest.fixture
-def system_channel(mailing: None) -> Any:
+def installed(mailing: None) -> Any:
     """The installed system channel, beside :func:`mailing`."""
 
     del mailing
     return _install()
+
+
+@pytest.fixture
+def system_channel(installed: Any, plain: Any) -> Any:
+    """The installed system channel and the minimal layout the templates here sit in."""
+
+    del plain
+    return installed
 
 
 def _send(row: Any, values: dict[str, Any], **arguments: Any) -> Any:
@@ -236,9 +246,9 @@ def _paused(channel: Any) -> None:
     ],
 )
 def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_nothing_written(
-    mailing: None, settings: Any, sent: list[str], state: str | None, to: str, key: str, code: str,
+    mailing: None, plain: Any, settings: Any, sent: list[str], state: str | None, to: str, key: str, code: str,
 ) -> None:
-    del mailing
+    del mailing, plain
     if state != "missing":
         channel = _install()
         if state == "paused":
@@ -383,3 +393,83 @@ def test_no_graphql_schema_reaches_the_system_send() -> None:
     scanned = _schema_sources()
     assert "angee.messaging_templates.schema" in scanned
     assert [name for name, source in scanned.items() if "send_as_system" in _names(source)] == []
+
+
+# ---------- the test send ----------
+
+
+SAMPLE = {"name": "Ana", "title": "Welcome"}
+
+
+def _sampled(**values: Any) -> Any:
+    """The greeting template whose sample renders."""
+
+    return _greeting(sample=SAMPLE, **values)
+
+
+def test_an_administrators_test_send_reaches_their_own_handle_marked_as_a_test(system_channel: Any, kit: Any) -> None:
+    """Rendered from the sample under the administrator, recorded on the system channel, read by administrators."""
+
+    tester = create_platform_admin("messaging-templates-tester", email="Test.Admin@example.test")
+    other = create_platform_admin("messaging-templates-other-admin")
+    member = create_user("messaging-templates-test-onlooker")
+    with system_context(reason="tests.messaging_templates.send.handle"):
+        handle = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value="test.admin@example.test")
+    row = _sampled()
+    rendered = _render(row, SAMPLE, kit)
+    message = MessageTemplate.objects.send_test(row, actor=tester)
+    assert message.actor() is None
+    with system_context(reason="tests.messaging_templates.send.read"):
+        stored: Any = Message._base_manager.select_related("thread").get(pk=message.pk)
+        recipients = list(Recipient._base_manager.filter(message=stored).values_list("role", "handle_id"))
+    assert (stored.channel_id, stored.status, stored.created_by_id, stored.thread.created_by_id) == (
+        system_channel.pk, "queued", tester.pk, tester.pk,
+    )
+    assert recipients == [("to", handle.pk)]
+    assert _stored(message) == ("[Test] Welcome from Acme", rendered.plain_text.strip(), rendered.html)
+    assert stored.with_actor(other).has_access("read")
+    assert not stored.with_actor(member).has_access("read")
+
+
+@pytest.mark.parametrize("host", ["installed", "missing", "unconfigured"])
+def test_a_non_administrator_learns_nothing_and_causes_no_render_read_or_audit_row(
+    mailing: None, plain: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, host: str,
+) -> None:
+    """A member and the system channel's own replier, on a host with the channel, without it, or without mail."""
+
+    del mailing, plain
+    member = create_user("messaging-templates-test-member")
+    replier = create_user("messaging-templates-test-replier")
+    if host != "missing":
+        grant(_install(), "replier", replier)
+    if host == "unconfigured":
+        settings.MAILERS = {}
+    row = _sampled()
+    looked_up: list[Any] = []
+    _recording(monkeypatch, ChannelManager, "system_channel", lambda manager: looked_up.append(manager))
+    walked = _walks(monkeypatch)
+    for actor in (member, replier):
+        audits = _audits()
+        with _refused(PermissionDenied):
+            MessageTemplate.objects.send_test(row, actor=actor)
+        assert _audits() == audits
+    assert (walked, looked_up) == ([], [])
+
+
+def test_an_account_with_no_address_or_a_sample_that_does_not_render_is_refused_with_nothing_elevated(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The render runs as the administrator, so a refused test writes no permission audit row at all."""
+
+    del system_channel
+    addressless = create_platform_admin("messaging-templates-addressless", email="")
+    tester = create_platform_admin("messaging-templates-sample-tester")
+    row, unrenderable = _sampled(), _greeting(key="tests.unrenderable", sample={"title": "Welcome"})
+    walked, audits = _walks(monkeypatch), _audits()
+    with _refused(ValidationError) as refusal:
+        MessageTemplate.objects.send_test(row, actor=addressless)
+    assert (refusal.value.code, walked) == ("no_test_address", [])
+    with _refused(ValidationError) as refusal:
+        MessageTemplate.objects.send_test(unrenderable, actor=tester)
+    assert [item.code for item in refusal.value.error_list] == ["invalid_values"]
+    assert _audits() == audits

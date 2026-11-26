@@ -540,6 +540,12 @@ system channel (`MessageTemplateManager.send_as_system`); the row's language is
 the mail's, and the caller's own gate authorised the send. See
 [sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
 
+**Test send** — an administrator's send of a message template with its sample
+to their own account address, rendered under them and recorded on messaging's
+system channel with a `[Test] ` subject (`MessageTemplateManager.send_test`);
+decided by `preview` alone, and projected as `can_send_test`. See
+[a test send](../src/angee/messaging_templates/README.md#a-test-send).
+
 **Layout / template / block / part** — a message template's four kinds, written
 once. A **template** is the mail itself, with its subject, preheader and the
 **layout** it sits in, the HTML that wraps templates; a **block** (a styled
