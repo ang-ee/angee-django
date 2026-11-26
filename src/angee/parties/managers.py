@@ -481,7 +481,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         without one, so a routine upsert cannot silently move an account between users.
         The holder is refused too: it is the projection of the winning statement, so a
         source states the link (``Party.objects.assert_handle``) and resolution writes it.
-        ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
+        ``normalized_value`` tracks ``value`` on every hit that names the row's own
+        address; a hit on another spelling's survivor leaves the row's key as it
+        is. Display fields refresh
         on every hit; blank values never clobber, and a field named in ``fill_only``
         is written only while the handle's own value is blank, so a name a person
         typed fills a handle that has none and never renames a shared one. Source
@@ -536,7 +538,10 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             # The value matched, not the external id, or another row holds the address the id's row would move to (a
             # spelling merged into it): never rewrite either key here.
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
-            self._refresh(handle, {"normalized_value": normalized_value, **refresh}, fill_only=fill_only)
+            if handle.value == value:
+                # The row's own address: its key is the rule's for it. Another spelling's key is not this row's.
+                refresh["normalized_value"] = normalized_value
+            self._refresh(handle, refresh, fill_only=fill_only)
         return handle
 
     def reidentify(

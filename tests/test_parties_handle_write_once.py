@@ -229,6 +229,31 @@ def test_an_address_a_merged_spelling_holds_lands_on_the_row_its_account_id_name
     assert Handle._base_manager.get(pk=spelling.pk).merged_into_id == account.pk
 
 
+def test_later_messages_from_an_account_whose_new_address_a_merged_spelling_holds_write_nothing(db: None) -> None:
+    """Each lands on the account's row as it is: no update, no history version, no new stamp."""
+
+    del db
+    with system_context(reason="tests.parties.write_once.merged_spelling_repeats"):
+        account = Handle.objects.upsert(platform="whatsapp", value="+14155552685", external_id="acct-c")
+        spelling = Handle.objects.upsert(platform="whatsapp", value="+14155552686")
+        account.fold([spelling])
+        Handle.objects.upsert(platform="whatsapp", value="+14155552686", external_id="acct-c")
+        versions = Handle.history.filter(id=account.pk).count()
+        stamped = Handle._base_manager.get(pk=account.pk).updated_at
+        counts = []
+        for _ in range(2):
+            with CaptureQueriesContext(connection) as queries:
+                landed = Handle.objects.upsert(platform="whatsapp", value="+14155552686", external_id="acct-c")
+            assert landed.pk == account.pk
+            statements = [query["sql"].lstrip().upper() for query in queries.captured_queries]
+            assert not [sql for sql in statements if sql.startswith(("INSERT", "UPDATE"))], statements
+            counts.append(len(queries))
+    assert counts[0] == counts[1]
+    assert Handle.history.filter(id=account.pk).count() == versions
+    assert Handle._base_manager.get(pk=account.pk).updated_at == stamped
+    assert _keys(account) == _keyed("whatsapp", "+14155552685", "acct-c")
+
+
 def test_an_upsert_with_nothing_to_change_runs_one_statement_and_only_a_moved_address_reads_who_holds_it(
     db: None,
 ) -> None:

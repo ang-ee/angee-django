@@ -31,8 +31,9 @@ class ImmutableFieldsMixin(models.Model):
     A refusal is keyed by the changed field's name, as model validation and
     ``form.add_error`` key a field: a relation's attname (``recipient_id``) under
     the relation (``recipient``), any other field (``external_id``) under its own.
-    The guard holds for instance saves: a collection write (a queryset ``update``,
-    ``bulk_update``) does not pass it.
+    The guard runs only in an instance's ``save()``: a queryset ``update``,
+    ``bulk_update`` or a ``bulk_create`` that updates on conflict writes declared
+    fields unchecked.
     """
 
     immutable_fields: ClassVar[tuple[str, ...]] = ()
