@@ -53,9 +53,13 @@ const FULL_TREE_SCAN_TIMEOUT_MS = 30_000;
 /**
  * The testing entries a story imports. A story bundles the whole entry into the workshop, where a
  * test runner loaded beside Storybook's own breaks it, so these are held to the published rule
- * (no test runner reached at load) instead of the testing entries' exemption.
+ * (no test runner reached at load) instead of the testing entries' exemption. The story walk
+ * (`storyRunnerViolations`) follows the stories of this repository and names the chain; this list
+ * holds the same entries for the stories it cannot see, a product's, which import them too.
  */
-const STORY_TESTING_ENTRIES: readonly string[] = ["@angee/app/testing", "@angee/refine/testing/wire", "@angee/ui/testing/shell"];
+const STORY_TESTING_ENTRIES: readonly string[] = [
+  "@angee/app/testing", "@angee/metadata/testing", "@angee/refine/testing/wire", "@angee/storybook/testing", "@angee/ui/testing/shell",
+];
 
 test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
   const path = join(MONOREPO_ROOT, "src", "angee", "tsconfig.base.json");
