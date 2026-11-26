@@ -172,7 +172,8 @@ jobs:
           PR_CHECKS: ${{ inputs.pr-checks-enabled }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            reached=$(git diff --name-only HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
+            # A moved file as its old path too: a removed module selects the whole suite.
+            reached=$(git diff --name-only --no-renames HEAD^1 HEAD | uv run --locked python scripts/changed_path_selection.py)
             postgres=(scripts/postgres_selection.py)
           else
             reached=

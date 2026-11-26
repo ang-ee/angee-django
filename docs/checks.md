@@ -49,8 +49,8 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py` |
-| PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
+| Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py` |
+| PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
 | PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
@@ -581,7 +581,13 @@ The current tiers are:
   render or read them. A change to an input every test reads without importing it
   (dependencies, the Python pin, conftests and the shared test plugins, settings and
   autoconfig, `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
-  suite; docs and web code select no Python test, and the shards do not start.
+  suite. So does a Python change to a shared owner every addon composes onto
+  (`angee.base`, `angee.server`, `angee.graphql`), to a module every test loads
+  (what the repository's conftest imports, the shared test graph in
+  `tests/conftest.py` among it, and the framework plugins it names), and to a
+  Python file outside the import graph, such as a removed module; the compose
+  migration templates are in the graph. Docs and web code select no Python test,
+  and the shards do not start.
   The `select` job computes the selection once for both lanes. What the app
   registry, signals or composition connect without an import surfaces only in a
   run that selects the whole suite.
