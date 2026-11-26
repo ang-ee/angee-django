@@ -55,7 +55,11 @@ type ArgValues = Record<string, unknown>;
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
  * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner. While
  * the submit runs it cannot be dismissed, and dismissing typed values asks first
- * (`DialogForm`'s `pending` and `dirty`).
+ * (`DialogForm`'s `pending` and `dirty`), so it renders under the app's router and
+ * `ModalsHost`: opened without the router it throws
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.` A test provides both
+ * through the shared providers (`createUiTestProviders` or `AppShellTestProviders` with
+ * `router`).
  * @kind surface
  */
 export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
