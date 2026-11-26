@@ -113,9 +113,16 @@ SPELLINGS = [
      ("ada@example.test",) * 3, True),
     ("email", ("ada@Bücher.example", "ada@xn--bcher-kva.example", "ada@XN--BCHER-KVA.example"),
      ("ada@bücher.example",) * 3, ("ada@bücher.example",) * 3, True),
-    # IDNA 2003: a punycode label carrying ß does not read back, so it stays as typed.
-    ("email", ("ada@xn--strae-oqa.example", "ada@straße.example"), ("ada@xn--strae-oqa.example", "ada@straße.example"),
-     ("ada@xn--strae-oqa.example", "ada@straße.example"), False),
+    # IDNA 2003, as the email backend sends a domain: an IDNA 2008 punycode label carrying ß does not read back, so it
+    # stays as typed, a domain of its own; ß itself is sent as ss.
+    ("email", ("ada@xn--strae-oqa.example", "ada@straße.example"), ("ada@xn--strae-oqa.example", "ada@strasse.example"),
+     ("ada@xn--strae-oqa.example", "ada@strasse.example"), False),
+    ("email", ("ada@straße.example", "ada@strasse.example", "ada@STRASSE.example"), ("ada@strasse.example",) * 3,
+     ("ada@strasse.example",) * 3, True),
+    ("email", ("ada@bücher.example", "ada@bu\u0308cher.example"), ("ada@bücher.example",) * 2,
+     ("ada@bücher.example",) * 2, True),
+    ("email", ("ada@example.test", "ada@\uff45xample.test"), ("ada@example.test",) * 2, ("ada@example.test",) * 2,
+     True),
     ("email", ("a.b@gmail.com", "ab@gmail.com", "A.B+promo@GMail.com"),
      ("a.b@gmail.com", "ab@gmail.com", "a.b+promo@gmail.com"), ("ab@gmail.com",) * 3, False),
     ("email", ("ab@googlemail.com", "ab@gmail.com"), ("ab@googlemail.com", "ab@gmail.com"),

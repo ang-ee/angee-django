@@ -1174,14 +1174,18 @@ class Handle(
 
     @staticmethod
     def normalize_email_domain(domain: str) -> str:
-        """Return the one spelling an email domain compares by: lower-cased, each punycode label read as Unicode.
+        """Return the one spelling an email domain compares by: lower-cased, each label as the IDNA codec reads it.
 
         The one rule for a domain, whoever compares one: a handle's spelling key
         (:meth:`spelling_key_of`) and person-matching key (:meth:`normalize_value`)
         and a domain stored as typed elsewhere, such as ``Organization.domain``,
-        read through it on both sides. The standard
-        library's ``idna`` codec reads an ``xn--`` label, as Django's ``punycode``
-        writes one with it; a label the codec cannot read stays as typed.
+        read through it on both sides. Each label makes the standard library's
+        ``idna`` round trip (IDNA 2003), the codec Django's ``punycode`` writes a
+        domain with to send it: a punycode label reads as Unicode, and Unicode
+        spellings IDNA 2003 sends as one domain are one (NFD and NFC, full-width
+        letters, ``ß`` and ``ss``). A label the codec cannot read or write, such as
+        ``xn--strae-oqa`` (IDNA 2008's ``straße``, a domain of its own), stays as
+        typed.
 
         Handle keys are stored from it: changing what this returns means bumping
         :attr:`NORMALIZATION_VERSION`.
@@ -1189,11 +1193,10 @@ class Handle(
 
         labels = []
         for label in (domain or "").strip().lower().split("."):
-            if label.startswith("xn--"):
-                try:
-                    label = label.encode("ascii").decode("idna").lower()
-                except UnicodeError:
-                    pass
+            try:
+                label = label.encode("idna").decode("idna")
+            except UnicodeError:
+                pass
             labels.append(label)
         return ".".join(labels)
 

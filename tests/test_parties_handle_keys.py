@@ -429,13 +429,24 @@ _DOMAINS: dict[str, str] = {
     "": "",
 }
 
+_IDNA_2003: dict[str, str] = {
+    # Spellings IDNA 2003 sends as one domain, as Django writes a domain to send it.
+    "bu\u0308cher.example": "bücher.example",  # NFD
+    "\uff45xample.test": "example.test",  # a full-width letter
+    "straße.example": "strasse.example",
+}
+
 NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
     1: (_VERSION_1_VALUES, _DOMAINS),
     2: (
         # The person-matching key: version 1's outputs, but for a domain with surrounding whitespace, which is now
-        # read through the domain rule before the Gmail fold.
-        {**_VERSION_1_VALUES, ("email", "a.b@ gmail.com"): "ab@gmail.com"},
-        _DOMAINS,
+        # read through the domain rule before the Gmail check, and the spellings IDNA 2003 sends as one domain.
+        {
+            **_VERSION_1_VALUES,
+            ("email", "a.b@ gmail.com"): "ab@gmail.com",
+            **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
+        },
+        {**_DOMAINS, **_IDNA_2003},
         # The spelling key: letter case and domain spelling on email; none for what is no address, or off email.
         {
             ("email", "ada@example.test"): "ada@example.test",
@@ -450,6 +461,7 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
             ("email", "STRASSE@example.test"): "strasse@example.test",
             ("email", '"ADA EXAMPLE"@example.test'): '"ada example"@example.test',
             ("email", "a.b@ gmail.com"): "a.b@gmail.com",
+            **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
             ("email", "n/a"): "",
             ("imessage", "Ada@Example.test"): "",
             ("phone", "+1 787 555 0100"): "",
