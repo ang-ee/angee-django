@@ -786,19 +786,23 @@ data through REBAC, never a queryset bypass.
 - **Login throttling belongs at the IAM auth seam.** Do not add per-view or
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
-  Every credential a person presents is an authentication backend: a sign-in
-  link redeems through [`SignInLinkBackend`](../../src/angee/iam/auth.py) under
-  the same throttle. Name a credential keyword so Django's cleanser masks it
-  (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
-  see it, and pass the account it names unmasked so axes records the attempt
-  under that account. Each request makes one attempt
+  Every credential a person presents is an authentication backend: an emailed
+  sign-in link redeems through
+  [`SignInLinkBackend`](../../src/angee/iam_messaging/auth.py) under the same
+  throttle. Name a credential keyword so Django's cleanser masks it (`token`,
+  `key`, `secret`, `password`) before `user_login_failed` receivers see it, and
+  pass the account it names unmasked as `sign_in_account` so axes records the
+  attempt under that account. Each request makes one attempt
   ([`authenticate_once`](../../src/angee/iam/auth.py)). Self-service current-password
   verification uses the same owner: authenticate before taking
   a row lock, require the authenticated user to be the actor, and reject a hash
   changed between authentication and the lock. IAM's autoconfig owns
   the axes policy (the cool-off, no reset on success, the username and
   whitelist callables); a refusal of a genuine but spent credential is not a
-  guess.
+  guess: its backend calls
+  [`mark_spent_credential`](../../src/angee/iam/auth.py). A credential's
+  session records IAM's `SESSION_BACKEND`, so it outlives that credential's
+  backend.
 - **Person accounts have one factory.** Actor-requested accounts go through
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
@@ -811,11 +815,17 @@ data through REBAC, never a queryset bypass.
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
 - **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password`, `issue_sign_in_link`, `reset_password` and
-  `set_account_password` lock
-  the row, check their own Zed permission, the expected revision and the shared
+  `rename`, `issue_password`, `reset_password` and `set_account_password` lock
+  the row through `User.lock_for_account_verb`, which checks the verb's own Zed
+  permission, the expected revision and the shared
   `User.account_action_blockers`, then write elevated; the `account_actions`
-  projection batches the same conditions. These verbs refuse a protected
+  projection batches the same conditions and names each verb by its permission.
+  The verbs are an open set: a donor adds its verb by extending
+  `User.account_verbs` and `account_action_blockers` through `super()`, as
+  [`iam_messaging`](../../src/angee/iam_messaging/models.py) does for the
+  emailed sign-in link, and unions its permission into
+  `auth/user#active_account_granted` or `#nonstaff_account_granted`; IAM seals
+  the disclosures it derives from them (`angee.iam.E004`). These verbs refuse a protected
   account: staff, superusers, the actor's own and effective members of
   `iam/protected:main#member`, except Set password admits another person's protected
   account for a concrete platform-administrator user. Self

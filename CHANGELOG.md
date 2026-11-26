@@ -10,6 +10,77 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
+  single-use sign-in link leaves base IAM for its own addon, with everything
+  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
+  `issue_sign_in_link` to IAM's account verbs, `SignInLinkBackend` and
+  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
+  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
+  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
+  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
+  the document, now `IamMessagingRedeemSignInLink`. The permission
+  `auth/user#issue_sign_in_link` is the addon's own declaration
+  (`permissions.extends.zed`); IAM's Zed (revision 31) names no link verb. The
+  addon joins the template's `full` profile; a host without it, the `base`
+  profile included, offers and redeems no sign-in link. A link's session records
+  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
+  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
+  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
+  (`iam_messaging_signinlink`) and was in no release, so no migration template
+  ships.
+  - A host that tracks main adds `angee.iam_messaging` to `INSTALLED_APPS` to
+    keep emailed sign-in links and composes. Before it runs `makemigrations`,
+    and before it runs `migrate` with what that writes, it deletes the old
+    rows on every database it deploys to: `DELETE FROM iam_signinlink;` in
+    `manage.py dbshell` (`--database <alias>` for each other alias), the same
+    statement on SQLite and PostgreSQL. `makemigrations` then writes IAM's
+    `DeleteModel("SignInLink")` and the addon's initial migration.
+  - Until the rows are gone, `makemigrations` stops with "unsafe autodetected
+    drop: iam.signinlink: iam_signinlink.* holds data in N rows on 'default'.
+    Declare a reviewed cutover migration before native makemigrations." It
+    counts rows only on the databases of the environment that authors the
+    migration: a migration generated on an empty database also drops the table
+    where another database holds links, so delete the rows on every database
+    the host deploys to before applying it.
+  - Such a host loses the links already sent (they stop working; send them
+    again), the record of who was sent a link, and every session a link opened
+    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
+    people sign in again).
+  - The stale `iam.signinlink` content type can be removed with
+    `manage.py remove_stale_contenttypes`.
+  - Projects that author `AUTHENTICATION_BACKENDS` replace
+    `angee.iam.auth.SignInLinkBackend` with
+    `angee.iam_messaging.auth.SignInLinkBackend`; Django otherwise raises
+    `ImportError` at the first sign-in.
+  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account verbs are an
+  open set another addon extends: `User.account_verbs()` names the verbs
+  `account_actions` offers, in offer order, and it and
+  `User.account_action_blockers` (now a classmethod) are extended through
+  `super()`; a contributed verb runs under `User.lock_for_account_verb`, which
+  replaces the private `_lock_for_account_action`, and meets IAM's person-kind
+  and protected-account blockers before its own. `account_actions` is
+  `[String!]!` and its values are the verbs' Zed permission names
+  (`issue_password`), where the `UserAccountAction` enum serialized member names
+  (`ISSUE_PASSWORD`); the enum leaves the console and public schemas, and the
+  web's TypeScript type `UserAccountAction` goes. `offersAccountAction` compares
+  names exactly, and `@angee/iam` exports `AccountActionBar` and
+  `ACCOUNT_ACTION_FIELDS` for a contributed verb's `iam.User#actions-menu` child;
+  `useIssueSignInLinkAction` is no longer exported. The disclosures
+  `auth/user#active_account` and `#nonstaff_account` derive from the union points
+  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
+  verb extends; IAM seals the disclosures (`angee.iam.E004`). A credential
+  backend marks a genuine but spent credential with
+  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
+  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
+  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
+  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
+  is removed. **Upgrade:** a client that compares `account_actions` values with
+  the enum's upper-case names compares the permission names; a host regenerates
+  its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
