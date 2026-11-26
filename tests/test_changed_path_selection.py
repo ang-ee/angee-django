@@ -33,7 +33,9 @@ def test_a_template_reaches_the_tests_that_render_or_read_the_templates() -> Non
     assert "tests" not in tests
 
 
-@pytest.mark.parametrize("changed", ["tests/conftest.py", "src/angee/storage/permissions.zed", "uv.lock"])
+@pytest.mark.parametrize(
+    "changed", ["tests/conftest.py", "src/angee/storage/permissions.zed", "uv.lock", ".python-version"],
+)
 def test_an_input_every_test_reads_selects_the_full_suite(changed: str) -> None:
     assert reached(changed) == ["tests", "src/angee/resources/tests"]
 

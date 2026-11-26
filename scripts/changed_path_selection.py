@@ -26,8 +26,8 @@ import grimp
 ROOT = Path(__file__).resolve().parents[1]
 # Matched against the file name, or against the path when the pattern has a slash.
 FULL_RUN = (
-    "pyproject.toml", "uv.lock", "conftest.py", "settings.py", "settings.yaml", "autoconfig.py", "*.zed",
-    ".github/*", "scripts/*", "src/angee/base/testing/*", "*/testing/fixtures.py",
+    "pyproject.toml", "uv.lock", ".python-version", "conftest.py", "settings.py", "settings.yaml", "autoconfig.py",
+    "*.zed", ".github/*", "scripts/*", "src/angee/base/testing/*", "*/testing/fixtures.py",
     "*/resources/*.yaml", "*/resources/*.yml",
 )
 REFERENCE = re.compile(r"""["']((?:angee|example|tests)(?:\.\w+)+)""")

@@ -14,10 +14,18 @@
 # the framework distributions + `[postgres]` into `ghcr.io/ang-ee/django-angee`, the fuller
 # image the self-contained `local` stack runs.
 
-ARG PYTHON_VERSION=3.14
+# The CPython release `.python-version` pins. `deps` runs `uv sync` on the source,
+# which reads that file, and the image never downloads an interpreter, so the
+# base tag carries exactly that release. A Dockerfile cannot read a context file
+# into FROM; tests/test_runtime_image.py holds this default to the pin.
+ARG PYTHON_VERSION=3.14.9
 
 # --- base: the lean OS+python layer, shared by `deps` and `final` --------------
 FROM python:${PYTHON_VERSION}-slim AS base
+# Docker rebuilds only the current patch release's tags, so a pinned patch tag
+# keeps the Debian packages of its last build; take Debian's updates first.
+RUN apt-get update && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /usr/local/bin/
 ENV UV_PROJECT_ENVIRONMENT=/opt/.venv \
     UV_LINK_MODE=copy \

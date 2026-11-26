@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 ENTRYPOINT = ROOT / "docker" / "runtime-entrypoint.sh"
+
+
+def test_image_python_is_the_release_python_version_pins() -> None:
+    """Every Python stage builds on the CPython release `.python-version` pins.
+
+    The dependency stage's `uv sync` reads that file and asks for exactly its release,
+    and the image never downloads an interpreter, so a base tag on any other release
+    fails the build. A Dockerfile cannot read a context file into `FROM`, so the
+    `PYTHON_VERSION` default follows the pin and a pin change edits both.
+    """
+
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    (default,) = re.findall(r"^ARG PYTHON_VERSION=(.*)$", dockerfile, re.MULTILINE)
+    assert default == (ROOT / ".python-version").read_text(encoding="utf-8").strip()
+    assert set(re.findall(r"^FROM python:(\S+)", dockerfile, re.MULTILINE)) == {"${PYTHON_VERSION}-slim"}
 
 
 def test_runtime_image_prepares_bind_mount_outputs_before_dropping_privileges() -> None:
