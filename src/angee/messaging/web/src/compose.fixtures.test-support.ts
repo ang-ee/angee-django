@@ -30,7 +30,8 @@ import messaging from "./index";
  * hold (as `compose` does), and other content under it answers the recorded conflict. A written reply's conversation reads as the
  * recording read it after the reply. `loseNextAnswer` makes the next compose write and then lose
  * its answer (a transport error with no GraphQL answer); `refuseNextAsUnsent` refuses the next
- * one before it is sent (`ServerUnavailableError`). A read or a send the recording has no answer
+ * one before it is sent (`ServerUnavailableError`); `holdNextAnswer` keeps the next one waiting
+ * until it is released, so a test can leave while it sends. A read or a send the recording has no answer
  * for is answered with a GraphQL error naming it.
  */
 
@@ -124,6 +125,8 @@ export interface ComposerFixture {
   loseNextAnswer: () => void;
   /** The next `compose_message` is refused before it is sent, as the connection boundary refuses it. */
   refuseNextAsUnsent: () => void;
+  /** The next `compose_message` waits to be answered until the returned release is called. */
+  holdNextAnswer: () => () => void;
 }
 
 function recordedError(error: RecordedError): GraphQLError {
@@ -183,6 +186,7 @@ export function composerFixture({ seat: initial = "ana", onRequest, onCall }: Co
   let seat: ComposerSeat = initial;
   let loseNext = false;
   let refuseNext = false;
+  let held: Promise<void> | null = null;
   const keys = new Map<ComposerSeat, Map<string, { intent: string; answer: ComposeData }>>();
   const transcripts = new Map<string, RecordedAnswer<TranscriptData>>();
   // `anaRevoked` reads as Ana did: only what composing answers changed with her right to send.
@@ -229,7 +233,12 @@ export function composerFixture({ seat: initial = "ana", onRequest, onCall }: Co
     },
     parts: () => pageParts(),
     parts_aggregate: () => ({ aggregate: { count: pageParts().length } }),
-    compose_message: (args) => {
+    compose_message: async (args) => {
+      if (held) {
+        const waiting = held;
+        held = null;
+        await waiting;
+      }
       const key = String(args.idempotency_key);
       const shape = sendShape(args);
       const sent = keys.get(seat) ?? new Map();
@@ -273,6 +282,11 @@ export function composerFixture({ seat: initial = "ana", onRequest, onCall }: Co
     as: (next) => { seat = next; },
     loseNextAnswer: () => { loseNext = true; },
     refuseNextAsUnsent: () => { refuseNext = true; },
+    holdNextAnswer: () => {
+      let release = () => undefined as void;
+      held = new Promise((done) => { release = done; });
+      return release;
+    },
   };
 }
 

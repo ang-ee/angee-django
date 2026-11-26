@@ -54,10 +54,14 @@ function mount(props: Partial<Parameters<typeof ComposerStory>[0]> & { surface: 
   const calls: ComposerFixtureCall[] = [];
   let fixture: ComposerFixture | undefined;
   const onSent = vi.fn();
-  render(<ComposerStory {...props} onSent={onSent} onCall={(call) => calls.push(call)} onFixture={(made) => { fixture = made; }}
-    queryClient={createClient({ defaultOptions: { queries: { retry: false } } })} />);
+  const queryClient = createClient({ defaultOptions: { queries: { retry: false } } });
+  const story = (next: typeof props) => <ComposerStory {...next} onSent={onSent} onCall={(call) => calls.push(call)}
+    onFixture={(made) => { fixture = made; }} queryClient={queryClient} />;
+  const view = render(story(props));
   return {
     calls, onSent,
+    /** The same story with other props: another conversation, say. */
+    rerender: (next: Partial<typeof props>) => view.rerender(story({ ...props, ...next })),
     sends: () => calls.filter((call) => call.field === "compose_message").map((call) => call.args),
     fixture: () => {
       if (!fixture) throw new Error("The story has not handed over its fixture.");
@@ -411,6 +415,18 @@ test("after a lost answer, Reply on another email keeps the conversation's draft
   expect(await within(box).findByText(word("compose.sentEarlier"))).toBeTruthy();
   const [first, second] = sends();
   expect(second).toMatchObject({ parent: MESSAGE.unaddressed, idempotency_key: first?.idempotency_key });
+});
+
+test("a box that went away while sending still reports a lost answer, in the shared late report's words", async () => {
+  const { fixture, rerender } = mount({ surface: "transcript", seat: "ana", lose: true });
+  const box = await openReply("Please add me.");
+  const release = fixture().holdNextAnswer();
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  // The person moves to another conversation while it sends: the box goes.
+  rerender({ conversation: "sales" });
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  await act(async () => release());
+  expect((await screen.findAllByText(ui("form.answerLost"))).length).toBeGreaterThan(0);
 });
 
 test("a request refused before it was sent is left to the connection boundary: no note, no toast", async () => {

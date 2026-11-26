@@ -67,6 +67,9 @@ export function ThreadReply({ threadId, parent, leaves, onSent, onShowLatest, on
   const sendingRef = React.useRef(false);
   const textRef = useLatestRef(text);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  // An answer that lands after the box went away (the person left while it sent) is still reported.
+  const mounted = React.useRef(true);
+  React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const author = senderDisplayName(parent.sender, t("message.author"));
   useIdempotencyDraftOwner(readOnly ? null : scope, `the reply box of conversation ${threadId}`);
   const requestLeave = useUnsavedChangesNavigationGuard({
@@ -90,12 +93,21 @@ export function ThreadReply({ threadId, parent, leaves, onSent, onShowLatest, on
         { parent: parent.id, text: body, queued: true, idempotency_key: idempotencyKey }, BOX_RENDERS_FAILURE,
       ), composeOutcome);
       const outcome = await settle(async () => extractActionOutcome(data, "compose_message"));
-      if (outcome?.ok) {
+      if (outcome?.ok && mounted.current) {
         setText("");
         onSent();
       }
     } catch (cause) {
       const told = failedWriteOutcome(cause);
+      if (!mounted.current) {
+        // Gone, the box's note says nothing: the late report the shared dialogs give (`useLateAnswerReport`'s
+        // wording; that owner is not exported yet), and the connection boundary's for an unsent request.
+        if (told !== "not-sent") {
+          toast.danger({ title: t("compose.notSent"),
+            description: told === "unconfirmed" ? uiT("form.answerLost") : errorMessage(cause, t("compose.notSent")) });
+        }
+        return;
+      }
       // The note tells a lost answer and an earlier version; the connection boundary, an unsent request.
       if (told === "refused" || told === "denied") toast.danger({ title: errorMessage(cause, t("compose.notSent")) });
       if (told === "conflict") onShowLatest();
