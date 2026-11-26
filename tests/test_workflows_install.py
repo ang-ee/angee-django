@@ -35,7 +35,7 @@ DRAFT_REFUSAL = (
 )
 PUBLISH_REFUSAL = (
     "publish applies on every changed row, so it is never create_only: under create_only a changed row "
-    "would publish whatever the entry declares."
+    "would publish, whatever the entry declares."
 )
 REFUSALS = {"draft": DRAFT_REFUSAL, "publish": PUBLISH_REFUSAL}
 STAFF_DRAFT = document("entry", "staff_draft")

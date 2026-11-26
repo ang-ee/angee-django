@@ -76,7 +76,7 @@ class WorkflowDefinitionResource(AngeeResource):
         ),
         "publish": (
             "publish applies on every changed row, so it is never create_only: under create_only a changed "
-            "row would publish whatever the entry declares."
+            "row would publish, whatever the entry declares."
         ),
     }
 

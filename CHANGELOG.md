@@ -52,9 +52,10 @@ live in code docstrings.
   actor=...)`; code matching the old messages ("a later write prevents revert", "the
   pre-boundary state is unavailable") matches the codes instead.
 - `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
-  resource adapter names the columns its owner verb applies on every changed row in
-  `AngeeResource.never_create_only`, a mapping of each column to why, which adds to
-  its parents'. The load refuses an entry listing one under `create_only` before any
+  resource adapter names, in `AngeeResource.never_create_only`, the columns whose
+  omission its owner verb does not treat as keeping what is stored (it publishes the
+  stored value or applies a default instead), each with why; a subclass adds to its
+  parents'. The load refuses an entry listing one under `create_only` before any
   row, and rolls back, as for any entry configuration error. Web forms' refusal of
   `publish` moved there with its message. A workflow entry may no longer list `draft`
   or `publish`: under `create_only: [draft]` a changed row (a rename, or the entry

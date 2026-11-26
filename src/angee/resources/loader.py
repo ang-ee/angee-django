@@ -85,9 +85,11 @@ class AngeeResource(resources.ModelResource):
     """Widget map that accepts native JSON values from structured files."""
 
     never_create_only: ClassVar[Mapping[str, str]] = {}
-    """Columns this adapter's owner verb applies on every changed row, each with why it is never ``create_only``.
+    """Columns whose omission this adapter's owner verb does not treat as keeping what is stored, each with why.
 
-    A subclass adds to its parents' columns; an entry listing one is refused before any row loads.
+    ``create_only`` omits a column from a changed row; such a verb then publishes the stored
+    value or applies a default instead, against the entry. An entry listing one is refused
+    before any row loads; a subclass adds to its parents' columns.
     """
 
     def __init__(

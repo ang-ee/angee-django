@@ -258,14 +258,14 @@ Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 [`WorkflowDefinitionResource`](resources.py) delegates to `install_definition`,
 which uses the same draft and publication owners as direct calls. Tests compose
 the abstract sources through [`workflows.testing`](testing/__init__.py) and can
-execute those same manager verbs synchronously through its drivers.
+execute those same manager verbs synchronously through its drivers. An entry never lists
+`draft` or `publish` under `create_only` (`WorkflowDefinitionResource.never_create_only`):
+the load refuses it. Trigger rows install disabled; a row re-applied without a change to
+the trigger's rule (`Trigger.rule_fields`) keeps its state: enabled or disabled, its
+reason, its grant, its schedule cursor and its pending occurrences. A rule change
+disables it, with its reason.
 
 **Named gap: a draft staff hold across a release.** A changed workflow row installs
 its declared `draft` over any draft staff saved, whatever `publish` says: `publish:
-false` only leaves the served version as it was. No owner yet keeps staff's draft
-across a release. An entry never lists `draft` or `publish` under `create_only`
-(`WorkflowDefinitionResource.never_create_only`): the load refuses it. Trigger rows
-install disabled; a row re-applied without a change to the trigger's rule
-(`Trigger.rule_fields`) keeps its state: enabled or disabled, its reason, its grant,
-its schedule cursor and its pending occurrences. A rule change disables it, with the
-reason "Trigger configuration changed; enable it again."
+false` only leaves the served version as it was. No owner keeps staff's draft across a
+release.
