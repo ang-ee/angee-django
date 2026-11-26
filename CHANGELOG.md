@@ -44,13 +44,27 @@ live in code docstrings.
     and, with the addon, its initial migration. After migrating, the host
     provisions, which syncs the permissions: IAM's schema at revision 32 and,
     with the addon, its fragment at revision 2.
-  - Until the rows are gone, `makemigrations` stops with "unsafe autodetected
-    drop: iam.signinlink: iam_signinlink.* holds data in N rows on 'default'.
-    Declare a reviewed cutover migration before native makemigrations." It
-    counts rows only on the databases of the environment that authors the
-    migration: a migration generated on an empty database also drops the table
-    where another database holds links, so delete the rows on every database
-    the host deploys to before applying it.
+  - Until the rows are gone, both commands refuse, on django-compose
+    0.1.0.dev14, which the framework requires since the composer upgrade below:
+    - `makemigrations`, on the databases of the environment that authors the
+      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
+      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
+      migration before native makemigrations." (0.1.0.dev13 said the same, its
+      last sentence "Declare a reviewed cutover migration before native
+      makemigrations.")
+    - `migrate`, and so `provision`, on a database that still holds links when a
+      migration authored where none were drops their table: "unsafe migration
+      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
+      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
+      To proceed, keep the storage, or move its data and declare the drop in
+      that migration of the project's history with
+      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
+      Nothing was applied, the addon's initial migration included. Delete the
+      rows on that database and run `migrate` (or `provision`) again; the links
+      cannot move, so declaring the drop loses them the same way. Under
+      0.1.0.dev13 that `migrate` dropped the table without a word.
+  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
+    under this heading, so the framework release that brings either brings both.
   - Such a host loses the links already sent (they stop working; send them
     again), the record of who was sent a link, and every session a link opened
     (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
