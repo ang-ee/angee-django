@@ -309,9 +309,6 @@ def test_iam_alone_serves_no_sign_in_link() -> None:
     console = addon_schema(iam_schemas, "console")._schema
     assert "redeem_sign_in_link" not in public.mutation_type.fields
     assert not {"redeem_sign_in_link", "issue_user_sign_in_link"} & set(console.mutation_type.fields)
-    assert "UserAccountAction" not in console.type_map
-    user_type = console.type_map["UserType"]
-    assert str(user_type.fields["account_actions"].type) == "[String!]!"
 
 
 def test_web_runtime_carries_the_deployment_ui_layer() -> None:

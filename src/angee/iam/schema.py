@@ -11,6 +11,7 @@ from __future__ import annotations
 from functools import partial
 from itertools import islice
 from operator import methodcaller
+from types import GenericAlias
 from typing import Any, cast
 
 import strawberry
@@ -51,7 +52,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
-from angee.graphql.capabilities import permission_expression
+from angee.graphql.capabilities import permission_enum, permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, delete_by_public_id
@@ -108,6 +109,8 @@ from angee.iam.roles import subject_permitted as _subject_permitted_owner
 
 User = cast(type[Any], get_user_model())
 Group = cast(type[Any], apps.get_model("iam", "Group"))
+AccountAction = permission_enum(User.account_actions())
+"""The composed account actions as one GraphQL enum, in offer order, each spelled as its Zed permission."""
 
 
 def _view_as(info: strawberry.Info) -> ViewAs | None:
@@ -128,6 +131,20 @@ def _account_action_allowed(action: str, info: strawberry.Info) -> Any:
         memo = (actor, User.account_action_annotations(actor))
         request.__dict__["_iam_account_action_annotations"] = memo
     return memo[1][action]
+
+
+def _account_actions(root: Any) -> Any:
+    """Account actions the viewer may run on this row, each named by its Zed permission, from their owner."""
+
+    actions = User.account_actions()
+    if all(hasattr(root, f"_iam_{action}") for action in actions):
+        allowed = [action for action in actions if getattr(root, f"_iam_{action}")]
+    else:
+        allowed = root.account_actions_for(current_actor())
+    return [AccountAction(action) for action in allowed]
+
+
+_account_actions.__annotations__["return"] = GenericAlias(list, (AccountAction,))
 
 
 def _preference_object(user: Any) -> JSON:
@@ -161,17 +178,10 @@ class UserType(AngeeNode):
     last_login: auto
     revision: int = strawberry_django.field(field_name="account_revision")
 
-    @strawberry_django.field(
-        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in User.account_actions()}
+    account_actions = strawberry_django.field(
+        resolver=_account_actions,
+        annotate={f"_iam_{action}": partial(_account_action_allowed, action) for action in User.account_actions()},
     )
-    def account_actions(self) -> list[str]:
-        """Account actions the viewer may run on this row, each named by its Zed permission, from their owner."""
-
-        user = cast(Any, self)
-        actions = User.account_actions()
-        if all(hasattr(user, f"_iam_{action}") for action in actions):
-            return [action for action in actions if getattr(user, f"_iam_{action}")]
-        return cast(list[str], user.account_actions_for(current_actor()))
 
     @strawberry_django.field
     def assignment_subject(self) -> str:

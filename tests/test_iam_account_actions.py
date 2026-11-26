@@ -14,6 +14,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from graphql import get_named_type
 from rebac import (
     ObjectRef,
     PermissionDenied,
@@ -490,3 +491,22 @@ def test_a_disclosure_reads_the_same_sql_as_its_grants_written_inline(db, disclo
         caveats=list(composed.caveats), directives=list(composed.directives), headers=dict(composed.headers),
     ))
     assert sql(composed) == written_inline
+
+
+def test_account_actions_are_one_enum_of_the_composed_actions_spelled_as_zed_permissions(db):
+    """The permissions builder types the field from the composed set, in offer order; a row lists Zed names."""
+
+    console = _schema("console")._schema
+    field_type = console.type_map["UserType"].fields["account_actions"].type
+    enum = get_named_type(field_type)
+    assert str(field_type) == f"[{enum.name}!]!" and enum.name.startswith("Permissions_")
+    assert list(enum.values) == list(User.account_actions())
+    # The bare host's user takes the sign-in link's donor, so the composed set ends with its action.
+    assert list(enum.values)[-1] == "issue_sign_in_link"
+    assert "UserAccountAction" not in console.type_map
+    admin = create_platform_admin("enum-admin", password=None)
+    User.objects.create_user("enum-person")
+    rows = result_data(execute_schema(_schema("console"), LIST, user=admin))["users"]
+    assert {row["username"]: row["account_actions"] for row in rows}["enum-person"] == [
+        "set_active", "rename", "issue_password", "set_password",
+    ]

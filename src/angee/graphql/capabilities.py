@@ -75,7 +75,15 @@ def held_permissions(
 
 
 @cache
-def _permission_enum(names: tuple[str, ...]) -> Any:
+def permission_enum(names: tuple[str, ...]) -> Any:
+    """Return the GraphQL enum of the Zed permission names ``names``, in their order.
+
+    Values on the wire keep their zed spelling. The type is named after its
+    members, so one name tuple is one type wherever a schema declares it; a
+    projection of a composed set (an open set of account actions) gets the
+    composition's own type.
+    """
+
     # Lengths preserve name boundaries even when a permission contains underscores.
     enum_name = "Permissions_" + "_".join(f"{len(name)}_{name}" for name in names)
     return strawberry.enum(cast(Any, Enum(enum_name, {name: name for name in names})))
@@ -156,7 +164,7 @@ def permissions_field(names: Iterable[str]) -> Any:
     names = tuple(sorted(set(names)))
     if not names:
         raise ImproperlyConfigured("A permissions field must declare at least one permission.")
-    enum = _permission_enum(names)
+    enum = permission_enum(names)
 
     def resolve(root: models.Model) -> Any:
         held = held_permissions(root, names)

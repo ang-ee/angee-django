@@ -68,10 +68,13 @@ live in code docstrings.
   `super()`; a contributed action runs under `User.lock_for_account_action`, the
   private `_lock_for_account_action` made public, and meets IAM's person-kind
   and protected-account blockers before its own. `account_actions` is
-  `[String!]!` and its values are the actions' Zed permission names
-  (`issue_password`), where the `UserAccountAction` enum serialized member names
-  (`ISSUE_PASSWORD`); the enum leaves the console and public schemas, and the
-  web's TypeScript type `UserAccountAction` goes. `offersAccountAction` compares
+  typed by one enum of the composed actions, built when the schema is by the
+  permissions builder (`angee.graphql.capabilities.permission_enum`, now public)
+  and named after its members (`Permissions_10_set_active_…`): its values are the
+  actions' Zed permission names (`issue_password`), where the fixed
+  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
+  leaves the console and public schemas, and the web's TypeScript type
+  `UserAccountAction` goes. `offersAccountAction` compares
   names exactly, and `@angee/iam` exports `AccountActionBar` and
   `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
   `useIssueSignInLinkAction` is no longer exported. The disclosures
@@ -83,9 +86,10 @@ live in code docstrings.
   `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
   `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
   OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
-  is removed. **Upgrade:** a client that compares `account_actions` values with
-  the enum's upper-case names compares the permission names; a host regenerates
-  its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
+  that compares `account_actions` values with the old enum's upper-case names
+  compares the permission names, and one typed by `UserAccountAction` reads the
+  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
   `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
