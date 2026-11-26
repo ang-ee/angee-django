@@ -23,10 +23,10 @@ logger = logging.getLogger("angee.graphql.view_as")
 
 
 class AngeeGraphQLView(GraphQLView):
-    """Strawberry's sync Django view, answering a body nested too deeply to decode with its own 400."""
+    """Strawberry's sync Django view, answering a body nested too deeply to accept with its own 400."""
 
     def decode_json(self, data: str | bytes) -> object:
-        """Decode through ``decode_json``, so a document past the decoder's stack is malformed JSON."""
+        """Decode through ``decode_json``, so a body nested past ``MAX_JSON_DOCUMENT_DEPTH`` is malformed JSON."""
 
         return decode_json(data)
 

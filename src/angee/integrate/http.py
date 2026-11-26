@@ -32,7 +32,6 @@ the vendor turns into its own ``IntegrationError`` (:meth:`HttpRefusal.as_error`
 
 from __future__ import annotations
 
-import json
 import logging
 import ssl
 import time
@@ -48,6 +47,8 @@ import httpcore2
 import httpx2
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+
+from angee.base.serialization import decode_json
 
 from .errors import (
     IntegrationError,
@@ -180,9 +181,10 @@ class HttpRefusal:
 
     A refused answer has its non-success ``status``, its ``Retry-After``, its
     parsed JSON ``body`` and its ``headers`` (:meth:`of`); the status decides,
-    so a body over the cap or one httpx2 cannot decode is simply absent. Any
-    other refusal keeps the ``failure`` that stopped the request, which the
-    caller's factory sees before the owner chains it.
+    so a body over the cap, one httpx2 cannot decode, or one ``decode_json``
+    refuses as malformed is simply absent. Any other refusal keeps the
+    ``failure`` that stopped the request, which the caller's factory sees
+    before the owner chains it.
 
     ``headers`` are a copy of the answer's, httpx2's case-insensitive type, for
     a vendor's own signal (a rate limit's remaining requests and reset): read
@@ -207,7 +209,7 @@ class HttpRefusal:
 
         content = answer.content if body is None else body
         try:
-            parsed = json.loads(content) if content else None
+            parsed = decode_json(content) if content else None
         except ValueError:
             parsed = None
         headers = httpx2.Headers(

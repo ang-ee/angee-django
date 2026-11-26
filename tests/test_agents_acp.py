@@ -45,6 +45,7 @@ from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
 from angee.agents_runtime_pydantic import runner as pydantic_runner
 from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.base.serialization import MAX_JSON_DOCUMENT_DEPTH
 from angee.graphql import asgi
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
@@ -1740,14 +1741,17 @@ def test_resume_awaiting_approval_is_idle_without_a_stop_reason(chat: Any, repla
     asyncio.run(scenario())
 
 
-def test_a_record_nested_past_the_json_decoder_is_skipped_as_invalid_json(caplog: pytest.LogCaptureFixture) -> None:
-    """A frame's record too deep for the decoder's stack is invalid JSON; the records beside it still arrive."""
+def test_a_record_nested_past_the_document_bound_is_skipped_as_invalid_json(caplog: pytest.LogCaptureFixture) -> None:
+    """A frame's record a level past ``MAX_JSON_DOCUMENT_DEPTH`` is invalid JSON; the record at the bound arrives."""
+
+    def record(depth: int) -> bytes:
+        levels = depth - 1
+        return b'{"jsonrpc": "2.0", "params": ' + b"[" * levels + b"0" + b"]" * levels + b"}"
 
     transport = WebsocketTransport(consumer=None)  # type: ignore[arg-type]
-    levels = 100_000
 
-    transport.feed(b"[" * levels + b"]" * levels + b'\n{"jsonrpc": "2.0"}\n')
+    transport.feed(record(MAX_JSON_DOCUMENT_DEPTH + 1) + b"\n" + record(MAX_JSON_DOCUMENT_DEPTH) + b"\n")
 
-    assert transport.messages.get_nowait() == {"jsonrpc": "2.0"}
+    assert transport.messages.get_nowait() == json.loads(record(MAX_JSON_DOCUMENT_DEPTH))
     assert transport.messages.empty()
-    assert "Invalid JSON on an ACP WebSocket." in caplog.text
+    assert caplog.text.count("Invalid JSON on an ACP WebSocket.") == 1
