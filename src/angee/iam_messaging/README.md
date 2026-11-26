@@ -63,7 +63,12 @@ override that drops the link, from either body or from a block it includes, or
 shows it only under a condition that is false for this person, is refused when a
 link is issued. The action refuses in band ("The sign-in link's email template does
 not show the link…", code `link_not_shown`), nothing is written, the earlier link
-stays current, and a warning on this addon's logger names the template row. The
+stays current, and a warning on this addon's logger names the template row and
+the refusal's code. Any other refusal of the render (a value the template reads
+as a date, a value or a text over its limit, a render that fails) is answered the
+same way in this addon's words ("…could not be rendered for this mail…", code
+`link_not_rendered`), never in the render's, which can quote a value, the link
+among them. The system channel's and compose's refusals pass as they are. The
 template reads
 three values, which the server builds: `link`, the single-use link; `expires_at`,
 when it stops working, printed in the deployment's time zone; and
@@ -174,11 +179,9 @@ reaches. Strawberry's line quotes the request's document where the error
 points, so a token passed as a variable, as this addon's page passes it, is
 logged nowhere, but one written into the document itself is logged there.
 Django never filters an exception's own message: nothing this addon raises
-carries the link or the address; the template's refusals pass in their own
-words, and the one that quotes a value (a value read as a date) quotes its
-first 40 characters, which end before a link's secret, so no answer, banner or
-log line carries the secret; a database's or a transport's error text is its
-own. Django's
+carries the link or the address, and no refusal of the render passes in the
+render's own words, so no answer, banner or log line carries the secret; a
+database's or a transport's error text is its own. Django's
 plain-text error report shows no local variables. The mail is stored on the
 system channel, where the link lives until it signs in, expires or is retired:
 

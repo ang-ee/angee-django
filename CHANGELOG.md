@@ -27,7 +27,11 @@ live in code docstrings.
   for the person, is refused in band (`link_not_shown`, "…edit or delete the
   deployment's version of the template, or of a block or part it includes."),
   nothing written, the earlier link still current, and a warning names the
-  template, its language and its row's public id. The action answers "Sign-in
+  template, its language, its row's public id and the refusal's code. Every other
+  refusal of the render is answered the same way in the addon's words
+  (`link_not_rendered`, "…could not be rendered for this mail…"), never the
+  render's, which can quote a value; the system channel's and compose's refusals
+  pass as they are. The action answers "Sign-in
   link queued for the account's email." (it said "sent"), and so do the
   cooldown's refusal and the log: its mail's delivery is the recorded message's
   to show on the system channel. A missing template's refusal names no command
