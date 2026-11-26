@@ -1601,7 +1601,7 @@ def test_a_value_typed_as_the_field_is_refused_and_an_expression_writes_unchecke
 
 @pytest.mark.django_db
 def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_recording_it() -> None:
-    """History loads under the retired key, its diff shows the key's text, and a later save still records it."""
+    """History loads under the retired key, shows it and keeps recording it; the live row's full save refuses it."""
 
     owner = create_user("retired-history-owner")
     vault = vault_for(owner)
@@ -1612,6 +1612,14 @@ def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_rec
     first, renamed = vault.history.order_by("history_id")
     _store_key(type(first), first.history_id, "retrieval_class", "retired")
     _store_key(vault_model, vault.pk, "retrieval_class", "retired")
+    with (
+        actor_context(owner),
+        pytest.raises(ValidationError) as refused,
+        transaction.atomic(),
+        changeset(fresh=True, change_reason="Refused"),
+    ):
+        vault_model._base_manager.get(pk=vault.pk).save()
+    assert "retrieval_class" in refused.value.message_dict
 
     history = model_history(vault_model)
     assert history is not None
