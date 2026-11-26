@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
+import { backendOperations, backendResource, backends } from "./implementation-fixtures";
 import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const statusOptions = [
@@ -206,7 +207,8 @@ const storySchemas = storySchema({
   persons_aggregate: () => ({ aggregate: { count: people.length } }),
   persons_by_pk: person,
   update_persons_by_pk: (args) => ({ ...person(args), ...patch(args) }),
-}, { resources: [noteResource, personResource] });
+  ...backendOperations,
+}, { resources: [noteResource, personResource, backendResource] });
 
 const meta = {
   title: "Views/FormView",
@@ -298,6 +300,30 @@ export const RelationWithoutEdit: Story = {
   ),
 };
 // A relation field's quick create gets its story here, from the lane that builds it.
+
+// A backend whose stored implementation key the registry no longer names: its Backend reads null.
+const unregistered = backends[1];
+const backendField = { name: "backend_class", label: "Backend" } satisfies FormField;
+
+/**
+ * Old archive's Backend is editable: it carries the warning mark "Not registered", described "Choose
+ * a registered one to save this record.", and its select offers Local folder and S3 bucket. Choosing
+ * one clears the mark and the record saves; saving without one is refused under Backend.
+ */
+export const ImplementationKeyNotRegistered: Story = {
+  render: () => (
+    <FormView resource="storage.Backend" id={unregistered.id} fields={[{ name: "label", label: "Name", title: true }, backendField]} />
+  ),
+};
+
+/** The same record with Backend create-only: read-only here, its mark is described "It cannot be changed on this record." */
+export const ImplementationKeyNotRegisteredCreateOnly: Story = {
+  name: "Implementation Key Not Registered, Create-only",
+  render: () => (
+    <FormView resource="storage.Backend" id={unregistered.id}
+      fields={[{ name: "label", label: "Name", title: true }, { ...backendField, createOnly: true }]} />
+  ),
+};
 
 export const RecordSectionHeading: Story = {
   render: () => <div className="max-w-3xl">

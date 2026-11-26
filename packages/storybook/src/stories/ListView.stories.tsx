@@ -9,6 +9,7 @@ import {
 } from "@angee/ui";
 
 import { ResourceQuery } from "@angee/metadata";
+import { backendOperations, backendResource } from "./implementation-fixtures";
 import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const rows = [
@@ -103,6 +104,7 @@ const storySchemas = storySchema({
   notes_aggregate: () => ({ aggregate: { count: rows.length } }),
   tasks: () => tasks,
   tasks_aggregate: () => ({ aggregate: { count: tasks.length } }),
+  ...backendOperations,
 }, { resources: [testDataResource("notes.Note", {
   schemaName: "public",
   roots: { list: "notes", aggregate: "notes_aggregate" },
@@ -111,7 +113,7 @@ const storySchemas = storySchema({
     ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
     ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
   ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
-}), taskResource] });
+}), taskResource, backendResource] });
 
 const meta = {
   title: "Views/ListView",
@@ -145,6 +147,19 @@ export const GroupedWithTieBreakers: Story = {
       <ListView resource="notes.Task" defaultGroup={{ field: "status" }} columns={[
         { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
       ]} />
+    </div>
+  ),
+};
+
+/**
+ * Two storage backends; Old archive stores an implementation key the registry no longer names, so its
+ * Backend column reads null. Its cell says "Not registered" in the warning tone, where Team files'
+ * shows its implementation, Local folder.
+ */
+export const ImplementationKeyNotRegistered: Story = {
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="storage.Backend" columns={[{ field: "label", header: "Name" }, { field: "backend_class", header: "Backend" }]} />
     </div>
   ),
 };

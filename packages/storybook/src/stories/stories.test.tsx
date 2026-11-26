@@ -62,6 +62,8 @@ test.each(paths)("%s imports", (path) => {
 const RECORD_STORIES = ["EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit"] as const;
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
+  "./ListView.stories.tsx ImplementationKeyNotRegistered", "./FormView.stories.tsx ImplementationKeyNotRegistered",
+  "./FormView.stories.tsx ImplementationKeyNotRegisteredCreateOnly",
 ]);
 /** The stories not rendered here, each with why. */
 const NOT_RENDERED: ReadonlyMap<string, string> = new Map([
@@ -143,4 +145,36 @@ test("Views/ListView / Grouped With Tie-breakers shows on its headers the sort i
     "Archive notes", "Approve budget", "Send invites", "Book the room", "Draft the brief", "Collect quotes",
   ]));
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+});
+
+test("Views/ListView / Implementation Key Not Registered says so in the warning tone, beside a registered implementation", async () => {
+  const said = consoleMessages();
+  render(<listView.ImplementationKeyNotRegistered />);
+  expect((await screen.findByText("Not registered")).className).toContain("bg-warning-soft");
+  expect(screen.getByText("Local folder")).toBeTruthy();
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+/** A mark's explanation: its accessible description. */
+const explanation = (mark: HTMLElement) => document.getElementById(mark.getAttribute("aria-describedby") ?? "")?.textContent;
+
+test("Views/FormView / Implementation Key Not Registered marks Backend, says a registered one saves it and offers them", async () => {
+  const said = consoleMessages();
+  render(<formView.ImplementationKeyNotRegistered />);
+  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Choose a registered one to save this record.");
+  fireEvent.click(screen.getByRole("combobox", { name: "Backend" }));
+  expect(await screen.findByRole("option", { name: "Local folder" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "S3 bucket" })).toBeTruthy();
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/FormView / Implementation Key Not Registered, Create-only marks Backend as unchangeable on this record", async () => {
+  const said = consoleMessages();
+  render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
+  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("It cannot be changed on this record.");
+  expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
