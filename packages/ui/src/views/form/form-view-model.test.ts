@@ -584,6 +584,21 @@ describe("dotted form fields", () => {
       },
     )).toEqual({ id: "record-1", count: null, ratio: null });
   });
+
+  test("leaves the values it reads as they were when a structured root and its dotted members turn into wire values", () => {
+    const owner = { id: "user-2", display_name: "Grace" };
+    const values = { config: { timeout: "", owner, note: "kept" } };
+    const loaded = structuredClone(values);
+    const data = mutationData(
+      values,
+      [{ name: "config", widget: "json" }, { name: "config.timeout", widget: "integer" }, { name: "config.owner", widget: "many2one" }],
+      { dirtyFields: { config: { timeout: true, owner: true } }, id: "record-1", isCreate: false },
+    );
+    expect(data).toEqual({ id: "record-1", config: { timeout: null, owner: "user-2", note: "kept" } });
+    expect(values).toEqual(loaded);
+    expect(values.config.owner).toBe(owner);
+    expect(data.config).not.toBe(values.config);
+  });
 });
 
 test("a to-many relation keeps an equal re-picked set as its baseline and submits public ids", () => {
