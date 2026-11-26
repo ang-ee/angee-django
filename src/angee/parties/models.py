@@ -855,6 +855,13 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
 
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", db_index=True, editable=False)
+    """``domain`` in the one spelling the domain rule gives (``Handle.normalize_email_domain``); ``""`` for no domain.
+
+    What :meth:`domain_filter` compares. Written by :meth:`save` from ``domain``, so history versions it beside the
+    domain, as a handle's keys; the provision repair (``PartyManager.renormalize_organization_domains``) saves again a
+    row a save did not key.
+    """
 
     class Meta:
         """Django model options for the organization child model."""
@@ -862,6 +869,33 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/organization"
+
+    @classmethod
+    def domain_filter(cls, domain: str) -> models.Q:
+        """The organizations whose domain is ``domain`` in any spelling the domain rule joins: its letter case, a
+        punycode or Unicode label, and the spellings IDNA 2003 sends as one (``Handle.normalize_email_domain``).
+
+        One indexed comparison of :attr:`domain_key`; an empty ``domain`` names no organization. Several
+        organizations may share a domain.
+        """
+
+        key = Handle.normalize_email_domain(domain)
+        return models.Q(domain_key=key) if key else models.Q(pk__in=[])
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the organization with :attr:`domain_key` computed from ``domain`` whenever the domain is written.
+
+        An insert, a full save, and a partial save naming ``domain`` or the key compute the key and write it beside
+        the domain; a partial save of other fields leaves it, and a history revert restoring the domain keys it again.
+        A queryset ``update`` writes no key: the provision repair keys what it left.
+        """
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or {"domain", "domain_key"}.intersection(update_fields):
+            self.domain_key = Handle.normalize_email_domain(self.domain)
+            if update_fields is not None and "domain_key" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "domain_key"]
+        super().save(*args, **kwargs)
 
 
 class Handle(
@@ -1181,8 +1215,9 @@ class Handle(
 
         The one rule for a domain, whoever compares one: a handle's spelling key
         (:meth:`spelling_key_of`) and person-matching key (:meth:`normalize_value`)
-        and a domain stored as typed elsewhere, such as ``Organization.domain``,
-        read through it on both sides. Each label makes the standard library's
+        and an organization's domain key (``Organization.domain_key``, which
+        ``Organization.domain_filter`` compares), each stored from it, while the
+        domain itself stays as typed. Each label makes the standard library's
         ``idna`` round trip (IDNA 2003), the codec Django's ``punycode`` writes a
         domain with to send it: a punycode label reads as Unicode, and Unicode
         spellings IDNA 2003 sends as one domain are one (NFD and NFC, full-width
@@ -1191,7 +1226,8 @@ class Handle(
         typed.
 
         Handle keys are stored from it: changing what this returns means bumping
-        :attr:`NORMALIZATION_VERSION`.
+        :attr:`NORMALIZATION_VERSION`. An organization's key needs no version: its
+        provision repair compares every row with this rule as it is.
         """
 
         labels = []

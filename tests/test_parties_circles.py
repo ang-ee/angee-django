@@ -1079,20 +1079,18 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
         pytest.param("bob@bu\u0308cher.example", "bücher.example", id="handle-nfd-organization-nfc"),
         pytest.param("bob@\uff45xample.test", "\uff45xample.test", id="handle-full-width-organization-full-width"),
         pytest.param("bob@\uff45xample.test", "example.test", id="handle-full-width-organization-ascii"),
-        pytest.param(
-            "bob@strasse.example", "straße.example", id="handle-ss-organization-sharp-s",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError,
-                reason="Organizations store no rule-derived domain key: one typed in a spelling the rule joins but "
-                "neither the rule's, its punycode nor the address's own is not found.",
-            ),
-        ),
+        # Spellings neither the rule's, its punycode nor the address's own: the organization's domain key finds them.
+        pytest.param("bob@strasse.example", "straße.example", id="handle-ss-organization-sharp-s"),
+        pytest.param("bob@bücher.example", "bu\N{COMBINING DIAERESIS}cher.example", id="handle-nfc-organization-nfd"),
+        pytest.param("bob@example.test", "\N{FULLWIDTH LATIN SMALL LETTER E}xample.test",
+                     id="handle-ascii-organization-full-width"),
+        pytest.param("bob@bücher.example", "BÜCHER.example", id="handle-unicode-organization-upper-unicode"),
     ],
 )
 def test_suggest_for_org_domain_reads_both_spellings_of_an_internationalised_domain(
     db: None, address: str, stored: str,
 ) -> None:
-    """One rule for a domain on both sides: the handle's key, and the organization's domain as it was typed."""
+    """One domain rule on both sides: the handle's key and the organization's domain key; its domain stays as typed."""
 
     del db
     with system_context(reason="test suggest domain spellings"):

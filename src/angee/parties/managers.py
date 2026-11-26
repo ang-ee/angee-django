@@ -52,7 +52,6 @@ from django.db.models.functions import Coalesce, NullIf
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
-from django.utils.encoding import punycode
 from phonenumbers import PhoneNumberMatcher
 from pydantic import ValidationError as PydanticValidationError
 from rebac import (
@@ -2366,14 +2365,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         review); otherwise an email whose non-generic domain matches a tracked
         :attr:`Organization.domain` contributes a rule suggestion at ``0.4``:
         the handle's domain is its spelling key's (``Handle.spelling_key_of``,
-        from its own value), and an organization is found when its domain, stored
-        as typed, is that spelling, its punycode, or the address's own spelling,
-        ASCII letter case aside, and the one rule
-        (``Handle.normalize_email_domain``) reads it as the same domain. Another
-        spelling the rule joins is not found (an organization typed
-        ``straße.example`` for an address typed ``strasse.example``, NFD for NFC,
-        full-width letters for ASCII), since organizations store no domain key;
-        otherwise no-op. Both branches stay inside the partition of the handle's
+        from its own value), and an organization is found by its domain key
+        (``Organization.domain_filter``), so any spelling of the domain the one
+        rule (``Handle.normalize_email_domain``) joins finds it, however it was
+        typed; otherwise no-op. Both branches stay inside the partition of the handle's
         creator: handles that user created and parties that user owns. Public
         mailbox-provider domains never imply organization membership. Returns the
         strongest created/existing link, or ``None``.
@@ -2416,24 +2411,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if key := handle_model.spelling_key_of(handle.platform, handle.value):
             domain = key.rpartition("@")[2]
             organization_model = apps.get_model("parties", "Organization")
-            org = None
-            if domain and domain not in GENERIC_EMAIL_DOMAINS:
-                # An organization's domain is stored as typed: read the rule's spelling, its punycode and the address's
-                # own spelling, then compare by the one rule.
-                spelled = Q(domain__iexact=domain) | Q(domain__iexact=handle.value.strip().rpartition("@")[2])
-                if not domain.isascii():
-                    try:
-                        spelled |= Q(domain__iexact=punycode(domain))
-                    except UnicodeError:
-                        pass
-                org = next(
-                    (
-                        row
-                        for row in organization_model.objects.filter(spelled, owner_id=handle.created_by_id)
-                        if handle_model.normalize_email_domain(row.domain) == domain
-                    ),
-                    None,
-                )
+            org = (
+                organization_model.objects.filter(
+                    organization_model.domain_filter(domain), owner_id=handle.created_by_id
+                ).first()
+                if domain and domain not in GENERIC_EMAIL_DOMAINS
+                else None
+            )
             if org is not None:
                 return self.assert_handle(
                     org,
@@ -4126,6 +4110,45 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if not rows.exists() or not rows.update(created_at=at, **auto_now_stamps(parties, now)):
             return None
         return at
+
+    def renormalize_organization_domains(self) -> int:
+        """Key again every organization whose stored domain key is not its domain's under the rule; return how many.
+
+        ``Organization.save`` keys every save of the domain; this keys the rest,
+        at every provision and as ``renormalize_organization_domains``: a row
+        stored before the column existed (its migration leaves ``""``), a domain a
+        queryset ``update`` wrote, and every row the domain rule
+        (``Handle.normalize_email_domain``) now spells otherwise, so the rule
+        needs no version here. It reads each organization's domain and key in key
+        batches of at most ``HandleManager.REPAIR_LIMIT``, and saves again,
+        through the organization's own save and under its row lock, each row whose
+        key differs, read again under the lock: a domain saved meanwhile is keyed
+        by its own save and skipped. Each batch is its own transaction, and each
+        saved row a history version, as the handle repair's. Named system work.
+        Idempotent: a second run reads every batch and saves nothing.
+        """
+
+        organization_model = apps.get_model("parties", "Organization")
+        normalize = apps.get_model("parties", "Handle").normalize_email_domain
+        organizations = organization_model._base_manager.order_by("pk")
+        size = min(query_batch_size(organizations), apps.get_model("parties", "Handle").objects.REPAIR_LIMIT)
+        keyed, last = 0, None
+        with system_context(reason="parties.organization.renormalize_domains"):
+            while rows := list(
+                (organizations if last is None else organizations.filter(pk__gt=last))
+                .values_list("pk", "domain", "domain_key")[:size]
+            ):
+                last = rows[-1][0]
+                stale = [pk for pk, domain, key in rows if normalize(domain) != key]
+                if not stale:
+                    continue
+                with transaction.atomic():
+                    for organization in row_lock_queryset(organization_model).filter(pk__in=stale).order_by("pk"):
+                        if normalize(organization.domain) != organization.domain_key:
+                            # The organization's save writes the key from the domain it holds now.
+                            organization.save(update_fields=["domain_key"])
+                            keyed += 1
+        return keyed
 
     def backdate_from_sources(self) -> tuple[int, int, int, datetime | None, datetime | None]:
         """Move each party's creation time back to the earliest its directory records state; return what it did.
