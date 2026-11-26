@@ -22,6 +22,7 @@ import {
   AppearanceProvider,
   useAppearance,
   type AppearancePreferences,
+  type AppearanceState,
   type HostAppearanceDefaults,
 } from "./appearance";
 
@@ -340,7 +341,7 @@ describe("while the host's own options are pending", () => {
     expect(cache()).toMatchObject({ themeId: ink.definition.id });
   });
 
-  test("a theme picked in a draft applies at once; a draft that follows the app default keeps waiting", async () => {
+  test("before the first paint, a draft that follows the app default waits and a theme picked in it applies at once", async () => {
     const { result } = renderAppearance({ preferences: {}, defaults: pendingHost });
     act(() => result.current.openDraft());
     await act(async () => { await result.current.setColorScheme("dark"); });
@@ -348,6 +349,41 @@ describe("while the host's own options are pending", () => {
     await act(async () => { await result.current.setTheme(ink.definition.id); });
     expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
     expect(cache()).toBeNull();
+  });
+
+  test.each([
+    { leave: "Discard", leaveDraft: async (appearance: AppearanceState) => { appearance.discard(); } },
+    { leave: "a return to the app default", leaveDraft: async (appearance: AppearanceState) => { await appearance.setTheme(undefined); } },
+  ])("after the first paint, a picked theme left by $leave gives way to the host theme at once", async ({ leaveDraft }) => {
+    const { result } = renderAppearance({ preferences: {}, defaults: pendingHost });
+    act(() => result.current.openDraft());
+    await act(async () => { await result.current.setTheme(ink.definition.id); });
+    expect(document.documentElement.dataset.themeId).toBe(ink.definition.id);
+    await act(async () => { await leaveDraft(result.current); });
+    // The document follows the context: the host theme, with the build's options until the host answers.
+    expect(result.current.effectiveThemeId).toBe(paper.definition.id);
+    expect(document.documentElement.dataset.themeId).toBe(paper.definition.id);
+    expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
+  });
+
+  test("another person signing in while the host's options are read again keeps the paint until they arrive", () => {
+    const answered = (brand: string): HostAppearanceDefaults => ({ ...pendingHost, pending: false, options: { version: 1, value: { brand, rail: "#223344" } } });
+    const signedIn = (id: string | null, status: RuntimeAuthState["status"] = "authenticated"): RuntimeAuthState =>
+      ({ status, user: id ? { id, name: id } : null, hasRole: () => false });
+    const tree = (host: HostAppearanceDefaults, auth: RuntimeAuthState) => (
+      <AppRuntimeProvider runtime={{ themes: THEMES, auth, userPreferences: { available: true, preferences: {}, patchPreferences: vi.fn(async () => undefined) } }}>
+        <AppearanceProvider host={host}>{null}</AppearanceProvider>
+      </AppRuntimeProvider>
+    );
+    const brand = () => document.documentElement.style.getPropertyValue("--brand");
+    const { rerender } = render(tree(answered("#abcdef"), signedIn("actor-1")));
+    expect(brand()).toBe("#abcdef");
+    // A session change resolves identity again and starts the host's read over: this person's first paint waits.
+    rerender(tree(pendingHost, signedIn(null, "resolving")));
+    rerender(tree(pendingHost, signedIn("actor-2")));
+    expect(brand()).toBe("#abcdef");
+    rerender(tree(answered("#123456"), signedIn("actor-2")));
+    expect(brand()).toBe("#123456");
   });
 });
 
