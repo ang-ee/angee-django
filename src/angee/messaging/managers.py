@@ -3247,9 +3247,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         The system channel's one writer, as nobody sends on that channel as a person.
         System mail is named system work (each email Django sends, through the system
-        mailer, among it): the caller's own gate authorized it, so a caller with its own
-        permission (an emailed sign-in link's action, a template's test send) may be a
-        person's button, and no grant is consulted here. The causing actor is recorded
+        mailer, among it): the caller's own gate authorized it, so a caller whose own
+        permission decided the send may be a person's button, and no grant is consulted
+        here. Each caller is named, with that permission, in
+        ``tests/test_messaging_system_mail_callers.py``. The causing actor is recorded
         in the caller's changeset. It runs in the caller's context and transaction, through
         the writer :meth:`compose` uses: the rows record the causing actor as
         ``created_by`` (empty with none), which grants nothing on them, and join
