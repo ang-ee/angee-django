@@ -53,6 +53,74 @@ live in code docstrings.
   than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
   so a client holding the spent key starts a new request. A trigger admission
   still records the refusal on its event.
+- `@angee/ui`: The Links pane says it is empty when it is. A related group
+  with neither rows nor a verb is left out, and the pane showed its empty
+  state only when no group was eligible; a record whose eligible groups were
+  all left out showed "Links 0" over a blank panel. Each group now tells the
+  pane whether it has rows or a verb, and the pane shows the empty state when
+  none does. A group still counting is taken to show something, so the empty
+  state does not flash while counts load.
+- `@angee/ui`: **Changed API.** A record action bound with
+  `useRecordActionMutation` is toasted by one owner, the action bar. The
+  hook's second path (taken with `settle` or `linkTo`), which handed the
+  outcome to the shared settle owner and toasted it under the server's
+  message, is removed with the `settle` option. For the verbs that took it: a
+  refusal is titled by the verb's label with the server's reasons as the body,
+  as every record action projected through `runActionResult` already was; a
+  transport failure is titled by the label with the error's message as the
+  body; an answer with no outcome reads the shared no-result text under the
+  label (a `noResultTitle` given through `settle` is no longer read); the
+  success toast follows the navigation to the created record, the refresh and
+  `afterSuccess`. For every verb bound with the hook, an answer with no
+  outcome is now a danger toast and neither refreshes nor runs `afterSuccess`
+  (it was silent and did both; with `defaultMessage` it was told as a
+  success), and `useRecordAction` applies `defaultMessage` to an empty success
+  message too, for every runner.
+  `linkTo` still follows the created record, through one implementation shared
+  with `useActionResultRun`. Not changed: a record action whose own `run`
+  calls `useActionResultRun`, `useActionResultMutation` or
+  `useRecordChromeActionMutation` is still toasted there, under the server's
+  message (the proposal ceremony, project lifecycle, task promotion, trash and
+  restore, account access, message delivery, triage, contributed conditional
+  verbs and others); a transport failure still also raises the data layer's
+  own notification. **Upgrade:** remove `settle` from
+  `useRecordActionMutation` options; an inline one is a type error, one passed
+  through a variable still compiles and is ignored.
+- `@angee/refine`, `@angee/ui`: A record action the server refuses tells the
+  person why. For a target refused before the verb runs (not found, not
+  allowed) the server's message is only the verb's summary and the reason
+  arrives in-band; `runActionResult` threw only the message, so the action
+  bar's toast read "Confirm / Confirm failed." and the reason was lost. It now
+  throws the reasons, and the message when there are none. Every record
+  action projected through `runActionResult` shows the reason without an edit;
+  no toast title changes. Other refusals (a transition not allowed, a missing
+  object) still read the verb's summary: the server sends no reason for them.
+  `@angee/refine` exports `actionOutcomeReasons` (a
+  refusal's in-band reasons, each once, as one line), which
+  `useActionResultRun` composes instead of its own copy, as does a refused row
+  of a bulk trash or restore (it showed only the first). **Upgrade:** code
+  that matched the thrown error's text against the outcome's `message` finds
+  the reasons there when the refusal carries any.
+- `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
+  applied: the panel library (react-resizable-panels) sets `overflow: auto`
+  inline on the element that takes a pane's class, and an inline style wins
+  over any class that is not `!important`, so a pane scrolls its content.
+  Nothing computed changes. A record in the document presentation that a list
+  opens in its split placement scrolls in the content pane of the list's own
+  workbench, as one opened inline scrolls in the list's record sheet; a record
+  in the workspace presentation, or with a full-bleed pane active, scrolls
+  inside the form in either placement. The pane's docstring says so; the
+  frontend guide's `Workbench` rule names what composes it (the console body
+  and a list's split placement), and its explorer-page rule covers the pages
+  that publish their navigator with `PrimaryPanePublisher`. A test holds, for
+  both placements, which element is the open record's nearest overflow rule
+  and the classes that size it and the list's root; it computes no layout, so
+  `Views/ResourceList`, the first story of a split list, shows a tall record
+  split and inline for a browser to measure the rest. Known, not changed:
+  `Workbench`'s `scrollMode` does nothing (both values compute the same
+  layout, since the library's inline styles override the class it adds); its
+  docstring says so, the console layout no longer passes its default, and
+  removing the prop waits on callers outside the framework.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
@@ -144,6 +212,62 @@ live in code docstrings.
   every change. A class instance would now be sent as a plain copy without its
   methods, and a value holding a function would throw. No widget or form holds
   such a value, and no declared form saves such a pair today.
+- Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
+  behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
+  which judged only what `makemigrations` autodetects, now also judges the plan
+  `migrate`, and so `provision`, is about to run, before any operation and also
+  under `--skip-checks`: a pending removal in the project's own history is refused
+  where it would destroy stored data, delete a table another model still owns, or
+  where the guard cannot prove that it would not. A migration declares a drop it
+  intends with `django_compose.operations.IntendedRemoveField` or
+  `IntendedDeleteModel`. The migration templates that drop data now declare it:
+  `joined_at` and `left_at` in messaging's `participants_to_recipients.py`,
+  `Folder.source_href` in parties' `addressbook_links.py`, and `recurrence` on the
+  task and its history in projects' `task_recurrence_due_rule.py`.
+  **Upgrade:**
+  - A host needs no action unless a pending migration drops data. Where one does,
+    `migrate` and `provision` stop before anything is migrated with `unsafe
+    migration drop:` (or `cannot prove migration drop safe:`), naming each
+    migration, operation, column or table and its row count, then the remedy;
+    `provision` stays `in_progress`. Review each named removal: keep the storage,
+    or move its data and write the removal as
+    `IntendedRemoveField(model_name=..., name=...)` or `IntendedDeleteModel(name=...)`
+    in that migration, then run `provision` again. A table another model still
+    owns is refused even when declared: keep it, or change that owner first.
+  - A copy of one of the three templates above that is not applied yet and was
+    taken before this change removes those columns undeclared, and is refused
+    while they hold data: copy the template again, keeping its dependencies. The
+    two copies differ only in the class that declares each drop, so their state
+    and operations are the same and a database that applied the earlier copy
+    needs nothing. A copy that subclasses the template's `Migration` inherits the
+    declarations. No framework code wrote messaging's `joined_at` or `left_at`, so
+    a copy of that template is refused only where something else did. A copy
+    already applied needs nothing; the guard judges only pending migrations.
+  - Before any database work, `provision` refuses an installed app's own `migrate`
+    command, which would run without the guard, and any unsilenced failure of the
+    `commands` system checks, such as `django_compose.E002` for an app's own
+    `makemigrations`: remove that command, or make it subclass django-compose's
+    command of the same name.
+- `@angee/ui`: **The keyboard focus ring is drawn.** `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) were plain classes inside
+  `@layer utilities`; Tailwind gives a variant to a registered utility only,
+  so `focus-visible:focus-ring`, `focus:focus-ring`, `focus-within:focus-ring`
+  and `data-[popup-open]:focus-ring` compiled to nothing, and no link, button,
+  input or other control that asks for a ring showed a focus indicator. Both
+  are declared with `@utility` now, as `selected` is. A visible change
+  everywhere the stylesheet is used: the 3px ring (`--ring`, `--ring-danger`
+  on an invalid control) appears on every control that asked for one. A test
+  compiles the workshop's stylesheet entry with Tailwind and holds a rule for
+  each variant the packages spell (`packages/storybook/scripts/styles.test.mjs`).
+  No other plain class of the framework or its products is composed through a
+  variant. Known, not changed: a ring is cut where its control touches the
+  edge of a container that clips (tabs in a tab list, the path buttons of a
+  breadcrumb, a pane's resize handle); a control with its own ring inside a
+  field that rings on focus within shows two; a tab panel and the code editor
+  take focus with no indicator; and the stock ring is the brand colour at 30
+  percent, about 1.5 to 1 against its surface. **Upgrade:** check your own
+  screens with the keyboard; a class of your own composed through a variant
+  needs `@utility` too.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
@@ -260,19 +384,23 @@ live in code docstrings.
   a sender the handle of its `from` row, logs how many `from` rows named someone
   other than their message's sender (each message's source keeps its `From`
   header) and deletes the `from` rows. A migration `makemigrations` writes without
-  the template deletes `Participant` and creates `Recipient`: the drop guard
-  refuses that where the participant table holds rows, but one generated on an
-  empty database drops the recipient rows when it is applied elsewhere, and those
-  rows are a projection of each message's stored envelope. Provision prunes the
+  the template deletes `Participant` and creates `Recipient`, which would drop the
+  recipient rows, a projection of each message's stored envelope: the drop guard
+  refuses it where the participant table holds rows, at `makemigrations` and, for
+  one generated on an empty database, at `migrate`. Provision prunes the
   retired REBAC type `messaging/participant`; grants written directly on its
   `editor` or `reader` relations, which no framework surface wrote, are not
   carried over. On a stack whose `operator-schema` job does not wait for
   `provision`, the first chained restart after this upgrade can fail `rebac.E009`
   on the retired `messaging/participant` type until provision's sync has run; run
-  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
-  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
-  stays while retained migrations import it; a host upgrading from an earlier
-  release applies the template through a 3.x release first.
+  the chain once more. If a provision run stops before its sync (for example at
+  its migration check, when a newly enabled addon has no migrations yet), the same
+  check stops every management command, `makemigrations` included; author the
+  pending migrations with `--skip-checks` until provision has synced. Upgrade
+  cutoff: the template ships through the 3.x releases and is removed in 4.0, and
+  `angee.base.querysets.MergeableQuerySet.survivor_id` stays while retained
+  migrations import it; a host upgrading from an earlier release applies the
+  template through a 3.x release first.
 - `@angee/ui`: A record form's create no longer displays a field its save
   cannot write that holds an empty object. What a record form displays reads
   its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a

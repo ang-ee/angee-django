@@ -2,16 +2,22 @@
 
 Today's rows carry ``Folder.source_href`` and its unique constraint: the test adds
 both to the folder table under a migration state derived from the installed
-models, so the template's callables run on historical models, never live ones.
+models, so the template's callables run on historical models, never live ones. The
+drop guard judges a copy of the template in a project's own history
+(``tests.project_history``), as ``migrate`` and ``provision`` judge it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
 from django.apps import apps
-from django.db import connection, models
+from django.core.management.base import CommandError
+from django.db import connection, migrations, models
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.migrations.state import ProjectState
@@ -26,6 +32,7 @@ from angee.messaging.testing.models import Directory, Folder, Person, Relationsh
 from angee.parties.compose_migrations.parties import addressbook_links
 from angee.parties_integrate_carddav.backend import CardDavDirectoryBackend
 from tests.conftest import current_stream, make_integration
+from tests.project_history import INITIAL, project_history
 from tests.test_parties_carddav_sync import _BASE, _BOOK, FakeDav, _card
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -35,6 +42,8 @@ _OTHER = f"{_BASE}books/other/"
 _LONG = f"{_BASE}books/{'x' * 600}/"
 _WIDE = f"{_BASE}books/{'w' * 373}/"  # 400 characters: longer than the old 255-character partition.
 _NAME = "0099_addressbook_links"
+_COPY = "0002_addressbook_links"
+_PINS = {"0000_parties_leaf": INITIAL, "0000_syncstream_container": INITIAL}
 
 
 def _legacy_state() -> ProjectState:
@@ -200,3 +209,74 @@ def test_the_address_book_template_upgrades_in_one_postgresql_migration(caplog: 
     """One atomic migration without pending trigger events, then first syncs on the parallel partition pool."""
 
     _upgrade_round_trip(caplog, {"sync_parallelism": 4})
+
+
+def _folder_columns() -> set[str]:
+    with connection.cursor() as cursor:
+        return {column.name for column in connection.introspection.get_table_description(cursor, Folder._meta.db_table)}
+
+
+@contextmanager
+def _folder_holding_an_href() -> Iterator[tuple[ProjectState, Any]]:
+    """A directory's folder whose ``source_href`` holds its address book's href; yield today's state and the folder.
+
+    Whatever the block leaves of the column and its constraint is removed afterwards.
+    """
+
+    directory = make_integration(
+        "carddav-upgrade-guard", model=Directory, backend_class="carddav", config={"server_url": _BASE},
+    )
+    folder = Folder._base_manager.create(name="Contacts", directory=directory, created_by=directory.owner)
+    before = _legacy_state()
+    try:
+        before.apps.get_model("parties", "Folder")._base_manager.filter(pk=folder.pk).update(source_href=_BOOK)
+        yield before, folder
+    finally:
+        if "source_href" in _folder_columns():
+            columns = migrations.Migration("todays_folder_columns_removed", "parties")
+            columns.operations = addressbook_links.Migration.operations[1:]
+            with connection.schema_editor() as editor:
+                columns.apply(before.clone(), editor)
+
+
+def test_migrate_applies_a_copy_of_the_template_whose_folders_hold_hrefs(tmp_path: Path) -> None:
+    """The template adopts each href as its link and declares the column's drop: the drop guard lets it go."""
+
+    with (
+        system_context(reason="test address-book upgrade under the drop guard"),
+        _folder_holding_an_href() as (before, folder),
+        project_history(tmp_path) as history,
+    ):
+        history.start(before, "parties", "integrate")
+        history.copy("parties", addressbook_links, _COPY, _PINS)
+
+        history.migrate("parties", _COPY)
+
+        assert history.applied("parties", _COPY)
+        assert "source_href" not in _folder_columns()
+        (link,) = RecordLink.objects.filter(stream__key="addressbooks")
+        assert (link.external_key, link.target) == (_BOOK, folder)
+
+
+def test_the_drop_guard_refuses_a_copy_that_drops_the_hrefs_undeclared(tmp_path: Path) -> None:
+    """A copy taken before the template declared its drop is refused while a folder holds an href; nothing changes."""
+
+    with (
+        system_context(reason="test address-book upgrade under the drop guard"),
+        _folder_holding_an_href() as (before, folder),
+        project_history(tmp_path) as history,
+    ):
+        history.start(before, "parties", "integrate")
+        history.copy("parties", addressbook_links, _COPY, _PINS, declarations=False)
+
+        with pytest.raises(CommandError) as refused:
+            history.migrate("parties", _COPY)
+
+        assert not history.applied("parties", _COPY)
+        legacy = before.apps.get_model("parties", "Folder")._base_manager
+        assert legacy.filter(pk=folder.pk).values_list("source_href", flat=True).get() == _BOOK
+        assert not RecordLink.objects.filter(stream__key="addressbooks").exists()
+    said = str(refused.value)
+    assert said.startswith(f"unsafe migration drop: parties.{_COPY} (Remove field source_href from folder): ")
+    assert f"{Folder._meta.db_table}.source_href holds data in 1 rows on 'default'" in said
+    assert "Nothing was migrated" in said and "IntendedRemoveField" in said

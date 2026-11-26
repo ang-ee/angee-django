@@ -312,7 +312,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   variables are authored. The shared hook owns deriving the Hasura custom
   mutation and running it through refine `useCustomMutation`; the rendered record
   adapter owns binding it to `ActionContext` (record id, refresh,
-  missing-record handling, success hooks). Set `idArgument` to the schema
+  missing-record handling, success hooks), and the action bar toasts its
+  outcome: a success with its message, a refusal under the verb's label with
+  its reasons (`runActionResult` throws them, or the message when it carries
+  none); `linkTo` follows the record the verb created. Set `idArgument` to the schema
   argument that receives the record id when it is named differently (for example,
   `"round"`); `null` on an outcome mutation sends only its explicit arguments.
   Don't hand-author these as `graphql()` documents or page-local
@@ -326,12 +329,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field errors). A channel vendor contributes such a verb through its
   `defineChannel*BridgeAddon` `recordActions`, scoped to its own rows.
 - **`ActionResult` verbs settle through `useActionResultRun`** (`@angee/ui`) —
-  it fires the verb, toasts the outcome (danger with the in-band non-field
-  reasons; success with the message), and deep-links to a created record via
+  it fires the verb, toasts the outcome (danger with the in-band reasons,
+  under any key; success with the message), and deep-links to a created record via
   `linkTo` + the routed resource page when the outcome carries an `id`. It
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A record action bound with `useRecordActionMutation` is not settled there:
+  its bar toasts it, and both follow a created record through one hook. A
+  record action whose own `run` calls `useActionResultRun`, directly or
+  through `useActionResultMutation` or `useRecordChromeActionMutation`, is
+  toasted there, under the server's message.
 - React does not own business logic, permissions, models, or persistence.
 - Dashboard widget visibility is declared separately from its data filter.
   [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
@@ -525,9 +533,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and keep any callbacks they close over stable; when a callback wraps
   Refine/query mutation objects that may refresh identity, expose a stable
   callback that reads the latest execution context from a ref (`useLatestRef`).
-  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
-  navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Context another
+  Explorer pages over a scoped tree (storage, knowledge) compose
+  `ScopedExplorerPane`, which owns the primary-pane navigator publication plus the
+  root loading/empty gate; addons provide row projection, route transitions, DnD
+  policy, and domain actions. An explorer page whose navigator is another surface
+  (the iam schema explorer, the agents session rail) renders it with
+  `PrimaryPanePublisher`. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list. The left pane never
   describes the record (see the shell's regions below). Page tests use
@@ -668,8 +679,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
   radio groups over the same owner), the visible-fields menu, the dashboard widget
   menu, the collapsed statusbar. Field choices inside such a menu stay native items;
-  verbs are `ActionTrigger`s. Every fire → toast flow settles through
-  `useActionResultRun`; row verbs included. Owner story:
+  verbs are `ActionTrigger`s. Each verb's outcome has one toast owner: the
+  record action bar for a record action whose run resolves a message or
+  rejects (one bound with `useRecordActionMutation` or projected through
+  `runActionResult`); `useActionResultRun` for a verb fired from a chrome, a
+  row or a pane, and for a record action whose run settles through it, whose
+  bar then stays silent; the action form for a verb with arguments; the bulk
+  owner for a selection. Owner story:
   [action menu](../../packages/storybook/src/stories/ActionMenu.stories.tsx) (story id `toolbars-actionmenu--default`).
 - **Time is absolute; relative time is a live header's.** Every list, row, facts
   line and period title formats through `date-format.ts`: `formatDate`,
@@ -735,6 +751,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
   `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
   and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
+- **A class composed through a variant is a registered utility.** `styles/index.css`
+  declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
+  Tailwind gives a variant to a registered utility only, and a plain class in
+  `@layer utilities` compiles to nothing under one, silently
+  ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
   `EmptyState` and `InlineEmpty` own every other error and empty surface. Owner story:
@@ -1796,10 +1817,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
+  `Explorer` is removed.** The console body and a list's split placement compose
+  `Workbench` over `page/SplitPanes` (v4) — `primary` is the navigator pane,
+  `children` the content, `secondary` the aside, with size/collapse persistence via
+  `autoSave`. Explorer pages do not compose it: they publish their navigator into the
+  console's primary pane (the shell-published surfaces rule above).
+  A pane scrolls its content: the library sets `overflow: auto` on it
+  ([`SplitPane`](../../packages/ui/src/page/SplitPanes.tsx)). Do not
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
@@ -2209,7 +2233,8 @@ metadata the backend derives from each edge's schema target relations. Timeline
 sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
 "unavailable" or offer writes on a type whose schema declares no arm. A section
-with neither rows nor a verb is absent, not empty.
+with neither rows nor a verb is absent, not empty; when every eligible group
+is absent the pane shows its empty state.
 
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks

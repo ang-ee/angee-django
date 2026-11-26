@@ -128,6 +128,7 @@ export {
 } from "./dialect/wire";
 export {
   AGGREGATE_MEASURE_OPERATORS,
+  actionOutcomeReasons,
   MAX_PAGE_SIZE,
   actionRequest,
   aggregateRequest,

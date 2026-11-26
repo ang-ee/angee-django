@@ -3986,7 +3986,7 @@
     "source": "packages/ui/src/views/resource/resource-list/public.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": null
+    "storyId": "views-resourcelist--inline"
   },
   {
     "package": "@angee/ui",

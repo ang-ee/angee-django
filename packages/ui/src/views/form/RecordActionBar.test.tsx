@@ -2,6 +2,7 @@
 
 import type { Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { runActionResult } from "@angee/refine";
 import {
   act,
   cleanup,
@@ -639,6 +640,22 @@ describe("RecordActionBar", () => {
       expect(trigger.getAttribute("aria-busy")).toBeNull();
       expect((trigger as HTMLButtonElement).disabled).toBe(false);
     });
+  });
+
+  test("a verb the server refuses is toasted under the verb's label with the server's reason instead of its summary", async () => {
+    // A refused target, as the server answers it: the message is the verb's summary and the reason arrives in-band.
+    const run = async () => runActionResult({
+      ok: false, message: "Confirm failed.",
+      validationErrors: { __all__: ["You are not allowed to modify this sales order."] },
+    });
+    renderActionBar(<RecordActionBar record={record} actions={[{ id: "confirm", label: "Confirm", placement: "toolbar", run }]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    // The danger toast's body (the text is also copied into the announcer's live region); its title precedes it.
+    const body = (await screen.findAllByText("You are not allowed to modify this sales order."))
+      .find((node) => node.getAttribute("data-type") === "danger")!;
+    expect(body.previousElementSibling?.textContent).toBe("Confirm");
+    expect(screen.queryByText("Confirm failed.")).toBeNull();
   });
 
   test("keeps a contributed action mounted when its menu closes for a dialog", async () => {

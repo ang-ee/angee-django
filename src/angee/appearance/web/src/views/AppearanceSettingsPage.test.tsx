@@ -228,7 +228,12 @@ test("pending Save disables the band actions and controls; a failed Save keeps t
   fireEvent.click(radio("Dark"));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(screen.getByRole<HTMLButtonElement>("button", { name: "Discard" }).disabled).toBe(true);
-  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled).toBe(true);
+  // A pending Save stays focusable, so whoever pressed it from the keyboard keeps their place; it is
+  // disabled to assistive technology and a second press sends nothing.
+  const pendingSave = screen.getByRole("button", { name: "Save" });
+  expect(pendingSave.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(pendingSave);
+  expect(f.patchPreferences).toHaveBeenCalledTimes(1);
   expect(brandInput().disabled).toBe(true);
   await act(async () => { reject(new Error("Preference write failed")); });
   expect(await screen.findByText("Preference write failed")).toBeTruthy();
