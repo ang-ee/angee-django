@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { formatDayLabel } from "@angee/ui";
 import { StrictMode } from "react";
@@ -153,7 +153,8 @@ describe("ThreadTranscript", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
       message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null, avatar: null, merged_into: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
-      message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
+      // A note written here, with the status every message has: it goes nowhere, so it shows no delivery.
+      message({ id: "note", direction: "INTERNAL", is_locally_written: true, status: "SENT", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ];
     mocks.total = mocks.transcriptRows.length;
 
@@ -161,9 +162,11 @@ describe("ThreadTranscript", () => {
 
     expect(screen.getByText("Inbound hello")).toBeTruthy();
     expect(screen.getByText("Outbound reply")).toBeTruthy();
-    expect(screen.getByText("Internal jotting")).toBeTruthy();
+    const note = screen.getByText("Internal jotting").closest("li");
+    if (!(note instanceof HTMLElement)) throw new Error("The internal note renders no row.");
     // The internal note carries its distinct label; inbound/outbound do not.
-    expect(screen.getByText("Internal note")).toBeTruthy();
+    expect(within(note).getByText("Internal note")).toBeTruthy();
+    expect(within(note).queryByText("Sent")).toBeNull();
   });
 
   test("keeps the envelope name for an unconfirmed 1.0 email-match auto-link", () => {
