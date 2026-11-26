@@ -50,7 +50,7 @@ export const ReaderCannotSend = { render: (_args: unknown, { globals }: StoryCon
 /** The real New message action, transcript and message page over the composer's wire fake, in the routed console shell. */
 export function ComposerStory({
   appearance, surface, seat = "ana", conversation = "support", anchor = "", order, message, pane, width, noReply = false, withNewMessage = false,
-  lose = false, revokeAfterSend = false, preview = false, onSent, onRequest, onCall, onFixture, queryClient,
+  lose = false, revokeAfterSend = false, preview = false, onSent, onRequest, onCall, onFixture, queryClient, notificationProvider,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
   surface: Surface;
@@ -83,6 +83,8 @@ export function ComposerStory({
   /** The fake's controls, for a test that moves it on (another seat, a lost answer). */
   onFixture?: (fixture: ComposerFixture) => void;
   queryClient?: RuntimeFixtureProps["queryClient"];
+  /** Receives the data layer's own notices, for a test that checks the page tells a failure itself. */
+  notificationProvider?: RuntimeFixtureProps["notificationProvider"];
 }): React.ReactElement {
   const fixture = React.useMemo(() => {
     let sent = 0;
@@ -115,7 +117,8 @@ export function ComposerStory({
       </div>;
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={fixture.schemas}
     collectionPath={collectionPath} runtime={{ ...composerRuntime(seat, preview), forms: { "messaging.Message": messageForm } }}
-    resourceName={surface === "message-page" ? "messaging.Message" : undefined} queryClient={queryClient}>
+    resourceName={surface === "message-page" ? "messaging.Message" : undefined} queryClient={queryClient}
+    notificationProvider={notificationProvider}>
     {/* The transcript reads its feed as the signed-in person. */}
     <AuthStateProvider auth={{ user: { id: `usr_${seat}`, name: seat }, status: "authenticated", hasRole: () => false }}>
       <div style={width ? { width } : undefined} className="min-h-0">{content}</div>
