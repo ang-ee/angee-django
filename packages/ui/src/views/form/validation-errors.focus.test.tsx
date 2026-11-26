@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { testDataResource } from "@angee/metadata/testing";
 import { afterEach, describe, expect, test } from "vitest";
@@ -226,3 +226,84 @@ describe("a record form's refused save, unchanged (its fields never lock)", () =
     expect(document.activeElement?.getAttribute("aria-invalid")).toBe("true");
   });
 });
+
+/** Refuse `probe` alone on one surface, the record form included, and return its focus calls. */
+async function refuseAnywhere(kind: Surface | "record", probe: Pick<FieldCase, "field" | "arg" | "schema" | "value" | "control">, scalar = "String") {
+  if (kind === "record") return refuseOnRecord(probe.field as FieldDescriptor, probe.value, scalar);
+  return (await refuse(surface(kind, probe, refused()), probe.control)).calls;
+}
+
+const ALL_SURFACES = ["record", "mutation", "action", "schema"] as const;
+
+/** Focus was asked of the field's control, never of the banner, and only once that control could take it. */
+function expectFieldCallsOnly(calls: readonly RecordedFocusCall[]) {
+  expect(calls.length).toBeGreaterThan(0);
+  expect(calls.filter(isBanner)).toEqual([]);
+  expect(calls.filter((call) => !call.takesFocus).map((call) => call.target.outerHTML.slice(0, 80))).toEqual([]);
+}
+
+describe.each(ALL_SURFACES)("a control that hands the form its focus target, on %s", (kind) => {
+  test.each([
+    scalarCase("the owner cell", "ownerCell", "a",
+      { options: OPTIONS, schema: { type: "string", label: "Field", widget: "ownerCell", enum: ["a", "b"] }, control: combobox }),
+    scalarCase("the progress bar", "progressBar", 40,
+      { schema: { type: "integer", label: "Field", widget: "progressBar" }, control: textbox }),
+  ])("$name: a refusal of it alone lands on its control, not the banner", async (probe) => {
+    const calls = await refuseAnywhere(kind, probe, probe.name === "the progress bar" ? "Int" : "String");
+    await waitFor(() => expect(document.activeElement).toBe(probe.control(document.body)));
+    expect(document.activeElement?.getAttribute("aria-invalid")).toBe("true");
+    expectFieldCallsOnly(calls);
+  });
+});
+
+// A field shown invalid that focuses a control not itself marked invalid: a composite refused as a
+// whole focuses its first member, and an absent value its "Set value" button.
+const OBJECT_TEMPLATE = [{ name: "street", label: "Street", widget: "text", kind: "string" }];
+const ITEM_TEMPLATE = { name: "item", label: "Item", widget: "text", kind: "string" };
+const ROWS_TEMPLATE = [{ name: "qty", label: "Qty", widget: "integer", kind: "integer" }];
+const keepsFocus: readonly [string, readonly (Surface | "record")[], Pick<FieldCase, "field" | "arg" | "schema" | "value" | "control">][] = [
+  ["an object refused as a whole", ["record", "mutation", "schema"], {
+    value: { street: "Main" },
+    field: { name: "f", label: "Field", widget: "object", objectTemplate: OBJECT_TEMPLATE } as DescriptorField,
+    arg: null as never,
+    schema: { type: "object", label: "Field", properties: { street: { type: "string", label: "Street" } } },
+    control: (root) => within(root).queryByRole("textbox", { name: "Street" }),
+  }],
+  ["a list refused as a whole", ["record", "mutation", "schema"], {
+    value: ["x"],
+    field: { name: "f", label: "Field", widget: "list", itemTemplate: ITEM_TEMPLATE } as DescriptorField,
+    arg: null as never,
+    schema: { type: "array", widget: "list", label: "Field", items: { type: "string", label: "Item" } },
+    control: (root) => within(root).queryByRole("textbox", { name: "Item" }),
+  }],
+  // The record form's rows field refused as a whole brings focus to the banner, not to its first
+  // cell, for a cause not isolated yet.
+  ["rows refused as a whole", ["mutation", "schema"], {
+    value: [{ qty: 1 }],
+    field: { name: "f", label: "Field", widget: "rows", rowTemplate: ROWS_TEMPLATE } as DescriptorField,
+    arg: null as never,
+    schema: { type: "array", label: "Field", minItems: 1, maxItems: 1, items: { type: "object", properties: { qty: { type: "integer", label: "Qty" } } } },
+    control: (root) => within(root).queryByRole("textbox", { name: "Qty" }),
+  }],
+  ["an absent value, through its Set value button", ["record", "mutation"], {
+    value: undefined,
+    field: { name: "f", label: "Field", omittable: true, nullable: true } as DescriptorField,
+    arg: null as never,
+    schema: {},
+    control: (root) => within(root).queryByRole("button", { name: "Set value" }),
+  }],
+];
+
+describe.each(keepsFocus.flatMap(([name, kinds, probe]) => kinds.map((kind) => [name, kind, probe] as const)))(
+  "%s, on %s",
+  (_name, kind, probe) => {
+    test("keeps the focus it lands on inside the refused field instead of losing it to the banner", async () => {
+      const calls = await refuseAnywhere(kind, probe);
+      await waitFor(() => expect(document.activeElement).toBe(probe.control(document.body)));
+      // The banner's turn is the timer after the field's; timers of one delay run in order, so this one comes after it.
+      await act(() => new Promise<void>((resolve) => { setTimeout(resolve); }));
+      expect(document.activeElement).toBe(probe.control(document.body));
+      expectFieldCallsOnly(calls);
+    });
+  },
+);

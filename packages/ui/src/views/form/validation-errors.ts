@@ -411,7 +411,8 @@ export function useRefusalFocus<TValues extends FieldValues>(messages: readonly 
     }
     if (!ready) return;
     const wanted = asked.current;
-    const inRefusedField = () => document.activeElement?.getAttribute("aria-invalid") === "true";
+    // On a refused field's invalid control, or anywhere inside a field shown invalid (a composite's member).
+    const inRefusedField = () => Boolean(document.activeElement?.closest("[aria-invalid='true'], [data-invalid]"));
     if (wanted?.field !== undefined) {
       asked.current = null;
       handled.current = messages;

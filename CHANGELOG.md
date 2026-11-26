@@ -10,6 +10,31 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, parties, IAM: a refused field now takes and keeps the focus its
+  refusal brings, on the record form and in every dialog, except a refused
+  member, a record form's rows field refused as a whole, and the controls left
+  as they are below. The `ownerCell` and
+  `progressBar` widgets, the parties fragment's registered party picker, the
+  IAM subject control and the group member field now hand the form their
+  control (`controlRef`); a refusal of any of them focused nothing and the
+  banner took focus. The group member field also marks its picker invalid. The
+  party picker widget is now the form field's control only: it no longer wraps
+  itself in a second field with its own label, which also left its trigger
+  unmarked when the field was refused, and it passes on the field's control
+  props; it is named as the framework's relation widgets are, by a group's
+  label, else the field's text label, else "Party" (so a label that is not
+  text and labels no group is not its name yet, for this widget as for
+  `many2one`). `PartyPicker` itself, for
+  a page outside a form, keeps its field and label. `useRefusalFocus` counts
+  focus anywhere inside a field shown invalid, so a composite field refused as
+  a whole (its first member focused) and an absent value (its "Set value"
+  button) keep it. Left as they are: the platform source dialog's repository
+  field (`RepositoryPicker` takes no ref for its search input) and the storage
+  mount dialog's source browser (no single control to focus), each needing
+  more than a forwarded ref; integrate's account picker
+  (`ConnectWithAccountAction`) and the `statusbar` and `visibility` widgets,
+  which hand the form no focus target either; and a refused member of a rows,
+  object or list field.
 - `@angee/ui`: **Changed contract.** A refusal's focus reaches the refused
   field whatever control draws it. In a `MutationDialog` and an
   `ActionFormDialog`, typed or schema-driven, a refused select, combobox, date,
@@ -39,7 +64,8 @@ live in code docstrings.
   not proven by the test DOM (the measured table is in the skill's web
   pitfalls). Not in this change: a refused member of a rows, object or list
   field, a markdown editor holding text (its source is hidden while it
-  previews), and the controls that hand the form no focus target.
+  previews), and the controls that hand the form no focus target, five of
+  which the entry above gives one.
 
 - `@angee/ui`: **Changed API.** A list resolves its group axes once:
   `buildColumns` takes them as `BuildColumnsOptions.axes` from the table state

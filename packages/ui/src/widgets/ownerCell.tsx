@@ -26,6 +26,7 @@ function OwnerCellEdit({
   onChange,
   field,
   readOnly,
+  controlRef,
 }: WidgetRenderProps<OwnerCellValue>): ReactElement {
   if (readOnly || (field?.options?.length ?? 0) === 0) {
     return <OwnerCellRead value={value} field={field} />;
@@ -33,6 +34,7 @@ function OwnerCellEdit({
 
   return (
     <Select
+      triggerRef={controlRef}
       value={ownerKey(value)}
       options={field?.options ?? []}
       readOnly={readOnly}
