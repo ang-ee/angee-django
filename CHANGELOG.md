@@ -17,9 +17,9 @@ live in code docstrings.
   every image build since the pin failed with `No interpreter found for Python
   3.14.9` and no framework image was published. The default names the pin, and the
   static tier's runtime image tests refuse a Dockerfile whose default differs from
-  `.python-version`: a pin change edits both. Follow-up: Docker rebuilds only the
-  current patch release's tags, so until the pin lifts the images carry the Debian
-  packages of `python:3.14.9-slim`'s last build (2026-10-21).
+  `.python-version`: a pin change edits both. Docker rebuilds only the current
+  patch release's tags, so the base stage first upgrades the Debian packages of
+  `python:3.14.9-slim`'s last build (2026-10-21) when it builds.
 
 - CI: a pull request that changes `.python-version` runs the whole SQLite suite on
   the interpreter it pins. The changed-path selection did not count the pin among
