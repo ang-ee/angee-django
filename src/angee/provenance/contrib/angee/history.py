@@ -12,7 +12,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
-from django.db.models import Exists, F, OuterRef, Q
+from django.db.models import Exists, ExpressionWrapper, F, OuterRef, Q
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django.db.models.functions import Cast
 from rebac import (
@@ -142,9 +142,10 @@ class ModelHistory(CaptureHistory):
         (:meth:`merge_survivors`) is refused when the survivor has no recorded state,
         or a write dated after the merge. A changeset refused both ways reports its
         later change. The states are read through the builders :meth:`changeset_states`
-        fetches them with (``versions_of``, ``dated_versions_of``). Three statements
-        answer any number of changesets, whatever they hold, so a history page's cost
-        does not grow with its entries. The list asks it to offer a revert; the verb
+        fetches them with (``versions_of``, ``dated_versions_of``). Two statements, one
+        for the rows the changesets wrote and one for their merge survivors, answer any
+        number of changesets, whatever they hold, so a history page's cost does not grow
+        with its entries. The list asks it to offer a revert; the verb
         asks it again under its row locks and stays the final judge.
         """
 
@@ -153,9 +154,8 @@ class ModelHistory(CaptureHistory):
             return {}
         history = model.history
         key = model._meta.pk.attname
-        written = history.filter(changeset_id__in=list(page))
         same_row = {key: OuterRef(key)}
-        later = written.filter(
+        later = Q(
             ~Exists(
                 history.filter(**same_row, changeset_id=OuterRef("changeset_id"), history_id__gt=OuterRef("history_id"))
             ),
@@ -165,7 +165,8 @@ class ModelHistory(CaptureHistory):
             ),
         )
         carriers = [get_history_manager_for_model(table) for table in self.carriers(model)[1:]]
-        unrecorded = written.exclude(history_type="+").filter(
+        unrecorded = Q(
+            ~Q(history_type="+"),
             ~Exists(history.versions_of(OuterRef(key), before=OuterRef("history_id"))),
             *(
                 ~Exists(carrier.dated_versions_of(
@@ -174,7 +175,19 @@ class ModelHistory(CaptureHistory):
                 for carrier in carriers
             ),
         )
-        blockers = dict.fromkeys(unrecorded.values_list("changeset_id", flat=True), "earlier_state_unavailable")
+        refused = (
+            history.filter(later | unrecorded, changeset_id__in=list(page))
+            .annotate(rewritten=ExpressionWrapper(later, output_field=models.BooleanField()))
+            .order_by()
+            .values_list("changeset_id", "rewritten")
+            .distinct()
+        )
+        blockers: dict[Any, str] = {}
+        for pk, rewritten in refused:
+            if rewritten:
+                blockers[pk] = "later_change"
+            else:
+                blockers.setdefault(pk, "earlier_state_unavailable")
         survivor = OuterRef("survivor")
         survivors = self.merge_survivors(model, page.values()).values_list(
             "pk",
@@ -191,11 +204,10 @@ class ModelHistory(CaptureHistory):
         for pk, unchanged, standing, versioned, rewritten, *carried in survivors:
             if not unchanged or not standing:
                 continue
-            if not versioned and not any(carried):
-                blockers[pk] = "earlier_state_unavailable"
-            elif rewritten:
+            if rewritten:
                 blockers[pk] = "later_change"
-        blockers.update(dict.fromkeys(later.values_list("changeset_id", flat=True), "later_change"))
+            elif not versioned and not any(carried):
+                blockers.setdefault(pk, "earlier_state_unavailable")
         return blockers
 
     def merge_survivors(self, model: Any, changesets: Iterable[Any]) -> models.QuerySet[Any]:

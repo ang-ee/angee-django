@@ -540,12 +540,17 @@ def test_history_projects_a_readable_statement_link_and_evidence_inline() -> Non
     assert [evidence.id for evidence in projected.evidence] == [public_id_of(party)]
 
 
+HISTORY_PAGE_STATEMENTS = 33
+"""One party history page at any size: 29 for its versions, statements, redaction and admission, and two per
+touched table (the party and its statements) for what the revert verb refuses, so it offers only what reverts."""
+
+
 @pytest.mark.parametrize("row_count", [1, 25])
 def test_history_page_query_count_does_not_grow_per_entry(
     row_count: int,
     django_assert_num_queries: Any,
 ) -> None:
-    """Loaded versions, statements, redaction and admission stay page-batched."""
+    """Loaded versions, statements, redaction, admission and the revert blockers stay page-batched."""
 
     person = create_user(f"history-budget-{row_count}")
     with actor_context(person), changeset(fresh=True, change_reason="Create party"):
@@ -563,6 +568,8 @@ def test_history_page_query_count_does_not_grow_per_entry(
         page = _history(schema, person, "parties.Party", party, limit=row_count)
 
     assert len(page["entries"]) == row_count
+    assert len(baseline) == HISTORY_PAGE_STATEMENTS
+    assert [entry["can_revert"] for entry in page["entries"]] == [True] + [False] * (row_count - 1)
 
 
 def test_history_names_a_statements_related_row_by_its_public_id() -> None:
