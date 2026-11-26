@@ -367,9 +367,12 @@ before the `@` is outside ASCII is refused, as no transport here speaks SMTPUTF8
 
 The system mailer carries what a Django email can mean on the system channel:
 `to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.
-It drops `Message-ID` and `Date`, does not carry `from_email`, and refuses
-attachments, `reply_to`, any other header, any other body or alternative type,
-and an `AnymailMessage`. A batch is recorded whole or not at all; built with
+It drops `Message-ID` and `Date`, and does not carry `from_email`: system mail
+goes from the default sender, which replaces `SERVER_EMAIL` on a direct
+`mail_admins` too. It refuses attachments, `reply_to`, any other header, any
+other body or alternative type, an `AnymailMessage`, an empty body (which Django
+itself would send), and a recipient the transport cannot carry (`cannot_carry`,
+under its role), so a mail that could never leave is never recorded as sent. A batch is recorded whole or not at all; built with
 `fail_silently`, it logs a refusal and reports none sent.
 
 The system channel holds system mail, live sign-in links among it,

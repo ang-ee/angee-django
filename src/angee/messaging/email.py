@@ -450,10 +450,12 @@ def _system_mail(email: EmailMessage) -> dict[str, Any]:
     become ``text`` and ``html``. ``Message-ID`` and ``Date`` are dropped
     (compose mints the one, delivery writes the other), ``from_email`` and
     ``encoding`` are not carried (system mail is sent from the system channel's
-    sender and stored as text). Attachments, ``reply_to``, any other header,
-    any other body or alternative type, and an ``AnymailMessage`` (whose
-    provider options mean nothing to a recorded message) are refused with
-    ``ValueError``.
+    sender, which replaces ``SERVER_EMAIL`` on a direct ``mail_admins`` too, and
+    stored as text). Attachments, ``reply_to``, any other header, any other body
+    or alternative type, and an ``AnymailMessage`` (whose provider options mean
+    nothing to a recorded message) are refused with ``ValueError``; an empty
+    body and a recipient the transport cannot carry are refused by
+    ``compose_as_system``.
     """
 
     if isinstance(email, AnymailMessage):

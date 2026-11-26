@@ -59,8 +59,11 @@ live in code docstrings.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
     default mailer; delivery is configured exactly when it is stated. System mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
-    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` and `Message-ID` are
-    not kept, and attachments, `reply_to` and extra headers are refused. A
+    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` (`SERVER_EMAIL` on a
+    direct `mail_admins` too) and `Message-ID` are not kept, and attachments,
+    `reply_to`, extra headers, an empty body and a recipient the transport cannot
+    carry (`cannot_carry`, under its role) are refused, so such a mail is never
+    recorded as sent. A
     transport that hands a delivery back to the system mailer fails that delivery
     instead of recording it again. Administrators alone read, send on, write,
     annotate and delete the system channel (schema revision 31): no channel,
