@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
+from django.db import transaction
 from rebac import (
     ObjectRef,
     PermissionDenied,
@@ -239,9 +240,9 @@ def test_an_administrators_share_of_system_mail_is_refused_and_the_member_reads_
 def test_tuples_no_verb_writes_on_system_mail_read_it_but_never_write_or_share_it(sealed: SimpleNamespace) -> None:
     """A tuple on a system thread or message, which no verb writes, and the identity rule: what each holds.
 
-    Their reads are not subtracted (the inbox's planned reads cannot afford it); nobody but an
-    administrator writes the thread, nobody writes the message or shares the thread, and only an
-    administrator deletes either.
+    Their reads are not subtracted (the inbox's planned reads cannot afford it); nobody writes or
+    shares the thread or writes the message, administrators included, and only an administrator
+    deletes either.
     """
 
     seats = sealed.seats
@@ -265,5 +266,39 @@ def test_tuples_no_verb_writes_on_system_mail_read_it_but_never_write_or_share_i
         *((seat, action, thread, False) for seat in seated for action in ("write", "share", "delete")),
         *((seat, action, message, False) for seat in seated for action in ("write", "delete")),
         (seats.admin, "share", thread, False), (seats.admin, "write", message, False),
-        (seats.admin, "write", thread, True), (seats.admin, "delete", message, True),
+        (seats.admin, "write", thread, False), (seats.admin, "delete", thread, True),
+        (seats.admin, "delete", message, True),
+    ])
+
+
+def test_nobody_writes_or_binds_a_system_thread_administrators_included(sealed: SimpleNamespace) -> None:
+    """Messaging's write arms on a system thread admit nobody, so a group or project binding of it is refused.
+
+    The control thread, on an ordinary channel, takes both bindings from the same administrator, so the
+    refusal is the seal's. Both bindings are tried on the bare host, which installs spaces and projects.
+    """
+
+    seats = sealed.seats
+    thread, control = sealed.rows["system"][1], sealed.rows["control"][1]
+    audience, project_reader = create_user("seal-audience"), create_user("seal-bound-project-reader")
+    with system_context(reason="tests.messaging.seal.audience"):
+        group = Group.objects.create(name="Seal audience", slug="seal-audience")
+        Membership.objects.create(group=group, party=Person.objects.for_user(audience), role="member",
+                                  is_confirmed=True)
+        project = Project.objects.create(title="Seal binding")
+    grant(project, "reader", project_reader)
+    assert_decisions(checks=[(seats.admin, "write", thread, False), (seats.admin, "write", control, True)])
+    with pytest.raises(PermissionDenied), transaction.atomic():
+        thread.with_actor(seats.admin).groups.add(group)
+    with actor_context(seats.admin), pytest.raises(PermissionDenied), transaction.atomic():
+        ProjectBinding.objects.bind(project=project, target=thread)
+    control.with_actor(seats.admin).groups.add(group)
+    with actor_context(seats.admin):
+        ProjectBinding.objects.bind(project=project, target=control)
+    with system_context(reason="tests.messaging.seal.bound"):
+        assert not Thread._base_manager.get(pk=thread.pk).groups.exists()
+        assert list(ProjectBinding.objects.filter(project=project).values_list("object_id", flat=True)) == [control.pk]
+    assert_decisions(checks=[
+        (seat, "read", target, target == control)
+        for seat in (audience, project_reader) for target in (thread, control)
     ])
