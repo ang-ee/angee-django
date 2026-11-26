@@ -10,6 +10,147 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: **Changed behaviour.** A person's merge of handles
+  (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
+  addresses only for a contact administrator, an effective member of
+  `parties/role:contact_admin` (platform administrators are). Every later message
+  to a merged handle's address goes to the kept one, so whoever had created two
+  handles (the person who first typed each address) could merge a contact into
+  their own address and receive other people's later mail to it. Anyone else
+  merging two different addresses is refused with a `ValidationError` that names
+  who can and says to merge their contacts instead, which moves no address.
+  Merging another spelling of an address (the same platform and comparison key)
+  is unchanged for whoever holds the merge's permissions, messages already
+  written keep their addresses, and the system's `fold` (`HandleManager.reidentify`)
+  is unchanged. A contact administrator can now complete a handle merge at all:
+  the merge wrote the redirect after resolving the merged handle's party, which
+  had cleared the party the administrator's write on that handle came through.
+  The redirect is now written first; the rows a merge ends in are unchanged, and
+  only the merged handle's history between differs. **Upgrade:** a person who
+  merged two addresses of one contact merges the contacts, or is granted the
+  contact administrator role.
+- `angee.base`: **Changed behaviour.** A refused write of a write-once field
+  (`ImmutableFieldsMixin`) is keyed by the field's name, as model validation and
+  `form.add_error` key a field: a relation changed through its attname is refused
+  under the relation as before (`recipient` for `recipient_id`), and any other
+  field under its own name. A plain field whose name ends in `_id` was keyed by
+  that name less the suffix, which names no field, so no form showed the refusal
+  beside it: `Handle.external_id` was refused under `external` and portfolio's
+  `Update.object_id` under `object`. **Upgrade:** a consumer that matched the old
+  key for a plain `..._id` field reads the field's own name.
+- `angee.parties`: **Changed behaviour.** A handle's ingestion keys, `platform`,
+  `value` and `external_id`, are written once (`Handle.immutable_fields`, through
+  the foundation's `ImmutableFieldsMixin`). A message reads its addresses from its
+  handles when it is sent, and whoever held `write` on a handle (the person who
+  first typed a contact's address holds it) could re-address it with a field
+  write: another person's held message to that contact was then sent to the new
+  address. A save that changes a key is now refused with the foundation's
+  write-once refusal, whoever saves it, system work included. Only the handle
+  owner's verbs change one: `HandleManager.upsert` rewrites `value` when a
+  source's `external_id` matched and the account behind it moved, and
+  `HandleManager.reidentify` rewrites or folds a handle; history's revert restores
+  earlier keys as they were. `upsert` no longer rewrites the value onto an address
+  another row holds (a spelling merged into the row the account id names), which
+  raised `IntegrityError` on every later message from that account: the call lands
+  on that row, which keeps its address. An `external_id` given as a number is
+  matched and stored as its text. Display fields stay writable as before. A resource
+  row that names another address under an xref a load already wrote is refused
+  (`ResourceLoadError`). **Upgrade:** a caller that set `platform`, `value` or
+  `external_id` on an existing handle and saved it lands the new address as its
+  own handle (`HandleManager.upsert`), or, as admitted system work, rewrites the
+  handle with `HandleManager.reidentify`; a seed gives a new address its own row.
+  No migration and no `rebac sync`.
+- `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
+  writes an outgoing message.**
+  - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
+    a new email on a channel (`channel=`), or a new email on a record's chatter
+    (`channel=` with `record=`): its row, parts, recipients, sender, thread,
+    idempotency and delivery hand-off, decided under the actor by `reply` on the
+    channel (and posting on the record) before anything is claimed or written.
+    A new message takes `to`, `cc` and `bcc` entries, each one recipient as
+    `Message.objects.clean_recipient(entry, *, key="to")` reads it: a bare
+    address read as itself or one explicit `Name <address>`, returned as
+    `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
+    entry a mail library would read as another address or as several (a
+    comment, a group, a list, trailing text), or carrying a NUL byte (which
+    failed the write on PostgreSQL after it began), is refused, never re-read; a caller
+    asks `clean_recipient` before expensive work. A message takes at most
+    `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
+    (default 50, the strictest common provider's per-message limit; each new
+    address costs a call about 34 statements) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
+    statements each); more is refused (`too_many`) under the argument that
+    crosses the bound, before anything is read. A `scheduled_at` without an
+    offset is refused (`naive_datetime`, as scheduling, calendar and workflows
+    refuse one) instead of being read in the server's zone. A new message also
+    takes a one-line `subject`,
+    `text`, `html` and readable `attachments`, and starts a thread of its own
+    through the new `ThreadManager.open_thread`, which `resolve` now shares.
+    `Message.require_reply(actor)` decides who may answer a message and returns
+    its channel; `Message.reply_envelope(*, actor=None, channel=None)` returns
+    whom an answer goes to (a `ReplyEnvelope`) or refuses, and
+    `Message.reply_error` is that refusal, without side effects.
+    `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
+    which `compose` shares. `Channel.reply_permission` (`"reply"`) is the one
+    name of the channel permission to send, which `require_reply` and `compose`
+    decide. `HandleManager.clean_identity` validates a handle
+    identity without writing, `HandleManager.upsert(fill_only=...)` names display
+    fields it only fills while blank, and `Handle.email_value` is the one form an
+    email address is stored in on a handle. `PartManager.attach_files` attaches
+    several files under one message lock. `HandleManager.find_identities` (and so
+    `find_identity`, `upsert` and every compose lookup) names the platform in each
+    arm of its one statement, so the `(platform, value)` key's index serves it; it
+    was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Removed.** `Message.objects.compose_reply`. Use
+    `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
+    takes no argument, and an email reply takes no `sender`.
+  - **Superseded.** An outgoing message written by hand (its row, recipients and
+    parts, then `deliver()`) is superseded by `compose`, which is now its one
+    writer.
+  - **Changed.** `compose` runs as its actor: an elevated call is refused
+    (`RuntimeError`), as a workflow step body refuses one. An email reply is
+    sent from its channel's default sender, so a held or queued email reply on a
+    channel whose delivery is not configured, that is not connected, or whose
+    default sender is invalid is refused; a keyed retry still returns its
+    original. A reply to a message whose `Reply-To` names no address the handle
+    owner accepts is refused (`reply_to`) rather than sent to the sender, which
+    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    `messaging.reply:`) do not replay through `compose` (scope
+    `messaging.compose:`): a posts workflow reply retried across the upgrade
+    does not replay, and if its original was trashed or failed, which the
+    comment's answered check does not count, a second reply is written. A reply's
+    preview is 280 characters, like every message's, and chatter posts and edits
+    preview through the same rule as ingest. An HTML-only email is sent without a
+    text part; it was made by stripping the HTML's tags. An outgoing subject, typed
+    or derived from a conversation's title, has each control character and line
+    break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
+    so no mail library, client or provider decodes anything out of it: the subject
+    stored, sent and read back are one string (`outgoing_subject`); a typed line
+    break is still refused. A channel's own sender handle is landed with no
+    creator, under a non-user attribution (`messaging/system:outgoing`): the
+    first person to compose on a channel no longer holds read, write and delete
+    on it, so cannot rename, re-address or delete the desk's sender. A recipient
+    a person types keeps that person as its creator, as the handle owner rules.
+    A sender handle created before the upgrade keeps the creator it was given; a
+    deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
+    is its message's, set by the model on insert (`Recipient.save`), which
+    refuses a different one. `Message.reply_addresses` keeps only what
+    `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
+    channel's default sender lands on the handle its lower-cased address names.
+    A name typed with a recipient address fills only a handle that has none.
+    Inbound mail joins a thread by its subject only when the thread was grouped
+    by subject: a conversation a person composed is joined through its threading
+    headers alone. Intake asks a requester by email when their request has only
+    a `Reply-To`. A reviewer who may not reply on the request's channel is
+    refused with that permission refusal, as before, when the email is the only
+    way to ask; a requester who may post on the task is now asked on chatter
+    alone instead of the whole question being refused. Creating a
+    message part (`messaging/part#create`) requires `write` on its message or
+    the administrators (schema revision 28), and creating a message
+    (`messaging/message#create`) requires `write` on its channel or the
+    administrators (schema revision 29); every framework and consumer writer of
+    both runs as system work.
+  - **Upgrade:** `rebac sync` (provision runs it). No migration.
 - Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
   behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
   which judged only what `makemigrations` autodetects, now also judges the plan

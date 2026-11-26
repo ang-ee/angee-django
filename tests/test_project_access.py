@@ -325,7 +325,9 @@ def test_project_binding_grants_and_revokes_thread_message_access(
         channel = Channel.objects.create(vendor=vendor, owner=owner, backend_class="manual")
     with actor_context(owner):
         thread = Thread.objects.create(channel=channel)
-        message = Message.objects.create(thread=thread)
+        # A message is written as system work; the actor's grants are what the test reads.
+        with system_context(reason="tests.project_access.message"):
+            message = Message.objects.create(thread=thread)
         binding = ProjectBinding.objects.bind(project=project, target=channel)
         assert ProjectBinding.objects.bind(project=project, target=channel).pk == binding.pk
         assert ProjectBinding.objects.filter(pk=binding.pk, project=project).exists()

@@ -26,18 +26,21 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Callable, Iterator, Mapping, Sequence
+import unicodedata
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
-from contextvars import Context
+from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from email.utils import getaddresses
 from functools import partial, reduce
 from itertools import batched
 from operator import or_
-from typing import TYPE_CHECKING, Any, Self, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from django.apps import apps
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -175,6 +178,30 @@ def normalize_subject(subject: str) -> str:
     # normalized subject still reads naturally and two subjects differing only in
     # case stay distinct conversations.
     return text.strip()
+
+
+_ENCODED_WORD_OPENER = re.compile(r"=(?=\?[^?]*\?[bq]\?)", re.IGNORECASE)
+"""The ``=`` that opens an RFC 2047 encoded word: a mail library decodes one with any or no charset, either
+encoding letter in either case, terminated or not, and inside a word too."""
+
+
+def outgoing_subject(subject: str) -> str:
+    """Return ``subject`` as an outgoing message carries it: one line, with no control character and no encoded word.
+
+    Each control character and line break becomes a space, and every encoded-word
+    opener (``=?charset?q?`` or ``?b?``) is broken with a space after its ``=``, so
+    neither a mail library nor a reader's client decodes anything out of it, and no
+    provider that receives the subject as a string can either: the subject written,
+    the one on the wire and the one a reader sees are the same string. Text that
+    opens no word (``2+2=?``) is kept. Every outgoing subject takes it, a typed one
+    and one derived from a conversation's title.
+    """
+
+    text = "".join(
+        " " if unicodedata.category(character) in ("Cc", "Zl", "Zp") else character
+        for character in strip_null_bytes(subject or "")
+    )
+    return _ENCODED_WORD_OPENER.sub("= ", text).strip()
 
 
 # One rule for naming a message part that arrived without its own filename. It lives
@@ -609,7 +636,10 @@ class _MessageChronology(TypedDict):
 
 def _preview(body: ParsedPart | None, *, limit: int = 280) -> str:
     """Return a short text preview of a parsed body tree: the first plain body text, else the
-    first HTML body stripped of its markup. A preview is user text and never carries tags."""
+    first HTML body stripped of its markup. A preview is user text and never carries tags.
+
+    The one preview rule of every message writer: ingest, ``MessageManager.compose`` and a
+    chatter post or edit. A plain body previews as its first ``limit`` characters."""
 
     plain = _first_body_text(body, html=False)
     if plain:
@@ -928,8 +958,9 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
 
         Otherwise the email priority applies: ``In-Reply-To`` → ``References``
         (newest-first, i.e. right-to-left, resolved in one batch query) →
-        normalised subject → a new thread. The subject match and the create run
-        under ``select_for_update`` on a deterministic external id
+        normalised subject, matched only on a subject-grouped (``subj:``) thread,
+        never on one a composed message started → a new thread. The subject
+        match and the create run under ``select_for_update`` on a deterministic external id
         (``subj:<normalized>`` or ``msg:<id>``) so two concurrent batches
         resolving the same subject collide on the unique constraint and converge
         to one thread instead of double-creating.
@@ -989,19 +1020,59 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
                 title_digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
                 title_fragment = fragment_model._base_manager.filter(hash=title_digest).first()
                 if title_fragment is not None:
+                    # Only a subject-grouped thread takes mail by subject: a conversation a
+                    # person started (``msg:``) is joined through its threading headers alone.
                     existing = (
                         self.lock_if_supported()
                         .filter(platform=platform, channel=channel, title=title_fragment)
+                        .filter(external_id__startswith="subj:")
                         .order_by("-created_at")
                         .first()
                     )
                     if existing is not None:
                         return existing
-            deterministic_id = f"subj:{normalized}" if normalized else f"msg:{message_external_id}"
-            title = fragment_model.objects.upsert(text=normalized, created_by_id=created_by_id) if normalized else None
+            return self.open_thread(
+                platform=platform,
+                channel=channel,
+                message_external_id=message_external_id,
+                subject=normalized,
+                group_by_subject=True,
+                created_by_id=created_by_id,
+                modality=modality,
+                visibility=visibility,
+            )
+
+    def open_thread(
+        self,
+        *,
+        platform: str,
+        channel: Any,
+        message_external_id: str,
+        subject: str = "",
+        group_by_subject: bool,
+        created_by_id: Any = None,
+        modality: Any = None,
+        visibility: Any = None,
+    ) -> ThreadT:
+        """Get or create, in one transaction, the thread a message with no threading hint starts.
+
+        ``group_by_subject`` keys a subject-bearing thread on its normalised
+        subject (``subj:``), as a received email is grouped; otherwise the thread
+        is the message's own, ``msg:<external id>``, titled with the normalised
+        subject when there is one, so messages that only share a subject never
+        fuse. :meth:`resolve` creates such a thread through it; a source's named
+        conversation (``chat:``) is created by :meth:`resolve` itself.
+        """
+
+        normalized = normalize_subject(subject)
+        with transaction.atomic():
+            title = (
+                apps.get_model("messaging", "Fragment").objects.upsert(text=normalized, created_by_id=created_by_id)
+                if normalized else None
+            )
             thread, _created = self.get_or_create_by_external_id(
                 platform=platform,
-                external_id=deterministic_id,
+                external_id=f"subj:{normalized}" if normalized and group_by_subject else f"msg:{message_external_id}",
                 defaults={
                     "channel_id": channel.pk if channel is not None else None,
                     "title_id": title.pk if title is not None else None,
@@ -1010,7 +1081,7 @@ class ThreadManager[ThreadT: Thread](_ThreadManagerBase[ThreadT]):
                     "created_by_id": created_by_id,
                 },
             )
-            return thread
+        return cast("ThreadT", thread)
 
     def get_or_create_by_external_id(
         self,
@@ -2996,136 +3067,438 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return queryset.filter(**self.model.public_id_lookup(str(value))).values_list("_order_at", "pk").first()
 
 
+class _Addressee(NamedTuple):
+    """One recipient of an outgoing message: an address landed by value, or a handle already known."""
+
+    role: str
+    address: str = ""
+    name: str = ""
+    handle_id: Any = None
+
+
+@dataclass(frozen=True)
+class _Outgoing:
+    """An outgoing message whose arguments were checked (``MessageManager._validate_outgoing``), ready to write.
+
+    What present state decides of it (an answer's envelope, a new email's sender)
+    is read when it is written, after an idempotent replay. ``parent`` places an
+    answer on its parent's thread and ``record`` a new message on the record's
+    chatter; with neither, the message starts a thread of its own. ``recipients``
+    and ``subject`` are a new message's; ``sender`` is an explicit handle (an
+    answer of a non-email kind).
+    """
+
+    channel: Any
+    kind: str
+    platform: str
+    body: ParsedPart
+    metadata: Mapping[str, Any]
+    parent: Any = None
+    record: Any = None
+    sender: Any = None
+    recipients: tuple[_Addressee, ...] = ()
+    subject: str = ""
+    attachments: tuple[Any, ...] = ()
+    queued: bool = False
+    scheduled_at: datetime | None = None
+
+
+_OUTGOING_ACTOR = SubjectRef.of("messaging/system", "outgoing")
+"""Non-user attribution for handles messaging lands on nobody's behalf: a handle it creates there has no creator.
+
+A channel's own sender handle is the channel's, not the first composer's; a recipient a
+person types keeps that person as creator, by the handle owner's rule.
+"""
+
+
+def _require_at_most(limit: int, what: str, groups: Iterable[tuple[str, Sequence[Any]]]) -> None:
+    """Refuse more than ``limit`` entries across ``groups`` together, under the key of the group that crosses it."""
+
+    total = 0
+    for key, entries in groups:
+        total += len(entries)
+        if total > limit:
+            raise ValidationError({key: ValidationError(
+                "A message takes at most %(limit)s %(what)s.", code="too_many", params={"limit": limit, "what": what},
+            )})
+
+
+def _require_landable(handle_model: Any, addresses: Iterable[tuple[str, str]]) -> None:
+    """Refuse, under its key, each ``(key, address)`` whose email address the handle owner cannot land."""
+
+    for key, address in addresses:
+        try:
+            handle_model.objects.clean_identity(platform=handle_model.Platform.EMAIL, value=address)
+        except ValidationError as error:
+            raise ValidationError({key: [item for items in error.error_dict.values() for item in items]}) from error
+
+
 _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 
 
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
-    """Owns idempotent ingest, insert deltas and state-change thread recounts."""
+    """Owns idempotent ingest, outgoing messages (:meth:`compose`), insert deltas and state-change recounts."""
 
-    def compose_reply(
-        self, parent: Any, *, body: str, sender: Any, actor: Any,
-        local: Mapping[str, Any] | None = None, idempotency_key: str | None = None,
-        scheduled_at: datetime | None = None, queued: bool = False,
-        admit: Callable[[Any], None] | None = None,
-    ) -> Any:
-        """Create an exact-once outbound reply under the channel's narrow reply grant.
+    def compose(
+        self,
+        *,
+        actor: Any,
+        parent: Message | None = None,
+        channel: Channel | None = None,
+        record: ThreadedModelMixin | None = None,
+        sender: Handle | None = None,
+        to: Sequence[str] = (),
+        cc: Sequence[str] = (),
+        bcc: Sequence[str] = (),
+        subject: str = "",
+        text: str = "",
+        html: str = "",
+        attachments: Sequence[Any] = (),
+        local: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        queued: bool = False,
+        scheduled_at: datetime | None = None,
+        admit: Callable[[], None] | None = None,
+    ) -> MessageT:
+        """Write one outgoing message, returned bound to ``actor``: the one writer of its rows.
 
-        Hold facts are final at insert. Every retained reply advances its thread
-        counter once; queueing does not change the count. Callers may contribute provenance, but not
-        messaging's delivery state. ``admit(parent)`` checks domain eligibility
-        only on insertion, after idempotency replay and fingerprint validation.
-        Admission and replay run under actor even for an elevated caller.
+        ``parent`` answers that message on its thread and channel. Otherwise
+        ``channel`` sends a new email, on ``record``'s chatter when given and else
+        on a thread of its own (:meth:`ThreadManager.open_thread`).
 
-        An email reply (the parent's kind is ``EMAIL``) is a complete envelope: it is
-        addressed to the parent's ``Reply-To`` when present, else its sender (RFC 5322
-        §3.6.2), titled ``Re: <thread title>`` and identified by a Message-ID minted as
-        Django mints one, so an answer to it threads back onto this conversation; its
-        ``parent`` renders as ``In-Reply-To``. A reply of any other kind keeps a client
-        token for the transport's provider id.
+        It runs as its actor and refuses an elevated call. Its shape is checked
+        first, reading nothing: its anchor, and at most
+        ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses across ``to``, ``cc`` and
+        ``bcc`` and ``ANGEE_MESSAGING_MAX_ATTACHMENTS`` attachments, each refused
+        (``too_many``) under the argument that crosses it. Who may write it is
+        decided next: :meth:`Message.require_reply` for an answer, else
+        ``reply`` on ``channel`` and the record's post gate
+        (:meth:`ThreadedModelMixin.require_post`), and read on every attachment.
+        Its arguments are checked next (:meth:`_validate_outgoing`), and
+        :meth:`_write_outgoing` claims, replays, reads what present state decides,
+        admits, writes and hands off. Every refusal comes before any write, with
+        one ordered exception: a keyed call refused on present state (the
+        answer's envelope, the channel's sender) has inserted its claim first,
+        and the refusal rolls the claim back with everything else. ``admit()``
+        checks domain eligibility once, on insertion, after replay. ``queued``
+        hands the message to delivery when the outermost transaction commits,
+        ``scheduled_at`` holds a draft until then (a time without an offset is
+        refused, ``naive_datetime``), neither holds it for approval, and both are
+        refused. ``local`` is the caller's provenance, never
+        messaging's delivery facts. ``idempotency_key`` replays the same intent
+        (the hold aside) for the same actor, whatever the channel can do now.
         """
 
         if is_sudo():
-            return Context().run(
-                self.compose_reply, parent, body=body, sender=sender, actor=actor,
-                local=local, idempotency_key=idempotency_key,
-                scheduled_at=scheduled_at, queued=queued, admit=admit,
-            )
-        parent = parent.with_actor(actor)
-        body = strip_null_bytes(body).strip()
-        if not body:
-            raise ValidationError({"body": "Reply text is required."})
-        if parent.pk is None or parent.thread_id is None or parent.channel_id is None:
-            raise ValidationError("A reply requires a saved parent, thread, and channel.")
-        channel = parent.transport_channel(reason="messaging.reply.channel").with_actor(actor)
-        if actor is None or not parent.has_access("read") or not channel.has_access("reply"):
-            raise PermissionDenied("Comment read and channel reply access are required.")
-        if sender is None or sender.pk is None or sender.platform != parent.platform:
-            raise ValidationError({"sender": "The reply sender must use the comment's platform."})
-        email = parent.message_type == self.model.MessageKind.EMAIL
-        reply_to = parent.reply_addresses(actor=actor) if email else {}
-        if email and not reply_to and parent.sender_id is None:
-            raise ValidationError("An email reply requires a parent Reply-To or sender to address.")
+            raise RuntimeError("Compose runs under its actor, outside system_context.")
+        if actor is None:
+            raise PermissionDenied("Composing a message requires an actor.")
+        if parent is not None and (channel is not None or record is not None):
+            raise ValidationError({"channel" if channel is not None else "record": ValidationError(
+                "An answer is sent on its parent's channel and thread.", code="reply_anchored",
+            )})
+        if parent is None and channel is None:
+            raise ValidationError({"channel": ValidationError("Choose the channel to send from.", code="required")})
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_ATTACHMENTS, "attachments", (("attachments", attachments),))
         values = dict(local or {})
-        if any(key.startswith("delivery_") for key in values):
-            raise ValidationError({"local": "Delivery facts are owned by messaging."})
-        claim_values = (
-            {"parent": parent, "body": body, "sender": sender, "local": values}
-            if idempotency_key is not None else None
-        )
-        actor_ref = to_subject_ref(actor)
-        created_by_id = actor_user_id(actor_ref)
-        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
-        with actor_context(actor), claim_boundary, transaction.atomic():
-            if idempotency_key is not None:
-                reply = changeset_model().objects.claim_created(
-                    f"messaging.reply:{actor_ref}",
-                    idempotency_key,
-                    values=claim_values,
-                    model=self.model,
-                    unavailable=ValidationError(
-                        {"idempotency_key": "The claimed reply is unavailable."},
-                    ),
-                )
-                if reply is not None:
-                    if reply.is_trashed:
-                        raise ValidationError("This idempotency key belongs to a discarded reply.")
-                    return reply.with_actor(actor)
-            if admit is not None:
-                admit(parent)
-            with system_context(reason="messaging.reply.compose"):
-                reply = self.create(
-                    parent=parent, thread_id=parent.thread_id, channel_id=parent.channel_id, sender=sender,
-                    platform=parent.platform, direction=self.model.Direction.OUTBOUND,
-                    status=self.model.MessageStatus.QUEUED if queued else self.model.MessageStatus.DRAFT,
-                    scheduled_at=scheduled_at, message_type=parent.message_type,
-                    external_id=make_msgid(domain=DNS_NAME).strip("<>") if email else str(uuid4()),
-                    preview=body[: self.model.preview.field.max_length],
-                    metadata=_bounded_message_metadata({"local": values}), created_by_id=created_by_id,
-                )
-                position = (
-                    self._write_email_reply_envelope(reply, parent, reply_to=reply_to, created_by_id=created_by_id)
-                    if email
-                    else 0
-                )
-                self._build_parts(
-                    reply, ParsedPart(text=body), parent=None, position=position, created_by_id=created_by_id,
-                )
-                self.advance_thread(reply)
-                if queued:
-                    reply.deliver()
-            if idempotency_key is not None:
-                require_changeset().record_created(reply)
-        return reply.with_actor(actor)
+        intent = {
+            "channel": channel, "parent": parent, "record": record, "sender": sender,
+            "to": list(to), "cc": list(cc), "bcc": list(bcc), "subject": subject, "text": text, "html": html,
+            "attachments": list(attachments), "local": values,
+        }
+        with actor_context(actor):
+            if parent is not None:
+                channel = parent.require_reply(actor)
+            else:
+                assert channel is not None
+                channel = apps.get_model("messaging", "Channel").objects.with_actor(actor).filter(pk=channel.pk).first()
+                if channel is None or not channel.has_access(channel.reply_permission):
+                    raise PermissionDenied("Sending a message requires reply on its channel.")
+                if record is not None:
+                    record.require_post(actor=actor)
+            files = tuple(attachments)
+            readable = set(
+                apps.get_model("storage", "File").objects.with_actor(actor)
+                .filter(pk__in=[file.pk for file in files]).values_list("pk", flat=True)
+            ) if files else set()
+            if any(file.pk not in readable for file in files):
+                raise PermissionDenied("Sending an attachment requires reading its file.")
+            outgoing = self._validate_outgoing(
+                channel=channel, parent=parent, record=record, sender=sender, to=to, cc=cc, bcc=bcc,
+                subject=subject, text=text, html=html, attachments=files, local=values, queued=queued,
+                scheduled_at=scheduled_at,
+            )
+            return self._write_outgoing(
+                outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
+            )
 
-    def _write_email_reply_envelope(
-        self, reply: Any, parent: Any, *, reply_to: Mapping[str, str], created_by_id: Any
-    ) -> int:
-        """Address an email reply as ``Re: <thread title>``; return the body position.
+    def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
+        """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
 
-        ``reply_to`` maps each of the parent's Reply-To addresses to its display name;
-        without one the reply goes to the handle the parent was sent from. The thread
-        title is the normalized subject, so prefixes never stack. The reply's ``parent``
-        is its In-Reply-To, which the email transport renders.
+        An entry is one recipient: a bare address, read as itself, or one explicit
+        ``Name <address>``. An entry a mail library would read as another address,
+        or as several (a comment, a group, a list, trailing text, ``address
+        (Name)``), is refused rather than re-read, and so is one carrying a NUL
+        byte, which no messaging write stores. The handle owner then decides
+        whether the address can be one and can be stored on a handle
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
+        nothing, so a caller can ask it before expensive work, and ``compose``
+        lands exactly what it returns. The refusal is ``invalid``, naming the
+        entry as typed.
         """
 
-        recipient_model = apps.get_model("messaging", "Recipient")
         handle_model = apps.get_model("parties", "Handle")
-        handle_ids = [
-            handle_model.objects.upsert(
-                platform=reply.platform, value=address, display_name=name, created_by_id=created_by_id
-            ).pk
-            for address, name in reply_to.items()
-        ] or [parent.sender_id]
-        for handle_id in dict.fromkeys(handle_ids):
-            recipient_model.objects.create(
-                message_id=reply.pk,
-                thread_id=reply.thread_id,
-                handle_id=handle_id,
-                role=recipient_model.RecipientRole.TO,
-                created_by_id=created_by_id,
+        text = str(entry or "").strip()
+        parsed = getaddresses([text])
+        name, address = parsed[0] if len(parsed) == 1 else ("", "")
+        explicit = text.endswith(f"<{address}>") and text.count("<") == text.count(">") == 1
+        landable = "\x00" not in text and handle_model.is_email_address(address)
+        if not address or not (text == address or explicit) or not landable:
+            raise ValidationError({key: ValidationError(
+                "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
+            )})
+        address = handle_model.email_value(address)
+        _require_landable(handle_model, ((key, address),))
+        return name.strip(), address
+
+    def _validate_outgoing(
+        self,
+        *,
+        channel: Any,
+        parent: Any,
+        record: Any,
+        sender: Any,
+        to: Sequence[str],
+        cc: Sequence[str],
+        bcc: Sequence[str],
+        subject: str,
+        text: str,
+        html: str,
+        attachments: tuple[Any, ...],
+        local: Mapping[str, Any],
+        queued: bool,
+        scheduled_at: datetime | None,
+    ) -> _Outgoing:
+        """Check an outgoing message's arguments, reading nothing; each refusal is keyed by its argument, with a code.
+
+        An answer takes its parent's kind and platform and names no subject or
+        address; one of a non-email kind is plain text from an explicit, saved
+        ``sender`` on the parent's platform. A new message is an email to at least
+        one recipient, each entry as :meth:`clean_recipient` reads it, with an
+        optional one-line subject. An
+        email has ``text``, ``html`` or both and names no sender: its channel's
+        default sends it.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        email_kind = self.model.MessageKind.EMAIL
+        if any(key.startswith("delivery_") for key in local):
+            raise ValidationError({"local": ValidationError("Delivery facts are owned by messaging.", code="reserved")})
+        metadata = _bounded_message_metadata({"local": dict(local)})
+        if queued and scheduled_at is not None:
+            raise ValidationError({"scheduled_at": ValidationError(
+                "A queued message is sent now; schedule a held one instead.", code="queued",
+            )})
+        if scheduled_at is not None and timezone.is_naive(scheduled_at):
+            raise ValidationError({"scheduled_at": ValidationError(
+                "A schedule time needs its offset; it is never read in the server's zone.", code="naive_datetime",
+            )})
+        text, html, subject = (strip_null_bytes(value or "").strip() for value in (text, html, subject))
+        if not text and not html:
+            raise ValidationError({"text": ValidationError("Write the message.", code="required")})
+        if "\r" in subject or "\n" in subject:
+            raise ValidationError({"subject": ValidationError("A subject is one line.", code="invalid")})
+        subject = outgoing_subject(subject)
+        recipients: tuple[_Addressee, ...] = ()
+        if parent is not None:
+            kind, platform = parent.message_type, parent.platform
+            if subject:
+                raise ValidationError({"subject": ValidationError(
+                    "An answer is titled after its conversation.", code="reply_titled",
+                )})
+            if to or cc or bcc:
+                raise ValidationError({"to" if to else "cc" if cc else "bcc": ValidationError(
+                    "An answer goes to the message it answers.", code="reply_addressed",
+                )})
+        else:
+            kind, platform = email_kind, handle_model.Platform.EMAIL
+            recipients = tuple(
+                _Addressee(role, address, name)
+                for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
+                for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
-        title = normalize_subject(parent.thread.display_title)
-        return self._write_envelope_parts(reply, subject=f"Re: {title}" if title else "", created_by_id=created_by_id)
+            if not recipients:
+                raise ValidationError({"to": ValidationError(
+                    "Address the message to at least one recipient.", code="required",
+                )})
+        if kind == email_kind:
+            if sender is not None:
+                raise ValidationError({"sender": ValidationError(
+                    "An email is sent from its channel's sender.", code="channel_sender",
+                )})
+        elif sender is None or sender.pk is None or sender.platform != platform:
+            raise ValidationError({"sender": ValidationError(
+                "The answer's sender must use the platform of the message it answers.", code="invalid",
+            )})
+        elif html or attachments:
+            raise ValidationError({"html" if html else "attachments": ValidationError(
+                "An answer of this kind is plain text.", code="plain_text",
+            )})
+        return _Outgoing(
+            channel=channel,
+            kind=kind,
+            platform=platform,
+            body=(
+                ParsedPart(type="multipart/alternative", children=(
+                    ParsedPart(text=text), ParsedPart(type="text/html", text=html),
+                ))
+                if text and html
+                else ParsedPart(type="text/html", text=html) if html else ParsedPart(text=text)
+            ),
+            metadata=metadata,
+            parent=parent,
+            record=record,
+            sender=sender if kind != email_kind else None,
+            recipients=recipients,
+            subject=subject,
+            attachments=attachments,
+            queued=queued,
+            scheduled_at=scheduled_at,
+        )
+
+    def _write_outgoing(
+        self,
+        outgoing: _Outgoing,
+        *,
+        actor: Any,
+        fingerprint: Mapping[str, Any],
+        idempotency_key: str | None,
+        admit: Callable[[], None] | None,
+    ) -> MessageT:
+        """Claim, replay, read what present state decides, admit, write and hand off; it consults no grant.
+
+        One transaction, in a fresh changeset when keyed. A keyed replay returns
+        the original before anything else is read; a trashed original is refused
+        and changed content raises ``CreationKeyConflict``. An answer's envelope
+        (:meth:`Message.reply_envelope`) or a new email's sender is read next and
+        its addresses checked; a refusal there rolls the claim back. Then
+        ``admit()`` runs, and the rows are written under ``system_context``: the
+        thread, the sender handle, the row with its Message-ID (minted as Django
+        mints one for an email, a client token otherwise) and preview, its title,
+        body and attachment parts, its recipients, the thread's counter, and a
+        queued message's hand-off (:meth:`Message.deliver`, published when the
+        outermost transaction commits).
+        """
+
+        actor_ref = to_subject_ref(actor)
+        created_by_id = actor_user_id(actor_ref)
+        handle_model = apps.get_model("parties", "Handle")
+        email = outgoing.kind == self.model.MessageKind.EMAIL
+        claim_boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
+        with claim_boundary, transaction.atomic():
+            if idempotency_key is not None:
+                original = changeset_model().objects.claim_created(
+                    f"messaging.compose:{actor_ref}",
+                    idempotency_key,
+                    values=fingerprint,
+                    model=self.model,
+                    unavailable=ValidationError({"idempotency_key": ValidationError(
+                        "The claimed message is unavailable.", code="unavailable",
+                    )}),
+                )
+                if original is not None:
+                    if original.is_trashed:
+                        raise ValidationError({"idempotency_key": ValidationError(
+                            "This key belongs to a discarded message.", code="discarded",
+                        )})
+                    return original.with_actor(actor)
+            recipients, subject, sender_address = outgoing.recipients, outgoing.subject, None
+            if outgoing.parent is not None:
+                envelope = outgoing.parent.reply_envelope(actor=actor, channel=outgoing.channel)
+                recipients = tuple(_Addressee("to", address, name) for address, name in envelope.addresses) or (
+                    (_Addressee("to", handle_id=envelope.handle_id),) if envelope.handle_id is not None else ()
+                )
+                subject, sender_address = envelope.subject, envelope.sender
+                _require_landable(handle_model, (("reply_to", addressee.address) for addressee in recipients
+                                                 if addressee.handle_id is None))
+            elif email:
+                sender_address = outgoing.channel.outbound_sender()
+            if sender_address is not None:
+                sender_address = (sender_address[0], handle_model.email_value(sender_address[1]))
+                _require_landable(handle_model, (("channel", sender_address[1]),))
+            if admit is not None:
+                admit()
+            with system_context(reason="messaging.compose"):
+                external_id = make_msgid(domain=DNS_NAME).strip("<>") if email else str(uuid4())
+                if outgoing.parent is not None:
+                    thread_id = outgoing.parent.thread_id
+                elif outgoing.record is not None:
+                    thread_id = outgoing.record.message_thread().pk
+                else:
+                    thread_id = apps.get_model("messaging", "Thread").objects.open_thread(
+                        platform=outgoing.platform, channel=outgoing.channel, message_external_id=external_id,
+                        subject=subject, group_by_subject=False, created_by_id=created_by_id,
+                    ).pk
+                sender = outgoing.sender
+                if sender_address is not None:
+                    # The channel's configured name is the operator's, so it refreshes the handle;
+                    # the handle is the channel's, so no composer becomes its creator.
+                    name, address = sender_address
+                    with actor_context(_OUTGOING_ACTOR):
+                        sender = handle_model.objects.upsert(
+                            platform=handle_model.Platform.EMAIL, value=address, display_name=name,
+                        )
+                message = self.create(
+                    parent=outgoing.parent, thread_id=thread_id, channel_id=outgoing.channel.pk, sender=sender,
+                    platform=outgoing.platform, direction=self.model.Direction.OUTBOUND,
+                    status=self.model.MessageStatus.QUEUED if outgoing.queued else self.model.MessageStatus.DRAFT,
+                    scheduled_at=outgoing.scheduled_at, message_type=outgoing.kind, external_id=external_id,
+                    preview=_preview(outgoing.body), metadata=outgoing.metadata, created_by_id=created_by_id,
+                )
+                position = self._write_envelope_parts(message, subject=subject, created_by_id=created_by_id)
+                self._build_parts(message, outgoing.body, parent=None, position=position, created_by_id=created_by_id)
+                if outgoing.attachments:
+                    apps.get_model("messaging", "Part").objects.attach_files(
+                        message, outgoing.attachments, position=position + 1, created_by_id=created_by_id,
+                    )
+                rows = self._land_addressees(recipients, created_by_id=created_by_id)
+                self._write_recipients(message, rows, created_by_id=created_by_id)
+                self.advance_thread(message)
+                if outgoing.queued:
+                    message.deliver()
+            if idempotency_key is not None:
+                require_changeset().record_created(message)
+        return message.with_actor(actor)
+
+    @staticmethod
+    def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
+        """Return each recipient's ``(handle id, role)``, its addresses resolved in one read.
+
+        Known handles resolve through the handle owner's batch lookup
+        (``HandleManager.find_identities``); an address with no handle, or with a
+        name typed beside it, goes through ``upsert``, where a typed name fills
+        only a handle that has none and never renames a shared one.
+        """
+
+        handle_model = apps.get_model("parties", "Handle")
+        email = handle_model.Platform.EMAIL
+        found = handle_model.objects.find_identities(
+            (email, addressee.address) for addressee in recipients if addressee.handle_id is None
+        )
+        rows: list[tuple[Any, str]] = []
+        for addressee in recipients:
+            handle_id = addressee.handle_id
+            if handle_id is None:
+                handle = found.get((email, addressee.address))
+                if handle is None or addressee.name:
+                    handle = found[(email, addressee.address)] = handle_model.objects.upsert(
+                        platform=email, value=addressee.address, display_name=addressee.name,
+                        fill_only=("display_name",), created_by_id=created_by_id,
+                    )
+                handle_id = handle.pk
+            rows.append((handle_id, addressee.role))
+        return rows
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
@@ -3644,7 +4017,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 message_type=kind,
                 subtype_id=subtype.pk if subtype is not None else None,
                 parent_id=parent.pk if parent is not None else None,
-                preview=body[:280],
+                preview=_preview(ParsedPart(text=body)),
                 sent_at=sent_at,
                 created_by_id=created_by_id,
             )
@@ -3793,7 +4166,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     _edit_history_entry(edited_by_id=edited_by_id, prev_fragment_hashes=prior_hashes),
                     *(message.edit_history or []),
                 ]
-                message.preview = body[:280]
+                message.preview = _preview(ParsedPart(text=body))
                 message.status = self.model.MessageStatus.EDITED
                 message.save(update_fields=("preview", "status", "edit_history", "updated_at"))
                 return message
@@ -4306,9 +4679,28 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                         *(message.edit_history or []),
                     ]
                     message.save(update_fields=("edit_history", "updated_at"))
-        handles = (
-            () if retain_authored_parts else self._write_recipients(message, thread, parsed, sender, created_by_id)
-        )
+        handles: list[Any] = []
+        if not retain_authored_parts:
+            # A re-sync rewrites the envelope's rows; the handles go back to the caller, the sender first.
+            apps.get_model("messaging", "Recipient").objects.filter(message=message).delete()
+            recipients = [
+                (
+                    handle_model.objects.upsert(
+                        platform=recipient.handle.platform,
+                        value=recipient.handle.value,
+                        created_by_id=created_by_id,
+                        display_name=recipient.handle.display_name,
+                        external_id=recipient.handle.external_id,
+                        metadata=recipient.handle.metadata,
+                    ),
+                    recipient.role,
+                )
+                for recipient in parsed.recipients
+            ]
+            self._write_recipients(
+                message, ((handle.pk, role) for handle, role in recipients), created_by_id=created_by_id,
+            )
+            handles = [*([] if sender is None else [sender]), *(handle for handle, _role in recipients)]
         if expected_thread is not None:
             message = self.correct_source_thread(message, channel=channel, expected_thread=expected_thread,
                                                  thread=explicit_thread)
@@ -4508,45 +4900,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         )
         return file
 
-    def _write_recipients(
-        self,
-        message: Any,
-        thread: Any,
-        parsed: ParsedMessage,
-        sender: Any,
-        created_by_id: Any,
-    ) -> list[Any]:
-        """Rewrite the message's recipient rows; return the envelope's handles, the sender first."""
+    def _write_recipients(self, message: Any, rows: Iterable[tuple[Any, str]], *, created_by_id: Any) -> None:
+        """Create ``message``'s recipient rows from ``(handle id, role)`` pairs, once per pair.
+
+        The write path owns envelope dedup (the unique constraint is the
+        backstop): any producer may repeat an address within one role. Each row
+        takes its thread from ``message`` (``Recipient.save``).
+        """
 
         recipient_model = apps.get_model("messaging", "Recipient")
-        handle_model = apps.get_model("parties", "Handle")
-        recipient_model.objects.filter(message=message).delete()
-        seen: set[tuple[Any, str]] = set()
-        handles: list[Any] = [] if sender is None else [sender]
-        for recipient in parsed.recipients:
-            handle = handle_model.objects.upsert(
-                platform=recipient.handle.platform,
-                value=recipient.handle.value,
-                created_by_id=created_by_id,
-                display_name=recipient.handle.display_name,
-                external_id=recipient.handle.external_id,
-                metadata=recipient.handle.metadata,
-            )
-            # The write path owns envelope dedup (the unique constraint is the
-            # backstop): any producer may repeat an address within one role.
-            key = (handle.pk, str(recipient.role))
-            if key in seen:
-                continue
-            seen.add(key)
-            recipient_model.objects.create(
-                message_id=message.pk,
-                thread_id=thread.pk,
-                handle_id=handle.pk,
-                role=recipient.role,
-                created_by_id=created_by_id,
-            )
-            handles.append(handle)
-        return handles
+        for handle_id, role in dict.fromkeys((handle_id, str(role)) for handle_id, role in rows):
+            recipient_model.objects.create(message=message, handle_id=handle_id, role=role, created_by_id=created_by_id)
 
 
 class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
@@ -4670,24 +5034,50 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
 
         with transaction.atomic():
             type(message).system_queryset(lock=("self",)).get(pk=message.pk)
-            existing = self.model._base_manager.filter(message=message, file=file).first()
-            if existing is not None:
-                return existing
-            if position is None:
-                last = self.model._base_manager.filter(message=message).aggregate(value=models.Max("position"))["value"]
-                position = 1 if last is None else last + 1
-            file = type(file)._base_manager.select_related("mime_type").get(pk=file.pk)
-            mime = file.mime_type
-            return self.create(
-                message=message,
-                file=file,
-                position=position,
-                type=mime.mime_type if mime is not None else "application/octet-stream",
-                name=(file.filename or file.title or "attachment") if name is None else name,
-                disposition=self.model.Disposition.ATTACHMENT,
-                role=self.model.PartRole.BODY,
-                created_by_id=message.created_by_id if created_by_id is None else created_by_id,
-            )
+            return self._append_file(message, file, position=position, name=name, created_by_id=created_by_id)
+
+    def attach_files(
+        self, message: Message, files: Sequence[Any], *, position: int | None = None, created_by_id: Any = None,
+    ) -> list[PartT]:
+        """Return each file's attachment part on ``message``, as :meth:`attach_file` does, under one message lock.
+
+        The parts a call appends take consecutive positions from ``position``
+        (after the last part when it is not given), in the order of ``files``.
+        """
+
+        parts: list[PartT] = []
+        with transaction.atomic():
+            type(message).system_queryset(lock=("self",)).get(pk=message.pk)
+            for file in files:
+                part = self._append_file(message, file, position=position, name=None, created_by_id=created_by_id)
+                if position is not None and part.position >= position:
+                    position = part.position + 1
+                parts.append(part)
+        return parts
+
+    def _append_file(
+        self, message: Message, file: Any, *, position: int | None, name: str | None, created_by_id: Any,
+    ) -> PartT:
+        """Append ``file`` to a message whose row the caller holds locked, once."""
+
+        existing = self.model._base_manager.filter(message=message, file=file).first()
+        if existing is not None:
+            return existing
+        if position is None:
+            last = self.model._base_manager.filter(message=message).aggregate(value=models.Max("position"))["value"]
+            position = 1 if last is None else last + 1
+        file = type(file)._base_manager.select_related("mime_type").get(pk=file.pk)
+        mime = file.mime_type
+        return self.create(
+            message=message,
+            file=file,
+            position=position,
+            type=mime.mime_type if mime is not None else "application/octet-stream",
+            name=(file.filename or file.title or "attachment") if name is None else name,
+            disposition=self.model.Disposition.ATTACHMENT,
+            role=self.model.PartRole.BODY,
+            created_by_id=message.created_by_id if created_by_id is None else created_by_id,
+        )
 
     BODY_SEPARATOR = "\n\n"
 

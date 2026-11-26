@@ -23,7 +23,6 @@ from django.core.exceptions import ValidationError
 from django.core.mail import mailers
 from django.core.mail.backends.base import BaseEmailBackend
 from django.core.validators import validate_email
-from django.utils.html import strip_tags
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
@@ -236,6 +235,12 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
     @staticmethod
     def _body(parts: list[Any], part_model: Any) -> tuple[str, str]:
+        """The message's ``(plain, html)`` bodies; an HTML-only message has no plain one.
+
+        The plain part is only ever the message's own text: it is never made from
+        the HTML, so Django sends an HTML-only message without a text part.
+        """
+
         plain_parts: list[str] = []
         html_parts: list[str] = []
         for part in parts:
@@ -248,7 +253,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 plain_parts.append(text)
         html = "\n".join(html_parts)
         plain = "\n\n".join(plain_parts)
-        return plain or strip_tags(html), html
+        return plain, html
 
     @staticmethod
     def _headers(parts: list[Any], part_model: Any) -> dict[str, str]:
