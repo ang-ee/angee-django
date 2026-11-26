@@ -2,7 +2,10 @@ import * as React from "react";
 
 import type { ChatterViewContext } from "../runtime";
 
-/** Counts published by independently mounted tab or group readers. */
+/**
+ * Numbers published by independently mounted tab or group readers, each under its id for as long
+ * as its publisher is mounted: a tab's or a group's count, or how many blocks a group shows.
+ */
 export function useChatterCounts() {
   const [counts, setCounts] = React.useState<Record<string, number>>({});
   const publish = React.useCallback((id: string, count: number | undefined) => {
@@ -31,7 +34,7 @@ export function ChatterCountProbe({ id, useCount, context, onCount }: CountProbe
   return <PublishedCount id={id} count={useCount(context)} onCount={onCount} />;
 }
 
-/** Publish one count under its id while mounted; only a changed number republishes. */
+/** Publish one number under its id while mounted; only a changed number republishes. */
 export function PublishedCount({ id, count, onCount }: Omit<CountProbeProps, "context"> & { count: number | undefined }): null {
   React.useEffect(() => {
     onCount(id, count);

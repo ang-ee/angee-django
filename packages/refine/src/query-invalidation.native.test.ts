@@ -194,6 +194,47 @@ test("a caller write during the initial request cancels its snapshot and discard
   }
 });
 
+test("a caller write during an active read's initial request never leaves that read idle before its resend, and the resend's answer is the one committed", async () => {
+  const cache = client();
+  const old = pending<string[]>();
+  const resent = pending<string[]>();
+  let requests = 0;
+  const options = {
+    queryKey: ["notes", "first"],
+    meta: { angeeModels: ["notes.Note"] },
+    // The transport ignores abort, so the first request can still answer after its cancellation.
+    queryFn: () => (++requests === 1 ? old.promise : resent.promise),
+  };
+  const observer = new QueryObserver(cache, options);
+  const unsubscribe = observer.subscribe(() => undefined);
+  // What a render reads from the observer whenever it runs: a writer's own confirmation renders while
+  // its refresh is under way. (Listeners are told of the reverted state inside the call itself.)
+  const read = () => { const { status, fetchStatus, data } = observer.getCurrentResult(); return { status, fetchStatus, data }; };
+  const waiting = { status: "pending", fetchStatus: "fetching", data: undefined };
+  try {
+    expect(read()).toEqual(waiting);
+    const invalidated = invalidateAuthoredQueries(cache, ["notes.Note"]);
+    // The write is not lost: the resend has been sent by the time the call returns.
+    expect(requests).toBe(2);
+    expect(read()).toEqual(waiting);
+    for (let turn = 0; turn < 5; turn++) {
+      await Promise.resolve();
+      expect(read()).toEqual(waiting);
+    }
+    // The first request's late answer is not committed; the resend's is.
+    old.resolve(["stale"]);
+    await old.promise;
+    expect(read()).toEqual(waiting);
+    resent.resolve(["current"]);
+    await invalidated;
+    expect(read()).toEqual({ status: "success", fetchStatus: "idle", data: ["current"] });
+    expect(requests).toBe(2);
+  } finally {
+    old.resolve([]); resent.resolve([]);
+    unsubscribe(); cache.clear();
+  }
+});
+
 test.each([true, false])("empty %s-disabled/inactive initial requests cancel without refetching", async (disabled) => {
   const cache = client();
   const old = pending<string[]>();

@@ -312,7 +312,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   variables are authored. The shared hook owns deriving the Hasura custom
   mutation and running it through refine `useCustomMutation`; the rendered record
   adapter owns binding it to `ActionContext` (record id, refresh,
-  missing-record handling, success hooks). Set `idArgument` to the schema
+  missing-record handling, success hooks), and the action bar toasts its
+  outcome: a success with its message, a refusal under the verb's label with
+  its reasons (`runActionResult` throws them, or the message when it carries
+  none); `linkTo` follows the record the verb created. Set `idArgument` to the schema
   argument that receives the record id when it is named differently (for example,
   `"round"`); `null` on an outcome mutation sends only its explicit arguments.
   Don't hand-author these as `graphql()` documents or page-local
@@ -326,12 +329,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field errors). A channel vendor contributes such a verb through its
   `defineChannel*BridgeAddon` `recordActions`, scoped to its own rows.
 - **`ActionResult` verbs settle through `useActionResultRun`** (`@angee/ui`) —
-  it fires the verb, toasts the outcome (danger with the in-band non-field
-  reasons; success with the message), and deep-links to a created record via
+  it fires the verb, toasts the outcome (danger with the in-band reasons,
+  under any key; success with the message), and deep-links to a created record via
   `linkTo` + the routed resource page when the outcome carries an `id`. It
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A record action bound with `useRecordActionMutation` is not settled there:
+  its bar toasts it, and both follow a created record through one hook. A
+  record action whose own `run` calls `useActionResultRun`, directly or
+  through `useActionResultMutation` or `useRecordChromeActionMutation`, is
+  toasted there, under the server's message.
 - React does not own business logic, permissions, models, or persistence.
 - Dashboard widget visibility is declared separately from its data filter.
   [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
@@ -450,10 +458,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins, unless the declaration that
-  supplies the theme sets `themeLocked`: then that theme and its options win
-  within the app, the person's color scheme still applies, their saved theme
-  is kept for other apps, and Appearance says why. A lock travels with the theme
+  default, its options ranked as [host and user precedence](appearance.md#host-and-user-precedence)
+  says. The person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked` (what a lock does is
+  [host and user precedence](appearance.md#host-and-user-precedence)). A lock travels with the theme
   it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
@@ -525,9 +533,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and keep any callbacks they close over stable; when a callback wraps
   Refine/query mutation objects that may refresh identity, expose a stable
   callback that reads the latest execution context from a ref (`useLatestRef`).
-  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
-  navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Context another
+  Explorer pages over a scoped tree (storage, knowledge) compose
+  `ScopedExplorerPane`, which owns the primary-pane navigator publication plus the
+  root loading/empty gate; addons provide row projection, route transitions, DnD
+  policy, and domain actions. An explorer page whose navigator is another surface
+  (the iam schema explorer, the agents session rail) renders it with
+  `PrimaryPanePublisher`. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list. The left pane never
   describes the record (see the shell's regions below). Page tests use
@@ -666,8 +677,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
   radio groups over the same owner), the visible-fields menu, the dashboard widget
   menu, the collapsed statusbar. Field choices inside such a menu stay native items;
-  verbs are `ActionTrigger`s. Every fire → toast flow settles through
-  `useActionResultRun`; row verbs included. Owner story:
+  verbs are `ActionTrigger`s. Each verb's outcome has one toast owner: the
+  record action bar for a record action whose run resolves a message or
+  rejects (one bound with `useRecordActionMutation` or projected through
+  `runActionResult`); `useActionResultRun` for a verb fired from a chrome, a
+  row or a pane, and for a record action whose run settles through it, whose
+  bar then stays silent; the action form for a verb with arguments; the bulk
+  owner for a selection. Owner story:
   [action menu](../../packages/storybook/src/stories/ActionMenu.stories.tsx) (story id `toolbars-actionmenu--default`).
 - **Time is absolute; relative time is a live header's.** Every list, row, facts
   line and period title formats through `date-format.ts`: `formatDate`,
@@ -733,6 +749,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
   `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
   and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
+- **A class composed through a variant is a registered utility.** `styles/index.css`
+  declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
+  Tailwind gives a variant to a registered utility only, and a plain class in
+  `@layer utilities` compiles to nothing under one, silently
+  ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
   `EmptyState` and `InlineEmpty` own every other error and empty surface. Owner story:
@@ -1322,9 +1343,23 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `actionFormSubmitResult(data, root)` and normalized outcomes with
   `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  A refusal's form-level messages stay several: the form-level error holds a
+  list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
+  and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
+  several as a list; never join them into one text. A record form's refused
+  save brings the person to its reason: the first shown field it names takes
+  focus (`applyFormErrors` with `focus`), else the banner does, and Save stays
+  focusable while it runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
+- What a record form's Save would write is readable before a save:
+  [nextSave](../../packages/ui/src/views/form/use-form-view-save.ts), on the
+  save surface a pane and a toolbar receive, returns the record's input and the
+  lines diff, built by Save's own function from the values, the baseline and
+  the changed fields the form holds when it is called. It validates, writes and
+  requests nothing, and each call returns a new object: a pane that previews
+  unsaved edits compares what it reads by value, and never rebuilds the mapping.
 - Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
   discriminator selection; RHF owns original and transformed values. Dialog
@@ -1752,10 +1787,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
+  `Explorer` is removed.** The console body and a list's split placement compose
+  `Workbench` over `page/SplitPanes` (v4) — `primary` is the navigator pane,
+  `children` the content, `secondary` the aside, with size/collapse persistence via
+  `autoSave`. Explorer pages do not compose it: they publish their navigator into the
+  console's primary pane (the shell-published surfaces rule above).
+  A pane scrolls its content: the library sets `overflow: auto` on it
+  ([`SplitPane`](../../packages/ui/src/page/SplitPanes.tsx)). Do not
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
@@ -2165,7 +2203,8 @@ metadata the backend derives from each edge's schema target relations. Timeline
 sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
 "unavailable" or offer writes on a type whose schema declares no arm. A section
-with neither rows nor a verb is absent, not empty.
+with neither rows nor a verb is absent, not empty; when every eligible group
+is absent the pane shows its empty state.
 
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
@@ -2367,7 +2406,10 @@ has one provider stack — appearance, data, toasts and modals.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
-fixture transports with live queries disabled. The `@angee/storybook/host` entry
+fixture transports with live queries disabled. The workshop's toolbar is the host's
+appearance, so the fixture leaves the composed addons' run-time `hostAppearance`
+source out and a workshop answers none of its reads; a story about that source
+passes `hostAppearanceSource`. The `@angee/storybook/host` entry
 exposes the stack's emitted addons and schema loader; it adds no product registry.
 `resourceSnapshotOperations` supplies small read-only sample collections through
 metadata-owned filters, relations and grouping. Product packages own their sample
@@ -2408,7 +2450,12 @@ Native form saves refresh their resource queries and authored reads of that
 model; custom commands retain their mutation owner's invalidation. Declare
 other affected models through `invalidateModels`; the
 [shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
+resolves their resource and authored-query invalidation. The save confirms as
+soon as the write answers: it starts those refreshes and does not wait for
+them, so a list of a dependent model or a read in the record's chrome may show
+the saved state a moment after the confirmation, and a read that fails or
+never answers cannot hold a save. Only a save that writes lines waits, for its
+own model's lists. A dependency between
 read models is not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no

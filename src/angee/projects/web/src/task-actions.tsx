@@ -113,11 +113,9 @@ export function useTaskFormDeclaration(
   const dropReasonOptions = useEnumOptions(TASK_MODEL, "dropped_reason", { casing: "upper" });
   const [complete] = useRecordActionMutation<ActionFieldName>("complete_task", {
     invalidateModels: [TASK_MODEL],
-    settle: true,
   });
   const [reopen] = useRecordActionMutation<ActionFieldName>("reopen_task", {
     invalidateModels: [TASK_MODEL],
-    settle: true,
   });
   const [promoteTask] = useActionOutcomeMutation<ActionFieldName>("promote_task_to_project", {
     invalidateModels: [TASK_MODEL, PROJECT_MODEL],
@@ -128,7 +126,6 @@ export function useTaskFormDeclaration(
   });
   const [resetDue] = useRecordActionMutation<ActionFieldName>("reset_task_due_to_rule", {
     invalidateModels: [TASK_MODEL],
-    settle: true,
   });
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],

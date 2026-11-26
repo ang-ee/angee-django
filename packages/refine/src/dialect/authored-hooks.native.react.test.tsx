@@ -711,6 +711,54 @@ test("response-backed completion accepts typed cache data before held background
   await waitFor(() => expect(result.current.read.data).toEqual({ notes: [{ id: "refreshed" }] }));
 });
 
+test("a result accepted while its read's first request is unanswered replaces the waiting read at once, never an idle one with no data", async () => {
+  const first = deferred<{ data: Data }>();
+  const custom = vi.fn(() => first.promise);
+  const f = fixture(custom);
+  // Every state the read's owner renders.
+  const rendered: string[] = [];
+  const { result, rerender } = renderHook(() => {
+    const read = useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] });
+    rendered.push(`${read.status}/${read.fetchStatus}`);
+    return { accept: useSetAuthoredQueryData(), read };
+  }, { wrapper: f.wrapper });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
+  expect(result.current.read.data).toBeUndefined();
+  let accepted!: Promise<void>;
+  // A render right after the call, before the cancelled request has settled, as a writer's own
+  // confirmation is.
+  act(() => { accepted = result.current.accept(DOCUMENT, { id: "a" }, { notes: [{ id: "accepted" }] }); rerender(); });
+  expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] });
+  await act(async () => { await accepted; });
+  // The first request's late answer does not replace the accepted result.
+  await act(async () => { first.resolve({ data: { notes: [{ id: "late" }] } }); await first.promise; });
+  expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] });
+  expect([...new Set(rendered)]).toEqual(["pending/fetching", "success/idle"]);
+  expect(custom).toHaveBeenCalledTimes(1);
+});
+
+test("an updater that accepts nothing leaves an unanswered first read on its way, and its answer is committed", async () => {
+  const first = deferred<{ data: Data }>();
+  const custom = vi.fn(() => first.promise);
+  const f = fixture(custom);
+  const rendered: string[] = [];
+  const { result, rerender } = renderHook(() => {
+    const read = useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] });
+    rendered.push(`${read.status}/${read.fetchStatus}`);
+    return { accept: useSetAuthoredQueryData(), read };
+  }, { wrapper: f.wrapper });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
+  const updater = vi.fn((current: Data | undefined) => current);
+  await act(async () => { await result.current.accept(DOCUMENT, { id: "a" }, updater); rerender(); });
+  // The updater ran and declined; the read was not cancelled for it.
+  expect(updater.mock.calls).toEqual([[undefined]]);
+  expect(result.current.read.fetchStatus).toBe("fetching");
+  await act(async () => { first.resolve({ data: { notes: [{ id: "first" }] } }); await first.promise; });
+  await waitFor(() => expect(result.current.read.data).toEqual({ notes: [{ id: "first" }] }));
+  expect([...new Set(rendered)]).toEqual(["pending/fetching", "success/idle"]);
+  expect(custom).toHaveBeenCalledTimes(1);
+});
+
 test("background refresh failure remains a native read error after accepted completion", async () => {
   const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
   custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });

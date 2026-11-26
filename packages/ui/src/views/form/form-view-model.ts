@@ -750,6 +750,11 @@ export function holdsNothingToDisplay(value: unknown): boolean {
   return typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).length === 0;
 }
 
+/**
+ * What a record form's save sends for `values`, built from the `fields` it writes. It writes nothing
+ * into `values`: what it takes from them it copies, so turning a structured root's dotted members into
+ * their wire values changes what it returns, never the values it was given.
+ */
 export function mutationData(
   values: FormValues,
   fields: readonly FieldDescriptor[],
@@ -793,7 +798,9 @@ export function mutationData(
       continue;
     }
     if (!options.isCreate && !dirty && !structuredRootDirty) continue;
-    setDottedValue(data, field.name, next);
+    // A copy, as a hidden reset's: a structured root's dotted members may be written into what is
+    // returned, and a write there must never reach `values`.
+    setDottedValue(data, field.name, cloneFormValue(next));
   }
   if (!options.isCreate && options.id != null) data.id = options.id;
   return data;
@@ -830,7 +837,14 @@ function setDottedValue(target: Record<string, unknown>, path: string, value: un
   set(target, path, value);
 }
 
-function cloneFormValue(value: unknown): unknown {
+/**
+ * A record form's copy of a value it reads: a deep copy (`structuredClone`) of an object or a list, that
+ * shares nothing with `value`; anything else as it is. The save's payload and `nextSave` read through it.
+ * A record form's values are plain data: `structuredClone` copies a class instance as a plain object
+ * without its methods (a `toJSON` among them), and a function throws, as in the form's undo history
+ * (`useFormHistory`), which already copies every value this way.
+ */
+export function cloneFormValue<T>(value: T): T {
   if (value == null || typeof value !== "object") return value;
   return structuredClone(value);
 }

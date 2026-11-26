@@ -519,7 +519,7 @@ describe("ConsoleLayout", () => {
     expect(screen.getByRole("region", { name: "Finder" }).contains(finder)).toBe(true);
   });
 
-  test("uses browser scrolling for content and pins the statusline host", async () => {
+  test("puts page content in the console's main region, fills the content area and pins the statusline host", async () => {
     const { container } = renderInRouter(
       <ConsoleLayout>
         <section aria-label="Page body">Tall body</section>
@@ -531,6 +531,7 @@ describe("ConsoleLayout", () => {
     await screen.findByText("Tall body");
 
     expect(screen.getByRole("main").className).toBe("console-content-main");
+    expect(screen.getByRole("main").contains(screen.getByRole("region", { name: "Page body" }))).toBe(true);
     expect(container.querySelector(".area-content")?.className).toContain("h-full");
     const statusHost = container.querySelector(".area-status");
     expect(statusHost?.className).toContain("console-statusline-host");

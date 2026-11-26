@@ -2,6 +2,7 @@ import type { DocumentNode } from "graphql";
 import { describe, expect, test } from "vitest";
 
 import {
+  actionOutcomeReasons,
   actionRequest,
   aggregateRequest,
   deletePreviewRequest,
@@ -263,7 +264,22 @@ describe("Hasura custom operations", () => {
     expect(success?.id).toBeUndefined();
     expect(() =>
       runActionResult({ ok: false, message: "Provisioning failed." }),
-    ).toThrow("Provisioning failed.");
+    ).toThrow(new Error("Provisioning failed."));
+  });
+
+  test("a refusal projected to the rendered action contract throws its reasons, each once, instead of its summary", () => {
+    // A refused target, as the server sends it: the message is the verb's summary and the reason arrives in-band.
+    const refused = extractActionOutcome({ confirm_sale: {
+      ok: false, message: "Confirm failed.",
+      validation_errors: { __all__: ["You are not allowed to modify this sales order."] },
+    } }, "confirm_sale");
+    expect(() => runActionResult(refused)).toThrow(new Error("You are not allowed to modify this sales order."));
+
+    const several = { validationErrors: { lines: ["The order has no lines.", "The customer is archived."], partner: ["The customer is archived."] } };
+    expect(actionOutcomeReasons(several)).toBe("The order has no lines.; The customer is archived.");
+    expect(() => runActionResult({ ok: false, message: "Confirm failed.", ...several }))
+      .toThrow(new Error("The order has no lines.; The customer is archived."));
+    expect(actionOutcomeReasons({})).toBe("");
   });
 
   test("carries the created record id a create-and-return verb populates", () => {

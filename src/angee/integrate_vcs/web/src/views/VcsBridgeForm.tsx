@@ -1,5 +1,5 @@
 import * as React from "react";
-import { runActionResult, useAuthoredMutation } from "@angee/refine";
+import { extractActionOutcome, runActionResult, useAuthoredMutation } from "@angee/refine";
 import { Action, Field, Form, registerForm, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, type RegisteredFormProps } from "@angee/ui";
 import { IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 
@@ -20,7 +20,7 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
   const discoverRepositories = React.useCallback(
     async (id: string) => {
       const result = await discover({ vcsBridgeId: id, org: "" });
-      return runActionResult(result?.discover_repositories);
+      return runActionResult(extractActionOutcome(result, "discover_repositories"));
     },
     [discover],
   );
