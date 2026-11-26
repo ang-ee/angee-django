@@ -64,14 +64,20 @@ console and the resource loader) keep exactly one default:
   so the second change waits and then takes the default from the first;
 - a save that marks a stored kit not the default rereads its flag under the
   kit's row lock and refuses as `BrandKit.clean` does, so an edit cleaned before
-  its kit became the default never leaves no default.
+  its kit became the default never leaves no default;
+- a changeset revert restores the kit that was the default before the changeset
+  ahead of every other kit (`BrandKitHistory.revert_order`), so the kit that took
+  the default is restored after it has lost it again, whichever the changeset
+  wrote first.
 
-Two writers take kit rows without that lock. A file purge clears the logo of
-every kit that shows the file, under the history capture's row lock, in scan
-order: against a change of default it can deadlock, and one of the two then fails
-with a database error. And an empty table has no row to lock: of two first kits
-created at once, the second fails on the one-default constraint with a database
-error, which a person does not reach because provisioning loads the first kit.
+Two writers take kit rows without that lock. A file purge clears the logo or
+dark logo of every kit that shows the file, under the history capture's row lock,
+in scan order: when the file shows on two or more kits it can deadlock with a
+change of default, and one of the two then fails with a database error (on one
+kit it holds a single kit row, which closes no cycle). And an empty table has no
+row to lock: of two first kits created at once, the second fails on the
+one-default constraint with a database error, which a person does not reach
+because provisioning loads the first kit.
 
 `BrandKit.objects.default()` returns the default kit the actor reads, or `None`:
 before any kit exists, as in a database before its first resource load; after a

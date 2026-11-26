@@ -60,6 +60,7 @@ from angee.brandkit.models import (
 )
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
 from tests.conftest import File, addon_schema, create_platform_admin, create_user
 from tests.decision_table import seat_cells
@@ -471,6 +472,38 @@ def test_a_save_of_a_kit_read_before_it_became_the_default_cannot_untick_it(db: 
         stale.save(update_fields=["voice"])
     assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
     assert _default_names() == ["Kit"]
+
+
+def test_a_revert_of_an_edit_and_a_change_of_default_in_one_changeset_restores_both(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The revert restores the kit that regains the default first, so restoring the other kit unticks nothing.
+
+    One changeset edits a kit and then makes it the default. Its first version comes
+    first in the changeset, so restored first it would be marked not the default
+    while it still is, which a save refuses.
+    """
+
+    del db
+    admin = create_platform_admin("brandkit-reverter")
+    _kit("Default")
+    kit = _kit("Kit")
+    with system_context(reason="tests.brandkit.revert"), django_capture_on_commit_callbacks(execute=True):
+        with changeset(fresh=True):
+            edited = BrandKit.objects.get(pk=kit.pk)
+            edited.voice = "Edited."
+            edited.save()
+            edited.is_default = True
+            edited.save()
+    assert _default_names() == ["Kit"]
+    snapshots: Any = BrandKit.history  # django-simple-history's manager, which the policy object stands in for
+    with system_context(reason="tests.brandkit.revert"):
+        boundary = snapshots.filter(id=kit.pk).order_by("-history_id").first().changeset
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
+        boundary.with_actor(admin).revert()
+    assert _default_names() == ["Default"]
+    with system_context(reason="tests.brandkit.read"):
+        assert BrandKit.objects.get(pk=kit.pk).voice == ANGEE["voice"]
 
 
 def test_the_default_cannot_be_deleted_on_any_delete_path(db: None) -> None:

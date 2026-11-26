@@ -391,9 +391,12 @@ live in code docstrings.
     second change waits and then takes the default from the first. A save that
     marks a stored kit not the default rereads its flag under the kit's row lock,
     so an edit cleaned before its kit became the default is refused, as `clean()`
-    refuses it, instead of leaving no default. Two writers take kit rows without
-    the lock: a file purge that clears kits' logos, which can deadlock with a
-    change of default (one of the two fails with a database error); and the
+    refuses it, instead of leaving no default. A changeset revert restores the
+    kit that was the default before the changeset ahead of every other kit, so
+    reverting a change of default never meets that refusal. Two writers take kit
+    rows without the lock: a file purge that clears the logo or dark logo of two
+    or more kits, which can deadlock with a change of default (one of the two
+    fails with a database error); and the
     second of two first kits created at once into an empty table, which fails on
     the conditional unique constraint with a database error (provisioning loads
     the first kit, so a person does not reach it). The same constraint refuses a

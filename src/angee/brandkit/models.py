@@ -51,7 +51,7 @@ from angee.base.querysets import row_lock_queryset
 from angee.base.validators import HEX_COLOR_VALIDATOR
 from angee.brandkit.fields import FontStackField
 from angee.brandkit.resources import BrandKitResource
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.resources.mixins import ResourceLoadMixin
@@ -267,13 +267,14 @@ class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
         (:class:`~angee.brandkit.resources.BrandKitResource`). A save that cannot
         move the default takes only its own row.
 
-        Two writers take kit rows without it. A file purge clears the logo of every
-        kit that shows the file, one column at a time, and the history capture locks
-        those kits in scan order; against a change of default it can deadlock, and
-        one of the two then fails with a database error. And an empty table has no
-        row to lock: of two first kits created at once, the second fails on the
-        one-default constraint with a database error, which a person does not reach
-        because provisioning loads the first kit.
+        Two writers take kit rows without it. A file purge clears the logo or dark
+        logo of every kit that shows the file, one column at a time, and the history
+        capture locks those kits in scan order; when the file shows on two or more
+        kits it can deadlock with a change of default, and one of the two then fails
+        with a database error (on one kit it holds a single kit row, which closes no
+        cycle). And an empty table has no row to lock: of two first kits created at
+        once, the second fails on the one-default constraint with a database error,
+        which a person does not reach because provisioning loads the first kit.
         """
 
         list(row_lock_queryset(self.model).order_by("pk").values_list("pk", flat=True))
@@ -302,9 +303,24 @@ class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
         ).update(is_default=False)
 
 
+class BrandKitHistory(ModelHistory):
+    """A kit's record history: a revert restores the kit that regains the default before every other kit."""
+
+    def revert_order(self, first: Any, last: Any, previous: Any) -> tuple[Any, ...]:
+        """Order a kit that was the default before the changeset ahead of the kits that were not.
+
+        Its save takes the default back, so restoring the kit that took it is no
+        untick, whichever kit the changeset wrote first.
+        """
+
+        *order, version = super().revert_order(first, last, previous)
+        return (*order, not (previous is not None and previous.is_default), version)
+
+
 class BrandKit(ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One brand: its name, colours, fonts, logos, mail footer and voice."""
 
+    history = BrandKitHistory(inherit=True)
     resource_class = BrandKitResource
     sqid_prefix = "bkt_"
 
