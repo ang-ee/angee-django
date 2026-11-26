@@ -9,12 +9,16 @@ import {
   APPEARANCE_CACHE_SCHEMA,
   APPEARANCE_PAYLOAD_ATTRIBUTE,
   bootstrapAppearance,
+  createThemeCustomizationOptions,
   defineTheme,
   readAppearancePayload,
   resolveAppearance,
   resolveThemeOptions,
+  serializableThemeMetadata,
   type AppearanceBootstrapPayload,
   THEME_TOKEN_NAMES,
+  type ThemeCustomization,
+  type ThemeCustomizationConfiguration,
   type ThemeDefinition,
   type ThemeTokenName,
 } from "./runtime.mjs";
@@ -222,4 +226,39 @@ test("theme envelopes accept only their declared current option version", () => 
   });
   expect(() => resolveThemeOptions(definition, { version: 1, value: {} })).toThrow("options version 1 is unsupported");
   expect(resolveThemeOptions(definition, { version: 2, value: {} }).version).toBe(2);
+});
+
+describe("a customisable theme that declines the host appearance source", () => {
+  const defaults = {
+    brand: "#315c52", accent: "#8b5cf6", neutral: "#777064", canvas: "#f8f6f1", surface: "#ffffff", rail: "#18211e",
+    success: "#16845b", warning: "#b7791f", danger: "#c2413a", info: "#3178c6",
+    font: "theme", radius: "theme", density: "theme", elevation: "theme", logo: "theme",
+  } satisfies ThemeCustomization;
+  const customisable = (configuration: ThemeCustomizationConfiguration) => defineTheme({
+    ...themeWithToken("--r-6", "4px"),
+    options: createThemeCustomizationOptions(defaults, configuration),
+  });
+  const silent = customisable({ version: 2 });
+  const declining = customisable({ version: 2, acceptsHostAppearanceSource: false });
+
+  test("states it on its options definition, and one that says nothing accepts", () => {
+    expect(declining.options?.acceptsHostAppearanceSource).toBe(false);
+    expect(silent.options?.acceptsHostAppearanceSource).toBe(true);
+  });
+
+  test("keeps its customisation contract: options version, defaults, catalogue entry and what a saved envelope resolves to", () => {
+    const saved = { version: 2, value: { ...defaults, brand: "#c2410c", rail: "#292524", radius: "soft" } };
+    expect([declining.options?.version, declining.options?.defaults]).toEqual([2, silent.options?.defaults]);
+    expect(serializableThemeMetadata(declining)).toEqual(serializableThemeMetadata(silent));
+    expect(resolveThemeOptions(declining, saved)).toEqual(resolveThemeOptions(silent, saved));
+  });
+
+  test.each([["a string", "no"], ["a number", 0], ["null", null]])("is refused as %s, on any options definition", (_kind, value) => {
+    const stated = value as unknown as boolean;
+    expect(() => customisable({ version: 2, acceptsHostAppearanceSource: stated })).toThrow("acceptsHostAppearanceSource must be a boolean");
+    expect(() => defineTheme({
+      ...themeWithToken("--r-6", "4px"),
+      options: { version: 1, defaults: {}, acceptsHostAppearanceSource: stated, parse: (option: unknown) => option, resolve: () => ({}) },
+    })).toThrow("acceptsHostAppearanceSource must be a boolean");
+  });
 });

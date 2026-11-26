@@ -4,6 +4,7 @@ import { LoginPage } from "@angee/app/auth";
 import type { CreateAppInput } from "@angee/app/create-app";
 import { operationDocuments } from "@angee/gql/console/actions";
 import { ComposedRuntimeFixture, storyAppearance, storySchema, type GraphQLWireRequest } from "@angee/storybook/testing";
+import ledger from "@angee/theme-ledger";
 import stock from "@angee/theme-stock";
 import { ConsoleLayout } from "@angee/ui";
 
@@ -41,6 +42,12 @@ export const ConsoleOrchard = { render: (_args: unknown, context: StoryContext) 
 export const ConsoleHarbour = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={HARBOUR_KITS} colorScheme={scheme(context)} /> };
 /** No default kit: the console wears the stock theme exactly. */
 export const ConsoleNoKit = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={NO_KITS} colorScheme={scheme(context)} /> };
+/**
+ * Stock and Ledger installed, Ledger chosen, Orchard the default kit. Ledger declines the host
+ * appearance source, so the console wears Ledger exactly, not Orchard: in light, ink on warm paper
+ * with its white rail. The kit is never read.
+ */
+export const ConsoleLedgerTheme = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} themeId="angee.ledger" themes={STOCK_AND_LEDGER} colorScheme={scheme(context)} /> };
 /** Orchard is the default. Harbour's form is open: tick Default kit and save, and the console turns Harbour without a reload; the list shows Harbour first. */
 export const SaveTheDefault = { render: (_args: unknown, context: StoryContext) => <HostAppearanceStory kits={ORCHARD_KITS} colorScheme={scheme(context)} initialEntry="/brand-kits/bkt_harbour" /> };
 /** A brand too pale for white ink: buttons fill pale with dark ink, links darken to read, and the console shows no warning. */
@@ -64,6 +71,7 @@ const ADMIN = {
 };
 
 const STOCK_ONLY: readonly BaseAddon[] = [stock];
+const STOCK_AND_LEDGER: readonly BaseAddon[] = [stock, ledger];
 
 /** The host's own sign-in route, as a project's `main.tsx` declares it. */
 const signIn = defineBaseAddon({

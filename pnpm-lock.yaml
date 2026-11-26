@@ -709,6 +709,12 @@ importers:
       '@angee/theme-angee':
         specifier: workspace:*
         version: link:../../theme_angee/web
+      '@angee/theme-fyltr':
+        specifier: workspace:*
+        version: link:../../theme_fyltr/web
+      '@angee/theme-ledger':
+        specifier: workspace:*
+        version: link:../../theme_ledger/web
       '@angee/theme-stock':
         specifier: workspace:*
         version: link:../../theme_stock/web
