@@ -44,6 +44,7 @@ from rebac import system_context
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import authored_documents, execute_schema
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
+from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import run_message_delivery
 from angee.messaging.testing.models import Channel, Message
 from tests.conftest import Feed, create_user, make_integration
@@ -324,8 +325,14 @@ def test_the_composer_fixture_is_what_the_server_says(  # noqa: PLR0915 -- one r
     deliver(answers["retrying"])
     deliver(answers["failed"])
     with _system():
-        # The retry falls due, and the provider then refuses for good: two attempts.
-        Message._base_manager.filter(pk=answers["failed"].pk).update(scheduled_at=timezone.now() - timedelta(minutes=1))
+        # The recording keeps only the order of its times, so the times set here stay clear of the ones the run
+        # writes, however slow it is: the provider's one-minute retry moves to half a day out (the scheduled draft
+        # stays later), and the failed message's retry falls due a day back; the provider then refuses it for good:
+        # two attempts.
+        retry = later - timedelta(hours=12)
+        Message._base_manager.filter(pk=answers["retrying"].pk).update(
+            scheduled_at=retry, delivery_lease_until=retry + timedelta(seconds=DELIVERY_TASK_EXPIRES))
+        Message._base_manager.filter(pk=answers["failed"].pk).update(scheduled_at=timezone.now() - timedelta(days=1))
     refusing(550)
     deliver(answers["failed"])
     uncertain = answers["uncertain"]
