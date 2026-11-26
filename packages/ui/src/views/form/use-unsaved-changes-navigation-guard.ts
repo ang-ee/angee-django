@@ -1,43 +1,73 @@
 import * as React from "react";
-import { useBlocker, type ShouldBlockFn } from "@tanstack/react-router";
+import { useBlocker, useRouter, type ShouldBlockFn } from "@tanstack/react-router";
 
 import { useConfirm } from "../../feedback";
 import { useUiT } from "../../i18n";
 
-/** Owns both in-app and before-unload protection for a dirty editable form.
+/** A route move the guard weighs: where the person is and where the move goes. */
+export type UnsavedChangesMove = Pick<Parameters<ShouldBlockFn>[0], "current" | "next">;
+
+/**
+ * Whether `move` changes the pathname: a move within it (search state only) keeps the form,
+ * as a retained record tab does. Pass it as the guard's `leaves`.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function pathnameChanges({ current, next }: UnsavedChangesMove): boolean {
+  return current.pathname !== next.pathname;
+}
+
+/** Ask whether to leave what a form holds, with the shared question: Leave resolves true, Stay
+ * false. Asked while a submission runs, it says that the submission goes on, not that changes
+ * are unsaved. */
+export function useUnsavedChangesQuestion(): (whilePending?: boolean) => Promise<boolean> {
+  const confirm = useConfirm();
+  const t = useUiT();
+  return React.useCallback((whilePending = false) => confirm({
+    title: t(whilePending ? "form.pendingLeaveTitle" : "form.unsavedLeaveTitle"),
+    ...(whilePending ? { body: t("form.pendingLeaveBody") } : {}),
+    cancel: t("form.stay"),
+    confirm: t("form.leave"),
+    danger: true,
+  }), [confirm, t]);
+}
+
+/** Owns both in-app and before-unload protection for a dirty editable form. A move
+ * `leaves` calls leaving asks first; by default every move leaves. It renders under the app's
+ * router and `ModalsHost`, and says so at mount when either is missing.
  * @owner FormView
  */
 export function useUnsavedChangesNavigationGuard({
   isDirty,
   isDirtyNow,
   readOnly,
-  allowSearchChanges = false,
+  leaves,
+  pendingNow,
 }: {
   isDirty: boolean;
+  /** Whether the form holds what a move would lose now, read live when a move is asked. */
   isDirtyNow: () => boolean;
   readOnly: boolean;
-  /** Retained record tabs may change search state without abandoning their form. */
-  allowSearchChanges?: boolean;
+  /** Whether a route move abandons the form; omit for every move. `pathnameChanges` keeps search moves. */
+  leaves?: (move: UnsavedChangesMove) => boolean;
+  /** Whether a submission runs now: the question then says it goes on, not that changes are unsaved. */
+  pendingNow?: () => boolean;
 }): () => Promise<boolean> {
-  const confirm = useConfirm();
-  const t = useUiT();
+  const ask = useUnsavedChangesQuestion();
+  if (!useRouter({ warn: false })) {
+    throw new Error("useUnsavedChangesNavigationGuard must be used under the app's router.");
+  }
   const requestLeave = React.useCallback(async () => {
     // Read the live store, not the captured render value. A successful save resets
     // the form (isDirty → false) and navigates in the same tick, before the React
     // re-render flushes — a stale `true` here would wrongly block the post-save
     // redirect with a phantom "unsaved changes" prompt.
     if (readOnly || !isDirtyNow()) return true;
-    const leave = await confirm({
-      title: t("form.unsavedLeaveTitle"),
-      cancel: t("form.stay"),
-      confirm: t("form.leave"),
-      danger: true,
-    });
-    return leave;
-  }, [confirm, isDirtyNow, readOnly, t]);
+    return ask(pendingNow?.() ?? false);
+  }, [ask, isDirtyNow, pendingNow, readOnly]);
 
-  const shouldBlockFn = React.useCallback<ShouldBlockFn>(async ({ current, next }) =>
-    !(allowSearchChanges && current.pathname === next.pathname) && !(await requestLeave()), [allowSearchChanges, requestLeave]);
+  const shouldBlockFn = React.useCallback<ShouldBlockFn>(async (move) =>
+    (leaves?.(move) ?? true) && !(await requestLeave()), [leaves, requestLeave]);
 
   useBlocker({
     shouldBlockFn,

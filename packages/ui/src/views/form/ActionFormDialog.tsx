@@ -9,6 +9,7 @@ import { errorMessage } from "../../feedback";
 import { Button } from "../../ui/button";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
+import { useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { useRuntimeViewAs } from "../../runtime";
 import { emptyValueForField } from "./field-values";
@@ -20,8 +21,8 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
-import { visibleFields } from "./form-view-model";
-import { actionOutcomeSubmitResult, markMemberErrors } from "./validation-errors";
+import { fieldValidationSummary, visibleFields } from "./form-view-model";
+import { actionOutcomeSubmitResult, formSubmitOutcome, markMemberErrors } from "./validation-errors";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
 export interface ActionFormDialogProps {
@@ -52,7 +53,9 @@ type ArgValues = Record<string, unknown>;
  *
  * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
- * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner.
+ * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner. While
+ * the submit runs it cannot be dismissed, and dismissing typed values asks first
+ * (`DialogForm`'s `pending` and `dirty`).
  * @kind surface
  */
 export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
@@ -98,12 +101,20 @@ function ActionArgsDialog({
   // or not), while a value that breaks a rule from the opening disables the submit silently until
   // its field is edited. A resolver reports constraints at submit.
   const validateConstraints = !definition?.resolver;
+  // Set when an accepted submit closes the dialog: `onSucceeded` may move on in the same tick,
+  // before the close renders, and the dialog then holds nothing a move would lose.
+  const accepted = React.useRef(false);
+  // An action declaring the draft it writes holds one idempotency key for it, from its first attempt.
+  const keys = useIdempotencyKeys();
+  const draftScope = action.idempotencyScope?.(context) ?? null;
+  useIdempotencyDraftOwner(open || inline ? draftScope : null, `the form of action "${action.id}"`);
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
     [args, definition],
   );
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
+    ...(draftScope ? { answerLost: t("form.answerLostResend") } : {}),
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     mode: validateConstraints ? "onChange" : "onSubmit",
     resolver: async (values, resolverContext, options) => {
@@ -115,17 +126,27 @@ function ActionArgsDialog({
         : { values, errors: {} };
     },
     submit: async (collected, options) => {
-      const result = await action.submit?.(serializeActionArgValues(args, collected), context, options);
-      return result && "status" in result ? result : actionOutcomeSubmitResult(result);
+      const values = serializeActionArgValues(args, collected);
+      const submitted = async (idempotencyKey?: string) => {
+        const result = await action.submit?.(values, idempotencyKey ? { ...context, idempotencyKey } : context, options);
+        return result && "status" in result ? result : actionOutcomeSubmitResult(result);
+      };
+      return draftScope ? keys.send(draftScope, submitted, formSubmitOutcome) : submitted();
     },
     onSuccess: (_values, outcome) => {
+      if (!inline) accepted.current = true;
       onSucceeded?.(outcome);
       if (!inline) onOpenChange(false);
     },
     fieldNames: argNames,
+    // The banner's line naming the refused fields, by the labels the dialog shows.
+    fieldSummary: (fieldErrors: Record<string, readonly string[]>): string => fieldValidationSummary(fieldErrors, new Map(
+      (typeof fields === "function" ? fields(actionForm.form.getValues()) : fields).map((field) => [field.name, field]),
+    ), t),
   });
   const {
     formErrors,
+    banner,
     submitting,
     saveConflict,
   } = actionForm;
@@ -151,7 +172,7 @@ function ActionArgsDialog({
     <>
       {definition ? <ActionDescriptorFields definition={definition} control={form.control} readOnly={saveConflict} disabled={submitting} /> : null}
       {!definition ? <DescriptorFieldList fields={args.map(actionArgField)} readOnly={saveConflict} unregisterHidden /> : null}
-      <ErrorBanner messages={formErrors} />
+      <ErrorBanner {...banner} messages={formErrors} />
     </>
   );
 
@@ -167,11 +188,18 @@ function ActionArgsDialog({
     <ActionFormProvider {...form}>
     <DialogForm
       open={open}
-      onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}
+      onOpenChange={(next) => {
+        // A dismissal gives the draft up; the accepted close has ended it already.
+        if (!next && draftScope) keys.discard(draftScope);
+        onOpenChange(next);
+      }}
+      pending={submitting}
+      dirty={form.formState.isDirty}
+      holdsWork={() => !accepted.current && (form.formState.isDirty || form.formState.isSubmitting)}
       title={action.label}
       size={definition?.size}
-      footer={<>
-        <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={submitting}>
+      footer={({ dismiss, dismissRefusal }) => <>
+        <Button type="button" variant="ghost" size="sm" onClick={dismiss} disabledReason={dismissRefusal}>
           {t("dialog.cancel")}
         </Button>
         {submitButton}

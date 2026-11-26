@@ -31,6 +31,8 @@ export interface RelationFieldWidgetProps {
    * explicitly.
    */
   create?: RelationCreateConfig | null;
+  /** The field it edits, which names its create form's draft (`RelationPicker`'s `fieldName`). */
+  fieldName?: string;
   /**
    * Pass null to decline inline edit of the selected record. By default it is offered
    * whenever the related resource has editable fields; the server is the authorization
@@ -87,6 +89,7 @@ function EditableRelationFieldWidget(
   filters,
   where,
   create,
+  fieldName,
   edit,
   searchFields,
   optionDescriptionField,
@@ -142,6 +145,7 @@ function EditableRelationFieldWidget(
       searchState={picker.searchState}
       create={forms.create}
       onCreated={refreshOptions}
+      fieldName={fieldName}
       // Edit is offered whenever the resource has editable fields — intentionally
       // UX-only, not gated on a `canEdit` flag (resource metadata exposes no
       // per-relation edit capability). The server is the authorization boundary: a denied

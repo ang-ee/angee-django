@@ -58,6 +58,8 @@ export interface RelationMultiFieldWidgetProps {
    * joins the selection.
    */
   create?: RelationCreateConfig | null;
+  /** The field it edits, which names its create form's draft (`RelationPicker`'s `fieldName`). */
+  fieldName?: string;
   "aria-label"?: string;
   controlRef?: (target: WidgetFocusTarget | null) => void;
 }
@@ -84,6 +86,7 @@ export function RelationMultiFieldWidget({
   optionGroupField,
   optionGroupOrderField,
   create,
+  fieldName,
   "aria-label": ariaLabel,
   controlRef,
 }: RelationMultiFieldWidgetProps): ReactElement {
@@ -92,7 +95,7 @@ export function RelationMultiFieldWidget({
   const [search, setSearch] = useState("");
   const [searchText] = useDebounce(search, 250);
   const forms = useRelationForms(relation, create);
-  const quickCreate = useRelationQuickCreate(forms.create);
+  const quickCreate = useRelationQuickCreate(forms.create, fieldName);
   const { options, list } = useRelationPickerSearch(relation, {
     enabled: !readOnly,
     filters,
@@ -147,7 +150,8 @@ export function RelationMultiFieldWidget({
   };
   const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef}
     onSearchChange={setSearch}
-    onCreate={quickCreate ? (query) => void quickCreate(query).then(created) : undefined}
+    // A failed quick create is reported through the data layer's notice; nothing is left to settle here.
+    onCreate={quickCreate ? (query) => void quickCreate(query).then(created, () => undefined) : undefined}
     onCreateAndEdit={forms.create ? (query) => setDialog({ mode: "create", query }) : undefined} />;
   if (!forms.create) return control;
   const cell = controlProps?.presentation === "cell";
@@ -173,6 +177,7 @@ export function RelationMultiFieldWidget({
       </div> : control}
       <RelationRecordDialog
         dialog={dialog}
+        fieldName={fieldName}
         create={forms.create}
         onClose={() => setDialog(null)}
         onCreated={created}

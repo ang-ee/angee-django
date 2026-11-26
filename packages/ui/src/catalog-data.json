@@ -2075,6 +2075,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "DraftScopeProvider",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Provider infrastructure: the enclosing draft scope.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "Drawer",
     "source": "packages/ui/src/ui/drawer.tsx",
     "kind": "primitive",
@@ -6265,6 +6274,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "formSubmitOutcome",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "formVariants",
     "source": "packages/ui/src/ui/form.tsx",
     "kind": "token",
@@ -7112,6 +7130,15 @@
     "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
     "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "pathnameChanges",
+    "source": "packages/ui/src/views/form/use-unsaved-changes-navigation-guard.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },
@@ -8215,6 +8242,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useDraftScope",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDraggable",
     "source": "packages/ui/src/lib/dnd.ts",
     "kind": null,
@@ -8334,6 +8370,33 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useIdempotencyDraftOwner",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeyState",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeys",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useImplCategory",
     "source": "packages/ui/src/views/relation/enum-options.ts",
     "kind": "contribution",
@@ -8381,6 +8444,15 @@
     "package": "@angee/ui",
     "name": "useInAppNavigator",
     "source": "packages/ui/src/lib/in-app-link.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useLateAnswerReport",
+    "source": "packages/ui/src/views/form/late-answer.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",

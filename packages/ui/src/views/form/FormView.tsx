@@ -12,6 +12,7 @@ import { ControlBandProvider } from "../../layouts/ControlBand";
 import { CommandBand } from "../resource/CommandBand";
 import { cn } from "../../lib/cn";
 import { ContainerOutlet } from "../../lib/container-outlet";
+import { DraftScopeProvider } from "../../lib/idempotency-key";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
 import type { RecordHeaderProps } from "../../fragments/RecordHeader";
@@ -149,7 +150,10 @@ export const FormView = Object.assign(FormViewComponent, {
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
   const surface = useFormViewSurface(props);
-  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+  // A create form inside this form (a relation field's, an embedded list's) names its draft under this one's.
+  return <DraftScopeProvider scope={surface.draftScope}>
+    <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>
+  </DraftScopeProvider>;
 }
 
 function FormViewContent({ surface, ...props }: FormViewProps & {
@@ -195,6 +199,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     saveErrors,
     saveBanner,
     saveConflict,
+    saveKeyConflict,
     declaredActions,
     genericActions,
     actionsBlocked,
@@ -411,8 +416,11 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
     <ErrorBanner
       {...saveBanner}
-      messages={saveErrors}
-      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      // A spent key is told in the form's own words, true however the person got here (a different
+      // record after a discard, or the same one corrected after a lost answer); it offers nothing to
+      // undo, since saving again is the person's call.
+      messages={saveKeyConflict ? [t("form.createdEarlier")] : saveErrors}
+      title={t(saveConflict ? "form.saveConflict" : saveKeyConflict ? "form.createdEarlierTitle" : "form.saveFailed")}
       actions={saveConflict ? (
         <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
           {t("form.reloadSaved")}

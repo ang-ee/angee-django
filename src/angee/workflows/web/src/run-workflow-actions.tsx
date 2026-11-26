@@ -1,9 +1,9 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useAuthoredQuery } from "@angee/refine";
+import { failedWriteOutcome, useAuthoredQuery, type ActionOutcome } from "@angee/refine";
 import {
-  DropdownMenu, RecordActionBar, parseFormSpec, useActionOutcomeMutation, useActionResultRun,
-  useAppRuntime, useRecordChromeContext, type ActionDescriptor,
+  DropdownMenu, RecordActionBar, actionOutcomeSubmitResult, formSubmitOutcome, parseFormSpec, useActionOutcomeMutation, useActionResultRun, useIdempotencyKeys,
+  useAppRuntime, useRecordChromeContext, type ActionDescriptor, type ActionFormContext,
 } from "@angee/ui";
 import { modelChain } from "@angee/ui/runtime";
 import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";
@@ -27,20 +27,26 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
     invalidateModels: [...RUN_MODELS, "decisions.Decision", "decisions.DecisionRecord"],
   });
   const settle = useActionResultRun({ noResultTitle: t("action.startFailed") });
+  const keys = useIdempotencyKeys();
   const actions = React.useMemo<readonly ActionDescriptor[]>(() =>
     (workflows.data?.workflow ?? []).flatMap((workflow) => {
       const published = workflow.published;
       // A null contract means the published graph cannot be started (its steps are gone).
       if (!published || published.input_schema == null) return [];
       const schema = parseFormSpec(published.input_schema);
-      // An opening retains its key across submissions, including transport retries.
-      let requestKey: string | undefined;
-      const submit = async (values: Record<string, unknown>) => {
-        const outcome = await start(workflow.id, {
-          subject: { model: chrome.resource, id: chrome.recordId }, input: values,
-          request_key: requestKey ??= crypto.randomUUID(),
-        });
-        if (outcome?.ok) requestKey = undefined;
+      // Starting one workflow on one record is one draft: every attempt until a run starts carries its key.
+      const scope = `workflows.start:${workflow.id}:${chrome.resource}:${chrome.recordId}`;
+      const startWith = async (values: Record<string, unknown>, requestKey: string): Promise<ActionOutcome | null | undefined> => {
+        let outcome;
+        try {
+          outcome = await start(workflow.id, {
+            subject: { model: chrome.resource, id: chrome.recordId }, input: values, request_key: requestKey,
+          });
+        } catch (cause) {
+          if (failedWriteOutcome(cause) !== "conflict") throw cause;
+          // An earlier attempt started a run with other input under this draft's key, in this action's words.
+          return { ok: false, code: "CREATION_KEY_CONFLICT", message: t("action.startedEarlier") };
+        }
         // The dialog's schema fields live inside the mutation's JSON input envelope.
         if (outcome?.validationErrors) return { ...outcome, validationErrors: Object.fromEntries(
           Object.entries(outcome.validationErrors).map(([path, messages]) =>
@@ -50,10 +56,16 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
       };
       return [{ id: workflow.id, label: workflow.name,
         ...(Object.keys(schema.properties ?? {}).length ? {
-          args: () => jsonSchemaActionArgs(published.input_schema, widgets), submit,
-        } : { run: async () => { await settle(() => submit({})); } }),
+          args: () => jsonSchemaActionArgs(published.input_schema, widgets),
+          // The dialog holds the draft's key (`idempotencyScope`); without one there is nothing to send.
+          submit: (values: Record<string, unknown>, context: ActionFormContext) => context.idempotencyKey
+            ? startWith(values, context.idempotencyKey) : { ok: false, message: t("action.startFailed") },
+          idempotencyScope: () => scope,
+        } : { run: async () => {
+          await settle(() => keys.send(scope, (key) => startWith({}, key), (outcome) => formSubmitOutcome(actionOutcomeSubmitResult(outcome))));
+        } }),
       }];
-    }), [workflows.data, chrome.resource, chrome.recordId, start, settle, widgets]);
+    }), [workflows.data, chrome.resource, chrome.recordId, keys, start, settle, t, widgets]);
   if (!chrome.record || !actions.length) return null;
   return <DropdownMenu.SubmenuRoot>
     <DropdownMenu.SubmenuTrigger disabled={chrome.actionsBlocked}>{t("action.runWorkflow")}</DropdownMenu.SubmenuTrigger>
