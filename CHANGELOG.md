@@ -10,6 +10,27 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.iam`: **Fixed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
+  answers for `user`. It checked the ambient REBAC actor instead, so asking about
+  someone else returned the current actor's answer, and asking outside any actor
+  (a worker, a mail bridge) returned `False` even for an administrator. It now
+  checks `user`'s own effective membership of the platform-admin role
+  (`REBAC_UNIVERSAL_ADMIN_ROLE`), under any actor and inside a system context; an
+  anonymous user or `None` is still never an administrator. The framework's
+  callers (the platform-admin GraphQL gate, IAM's role and grant catalogues,
+  integrate's implementation choices and the profiling hook) pass the request's
+  own user, so their answers are unchanged. New
+  `angee.iam.roles.platform_admin_holders()` lists the user ids holding the role
+  in the shape of `protected_account_holders()`: every path REBAC's subject lookup
+  follows, `None` when every user holds it, empty when no role is configured.
+  **Upgrade:** a caller that passed one user while relying on the answer for the
+  ambient actor now gets that user's answer; pass the actor it means
+  (`get_current_user(info)` in a resolver), or ask
+  `angee.iam.permissions.current_actor_has_role(role)` about the ambient actor.
+  Code that spelled `platform_admin_role()` with `subject_has_role` or a subject
+  lookup to read someone else's membership or the role's holders can call
+  `is_platform_admin` or `platform_admin_holders()`.
+
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
   it, signed in or not.
