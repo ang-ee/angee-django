@@ -10,6 +10,54 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: The Links pane says it is empty when it is. A related group
+  with neither rows nor a verb is left out, and the pane showed its empty
+  state only when no group was eligible; a record whose eligible groups were
+  all left out showed "Links 0" over a blank panel. Each group now tells the
+  pane whether it has rows or a verb, and the pane shows the empty state when
+  none does. A group still counting is taken to show something, so the empty
+  state does not flash while counts load.
+- `@angee/ui`: **Changed API.** A record action bound with
+  `useRecordActionMutation` is toasted by one owner, the action bar. The
+  hook's second path (taken with `settle` or `linkTo`), which handed the
+  outcome to the shared settle owner and toasted it under the server's
+  message, is removed with the `settle` option. For the verbs that took it: a
+  refusal is titled by the verb's label with the server's reasons as the body,
+  as every record action projected through `runActionResult` already was; a
+  transport failure is titled by the label with the error's message as the
+  body; an answer with no outcome reads the shared no-result text under the
+  label (a `noResultTitle` given through `settle` is no longer read); the
+  success toast follows the navigation to the created record, the refresh and
+  `afterSuccess`. For every verb bound with the hook, an answer with no
+  outcome is now a danger toast and neither refreshes nor runs `afterSuccess`
+  (it was silent and did both; with `defaultMessage` it was told as a
+  success), and `useRecordAction` applies `defaultMessage` to an empty success
+  message too, for every runner.
+  `linkTo` still follows the created record, through one implementation shared
+  with `useActionResultRun`. Not changed: a record action whose own `run`
+  calls `useActionResultRun`, `useActionResultMutation` or
+  `useRecordChromeActionMutation` is still toasted there, under the server's
+  message (the proposal ceremony, project lifecycle, task promotion, trash and
+  restore, account access, message delivery, triage, contributed conditional
+  verbs and others); a transport failure still also raises the data layer's
+  own notification. **Upgrade:** remove `settle` from
+  `useRecordActionMutation` options; an inline one is a type error, one passed
+  through a variable still compiles and is ignored.
+- `@angee/refine`, `@angee/ui`: A record action the server refuses tells the
+  person why. For a target refused before the verb runs (not found, not
+  allowed) the server's message is only the verb's summary and the reason
+  arrives in-band; `runActionResult` threw only the message, so the action
+  bar's toast read "Confirm / Confirm failed." and the reason was lost. It now
+  throws the reasons, and the message when there are none. Every record
+  action projected through `runActionResult` shows the reason without an edit;
+  no toast title changes. Other refusals (a transition not allowed, a missing
+  object) still read the verb's summary: the server sends no reason for them.
+  `@angee/refine` exports `actionOutcomeReasons` (a
+  refusal's in-band reasons, each once, as one line), which
+  `useActionResultRun` composes instead of its own copy, as does a refused row
+  of a bulk trash or restore (it showed only the first). **Upgrade:** code
+  that matched the thrown error's text against the outcome's `message` finds
+  the reasons there when the refusal carries any.
 - `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
   applied: the panel library (react-resizable-panels) sets `overflow: auto`
   inline on the element that takes a pane's class, and an inline style wins

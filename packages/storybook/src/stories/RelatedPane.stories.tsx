@@ -78,3 +78,6 @@ export const Default: Story = { render: () => <Pane groups={{ "story.files": fil
 
 /** No eligible group: the shared empty state. */
 export const Empty: Story = { render: () => <Pane groups={{}} /> };
+
+/** An eligible group with neither rows nor a verb, and no other: the same empty state, not a blank panel. */
+export const NothingShown: Story = { render: () => <Pane groups={{ "story.sources": sources }} /> };
