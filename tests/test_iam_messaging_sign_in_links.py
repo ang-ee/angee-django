@@ -658,6 +658,45 @@ def test_links_are_offered_with_an_https_origin_and_system_mail_configured(overr
         assert SignInLink.deliverable() is deliverable_now
 
 
+ORIGINS = [
+    ("https://app.example.test", "https://app.example.test"),
+    ("https://app.example.test/", "https://app.example.test"),
+    ("https://app.example.test.", "https://app.example.test."),
+    ("https://app.example.test:8443", "https://app.example.test:8443"),
+    ("https://localhost", "https://localhost"),
+    ("https://10.0.0.1", "https://10.0.0.1"),
+    ("https://[::1]:8000", "https://[::1]:8000"),
+    ("https://bücher.example", "https://xn--bcher-kva.example"),
+    ("https://xn--bcher-kva.example", "https://xn--bcher-kva.example"),
+]
+"""``(ANGEE_PUBLIC_ORIGIN, the origin a mail prints)`` for origins base accepts with ``DEBUG`` on and off: a name, a
+trailing slash and dot, a port, a single label, an address of each family, an international name (printed in its
+ASCII form)."""
+DEBUG_ORIGINS = [
+    ("http://localhost:6173", "http://localhost:6173"),
+    ("http://127.0.0.1:8000", "http://127.0.0.1:8000"),
+    ("http://[::1]:8000", "http://[::1]:8000"),
+    ("http://app.example.test", "http://app.example.test"),
+]
+"""The same for origins base accepts only under ``DEBUG``."""
+
+
+@pytest.mark.parametrize(("origin", "printed", "debug"), [
+    *(pytest.param(origin, printed, debug, id=f"{origin}-debug-{'on' if debug else 'off'}")
+      for origin, printed in ORIGINS for debug in (False, True)),
+    *(pytest.param(origin, printed, True, id=f"{origin}-debug-on") for origin, printed in DEBUG_ORIGINS),
+])
+def test_every_public_origin_base_accepts_gives_a_link_the_mail_can_carry(origin, printed, debug):
+    """The template's link rule admits the deployment's own origin whatever its host, so the send's
+    ``value_not_linkable`` cannot come from a link ``url_for`` builds, and the send does not map it. If base's
+    accessor and the rule ever part, this fails, and the send maps that refusal then. No database."""
+
+    token = f"usr_probe.{SECRET}"
+    with override_settings(ANGEE_PUBLIC_ORIGIN=origin, DEBUG=debug):
+        linked = MessageTemplate.objects.clean_link(SignInLink.url_for(token))
+    assert linked == f"{printed}{SIGN_IN_LINK_PATH}#token={token}"
+
+
 def test_links_open_the_route_this_addons_web_fragment_declares():
     manifest = Path(angee.iam_messaging.__file__).with_name("web") / "src" / "index.ts"
     assert f'const SIGN_IN_LINK_PATH = "{SIGN_IN_LINK_PATH}";' in manifest.read_text()
