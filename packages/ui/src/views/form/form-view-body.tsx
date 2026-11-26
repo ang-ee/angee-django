@@ -31,6 +31,7 @@ import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import { DATE_TIME_WIDGETS } from "./field-values";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import { isUnregisteredImplementation } from "../resource/implementation-fields";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
@@ -54,7 +55,7 @@ import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
-import { RecordFieldMarkControl } from "./record-field-marks";
+import { RecordFieldMarkControl, UnregisteredImplementationField } from "./record-field-marks";
 import { createLabelForResource } from "../resource/utils/labels";
 
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
@@ -522,6 +523,10 @@ function BoundFormField({
   const values = useWatch({ control: surface.form.control });
   const value = get(values, field.name);
   const readOnly = surface.fieldReadOnly(field);
+  // The stored key is not registered and the form holds no other choice yet: a create form has no
+  // stored row, and picking a registered implementation clears the mark until it is discarded.
+  const unregistered = surface.displayRecord != null && (value == null || value === "")
+    && isUnregisteredImplementation(surface.modelMetadata, field.name, get(surface.displayRecord, field.name));
   const relation = surface.relationByField.get(field.name);
   const relationList = surface.relationListByField.get(field.name);
   const currentRelationId = relationValueId(value);
@@ -539,7 +544,7 @@ function BoundFormField({
       control={surface.form.control}
       name={field.name}
       render={({ field: controller, fieldState }) => (
-        <BoundFieldRow
+        <UnregisteredImplementationField field={unregistered ? field.name : null}><BoundFieldRow
           controlRef={controller.ref}
           field={field}
           rail={rail}
@@ -562,7 +567,7 @@ function BoundFormField({
             controller.onChange(next);
             surface.afterFieldChange(field, next);
           }}
-        />
+        /></UnregisteredImplementationField>
       )}
     />
   );

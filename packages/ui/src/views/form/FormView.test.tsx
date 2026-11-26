@@ -1352,6 +1352,34 @@ describe("FormView", () => {
     expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
   });
 
+  test("a create form never marks an implementation key; a picked registered one clears the mark until discarded", async () => {
+    const backend = { name: "backend", kind: "enum" as const, readable: true, aggregatable: false,
+      creatable: true, updatable: true, requiredOnCreate: false,
+      values: [{ value: "LOCAL", description: "Local" }, { value: "STUB", description: "Stub" }] };
+    const resource = testDataResource("notes.Note", { fields: [backend], implFields: ["backend"] });
+    const schema = { types: { NoteType: { resource, fields: { backend } } } };
+    const fields = [{ name: "title", title: true }, { name: "backend", label: "Backend" }];
+
+    sdkMocks.record = null;
+    renderWithProviders(<FormView resource="notes.Note" fields={fields} />, schema);
+    expect(await screen.findByRole("combobox", { name: "Backend" })).toBeTruthy();
+    expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
+
+    cleanup();
+    const record = { id: "note-1", title: "First", backend: null, permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
+      acknowledgedSource={{ record, values: record }} />, schema);
+    fireEvent.click(await screen.findByRole("combobox", { name: "Backend" }));
+    expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+    const local = await screen.findByRole("option", { name: "Local" });
+    fireEvent.pointerDown(local, { pointerType: "mouse" });
+    fireEvent.click(local);
+    await waitFor(() => expect(screen.queryByLabelText("Not registered: Backend")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+  });
+
   test("a rail child's permission gates the groups it declares", async () => {
     const renderRail = (permissions: string[]) => {
       const record = { id: "note-1", title: "First", permissions };

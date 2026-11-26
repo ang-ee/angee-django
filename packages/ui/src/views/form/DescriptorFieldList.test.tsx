@@ -15,6 +15,9 @@ import { deserializeFormSpec } from "./form-spec";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { useFieldValidation } from "./use-field-validation";
+import { ModelMetadataProvider, schemaFieldMetadataFromDataResources } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
+import { RecordChromeProvider } from "../resource/record-chrome-context";
 
 type Values = Record<string, unknown>;
 
@@ -52,6 +55,23 @@ function FormOwner<TValues extends FieldValues>({ form, children }: { form: UseF
 }
 
 describe("DescriptorFieldList", () => {
+  test("a dialog's field sharing a record field's name carries no not-registered mark", async () => {
+    const backend = { name: "backend", kind: "enum" as const, readable: true, filterable: false, sortable: false,
+      aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false,
+      values: [{ value: "LOCAL", description: "Local" }] };
+    const resource = testDataResource("notes.Note", { fields: [backend], implFields: ["backend"] });
+    render(<ModelMetadataProvider metadata={schemaFieldMetadataFromDataResources([resource])}>
+      <RecordChromeProvider value={{ resource: "notes.Note", dataProviderName: undefined, canonicalResource: "notes.Note",
+        recordId: "note-1", record: { id: "note-1", backend: null }, formReadOnly: false }}>
+        <FormHarness fields={[{ name: "backend", label: "Backend", widget: "select", options: [{ value: "LOCAL", label: "Local" }] }]}
+          defaultValues={{ backend: null }} />
+      </RecordChromeProvider>
+    </ModelMetadataProvider>);
+
+    expect(await screen.findByRole("combobox", { name: "Backend" })).toBeTruthy();
+    expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
+  });
+
   test("relation metadata preserves an explicitly declared registry widget", () => {
     const edit: WidgetDefinition["edit"] = ({ onChange }) => <button onClick={() => onChange?.("chosen")}>Custom choice</button>;
     const onChange = vi.fn();

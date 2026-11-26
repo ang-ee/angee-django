@@ -7,6 +7,8 @@ import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { fieldErrorMessages, isFieldVisible, resolveField, type FormValues } from "./form-view-model";
 import type { FormViewSaveSurface } from "./use-form-view-save";
 import { fieldsWithMetadataDefaults } from "../resource/model-metadata-defaults";
+import { isUnregisteredImplementation } from "../resource/implementation-fields";
+import { UnregisteredImplementationField } from "./record-field-marks";
 import type { WidgetFocusTarget } from "../../widgets";
 
 export interface BoundDescriptorFieldProps {
@@ -92,9 +94,15 @@ export function BoundDescriptorField({
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
   const resolved = resolveField(declared, siblingValues);
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
+  // One of this record's own columns whose stored key is not registered: the stored row, so a create
+  // form never shows it, and while the form still holds no other choice.
+  const storedUnregistered = !scope && surface.displayRecord != null
+    && isUnregisteredImplementation(modelMetadata, resolved.name, surface.displayRecord[resolved.name]);
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
 
-  return <BoundFormValue form={surface} name={name}>{(bound) => <LabeledDescriptorField
+  return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
+    field={storedUnregistered && (bound.value == null || bound.value === "") ? resolved.name : null}
+  ><LabeledDescriptorField
     field={resolved}
     value={bound.value}
     dialogValues={siblingValues}
@@ -103,7 +111,7 @@ export function BoundDescriptorField({
     messages={bound.messages}
     onCommit={bound.onCommit}
     onChange={(next) => { bound.onChange(next); surface.afterFieldChange(resolved, next, scope); }}
-  />}</BoundFormValue>;
+  /></UnregisteredImplementationField>}</BoundFormValue>;
 }
 
 function isFormValues(value: unknown): value is FormValues {

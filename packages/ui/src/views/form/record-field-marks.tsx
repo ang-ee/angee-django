@@ -1,6 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useModelMetadata } from "@angee/metadata";
-import { isUnregisteredImplementation } from "../../lib/empty-value";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
@@ -120,9 +118,21 @@ function useRecordFieldMarksForField(field: string) {
   }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
+const UnregisteredImplementation = createContext<string | null>(null);
+
+/** Name the one field of the record's own form whose stored implementation key the registry no
+ * longer names and whose value in the form is still empty; only that field's marks read it.
+ * @kind null
+ * @reason Provider infrastructure: the record form's not-registered field.
+ */
+export function UnregisteredImplementationField({ field, children }: { field: string | null; children: ReactNode }) {
+  return <UnregisteredImplementation.Provider value={field}>{children}</UnregisteredImplementation.Provider>;
+}
+
 /** Every native form field placement composes attention, provenance, and access marks once.
- * An implementation-key field whose stored key the registry no longer names carries "Not
- * registered" as an attention mark, while its control still offers every registered one.
+ * The field the record's own form names through `UnregisteredImplementationField` carries "Not
+ * registered" as an attention mark, while its control still offers every registered one; a
+ * dialog's field of the same name is not that field, so it carries none.
  * @kind fragment
  */
 export function RecordFieldMarkControl({ field, label, restricted = false }: {
@@ -132,10 +142,7 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
 }) {
   const t = useUiT();
   const published = useRecordFieldMarksForField(field);
-  const record = useRecordChromeContextMaybe();
-  const model = useModelMetadata(record?.resource ?? "");
-  // The stored row, not the draft: a create form's empty selector is not a retired key.
-  const unregistered = record?.record != null && isUnregisteredImplementation(model, field, record.record[field]);
+  const unregistered = useContext(UnregisteredImplementation) === field;
   const marks: readonly RecordFieldMark[] = [
     ...published,
     ...(unregistered ? [{ field, label: t("implementation.notRegistered"), tone: "warning" as const }] : []),
