@@ -33,7 +33,7 @@ from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.permissions import require_rebac_queryset
-from angee.base.prefetch import InstancePrefetch, ReaderMemo
+from angee.base.prefetch import InstancePrefetch, ReaderBatch, ReaderMemo
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
@@ -123,27 +123,6 @@ class RunGraph:
 logger = logging.getLogger(__name__)
 _READER = ReaderMemo("_workflows_reader_answers")
 """A run row's answers from one reader's batch read (graph, write, open work)."""
-
-
-class _ReaderBatch(InstancePrefetch):
-    """Answer one reader's facts for a whole run list through Django's native instance prefetch.
-
-    The named batch classmethod remembers each listed run's answer for the reader
-    the hint's queryset names; each run's own method then answers from its memo. Only
-    the prefetch's ``to_attr`` marker is attached; a list read without a reader is
-    left to answer per run.
-    """
-
-    def __init__(self, batch: str) -> None:
-        self.batch = batch
-
-    def related(
-        self, instances: list[Any], queryset: models.QuerySet[Any],
-    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
-        actor = self.reader(queryset)
-        if actor is not None and instances:
-            getattr(type(instances[0]), self.batch)(instances, actor)
-        return [], id, lambda run: run.pk
 
 
 class _PolicyVersions(InstancePrefetch):
@@ -351,8 +330,8 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
 
     objects = WorkflowRunManager()
 
-    _reader_graphs = _ReaderBatch("graphs_for")
-    _reader_cancel = _ReaderBatch("prepare_cancel")
+    _reader_graphs = ReaderBatch("graphs_for")
+    _reader_cancel = ReaderBatch("prepare_cancel")
     _policy_versions = _PolicyVersions()
 
     def change_related_records(self) -> tuple[RecordRef, ...]:

@@ -221,8 +221,11 @@ Use these owners instead of maintaining another contract in an addon:
 - **Batch per reader, answer per row.** A relation the owner computes (targets
   read per referenced type, a reader's facts for a run list) is an
   [`InstancePrefetch`](../../src/angee/base/prefetch.py) hinted through a native
-  `Prefetch(..., to_attr=...)`; a row's per-reader answers live in a
-  `ReaderMemo`, never remembered without an actor or under sudo; its owner answers
+  `Prefetch(..., to_attr=...)`; a reader's facts computed by a model's batch
+  classmethod hint a `ReaderBatch` naming it. A row's per-reader answers live in a
+  `ReaderMemo`, never remembered without an actor or under sudo: the batch
+  classmethod remembers into a `ReaderMemo`; an explicit primer such as
+  `needaction_for_messages` fills it directly. Its owner answers
   every miss from the rule, so sudo computes and never reads as empty. A resolver reads
   the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
   hint only for a row loaded another way, so it reads its own value through the
