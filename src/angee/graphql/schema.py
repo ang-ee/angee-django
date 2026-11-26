@@ -201,34 +201,39 @@ class AngeeSchema(strawberry.Schema):
         errors: list[GraphQLError],
         execution_context: ExecutionContext | None = None,
     ) -> None:
-        """Attach GraphQL error codes before Strawberry logs errors."""
+        """Attach GraphQL error codes; the sanitizer logs each unexpected error once.
 
-        errors_to_log: list[GraphQLError] = []
+        Strawberry's own ``process_errors`` is replaced, not extended: it logs the
+        ``GraphQLError`` itself, and printing one quotes the request's text at the
+        error's location, so a value written inline in the document (a token, a
+        password) would reach the log. No record quotes the request or its
+        variables; refusals are not logged.
+        """
+
+        del execution_context
         for error in errors:
-            refusal = (
-                classify_error(error.original_error).expected
-                or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
-            )
             if error.path is None and (error.original_error is None or isinstance(error.original_error, GraphQLError)):
                 # graphql-core's document validation and request coercion errors
                 # can echo submitted values, including inline literals.
-                # Preserve them for the client without passing them to logging.
+                # They reach the client as they are and are not logged.
                 if isinstance(error.original_error, GraphQLError):
                     error.extensions = {"code": (error.extensions or {}).get("code", "BAD_USER_INPUT")}
                 continue
             self._apply_rebac_code(error)
             self._apply_validation_error(error)
             self._sanitize_unexpected_error(error)
-            if not refusal:
-                errors_to_log.append(error)
-        super().process_errors(errors_to_log, execution_context)
 
     @staticmethod
     def _sanitize_unexpected_error(error: GraphQLError) -> None:
-        """Keep resolver implementation details out of public GraphQL errors."""
+        """Keep resolver implementation details out of public GraphQL errors.
 
-        original = error.original_error
-        if original is None or isinstance(original, MissingActorError | PermissionDenied):
+        An error that is no refusal is logged here, once, as its class, response
+        path and frames; an error raised already located is its own original.
+        """
+
+        # graphql-core passes a raised error that carries a path through unwrapped.
+        original = error if error.original_error is None else error.original_error
+        if isinstance(original, MissingActorError | PermissionDenied):
             return
         if isinstance(original, DomainError):
             error.message = original.code
@@ -261,9 +266,9 @@ class AngeeSchema(strawberry.Schema):
         )
         error.message = classification.message
         error.extensions = {"code": "INTERNAL"}
-        # Strawberry logs ``original_error`` with its traceback. Detach it after
-        # recording its class, path and frames so secrets in exception values do
-        # not merely move from the response into ordinary application logs.
+        # The error travels on in the execution result to views, extensions and
+        # whatever they log. Detach the original after recording its class, path
+        # and frames so secrets in exception values do not travel with it.
         error.original_error = None
 
     def _apply_rebac_code(self, error: GraphQLError) -> None:

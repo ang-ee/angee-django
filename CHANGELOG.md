@@ -10,6 +10,25 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.graphql`: **Changed behaviour.** An unexpected GraphQL error is one log
+  record, `AngeeSchema`'s own (class, response path and frames), and no record the
+  schema writes quotes the request. Strawberry's logger also wrote each such error
+  to `strawberry.execution`, and printing a `GraphQLError` quotes the document at
+  its location, so a secret written inline (`redeemSignInLink(token: "…")` instead
+  of a `$token` variable) reached the application log with any mutation that
+  failed. `AngeeSchema.process_errors` replaces Strawberry's logging instead of
+  extending it; refusals, document validation and request coercion errors stay
+  unlogged, and variables are never logged. A resolver that raises a
+  `GraphQLError` already carrying a `path` now meets the same sanitizer as one
+  without: it is logged once, and the client gets `INTERNAL` and the generic
+  message unless its code is an expected one, where its message and exception
+  value used to reach the client and only Strawberry's record logged it.
+  `GraphQLConfig`'s own `ignore_logger("strawberry.execution")` is deleted: the
+  schema writes nothing there, and Sentry's Strawberry integration module, which
+  GraphQL's autoconfig imports to disable it, ignores that logger on import.
+  **Upgrade:** nothing, unless a log pipeline read `strawberry.execution` for
+  GraphQL failures; it reads `angee.graphql.schema`.
+
 - `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
   answers for `user`. It checked the ambient REBAC actor instead, so asking about
   someone else returned the current actor's answer, and asking outside any actor

@@ -41,7 +41,7 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.base.exceptions import TransitionNotAllowed
+from angee.base.exceptions import DomainError, TransitionNotAllowed
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeModel
 from angee.base.permissions import require_rebac_queryset
@@ -109,9 +109,13 @@ def test_generated_read_root_conceals_missing_and_hidden_ids(db: None) -> None:
         assert read(identity) == {"data": {"people_by_pk": None}}
 
 
+class _DocumentRefused(DomainError):
+    code = "DOCUMENT_REFUSED"
+
+
 @pytest.mark.parametrize("refusal", [
     ValidationError("refusal-canary"), PermissionDenied("refusal-canary"),
-    TransitionNotAllowed("refusal-canary"), ObjectDoesNotExist("refusal-canary"),
+    TransitionNotAllowed("refusal-canary"), ObjectDoesNotExist("refusal-canary"), _DocumentRefused(),
 ])
 def test_resolver_refusals_do_not_log_errors_or_documents(
     refusal: Exception, caplog: pytest.LogCaptureFixture,
@@ -877,39 +881,54 @@ def test_variable_coercion_preserves_custom_scalar_error_code(caplog: pytest.Log
     assert invalid_value not in caplog.text
 
 
-def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: pytest.LogCaptureFixture) -> None:
-    """Resolver failures log their class, path and frames without exception values."""
+@pytest.mark.parametrize("located", [False, True], ids=["raised", "located"])
+def test_unexpected_graphql_errors_log_once_without_exception_or_request_values(
+    located: bool, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A resolver failure is one record of its class, path and frames.
 
-    secret = "secret-token-xyz"
+    The record carries neither the exception's value nor the request: printing a
+    ``GraphQLError`` quotes the document at its location, so a token written inline
+    would reach the log, and so would a variable. An error raised already located
+    is logged the same way.
+    """
 
-    def raise_provider_failure() -> str:
+    secret, inline, variable = "secret-token-xyz", "inline-token-canary", "variable-note-canary"
+
+    def raise_provider_failure(info: strawberry.Info) -> bool:
+        if located:
+            raise GraphQLError(secret, path=info.path.as_list())
         raise RuntimeError(secret)
 
     @strawberry.type
-    class Query:
-        @strawberry.field
-        def failure(self) -> str:
-            return raise_provider_failure()
+    class Mutation:
+        @strawberry.mutation
+        def redeem(self, info: strawberry.Info, token: str, note: str) -> bool:
+            return raise_provider_failure(info)
 
-    schema = GraphQLSchemas([addon(public={"query": [Query]})]).build("public")
+    schema = GraphQLSchemas([addon(public={"query": [HelloQuery], "mutation": [Mutation]})]).build("public")
 
-    result = schema.execute_sync("{ failure }")
+    result = schema.execute_sync(
+        f'mutation Redeem($note: String!) {{ redeem(token: "{inline}", note: $note) }}',
+        variable_values={"note": variable},
+    )
 
     assert result.errors is not None
     assert result.errors[0].message == "An unexpected error occurred."
     assert result.errors[0].extensions == {"code": "INTERNAL"}
     assert result.errors[0].original_error is None
-    records = [
-        record for record in caplog.records if record.name == "angee.graphql.schema" and record.levelno == logging.ERROR
-    ]
-    assert len(records) == 1
-    diagnostic = records[0].getMessage()
-    assert "RuntimeError" in diagnostic
-    assert "['failure']" in diagnostic
+    [record] = caplog.records
+    assert (record.name, record.levelno, record.exc_info) == ("angee.graphql.schema", logging.ERROR, None)
+    diagnostic = record.getMessage()
+    assert ("GraphQLError" if located else "RuntimeError") in diagnostic
+    assert "['redeem']" in diagnostic
     assert __file__ in diagnostic
     assert "in raise_provider_failure" in diagnostic
-    assert "raise RuntimeError(secret)" in diagnostic
-    assert secret not in caplog.text
+    assert ("raise GraphQLError(secret" if located else "raise RuntimeError(secret)") in diagnostic
+    formatted = logging.Formatter().format(record)
+    for value in (secret, inline, variable):
+        for text in (diagnostic, str(record.msg), repr(record.args), formatted, caplog.text):
+            assert value not in text
 
 
 def test_graphql_identity_exports_public_node() -> None:
