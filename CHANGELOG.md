@@ -64,6 +64,16 @@ live in code docstrings.
     because the workshop's toolbar is the host's appearance there; a story about the
     source passes `hostAppearanceSource`.
 
+- `@angee/ui`: **Changed behaviour.** A customised theme's link, and each tone's text
+  (`--brand-soft-text`, `--accent-soft-text` and the four status texts), read at 4.5:1
+  on every surface of their scheme (canvas, sheets, popover and inset), in light and
+  dark, besides the tone's own fills. The link was worked out against plain white and
+  the dark ink and fell under that on a kit's sheets, most in dark. A customisation may
+  therefore show a darker link and tone text in light and a lighter one in dark; a
+  theme's own colours are unchanged. The theme runtime feeds the theme catalogue's
+  fingerprint, so each device drops its first-paint cache once, on its first visit
+  after the upgrade.
+
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the

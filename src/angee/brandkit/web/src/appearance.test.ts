@@ -9,9 +9,11 @@ import {
   parseThemeCustomization,
   resolveThemeOptions,
   type ThemeDefinition,
+  type ThemeTokenName,
 } from "@angee/ui/theme";
 
 import { brandKitOptions } from "./appearance";
+import { ANGEE, HARBOUR, ORCHARD, PALE, SANDSTONE, colorsOf } from "./views/brand-kits.test-support";
 
 const stock = stockThemes[0]! as ThemeDefinition<unknown>;
 const angee = angeeThemes[0]! as ThemeDefinition<unknown>;
@@ -127,5 +129,65 @@ describe("brandKitOptions: what each kind of host wears", () => {
 
   test("normalizes a kit's colours as the theme does", () => {
     expect(valueOf(brandKitOptions(stock, { ...CLAY, brand: "#C2410C" }, undefined)).brand).toBe("#c2410c");
+  });
+});
+
+/** The surfaces the console draws text on: the page, sheets and their alternate rows, popovers and insets. */
+const SURFACES = [
+  "--surface-canvas", "--surface-sheet", "--surface-sheet-2", "--surface-popover", "--surface-inset",
+] as const satisfies readonly ThemeTokenName[];
+
+/** Each tone's text colour, the kit colour it derives from, and the fills it is drawn on besides the surfaces. */
+const TONE_TEXTS = [
+  ["brand", "--brand-soft-text", "--brand-soft", "--brand-tint"],
+  ["accent", "--accent-soft-text", "--accent-soft", "--accent-tint"],
+  ["success", "--success-text", "--success-soft", "--success-tint"],
+  ["warning", "--warning-text", "--warning-soft", "--warning-tint"],
+  ["danger", "--danger-text", "--danger-soft", "--danger-tint"],
+  ["info", "--info-text", "--info-soft", "--info-tint"],
+] as const satisfies readonly (readonly [string, ThemeTokenName, ThemeTokenName, ThemeTokenName])[];
+
+/** The WCAG 2 contrast ratio of two `#rrggbb` colours, worked out here rather than by the runtime under test. */
+function contrast(left: string, right: string): number {
+  const luminance = (color: string) => {
+    const [red, green, blue] = [1, 3, 5].map((start) => {
+      const channel = Number.parseInt(color.slice(start, start + 2), 16) / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  const [lighter, darker] = [luminance(left), luminance(right)].sort((first, second) => second - first) as [number, number];
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+describe("a kit's text on the stock theme reads at 4.5:1 wherever the console draws it", () => {
+  const cases = [ORCHARD, HARBOUR, PALE, ANGEE, SANDSTONE].flatMap((kit) =>
+    (["light", "dark"] as const).map((scheme) => ({ kit: kit.name, colors: colorsOf(kit), scheme })));
+
+  /** A reader of the scheme's tokens the kit derives: every colour measured here is one of them. */
+  function derived(colors: ReturnType<typeof colorsOf>, scheme: "light" | "dark") {
+    const tokens = resolveThemeOptions(stock, brandKitOptions(stock, colors, undefined)).tokens[scheme];
+    return (name: ThemeTokenName): string => {
+      expect(tokens[name], `${name} is derived`).toMatch(/^#[0-9a-f]{6}$/);
+      return tokens[name]!;
+    };
+  }
+
+  test.each(cases)("$kit, $scheme: the link on each surface", ({ colors, scheme }) => {
+    const token = derived(colors, scheme);
+    for (const surface of SURFACES) {
+      expect(contrast(token("--text-link"), token(surface)), surface).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test.each(cases)("$kit, $scheme: each tone's text the kit derives, on its own fills and on each surface", ({ colors, scheme }) => {
+    const token = derived(colors, scheme);
+    const own = paletteOf(stock);
+    for (const [seed, text, ...fills] of TONE_TEXTS) {
+      if (colors[seed] === own[seed]) continue; // the kit leaves this tone to the theme
+      for (const fill of [...fills, ...SURFACES]) {
+        expect(contrast(token(text), token(fill)), `${text} on ${fill}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });
