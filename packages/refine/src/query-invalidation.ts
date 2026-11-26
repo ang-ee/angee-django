@@ -50,7 +50,10 @@ export function queryReadsLiveChange(meta: unknown, change: LiveChange): boolean
 
 /**
  * Refetch every active authored read registered against one of the models a
- * caller's own write moved: a read that started before the write never commits.
+ * caller's own write moved: a read that started before the write never commits,
+ * and no render sees an active first read idle between its cancellation and its
+ * resend, which happen in one synchronous call (a reader that waits for a first
+ * answer takes an idle read for an answer that will not come).
  * Live changes from other writers coalesce without cancelling
  * (`createLiveInvalidation`); connection catch-up
  * (`catchUpAuthoredQueries`) is the separate non-cancelling protocol.
@@ -62,7 +65,11 @@ export async function invalidateAuthoredQueries(
   const predicate = (query: Query) => authoredQueryReadsAnyModel(query.meta, modelLabels);
   // Native invalidation joins an initial in-flight request instead of restarting
   // it. Cancel that snapshot first so the write cannot be lost when it settles.
-  await queryClient.cancelQueries({
+  // Not awaited: the cancellation rejects the request and reverts the read
+  // synchronously, so the invalidation below sends a new request in this same
+  // call (`fetch` never joins a rejected request) and no render sees the read
+  // idle in between.
+  void queryClient.cancelQueries({
     predicate: (query) => predicate(query)
       && query.state.data === undefined
       && query.state.fetchStatus !== "idle",

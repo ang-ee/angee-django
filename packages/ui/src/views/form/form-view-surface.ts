@@ -82,6 +82,7 @@ import {
 } from "./use-form-view-save";
 
 export type {
+  FormNextSave,
   FormSubmit,
   FormSubmitAcknowledgement,
   FormSubmitContext,

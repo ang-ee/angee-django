@@ -13,10 +13,11 @@ import { fieldErrorMessages } from "./form-view-model";
 import {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
-  invalidFormSubmit,
-  formSubmitError,
   applyFormErrors,
   directDottedPathMessages,
+  formErrorsFromForm,
+  formSubmitError,
+  invalidFormSubmit,
   jsonSchemaErrorMessage,
   lineRowErrorsFromDottedPaths,
   markMemberErrors,
@@ -471,7 +472,14 @@ describe("shared form submission errors", () => {
     expect(result.current.getFieldState("rows.0.title").error).toMatchObject({
       type: "server", message: "Required Use a unique title", types: { server: ["Required", "Use a unique title"] },
     });
-    expect(result.current.getFieldState("root.server").error?.message).toBe("Review the form rowsExtra: Unknown field");
+    // The form-level messages stay several: a list, read by its one reader; the message is their text, one per line.
+    const stored = result.current.getFieldState("root.server").error;
+    expect(formErrorsFromForm({ root: { server: stored } })).toEqual(["Review the form", "rowsExtra: Unknown field"]);
+    expect(formErrorsFromForm({ root: { server: { type: "server", message: "Set by another owner." } } })).toEqual(["Set by another owner."]);
+    expect(formErrorsFromForm({})).toEqual([]);
+    expect(stored).toMatchObject({
+      type: "server", message: "Review the form\nrowsExtra: Unknown field", types: { server: ["Review the form", "rowsExtra: Unknown field"] },
+    });
   });
 
   test("a refusal bound to a rendered field is shown there once, not again as the fallback", () => {

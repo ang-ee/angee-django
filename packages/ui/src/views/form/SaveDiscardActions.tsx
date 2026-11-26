@@ -56,6 +56,8 @@ export function SaveDiscardActions({
         variant="primary"
         size="sm"
         loading={pending}
+        // A pending Save stays focusable, so the keyboard user who pressed it keeps their place.
+        focusableWhenDisabled={pending}
         disabled={saveDisabled}
         onClick={onSave}
       >
