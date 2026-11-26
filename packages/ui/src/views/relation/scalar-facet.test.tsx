@@ -249,6 +249,7 @@ function resourceFacets(
         },
       ]),
     ),
+    errors: {},
     fetching: false,
     error: null,
     refetch: vi.fn(),

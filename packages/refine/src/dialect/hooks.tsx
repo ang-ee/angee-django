@@ -126,6 +126,8 @@ export interface AngeeListBatchEntry {
 
 export interface UseAngeeFacetsResult {
   facets: Readonly<Record<string, ResourceFacetResult>>;
+  /** Each facet's own read's error, by facet id: a refused facet says why while the others keep counting. */
+  errors: Readonly<Record<string, Error | null>>;
   fetching: boolean;
   error: Error | null;
   refetch: () => void;
@@ -301,6 +303,9 @@ export function useAngeeFacets(
       facets: Object.fromEntries(
         activeFacets.map((facet) => [facet.id, decoded.get(facet.id)?.result ?? EMPTY_FACET_RESULT]),
       ),
+      errors: Object.fromEntries(activeFacets.map((facet) => [
+        facet.id, batch.get(facet.id)?.error ?? decoded.get(facet.id)?.error ?? null,
+      ])),
       fetching: values.some((entry) => entry.isFetching),
       error: values.find((entry) => entry.error)?.error
         ?? [...decoded.values()].find((facet) => facet.error)?.error ?? null,

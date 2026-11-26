@@ -86,9 +86,12 @@ function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut:
       </React.Fragment>) : label}</SelectValue>
       <SelectIcon />
     </Toolbar.Button>
-    <SelectPortal><SelectPositioner sideOffset={4}><SelectContent size="sm"><SelectList>
-      {options.map((option) => <SelectItem key={option.id} value={option.id}><SelectItemText>{option.label}</SelectItemText><SelectItemIndicator /></SelectItem>)}
-    </SelectList></SelectContent></SelectPositioner></SelectPortal>
+    <SelectPortal><SelectPositioner sideOffset={4}><SelectContent size="sm">
+      {facet.error ? <p role="status" className="px-2 py-1 text-xs text-fg-muted">{facet.error}</p> : null}
+      <SelectList>
+        {options.map((option) => <SelectItem key={option.id} value={option.id}><SelectItemText>{option.label}</SelectItemText><SelectItemIndicator /></SelectItem>)}
+      </SelectList>
+    </SelectContent></SelectPositioner></SelectPortal>
   </SelectRoot>;
 }
 

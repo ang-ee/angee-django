@@ -62,8 +62,9 @@ export function useScalarFacets<TRow extends object>(
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => {
     const axis = ResourceQuery.from(metadata!).axis(facet.field);
+    const error = facetQuery.errors[facet.id]?.message;
     return {
-      field: facet.field, label: facet.label, source: "scalar",
+      field: facet.field, label: facet.label, source: "scalar", ...(error ? { error } : {}),
       options: (facetQuery.facets[facet.id]?.options ?? []).flatMap((option) => {
         const filter = axis.drill({ key: option.key });
         if (!filter) return [];
@@ -73,7 +74,7 @@ export function useScalarFacets<TRow extends object>(
           filter, ...(value === undefined ? {} : { value }) }];
       }),
     };
-  }), [facets, facetQuery.facets, metadata, t]);
+  }), [facets, facetQuery.errors, facetQuery.facets, metadata, t]);
 }
 
 export function scalarFacetDeclarations<TRow extends object>(

@@ -47,7 +47,7 @@ vi.mock("../../feedback", async (importOriginal) => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQueryBatch: () => new Map(),
-  useAngeeFacets: () => ({ facets: {} }),
+  useAngeeFacets: () => ({ facets: {}, errors: {} }),
   useOperationDocuments: () => ({}),
 }));
 

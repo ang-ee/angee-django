@@ -9,17 +9,19 @@ registered" (`implementation.notRegistered`) through the status badge, in the
 warning tone. On the record's own form the field carries "Not registered" as an
 attention mark, from the stored record (a create form never shows it) and while
 the form holds no other choice (picking a registered one clears the mark until
-the draft is discarded). The mark explains itself, as its accessible
-description and on hover: where the field is editable, its control offers every
-registered implementation and the mark says "Choose a registered one to save
-this record."; where it is read-only on that form (`readOnly`, or `createOnly`
-on a stored record), "It cannot be changed on this record." A refused save
-still shows the server's reason under the field. A dialog's field of the same
-name carries none. A null in any other column, or in a column reached through a
-relation (`channel.backend_class`), renders as before.
+the draft is discarded). The mark explains itself, as its accessible description
+and on hover: where the field offers every registered implementation, "Its
+implementation cannot run until another is chosen."; where it is read-only on
+that form (`readOnly`, or `createOnly` on a stored record), "Its implementation
+cannot run. It cannot be changed on this record." The record's other fields save
+either way; a refused choice shows the server's reason under the field. A
+dialog's field of the same name carries none. A null in any other column, or in
+a column reached through a relation (`channel.backend_class`), renders as
+before.
 
-Not changed: a list grouped by such a column, a board laned by it and a facet
-counted on it read the column's groups, which fail for such a row, as before:
-the grouping library refuses to shape a group key from a stored value outside
-the column's choices (`ChoicesValueNotInEnumError`). A filter chip offers only
-registered implementations.
+A list grouped by such a column, a board laned by it and a facet counted on it
+still cannot be read for such a row: the server refuses, publicly and in words
+naming the column, and the list and the board show those words once, without
+retrying, while the search panel shows them in that facet's own section and the
+other facets keep their counts. There is no "Not registered" group, lane or
+facet bucket yet. A filter chip offers only registered implementations.

@@ -249,6 +249,29 @@ test("a failed facet read checks auth and notifies", async () => {
   expect(f.custom).toHaveBeenCalledTimes(1);
 });
 
+test("a facet whose read is refused carries its own error while the other facets keep their counts", async () => {
+  // The server refuses to group by one column and answers the other: each facet is its own read.
+  const refusal = Object.assign(new Error("A record holds an implementation that is not registered."), {
+    response: { errors: [{ message: "A record holds an implementation that is not registered.", extensions: { code: "BAD_USER_INPUT" } }] },
+  });
+  const f = fixture(vi.fn().mockImplementation(async (request: unknown) => {
+    if (JSON.stringify(request).includes("BACKEND")) throw refusal;
+    return response(2);
+  }));
+  const { result } = renderHook(() => useAngeeFacets(TARGET, {
+    document: DOCUMENT,
+    facets: [
+      { id: "channels", ...SCOPES[0]!.query },
+      { id: "backends", dimensions: [{ input: "BACKEND", key: "channel_id" }], page: 1, pageSize: 50 },
+    ],
+  }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.errors.backends).toBeTruthy());
+  await waitFor(() => expect(result.current.facets.channels!.options).toHaveLength(2));
+  expect(result.current.errors.backends!.message).toBe("A record holds an implementation that is not registered.");
+  expect(result.current.errors.channels).toBeNull();
+  expect(result.current.facets.backends!.options).toEqual([]);
+});
+
 test("single group read retains its last buckets with the refetch error", async () => {
   const f = fixture();
   const { result } = renderHook(() => useAngeeGroupBy(TARGET,
