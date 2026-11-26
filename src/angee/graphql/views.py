@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from functools import cache
 from typing import Any
@@ -15,18 +14,29 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
+from angee.base.serialization import decode_json
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.view_as import ViewAs
 from graphql import GraphQLError, get_operation_ast, parse
 
 logger = logging.getLogger("angee.graphql.view_as")
 
+
+class AngeeGraphQLView(GraphQLView):
+    """Strawberry's sync Django view, answering a body nested too deeply to decode with its own 400."""
+
+    def decode_json(self, data: str | bytes) -> object:
+        """Decode through ``decode_json``, so a document past the decoder's stack is malformed JSON."""
+
+        return decode_json(data)
+
+
 @cache
 def _get_view(schema_name: str) -> Any:
     """Return the Django view for one named GraphQL schema."""
 
     schema = GraphQLSchemas.from_discovery().build(schema_name)
-    return GraphQLView.as_view(
+    return AngeeGraphQLView.as_view(
         schema=schema,
         graphql_ide=settings.ANGEE_GRAPHQL_IDE,
     )
@@ -46,7 +56,7 @@ def graphql_endpoint(request: HttpRequest, schema_name: str) -> HttpResponse:
         document = request.GET.get("query")
         if request.method == "POST":
             try:
-                payload = json.loads(request.body)
+                payload = decode_json(request.body)
                 if isinstance(payload, dict):
                     operation = payload.get("operationName")
                     document = payload.get("query")

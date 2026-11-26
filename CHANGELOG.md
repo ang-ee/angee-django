@@ -10,6 +10,76 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
+  - A request body or WebSocket message nested too deeply for Python's JSON
+    decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
+    `decode_json` in `angee.base.serialization`: the GraphQL view answers
+    Strawberry's own 400, a refused view-as preview still answers its 403, the
+    GraphQL WebSocket closes with Strawberry's 4400, anonymous ingress
+    refuses it as `invalid_request`, and an agent's ACP WebSocket skips the
+    record as invalid JSON. Each raised an uncaught `RecursionError` before.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
+- `angee.appearance_integrate`: **Changed behaviour.** Website appearance
+  analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
+  signed-in contract states. It refused only a request with no actor at all, so
+  the anonymous actor REBAC gives an unauthenticated request was admitted: it
+  could make the server fetch outside URLs, and every anonymous caller spent
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
 - **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
   single-use sign-in link leaves base IAM for its own addon, with everything
   about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds

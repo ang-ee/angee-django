@@ -43,3 +43,21 @@ def test_ingress_cache_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(ingress.AnonymousIngressUnavailable) as refused:
         ingress.guard_anonymous_ingress(request, policy)
     assert refused.value.status_code == 503
+
+
+def test_ingress_refuses_a_body_nested_past_the_json_decoder_as_malformed() -> None:
+    """A body too deep for the decoder's stack is malformed JSON, answered as a client error."""
+
+    policy = ingress.AnonymousIngressPolicy(
+        max_body_bytes=400_000, allowed_fields=frozenset({"text"}),
+        rate_limit=ingress.AnonymousIngressRateLimit(scope="test", burst=1, window_seconds=60),
+    )
+    body = '{"text": ' + "[" * 100_000 + "]" * 100_000 + "}"
+    request = RequestFactory().post("/", data=body, content_type="application/json")
+    cache.clear()
+    try:
+        with pytest.raises(ingress.AnonymousIngressRejected) as refused:
+            ingress.guard_anonymous_ingress(request, policy)
+    finally:
+        cache.clear()
+    assert refused.value.status_code == 400

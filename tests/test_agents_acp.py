@@ -33,6 +33,7 @@ from rebac import (
 )
 
 from angee.agents.acp_server import SessionAgent
+from angee.agents.consumers import WebsocketTransport
 from angee.agents.context import render_view_context
 from angee.agents.models import AgentSessionManager, TurnStatus
 from angee.agents.protocol import ACP_PATH, TURN_FAILED_STOP_REASON, TURN_FAILURE_CODE
@@ -1737,3 +1738,16 @@ def test_resume_awaiting_approval_is_idle_without_a_stop_reason(chat: Any, repla
         await peer.socket.disconnect()
 
     asyncio.run(scenario())
+
+
+def test_a_record_nested_past_the_json_decoder_is_skipped_as_invalid_json(caplog: pytest.LogCaptureFixture) -> None:
+    """A frame's record too deep for the decoder's stack is invalid JSON; the records beside it still arrive."""
+
+    transport = WebsocketTransport(consumer=None)  # type: ignore[arg-type]
+    levels = 100_000
+
+    transport.feed(b"[" * levels + b"]" * levels + b'\n{"jsonrpc": "2.0"}\n')
+
+    assert transport.messages.get_nowait() == {"jsonrpc": "2.0"}
+    assert transport.messages.empty()
+    assert "Invalid JSON on an ACP WebSocket." in caplog.text
