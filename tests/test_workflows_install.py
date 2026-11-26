@@ -605,4 +605,3 @@ def test_a_staff_save_after_a_release_load_takes_the_loads_revert_off_the_workfl
 
     with actor_context(staff):
         assert workflow.revertable_changesets((load, save), actor=staff) == {save.pk}
-        assert not load.revertable(workflow, actor=staff)

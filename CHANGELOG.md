@@ -27,8 +27,8 @@ live in code docstrings.
 - `angee.provenance`: **Changed behaviour.** A record's Activity history no longer
   offers a revert the verb refuses for a later change to a row the changeset wrote, or
   for an earlier state no longer recorded: `ModelHistory.revert_blockers` is the one
-  rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert` and
-  `Changeset.revertable`) for a whole page in two statements per touched table, and
+  rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert`) for a whole page
+  in two statements per touched table, and
   by the verb under its row locks. Both read a row's earlier versions through the
   historical queryset's `versions_of` and `dated_versions_of` (an MTI descendant's,
   dated), the builders the verb fetches the restored state with and the history page's
@@ -47,8 +47,10 @@ live in code docstrings.
   any page size: a party's page (party and statement tables) goes from 29 statements to
   33 at 1 and at 25 entries, pinned at 33 in
   `test_history_page_query_count_does_not_grow_per_entry`.
-  **Upgrade:** code matching the old messages ("a later write prevents revert", "the
-  pre-boundary state is unavailable") matches the new words or the codes.
+  **Removed:** `Changeset.revertable(record, actor=...)`, which only forwarded to the
+  record. **Upgrade:** call `changeset.pk in record.revertable_changesets((changeset,),
+  actor=...)`; code matching the old messages ("a later write prevents revert", "the
+  pre-boundary state is unavailable") matches the codes instead.
 - `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
   resource adapter names the columns its owner verb applies on every changed row in
   `AngeeResource.never_create_only`, a mapping of each column to why, which adds to

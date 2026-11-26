@@ -194,10 +194,10 @@ def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None
     with actor_context(curator):
         survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
         boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
-        assert boundary.revertable(survivor, actor=curator)
+        assert boundary.pk in survivor.revertable_changesets((boundary,), actor=curator)
         survivor.name = "Mobile phones"
         survivor.save(update_fields=("name",))
-        assert not boundary.revertable(survivor, actor=curator)
+        assert boundary.pk not in survivor.revertable_changesets((boundary,), actor=curator)
         with pytest.raises(ValidationError, match="A later change to this record prevents this revert."):
             boundary.with_actor(curator).revert()
     assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
