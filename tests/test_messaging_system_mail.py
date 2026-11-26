@@ -20,8 +20,11 @@ from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.core.mail.backends.base import BaseEmailBackend
 from django.db import transaction
+from django.db.models.signals import post_save
+from django.template.defaultfilters import pprint
 from django.test import override_settings
 from django.utils.log import AdminEmailHandler, configure_logging
+from django.views.debug import ExceptionReporter
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
@@ -556,3 +559,76 @@ def test_a_configured_logger_that_would_record_error_mail_is_reported(
 def test_messagings_own_logging_is_not_reported(settings: Any) -> None:
     settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
     assert "messaging.W001" not in {message.id for message in run_checks(tags=[Tags.mail])}
+
+
+SECRET = "https://example.test/sign-in#token=SECRET-7f3a"
+"""A credential in a system mail's text, as a sign-in link carries one."""
+
+
+def _reported_secret(error: BaseException) -> list[tuple[str, str]]:
+    """Each ``(function, variable)`` of an error report that shows ``SECRET``, as Django's reporter renders it."""
+
+    reporter = ExceptionReporter(None, type(error), error, error.__traceback__)
+    return sorted({
+        (frame["function"], name) for frame in reporter.get_traceback_frames() for name, value in frame["vars"]
+        if "SECRET-7f3a" in pprint(value)
+    })
+
+
+def test_an_error_report_of_an_email_the_system_mailer_refuses_shows_none_of_its_body(
+    system_mailer: Any, settings: Any,
+) -> None:
+    """Refused while the mailer reads it: the reported frames hold the body under the mailer's marked names."""
+
+    settings.DEBUG = False
+    email = EmailMultiAlternatives("Sign in", SECRET, None, ["reader@example.test"])
+    email.attach_alternative(SECRET, "text/calendar")
+    with pytest.raises(ValueError) as refused:
+        email.send()
+    assert _reported_secret(refused.value) == []
+
+
+def test_an_error_report_of_system_mail_with_no_system_channel_shows_none_of_its_text(
+    db: None, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refused inside the writer, below the mailer: neither the recorded arguments nor the writer's text show."""
+
+    del db
+    settings.DEBUG = False
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    settings.DEFAULT_FROM_EMAIL = SENDER
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    with pytest.raises(SystemChannelMissing) as missing:
+        EmailMessage("Sign in", SECRET, None, ["reader@example.test"]).send()
+    assert _reported_secret(missing.value) == []
+
+
+def test_an_error_report_of_system_mail_its_arguments_refuse_shows_none_of_its_text(
+    system_channel: Any, settings: Any,
+) -> None:
+    settings.DEBUG = False
+    with pytest.raises(ValidationError) as refused:
+        Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["reader@example.test"],
+                                          subject="Two\nlines", text=SECRET)
+    assert _reported_secret(refused.value) == []
+
+
+def test_an_error_report_of_a_system_mail_write_that_fails_shows_none_of_its_text(
+    system_channel: Any, settings: Any,
+) -> None:
+    """Failing while its recipients land, after the row is written: the writer's frame holds the text and the row."""
+
+    settings.DEBUG = False
+
+    def fail(sender: Any, instance: Any, **kwargs: Any) -> None:
+        if instance.value == "failing@example.test":
+            raise RuntimeError("The recipient cannot be landed.")
+
+    post_save.connect(fail, sender=Handle, weak=False)
+    try:
+        with pytest.raises(RuntimeError) as failed:
+            Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["failing@example.test"],
+                                              subject="Sign in", text=SECRET)
+    finally:
+        post_save.disconnect(fail, sender=Handle)
+    assert _reported_secret(failed.value) == []

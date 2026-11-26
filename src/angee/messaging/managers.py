@@ -52,6 +52,7 @@ from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.lookups import In
 from django.utils import timezone
 from django.utils.html import strip_tags
+from django.views.decorators.debug import sensitive_variables
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -3232,6 +3233,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
 
+    # The mail's text stays out of error reports, system mail carrying credentials. Django's
+    # filter applies these names to the undecorated frames below, ``_validate_outgoing``'s too.
+    @sensitive_variables("text", "html", "outgoing")
     def compose_as_system(
         self,
         *,
@@ -3428,6 +3432,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             scheduled_at=scheduled_at,
         )
 
+    # Its frame holds the text in ``outgoing`` and the written row, whose str is its preview.
+    @sensitive_variables("outgoing", "message")
     def _write_outgoing(
         self,
         outgoing: _Outgoing,
