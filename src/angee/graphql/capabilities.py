@@ -81,7 +81,9 @@ def permission_enum(names: tuple[str, ...]) -> Any:
     Values on the wire keep their zed spelling. The type is named after its
     members, so one name tuple is one type wherever a schema declares it; a
     projection of a composed set (an open set of account actions) gets the
-    composition's own type.
+    composition's own type. It validates nothing: ``permissions_field``
+    validates its names at schema build, and a composed set's owner validates
+    its own, as IAM's ``angee.iam.E005`` does.
     """
 
     # Lengths preserve name boundaries even when a permission contains underscores.
