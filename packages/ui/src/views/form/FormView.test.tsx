@@ -2851,6 +2851,37 @@ describe("FormView", () => {
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
   });
 
+  // The create draft seeds a field declared by a number widget alone with null (it has no kind for the seed rule
+  // to read) and a bound makes it a field the rule check reads; the check takes that seed for the field holding
+  // nothing.
+  test.each(["integer", "float"])("a create with an untouched optional bounded field declared by the %s widget alone is sent, the field left out", async (widget) => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={[
+      { name: "label", label: "Label" },
+      { name: "limit", label: "Limit", widget, maximum: 100 },
+    ]} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
+  });
+
+  test("an edit of a record that lacks an optional bounded member declared by a number widget alone is saved, the member sent as null as the same member without a bound is", async () => {
+    sdkMocks.mutate.mockClear();
+    sdkMocks.record = { id: "note-1", title: "First", config: { name: "a" } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[
+      { name: "config.name", label: "Name" },
+      { name: "config.limit", label: "Limit", widget: "integer", minimum: 0 },
+      { name: "config.count", label: "Count", widget: "integer" },
+    ]} />);
+    const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    await waitFor(() => expect(name.value).toBe("a"));
+    fireEvent.change(name, { target: { value: "b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data.config).toStrictEqual({ name: "b", limit: null, count: null });
+  });
+
   test("a date carried as text that the record lacks is sent as null when an edit writes its object", async () => {
     const members = deserializeFormSpec({ type: "object", properties: {
       name: { type: "string", label: "Name" }, day: { type: "string", format: "date", widget: "date", label: "Day" },

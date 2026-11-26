@@ -10,6 +10,25 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A form no longer refuses its own seed. An optional field with a
+  bound whose empty value is `null` and whose declared type does not refuse
+  that `null` (a field declared by a number, date or time widget alone, or of
+  kind `any`) was seeded with it and then refused as "This field is
+  required.": on a record form's create and on its edit of a record that lacks
+  the field, in a `MutationDialog`, and for such a member of an object field.
+  The rule that judges a held value (`structuredFieldErrors`, at the field's
+  own path and each member's) now composes the seed rule: the `null` a form
+  gives a field that holds nothing is not held against it for holding the key.
+  A required field and a presence-required one answer for a `null` as before
+  (refused, unless the field may be null); a value outside its bound is
+  refused; a typed number that is not nullable is not seeded with `null` and
+  is unchanged; a list item that holds nothing is still refused. At a field's
+  own path no declared form has the shape; an untyped member of an object
+  field, which the server's form projection emits for a JSON field, has it
+  without a bound. Known limit: an edit of a
+  record that lacks such a field as a member of a JSON value sends the member
+  as `null`, as it already does without a bound, which a server member typed
+  as a plain number with a default refuses.
 - `@angee/refine`: A caller's write cancels a refetch that no enabled observer
   watches. `invalidateAuthoredQueries` cancelled only reads with no data and
   refetched only active reads, so a read that had data and was still
