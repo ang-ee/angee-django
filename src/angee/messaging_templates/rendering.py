@@ -56,15 +56,27 @@ writing direction, the subject and the preheader), and Django's template engine 
 MAX_VARIABLE_SEGMENTS = 8
 """The most names a declared path joins, so following a declared path stays a short walk."""
 
+MAX_VARIABLE_PATH_LENGTH = 200
+"""The most characters an author's declared path holds."""
+
+MAX_VARIABLE_DESCRIPTION_LENGTH = 1_000
+"""The most characters an author's description of a declared path holds: with :data:`MAX_VARIABLE_PATH_LENGTH`, a
+row's own declaration holds at most about 60,400 characters as JSON, under the walk's ``WALK_VARIABLES_LIMIT``."""
+
 _VARIABLE_PATH = re.compile(r"[a-z][a-z0-9_]*(?:\.(?:[a-z][a-z0-9_]*|\*))*")
 
 
-def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
+def validate_variables(variables: Any, *, max_paths: int = 50, lengths: bool = True) -> None:
     """Refuse ``variables`` that are not an object of declared paths to their descriptions.
 
     Each key is a dotted path of at most :data:`MAX_VARIABLE_SEGMENTS` lower-case
     names (``order.total``) whose later segments may be ``*``, every item of a list
-    (``tags.*`` is a list of scalars); each value is a string describing it. There
+    (``tags.*`` is a list of scalars); each value is a string describing it. With
+    ``lengths``, as an author's row is judged, a path holds at most
+    :data:`MAX_VARIABLE_PATH_LENGTH` characters and a description at most
+    :data:`MAX_VARIABLE_DESCRIPTION_LENGTH`; a walk judges a stored row's grammar
+    without them, so a row stored longer still renders, its declaration counted by
+    the walk's own cap. There
     are at most ``max_paths`` keys: a row's own declaration takes the default, and a
     caller judging several rows' declarations together passes its own limit. No
     path is a proper prefix of another (``order`` and ``order.total`` are not both
@@ -84,6 +96,11 @@ def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
             code="too_many_variables", params={"limit": max_paths, "path": extra},
         )
     for path, description in variables.items():
+        if lengths and isinstance(path, str) and len(path) > MAX_VARIABLE_PATH_LENGTH:
+            raise ValidationError(
+                "%(path)s… is over %(limit)s characters: name the value in fewer.",
+                code="variable_path_too_long", params={"path": path[:40], "limit": MAX_VARIABLE_PATH_LENGTH},
+            )
         if isinstance(path, str) and path.count(".") >= MAX_VARIABLE_SEGMENTS:
             raise ValidationError(
                 "%(path)s joins more than %(limit)s names.",
@@ -97,6 +114,11 @@ def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
         if not isinstance(description, str):
             raise ValidationError(
                 "Describe %(path)s in words.", code="invalid_variable_description", params={"path": path},
+            )
+        if lengths and len(description) > MAX_VARIABLE_DESCRIPTION_LENGTH:
+            raise ValidationError(
+                "Describe %(path)s in at most %(limit)s characters.",
+                code="variable_description_too_long", params={"path": path, "limit": MAX_VARIABLE_DESCRIPTION_LENGTH},
             )
         if path.split(".", 1)[0] in RESERVED_VARIABLE_ROOTS:
             raise ValidationError(

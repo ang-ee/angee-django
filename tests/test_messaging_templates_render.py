@@ -9,6 +9,7 @@ import email.policy
 import functools
 import inspect
 import itertools
+import json
 import logging
 import math
 import os
@@ -1241,6 +1242,7 @@ class _Rows:
         found = {name: self.rows[name] for name in names if name in self.rows}
         for row in found.values():
             row.text_length = len(row.source) + len(row.text_source)
+            row.variables_length = len(json.dumps(row.variables))
         return found
 
     def with_text(self, rows: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -2354,15 +2356,16 @@ def test_walk_stops_expanding_at_its_node_bound(plain: Any) -> None:
         assert any("over 1000 nodes" in message for message in _refusals(template))
 
 
-def _text_read(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Record the characters each ``with_text`` call reads: what a walk loads of its levels' text."""
+def _text_read(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    """Record what each ``with_text`` call reads: the characters of a level's text, and of its ``variables``."""
 
-    read: list[int] = []
+    read: list[tuple[int, int]] = []
     with_text = MessageTemplateQuerySet.with_text
 
     def recorded(rows: Any, named: Any) -> Any:
         found = with_text(rows, named)
-        read.append(sum(len(row.source) + len(row.text_source) for row in found.values()))
+        read.append((sum(len(row.source) + len(row.text_source) for row in found.values()),
+                     sum(len(json.dumps(row.variables)) for row in found.values())))
         return found
 
     monkeypatch.setattr(MessageTemplateQuerySet, "with_text", recorded)
@@ -2417,7 +2420,7 @@ def test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unre
         sized: Any = MessageTemplate.objects.named_rows(["parts/full2"], language="en")["parts/full2"]
         assert sized.text_length == len(rows[2].source) and "\U0001f600" in rows[2].source
         assert TemplateWalker().judge(template, MessageTemplate.objects).refusals == []
-    assert read == [150_000 - len(template.source) - len(template.text_source)], read
+    assert [text for text, _ in read] == [150_000 - len(template.source) - len(template.text_source)], read
     assert "\U0001f600" in _render(template, {}, kit).plain_text
     read.clear()
     with system_context(reason="tests.messaging_templates.render.full"):
@@ -2426,6 +2429,116 @@ def test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unre
         refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
     assert refusals == ["tests.full: the rows it reaches hold over 150000 characters of source"], refusals
     assert read == [], read
+
+
+def _declaring(characters: int) -> dict[str, str]:
+    """Fifty ASCII paths whose JSON holds exactly ``characters`` characters, each within an author's limits."""
+
+    described = characters - 2 - 50 * 9 - 49 * 2  # braces, '"v00": ""' a path, ', ' between them
+    share, rest = divmod(described, 50)
+    return {f"v{index:02}": "d" * (share + (index < rest)) for index in range(50)}
+
+
+def test_a_level_s_variables_are_counted_before_they_are_read(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """400 parts each declaring one 40,000-character description, or one 40,000-character path, were admitted, and
+    every walk of a template including them loaded 16 million characters of variables: an author's row can no longer
+    declare either, and a level whose stored variables would carry the walk past WALK_VARIABLES_LIMIT is refused
+    before they are read, on the render-side judge and a member's insert."""
+
+    del plain
+    read = _text_read(monkeypatch)
+    shapes = {"described": {"a": "d" * 40_000}, "named": {"a" * 40_000: "x"}}
+    codes = {"described": "variable_description_too_long", "named": "variable_path_too_long"}
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    member = create_user("messaging-templates-declared")
+    counts: dict[str, int] = {}
+    for shape, variables in shapes.items():
+        with pytest.raises(ValidationError) as refused, system_context(reason="tests.messaging_templates.render"):
+            _unsaved("part", "alone", variables=variables).full_clean()
+        assert [error.code for error in refused.value.error_dict["variables"]] == [codes[shape]]
+        for index in range(400):
+            _row("part", f"{shape}{index}", source="x", variables=variables)  # stored past clean, as before
+        source = "\n".join("".join(f'{{% include "parts/{shape}{index}" only %}}' for index in range(line, line + 25))
+                           for line in range(0, 400, 25))
+        template = _unsaved(format="html", source=source, text_source="x", key=f"tests.{shape}")
+        with system_context(reason="tests.messaging_templates.render.declared"), CaptureQueriesContext(connection) as q:
+            walk = TemplateWalker().judge(template, MessageTemplate.objects)
+        assert walk.refusals == [f"tests.{shape}: the rows it reaches declare over 100000 characters of variables"]
+        assert list(walk.rows) == [f"tests.{shape}"] and read == [], read
+        counts[f"{shape} judge"] = len(q)
+        inserted = {"kind": "part", "key": shape, "language": "en", "name": "n", "format": "html", "source": source,
+                    "text_source": "x"}
+        with CaptureQueriesContext(connection) as q:
+            result = execute_schema(schema, _INSERT, {"object": inserted}, user=member)
+        assert [((error.extensions or {}).get("code"), "over 100000 characters of variables" in error.message)
+                for error in result.errors or ()] == [("VALIDATION", True)], result.errors
+        assert read == [], read
+        counts[f"{shape} member insert"] = len(q)
+    assert counts == DECLARED_QUERIES, counts
+
+
+DECLARED_QUERIES = {"described judge": 1, "described member insert": 76, "named judge": 1, "named member insert": 79}
+"""The queries of those walks: the level's query, which no longer reads its rows' variables, and nothing after it."""
+
+
+def test_a_walk_at_the_variables_cap_renders_and_one_character_more_is_refused_unread(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The database's text of ASCII variables is as long as json.dumps writes it, on PostgreSQL and SQLite alike (jsonb
+    reorders keys but keeps the separators), so a tree declaring exactly WALK_VARIABLES_LIMIT characters renders, its
+    level read whole, and one character more is refused before the level is read."""
+
+    del plain
+    read = _text_read(monkeypatch)
+    template = _mail("\n\n".join(f'{{% include "parts/declared{index}" only %}}' for index in range(2)),
+                     key="tests.declared")
+    held = len(json.dumps(template.variables)) + len(json.dumps({}))  # the template and its layout
+    rows = [_row("part", "declared0", source="x", variables=_declaring(50_000)),
+            _row("part", "declared1", source="x", variables=_declaring(100_000 - held - 50_000))]
+    assert max(len(path) for row in rows for path in row.variables) <= 200
+    assert max(len(text) for row in rows for text in row.variables.values()) < 1_000
+    with system_context(reason="tests.messaging_templates.render.declared"):
+        for row in rows:
+            row.full_clean()
+        sized: Any = MessageTemplate.objects.named_rows(["parts/declared1"], language="en")["parts/declared1"]
+        assert sized.variables_length == len(json.dumps(rows[1].variables)), sized.variables_length
+        assert TemplateWalker().judge(template, MessageTemplate.objects).refusals == []
+    assert [declared for _, declared in read] == [100_000 - len(json.dumps(template.variables))], read
+    assert _render(template, {}, kit).plain_text
+    read.clear()
+    with system_context(reason="tests.messaging_templates.render.declared"):
+        rows[1].variables["v00"] += "d"
+        rows[1].save()
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    assert refusals == ["tests.declared: the rows it reaches declare over 100000 characters of variables"], refusals
+    assert read == [], read
+
+
+def test_an_author_s_paths_and_descriptions_are_held_to_their_lengths_and_a_stored_row_still_renders(
+    plain: Any, kit: Any,
+) -> None:
+    """A root is loaded by its caller, uncounted by any level read, so clean() holds an author's row to paths of 200
+    characters and descriptions of 1,000; a row stored longer before the rule renders until it is next edited, its
+    declaration counted by the walk's cap, and its next full_clean() refuses it."""
+
+    del plain
+    for variables, code in (({"a" * 201: "x"}, "variable_path_too_long"),
+                            ({"a": "d" * 1_001}, "variable_description_too_long")):
+        with pytest.raises(ValidationError) as refused, system_context(reason="tests.messaging_templates.render"):
+            _unsaved(variables=variables).full_clean()
+        assert [error.code for error in refused.value.error_dict["variables"]] == [code], refused.value
+    with system_context(reason="tests.messaging_templates.render"):
+        _unsaved(variables={"a" * 200: "d" * 1_000}).full_clean()
+    stored = _mail("Hello.", {"a" * 300: "d" * 5_000}, key="tests.stored")
+    assert _render(stored, {}, kit).plain_text.strip() == "Hello."
+    with system_context(reason="tests.messaging_templates.render"):
+        assert stored.preview(kit=kit).rendered is not None
+        stored.name = "Renamed"
+        with pytest.raises(ValidationError) as refused:
+            stored.full_clean()
+    assert [error.code for error in refused.value.error_dict["variables"]] == ["variable_path_too_long"]
 
 
 def test_walk_character_cap(plain: Any) -> None:

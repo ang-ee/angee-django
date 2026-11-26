@@ -96,6 +96,13 @@ LINE_LIMIT = 1_000
 OPENERS_PER_LINE = 30
 FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
+WALK_VARIABLES_LIMIT = 100_000
+"""The most characters the ``variables`` of the rows a walk reaches hold together, as JSON: counted from the
+database's text of each level before the level is read (``jsonb`` on PostgreSQL writes keys in its own order and a
+character where ``json.dumps`` may write an escape) and again by ``len(json.dumps(...))`` as each row is checked, the
+root among them. A bound, not an exact count. An author's row declares at most about 60,400: 50 paths of
+:data:`~angee.messaging_templates.rendering.MAX_VARIABLE_PATH_LENGTH` characters, each described in
+:data:`~angee.messaging_templates.rendering.MAX_VARIABLE_DESCRIPTION_LENGTH`; so no row fills it alone."""
 WALK_READ_LIMIT = 600_000
 WALK_SPAN_READ_LIMIT = 4_000
 """What the checks of the rows a walk reaches read at most, summed as it gathers them: characters of their forms and
@@ -245,7 +252,8 @@ class RowReader(Protocol):
     """Where a walk reads the rows it names: the model's scoped manager, or a queryset of it.
 
     :meth:`named_rows` returns each row with its ``text_length``, the characters its ``source`` and ``text_source``
-    hold, and those two unread; :meth:`with_text` reads them in one query, a row gone since absent.
+    hold, and its ``variables_length``, the characters of its ``variables``, those three unread; :meth:`with_text`
+    reads them in one query, a row gone since absent.
     """
 
     def named_rows(self, names: Iterable[str], *, language: str) -> Mapping[str, Any]: ...
@@ -419,6 +427,12 @@ def _too_much_source(root_name: str) -> str:
     """The refusal of a walk whose rows hold over :data:`WALK_SOURCE_LIMIT` characters, counted or about to load."""
 
     return f"{root_name}: the rows it reaches hold over {WALK_SOURCE_LIMIT} characters of source"
+
+
+def _too_much_declared(root_name: str) -> str:
+    """The refusal of a walk whose rows declare over :data:`WALK_VARIABLES_LIMIT` characters, counted or to load."""
+
+    return f"{root_name}: the rows it reaches declare over {WALK_VARIABLES_LIMIT} characters of variables"
 
 
 def _nested_too_deep(name: str) -> str:
@@ -1170,7 +1184,7 @@ class TemplateWalker:
             refuse(f"{', '.join(holding)}: {rule.message} (rule {rule.value})")
             return _RowCheck(name, refusals=tuple(refusals))
         try:
-            validate_variables(row.variables)
+            validate_variables(row.variables, lengths=False)
         except ValidationError as error:
             refuse(" ".join(error.messages))
         try:
@@ -1314,25 +1328,30 @@ class TemplateWalker:
         A row is fetched only at an include depth the tree reaches: the root and its layout stand at 0, a row they
         include at 1, and a target past :data:`INCLUDE_DEPTH_LIMIT` is refused in the tree's own words
         (:func:`_nested_too_deep`) before it is read, so a chain costs queries bounded by the limit, not its length.
-        A level is read in two queries: its rows with their ``text_length``, then their text, read only when the
-        walk's characters with theirs stay within :data:`WALK_SOURCE_LIMIT`, so a level wider than the cap is refused
-        before its text is fetched; a row gone between the two is not found. Each row is counted again by ``len()``
-        as it is checked, the root among them, so the cap holds for what was read.
+        A level is read in two queries: its rows with their ``text_length`` and ``variables_length``, then their text
+        and ``variables``, read only when the walk's counts with theirs stay within :data:`WALK_SOURCE_LIMIT` and
+        :data:`WALK_VARIABLES_LIMIT`, so a level wider than either is refused before they are fetched; a row gone
+        between the two is not found. Each row is counted again as it is checked, the root among them, so the caps
+        hold for what was read.
         """
 
         checks: dict[str, _RowCheck] = {}
         totals: dict[RowPiece, tuple[int, int, int]] = {}
         depths: dict[str, int] = {walk.root_name: 0}
         includers: dict[str, str] = {}
-        characters = read = spans = 0
+        characters = declaring = read = spans = 0
         level = [walk.root_name]
         while level:
             wanted: list[str] = []
             for name in level:
                 row = walk.rows[name]
                 characters += len(row.source) + len(row.text_source)
+                declaring += len(json.dumps(row.variables, default=str))
                 if characters > WALK_SOURCE_LIMIT:
                     walk.refusals.append(_too_much_source(walk.root_name))
+                    return checks
+                if declaring > WALK_VARIABLES_LIMIT:
+                    walk.refusals.append(_too_much_declared(walk.root_name))
                     return checks
                 check = checks[name] = self.check(row)
                 walk.refusals.extend(check.refusals)
@@ -1371,6 +1390,9 @@ class TemplateWalker:
             if characters + sum(row.text_length for row in found.values()) > WALK_SOURCE_LIMIT:
                 walk.refusals.append(_too_much_source(walk.root_name))
                 return checks
+            if declaring + sum(row.variables_length for row in found.values()) > WALK_VARIABLES_LIMIT:
+                walk.refusals.append(_too_much_declared(walk.root_name))
+                return checks
             found = reader.with_text(found)
             # One query a level for what a save asks of every included key, never one a target.
             resolving = reader.resolving_names(
@@ -1398,7 +1420,7 @@ class TemplateWalker:
         declared = dict(walk.rows[layout].variables) if layout else {}
         declared.update(walk.root.variables)
         try:
-            validate_variables(declared, max_paths=DECLARED_LIMIT)
+            validate_variables(declared, max_paths=DECLARED_LIMIT, lengths=False)
         except ValidationError as error:
             walk.refusals.append(f"{walk.root_name}: with its layout, {' '.join(error.messages)}")
         walk.declared = declared

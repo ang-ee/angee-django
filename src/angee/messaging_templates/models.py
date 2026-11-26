@@ -53,7 +53,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
-from django.db.models.functions import Length
+from django.db.models.functions import Cast, Length
 from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
 
 from angee.base.fields.state import StateField
@@ -558,10 +558,12 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         resolved by :meth:`effective_rows` in one query. It reads each row's
         ``text_length`` in place of its ``source`` and ``text_source``: the characters
         the two hold, by the database's ``Length``, which counts characters as
-        ``len()`` does on PostgreSQL and SQLite. :meth:`with_text` reads the two, so a
-        walk counts a level before it loads the level's text. ``description`` and
-        ``sample``, which a walk never reads, stay unread too. A name with no row is
-        absent.
+        ``len()`` does on PostgreSQL and SQLite; and its ``variables_length`` in place
+        of its ``variables``: the characters of the database's text of the JSON, which
+        ``jsonb`` writes in its own key order. :meth:`with_text` reads the three, so a
+        walk counts a level before it loads it, every candidate row among them.
+        ``description`` and ``sample``, which a walk never reads, stay unread too. A
+        name with no row is absent.
         """
 
         identities: dict[tuple[str, str], str] = {}
@@ -570,8 +572,9 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
                 identities[identity] = name
         if not identities:
             return {}
-        sized = cast(Self, self.defer("source", "text_source", "description", "sample").annotate(
+        sized = cast(Self, self.defer("source", "text_source", "variables", "description", "sample").annotate(
             text_length=Length("source") + Length("text_source"),
+            variables_length=Length(Cast("variables", output_field=models.TextField())),
         ))
         rows = sized.effective_rows(
             {kind for kind, _ in identities}, keys={key for _, key in identities}, language=language,
@@ -579,19 +582,21 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         return {identities[identity]: row for identity, row in rows.items() if identity in identities}
 
     def with_text(self, rows: Mapping[str, TemplateT]) -> dict[str, TemplateT]:
-        """Return ``rows`` (from :meth:`named_rows`) with their ``source`` and ``text_source`` read, in one query.
+        """Return ``rows`` (from :meth:`named_rows`) with their ``source``, ``text_source`` and ``variables`` read.
 
-        A row no longer read through this queryset is absent.
+        One query reads them; a row no longer read through this queryset is absent.
         """
 
         texts = {
-            pk: (source, text) for pk, source, text in
-            self.filter(pk__in=[row.pk for row in rows.values()]).order_by().values_list("pk", "source", "text_source")
+            pk: (source, text, variables) for pk, source, text, variables in
+            self.filter(pk__in=[row.pk for row in rows.values()]).order_by().values_list(
+                "pk", "source", "text_source", "variables",
+            )
         }
         read: dict[str, TemplateT] = {}
         for name, row in rows.items():
             if (text := texts.get(row.pk)) is not None:
-                row.source, row.text_source = text
+                row.source, row.text_source, row.variables = text
                 read[name] = row
         return read
 
