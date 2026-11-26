@@ -114,6 +114,7 @@ function ActionArgsDialog({
     [args, definition],
   );
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
+    ...(draftScope ? { answerLost: t("form.answerLostResend") } : {}),
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     mode: validateConstraints ? "onChange" : "onSubmit",
     resolver: async (values, resolverContext, options) => {

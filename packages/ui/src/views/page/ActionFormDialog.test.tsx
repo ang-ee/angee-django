@@ -1193,11 +1193,13 @@ describe("ActionFormDialog", () => {
       await waitFor(() => expect(submit).toHaveBeenCalledTimes(count));
     };
     await register(1);
+    // The lost answer is told as one: the kept key makes the resend safe.
+    expect(await screen.findByText("No answer came back, so it may have been sent. Sending again from this page sends it once.")).toBeTruthy();
     await register(2);
     await screen.findByText("Fix the amount.");
     await register(3);
     expect(await screen.findByText("Review registered.")).toBeTruthy();
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Register review" })).toBeNull());
     expect(keys.slice(0, 3)).toEqual([keys[0], keys[0], keys[0]]);
     expect(keys[0]).toEqual(expect.any(String));
   });

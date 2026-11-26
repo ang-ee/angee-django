@@ -2,6 +2,7 @@ import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
 import { AuthoredEnvelopeError, useAuthoredMutation, useAuthoredQuery, type AuthoredMutateOptions } from "@angee/refine";
 import { jsonValueFromUnknown, type JsonValue } from "@angee/ui";
+import { useDashboardsT } from "./i18n";
 import {
   parseDashboardSnapshot,
   type DashboardCapabilities,
@@ -60,21 +61,23 @@ function capabilities(payload: FullPayload): DashboardCapabilities {
 /**
  * The server's in-band refusal as the envelope error its readers classify (`failedWriteOutcome`):
  * a conflict with a current revision is a stale one, and a keyed create's conflict without one is
- * its spent idempotency key; every other refusal is the server's answer, with no code.
+ * its spent idempotency key, told in the create's own words (`keyConflict`, given only for a keyed
+ * create); every other refusal is the server's answer, with no code.
  */
-function payloadError(payload: ErrorPayload | null | undefined, keyed = false): Error | null {
+function payloadError(payload: ErrorPayload | null | undefined, keyConflict?: string): Error | null {
   if (!payload) return new Error("The dashboard API returned no result.");
   if (payload.status === "ready" || payload.status === "absent") return null;
   if (payload.status === "conflict") {
+    if (payload.current_revision == null && keyConflict !== undefined) return new AuthoredEnvelopeError(keyConflict, "CREATION_KEY_CONFLICT");
     const suffix = payload.current_revision == null ? "" : ` Current revision: ${payload.current_revision}.`;
-    const code = payload.current_revision != null ? "STALE_REVISION" : keyed ? "CREATION_KEY_CONFLICT" : null;
+    const code = payload.current_revision != null ? "STALE_REVISION" : null;
     return new AuthoredEnvelopeError(`${payload.message ?? "The dashboard changed since it was loaded."}${suffix}`, code);
   }
   return new AuthoredEnvelopeError(payload.message ?? "The dashboard operation failed.", null);
 }
 
-function saveResult(payload: FullPayload | null | undefined, keyed = false): DashboardSaveResult {
-  const error = payloadError(payload, keyed);
+function saveResult(payload: FullPayload | null | undefined, keyConflict?: string): DashboardSaveResult {
+  const error = payloadError(payload, keyConflict);
   if (error) throw error;
   if (!payload?.id || payload.revision == null || payload.snapshot == null) {
     throw new Error("The dashboard API returned an incomplete snapshot.");
@@ -119,6 +122,7 @@ function loadState(
 }
 
 function useCreatePersonal() {
+  const t = useDashboardsT();
   const [create] = useAuthoredMutation(CreatePersonalDashboardDocument, {
     invalidateModels: DASHBOARD_MODELS,
   });
@@ -131,11 +135,12 @@ function useCreatePersonal() {
       description: input.description ?? "",
       idempotencyKey: input.idempotencyKey,
     }, options);
-    return saveResult(result?.create_personal_dashboard, true);
-  }, [create]);
+    return saveResult(result?.create_personal_dashboard, t("catalogue.createdEarlier"));
+  }, [create, t]);
 }
 
 function useDashboard(target: DashboardTarget) {
+  const t = useDashboardsT();
   const variables = React.useMemo(() => ({ target: targetInput(target) }), [target]);
   const query = useAuthoredQuery(DashboardDocument, variables, { models: DASHBOARD_MODELS });
   const loadedState = loadState(query.data?.dashboard, query.isFetching, query.error);
@@ -172,8 +177,8 @@ function useDashboard(target: DashboardTarget) {
         idempotencyKey: input.idempotencyKey,
         snapshot: dashboardSnapshotInput(input.snapshot),
       });
-      return saveResult(result?.duplicate_dashboard, true);
-    }, [duplicateMutation]),
+      return saveResult(result?.duplicate_dashboard, t("common.duplicatedEarlier"));
+    }, [duplicateMutation, t]),
   };
 }
 

@@ -548,6 +548,21 @@ describe("MutationDialog", () => {
     expect(sent[3]).not.toBe(sent[0]);
   });
 
+  test.each([
+    ["a keyed dialog says it may have been sent and that sending again sends it once", "dashboards.create-personal",
+      "No answer came back, so it may have been sent. Sending again from this page sends it once."],
+    ["an unkeyed one, whose resend could write twice, says only what failed", undefined, "Request failed."],
+  ])("while open, a lost answer is told as one: %s", async (_name, scope, told) => {
+    const lost = boundedGraphQLTransportError(new TypeError("Failed to fetch"));
+    const props = { title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues, open: true, onOpenChange: vi.fn() };
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      {scope ? <MutationDialog {...props} idempotencyScope={scope} mutation={async () => { throw lost; }} />
+        : <MutationDialog {...props} mutation={async () => { throw lost; }} />}
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText(told)).toBeTruthy();
+  });
+
   test("a keyed dialog whose submission returns its failures as results ends a spent key's draft: lost, then conflict, then a new key", async () => {
     const sent: string[] = [];
     const conflict = boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{

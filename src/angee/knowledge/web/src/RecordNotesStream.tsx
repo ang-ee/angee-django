@@ -93,7 +93,10 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       try {
         await keys.send(noteScope, (key) => createNote({ ...input, idempotency_key: key }, options));
       } catch (cause) {
-        if (failedWriteOutcome(cause) !== "conflict") throw cause;
+        const outcome = failedWriteOutcome(cause);
+        // A lost answer: the note may be written, and the draft's kept key makes a resend safe.
+        if (outcome === "unconfirmed") return { ok: false, message: t("notes.saveLost") };
+        if (outcome !== "conflict") throw cause;
         // An earlier version of this note was saved under the draft's key: show it; the next send is a new note.
         void bindings.refetch();
         return { ok: false, message: t("notes.savedEarlier") };

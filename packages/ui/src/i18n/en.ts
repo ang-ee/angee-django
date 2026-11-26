@@ -702,6 +702,7 @@ export const enUiMessages: Record<string, string> = {
   "form.pendingLeaveTitle": "Still sending - leave before the answer arrives?",
   "form.pendingLeaveBody": "Leaving does not stop it; its answer shows as a notice.",
   "form.answerLost": "The answer was lost, so it may not have been sent. Check before you send it again.",
+  "form.answerLostResend": "No answer came back, so it may have been sent. Sending again from this page sends it once.",
   "form.untitled": "Untitled",
   "form.updated": "updated {value}",
   "form.updatedBy": "updated by",

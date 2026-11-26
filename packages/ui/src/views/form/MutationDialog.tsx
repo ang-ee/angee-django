@@ -421,7 +421,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       accepted = { result, values: submittedValues };
     } catch (cause) {
       if (current()) {
-        applyFormErrors(form, formSubmitError(cause, errorOptions.fallback), errorOptions);
+        applyFormErrors(form, formSubmitError(cause, errorOptions.fallback, idempotencyScope ? t("form.answerLostResend") : undefined), errorOptions);
         await allowRootErrorRetry();
       } else if (sent) {
         reportLate({ thrown: cause }, errorOptions.fallback);

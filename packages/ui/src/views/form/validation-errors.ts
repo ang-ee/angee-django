@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { ErrorObject } from "ajv";
 import {
-  extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+  extractActionOutcome, failedWriteOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
   type FailedWriteOutcome,
 } from "@angee/refine";
 import { get, set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
@@ -237,12 +237,17 @@ export function savedFormSubmitResult<TData>(data: TData | null | undefined, mis
   return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
 }
 
-/** Decode a transport failure; contract violations remain developer errors.
+/** Decode a transport failure; contract violations remain developer errors. A keyed surface
+ * gives `answerLost`, the sentence a lost answer reads there (`failedWriteOutcome` says
+ * `unconfirmed`: no answer says whether it was written), since its kept key makes a resend safe.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
+export function formSubmitError(cause: unknown, fallback?: string, answerLost?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
+  if (answerLost !== undefined && failedWriteOutcome(cause) === "unconfirmed") {
+    return invalidFormSubmit({ fieldErrors: {}, formErrors: [answerLost] });
+  }
   const codes = publicGraphQLErrorsFromUnknown(cause).map((item) => item.extensions.code);
   // A spent key outranks a stale revision: it is what the next attempt must change.
   const code = codes.includes("CREATION_KEY_CONFLICT") ? "CREATION_KEY_CONFLICT" : codes.includes("STALE_REVISION") ? "STALE_REVISION" : null;

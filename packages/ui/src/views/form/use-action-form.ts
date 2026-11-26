@@ -34,6 +34,8 @@ export interface UseActionFormOptions<TValues extends FieldValues, TData = unkno
   /** Unclaimed issue paths also appear in the form-level summary. */
   fieldNames?: Iterable<string>;
   genericErrorMessage?: string;
+  /** What a lost answer reads, for a keyed submit (`formSubmitError`'s `answerLost`). */
+  answerLost?: string;
 }
 
 export interface UseActionFormResult<TValues extends FieldValues, TSubmitValues extends FieldValues = TValues> {
@@ -84,11 +86,11 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
       await handleSubmit(async (collected) => {
         if (preview.current.viewAs || preview.current.pending) return;
         if (validateEditors()) return;
-        const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage } = optionsRef.current;
+        const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage, answerLost } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
         let thrown: LateAnswer | undefined;
         const result = await Promise.resolve().then(() => submit(collected, SURFACE_RENDERS_FAILURE))
-          .catch((cause) => { thrown = { thrown: cause }; return formSubmitError(cause, fallback); });
+          .catch((cause) => { thrown = { thrown: cause }; return formSubmitError(cause, fallback, answerLost); });
         if (!mounted.current) {
           // The form went away while the write ran: its answer is still reported, so nobody
           // writes it again, or trusts it went out, unaware.

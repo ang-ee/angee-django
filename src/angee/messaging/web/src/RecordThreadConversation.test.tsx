@@ -551,7 +551,7 @@ describe("RecordThreadConversation", () => {
     expect(screen.queryByLabelText("Message")).toBeNull();
   });
 
-  test("announces a post failure through an alert banner", async () => {
+  test("announces a post whose answer was lost through an alert banner: it may have been posted, and sending again posts it once", async () => {
     mocks.failOps = new Set(["MessagingPostRecordMessage"]);
     render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
 
@@ -559,7 +559,7 @@ describe("RecordThreadConversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Network down");
+    expect(alert.textContent).toContain("No answer came back, so the message may have been posted. Sending again from this page posts it once.");
     const first = mocks.mutateCalls.find((call) => call.op === "MessagingPostRecordMessage");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("alert");

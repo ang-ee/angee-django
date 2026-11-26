@@ -403,7 +403,13 @@ export function RecordThreadConversation({
         setWindow({ scope, latest: true });
         return true;
       } catch (cause) {
-        if (failedWriteOutcome(cause) === "conflict") {
+        const outcome = failedWriteOutcome(cause);
+        // A lost answer: the post may be written, and the draft's kept key makes a resend safe.
+        if (outcome === "unconfirmed") {
+          setError(t("error.postLost"));
+          return false;
+        }
+        if (outcome === "conflict") {
           // An earlier version of this post was written under the draft's key: show it; the next send is a new post.
           setWindow({ scope, latest: true });
           void threadQuery.refetch();

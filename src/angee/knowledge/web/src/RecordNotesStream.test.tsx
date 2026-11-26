@@ -157,8 +157,10 @@ test("the note box is one draft: a lost send, an edit and a resend carry one key
   render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
   const submit = lastChildSource().createAction!.submit;
   const context = { record: null, selectedIds: [] };
-  await expect(submit({ body: "Draft" }, context)).rejects.toThrow("Offline");
-  await expect(submit({ body: "Changed" }, context)).rejects.toThrow("Offline");
+  // A lost answer says the note may have been saved, and that saving again saves it once.
+  const lost = { ok: false, message: "No answer came back, so the note may have been saved. Saving again from this page saves it once." };
+  expect(await submit({ body: "Draft" }, context)).toEqual(lost);
+  expect(await submit({ body: "Changed" }, context)).toEqual(lost);
   await submit({ body: "Changed" }, context);
   await submit({ body: "Next note" }, context);
   const [first, edited, saved, next] = sdk.createNote.mock.calls.map(([variables]) => variables.idempotency_key);

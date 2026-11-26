@@ -20,6 +20,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "notes.add": "Add note",
   "notes.added": "Note added.",
   "notes.savedEarlier": "An earlier version of this note was already saved.",
+  "notes.saveLost": "No answer came back, so the note may have been saved. Saving again from this page saves it once.",
   "notes.bodyRequired": "Write a note before posting.",
   "notes.createError": "Could not create the note.",
   "notes.loadError": "Could not load the notes.",

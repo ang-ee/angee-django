@@ -56,6 +56,9 @@ test.each([
       : store.save({ target: { scope: "personal", id: "dsh_1" }, snapshot, persistedId: "dsh_1", expectedRevision: 3 })
   ).catch((error: unknown) => error);
   expect(refusal).toBeInstanceOf(Error);
-  expect((refusal as Error).message).toContain(payload.message);
+  // A spent key is told in the create's own words; every other refusal in the server's.
+  const told = outcome !== "conflict" ? payload.message
+    : write === "create" ? "An earlier attempt already created a personal dashboard." : "An earlier attempt already made a copy of this dashboard.";
+  expect((refusal as Error).message).toContain(told);
   expect(failedWriteOutcome(refusal)).toBe(outcome);
 });

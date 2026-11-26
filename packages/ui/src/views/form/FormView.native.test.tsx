@@ -1633,12 +1633,14 @@ test("updates send the edit baseline revision and retain a stale draft", async (
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
-test("create retries reuse the form session's idempotency key", async () => {
+test("create retries reuse the form session's idempotency key, and a lost answer says the retry is safe", async () => {
   const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
   edit("title", "New record");
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce(new Error("Unavailable"));
   await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key: the keyed create's lost-answer sentence.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostResend"]);
   await act(async () => f.surface().submitForm());
   expect(f.update).toHaveBeenCalledTimes(2);
   const key = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;

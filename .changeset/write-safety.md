@@ -24,7 +24,11 @@ pending write and typed values.
   create, chatter's post, knowledge's note and vault clone, the project from a
   template, the dashboards' create and duplicate, and the workflow start sit on
   it; chatter and notes read again after a conflict, so the earlier version
-  shows.
+  shows. A keyed surface still open when its answer is lost says so, that the
+  write may have gone through and that sending again from the page sends it
+  once (`formSubmitError`'s `answerLost`; chatter and notes in their own
+  words); the dashboards' create and duplicate tell a spent key in their own
+  words.
 - One draft scope belongs to one surface at a time. `useIdempotencyDraftOwner(scope)`
   holds it while the surface is mounted (an open dialog, the record form's
   create, a composer that can post), and in development two surfaces holding
