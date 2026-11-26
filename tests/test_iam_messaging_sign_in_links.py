@@ -1128,6 +1128,37 @@ def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fa
     assert _redeem(earlier) == target
 
 
+def test_a_template_that_reads_the_link_as_a_date_is_refused_in_words_that_quote_no_secret(
+    deliverable, iam_admin, sent, settings, monkeypatch, caplog,
+):
+    """The template addon's one refusal of a render that quotes a value is its date check, which quotes the value's
+    first 40 characters; a link's secret starts later, after the shortest origin base accepts, the path and the
+    account's public id. Every override that would make the render itself fail on the link is refused when it is
+    saved. If the template addon quotes more, this fails, and the action maps the refusal to its own words."""
+
+    target = _person("guest-dated")
+    earlier = sent(target, iam_admin)
+    with system_context(reason=READ):
+        shipped = MessageTemplate._base_manager.get(
+            kind="template", key=SIGN_IN_LINK_TEMPLATE, language="en", is_baseline=True,
+        ).source
+    _override("template", SIGN_IN_LINK_TEMPLATE, source=f'{shipped}\n\n{{{{ link|date:"U" }}}}')
+    settings.ANGEE_PUBLIC_ORIGIN = "https://a.io"  # the shortest origin base accepts
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
+    link = SignInLink.url_for(f"{target.public_id}.{SECRET}")
+    with caplog.at_level(logging.DEBUG):
+        with actor_context(iam_admin), _refused(ValidationError) as refusal:
+            target.with_actor(iam_admin).issue_sign_in_link()
+        answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
+    [item] = refusal.value.error_list
+    quoted = re.fullmatch(r"link is not a date, or a date and time with its offset: '(.*)'\.", item.message)
+    assert item.code == "invalid_values" and quoted is not None
+    assert link.startswith(quoted[1]) and len(quoted[1]) < link.index(SECRET)
+    assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": item.message}
+    assert not any(SECRET in text for text in (caplog.text, repr(refusal.value), str(answered.errors)))
+    assert _redeem(earlier) == target
+
+
 def _broken(state: str, channel: Any) -> None:
     """Take away what ``state`` names, as a deployment that skipped or undid part of provision does."""
 
