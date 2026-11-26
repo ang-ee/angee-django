@@ -540,9 +540,9 @@ def test_history_projects_a_readable_statement_link_and_evidence_inline() -> Non
     assert [evidence.id for evidence in projected.evidence] == [public_id_of(party)]
 
 
-HISTORY_PAGE_STATEMENTS = 33
-"""One party history page at any size: 29 for its versions, statements, redaction and admission, and two per
-touched table (the party and its statements) for what the revert verb refuses, so it offers only what reverts."""
+HISTORY_PAGE_STATEMENTS = 32
+"""One party history page at any size: 29 for its versions, statements, redaction and admission, and per touched
+table what the revert verb refuses: two for the party, one for its statements, which no merge originates in."""
 
 
 @pytest.mark.parametrize("row_count", [1, 25])
@@ -569,6 +569,41 @@ def test_history_page_query_count_does_not_grow_per_entry(
 
     assert len(page["entries"]) == row_count
     assert len(baseline) == HISTORY_PAGE_STATEMENTS
+    assert [entry["can_revert"] for entry in page["entries"]] == [True] + [False] * (row_count - 1)
+
+
+HISTORY_DOCUMENT_PAGE_STATEMENTS = 20
+"""One project history page at any size, each changeset editing the project and one of its lines: 18 as before,
+and per touched table the revert blockers' one statement (no merge originates in either table)."""
+
+
+@pytest.mark.parametrize("row_count", [1, 25])
+def test_a_document_history_page_costs_the_same_at_any_size_for_the_tables_it_touches(
+    row_count: int,
+    django_assert_num_queries: Any,
+) -> None:
+    """The blockers' cost is fixed per touched table: a document with owned lines pays it for each table."""
+
+    owner = create_user(f"history-document-budget-{row_count}")
+    with actor_context(owner), changeset(fresh=True, change_reason="Plan"):
+        project = apps.get_model("projects", "Project").objects.create(title="Plan 0", owner=owner)
+        milestone = apps.get_model("projects", "Milestone").objects.create(project=project, name="Line 0")
+    for index in range(1, 26):  # 25 revisions, so every page size holds revisions only
+        with actor_context(owner), changeset(fresh=True, change_reason=f"Revise {index}"):
+            project.title = f"Plan {index}"
+            project.save(update_fields=("title",))
+            milestone.name = f"Line {index}"
+            milestone.save(update_fields=("name",))
+
+    schema = _schema()
+    _history(schema, owner, "projects.Project", project, limit=1)
+    with CaptureQueriesContext(connection) as baseline:
+        _history(schema, owner, "projects.Project", project, limit=1)
+    with django_assert_num_queries(len(baseline)):
+        page = _history(schema, owner, "projects.Project", project, limit=row_count)
+
+    assert len(page["entries"]) == row_count
+    assert len(baseline) == HISTORY_DOCUMENT_PAGE_STATEMENTS
     assert [entry["can_revert"] for entry in page["entries"]] == [True] + [False] * (row_count - 1)
 
 

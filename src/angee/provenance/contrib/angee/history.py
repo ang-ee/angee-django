@@ -34,6 +34,7 @@ from simple_history.utils import get_history_manager_for_model
 
 from angee.base.lineage import concrete_child_models, concrete_lineage
 from angee.base.models.locks import ImmutableFieldsMixin
+from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.trash import TrashMixin
@@ -142,10 +143,10 @@ class ModelHistory(CaptureHistory):
         (:meth:`merge_survivors`) is refused when the survivor has no recorded state,
         or a write dated after the merge. A changeset refused both ways reports its
         later change. The states are read through the builders :meth:`changeset_states`
-        fetches them with (``versions_of``, ``dated_versions_of``). Two statements, one
-        for the rows the changesets wrote and one for their merge survivors, answer any
-        number of changesets, whatever they hold, so a history page's cost does not grow
-        with its entries. The list asks it to offer a revert; the verb
+        fetches them with (``versions_of``, ``dated_versions_of``). One statement for the
+        rows the changesets wrote, and one for their merge survivors where a merge can
+        originate, answer any number of changesets, whatever they hold: a history page
+        costs that per touched table, at any page size. The list asks it to offer a revert; the verb
         asks it again under its row locks and stays the final judge.
         """
 
@@ -217,20 +218,25 @@ class ModelHistory(CaptureHistory):
         still define a boundary, without an artificial stamp-only save. Each row says
         whether the merge wrote no version of the survivor here (``unchanged``) and
         whether the survivor still stands (``standing``): the boundary is the
-        survivor's when both hold. One statement, whatever the changesets hold.
+        survivor's when both hold. One statement, whatever the changesets hold, and
+        none for a table whose lineage holds no ``MergeableMixin`` model: only its
+        ``merge`` opens a merge boundary, so no merge's origin is one of its rows.
         """
 
         changeset_type = changeset_model()
+        lineage = concrete_lineage(model)
+        mergeable = any(issubclass(table, MergeableMixin) for table in lineage)
         survivor = OuterRef("survivor")
-        return changeset_type._base_manager.filter(
+        merges = changeset_type._base_manager.filter(
             pk__in=[changeset.pk for changeset in changesets],
             activity=changeset_type.Activity.MERGE,
-            origin_content_type__in=list(ContentType.objects.get_for_models(*concrete_lineage(model)).values()),
+            origin_content_type__in=list(ContentType.objects.get_for_models(*lineage).values()) if mergeable else [],
         ).annotate(
             survivor=Cast("origin_object_id", output_field=model._meta.pk),
             unchanged=~Exists(model.history.filter(changeset_id=OuterRef("pk")).versions_of(survivor)),
             standing=Exists(model._base_manager.filter(pk=survivor)),
-        )
+        ).order_by()
+        return merges if mergeable else merges.none()
 
     def changeset_states(self, model: Any, changeset: Any) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
