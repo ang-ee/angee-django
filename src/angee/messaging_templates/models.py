@@ -452,7 +452,8 @@ class MessageTemplateQuerySet[TemplateT: MessageTemplate](
         the two hold, by the database's ``Length``, which counts characters as
         ``len()`` does on PostgreSQL and SQLite; and its ``variables_length`` in place
         of its ``variables``: the characters of the database's text of the JSON, which
-        ``jsonb`` writes in its own key order. :meth:`with_text` reads the three, so a
+        ``jsonb`` writes in its own key order and SQLite holds as Django wrote it, each
+        non-ASCII character escaped. :meth:`with_text` reads the three, so a
         walk counts a level before it loads it, every candidate row among them.
         ``description`` and ``sample``, which a walk never reads, stay unread too. A
         name with no row is absent.
