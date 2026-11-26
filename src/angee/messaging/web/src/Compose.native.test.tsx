@@ -555,11 +555,12 @@ test.each([
   ["Cleo on the uncertain message", "cleo", "uncertain", { reason: true, verbs: [M["messages.retryDelivery"], M["messages.markAsSent"]] }],
   ["Ana, who wrote on Support, on the failed message", "ana", "failed", { reason: false, verbs: [] }],
 ] as const)("the message page reads why delivery failed and offers its verbs only to %s who may act", async (_case, seat, state, { reason, verbs }) => {
-  mount({ surface: "message-page", seat, message: MESSAGE[state] });
+  mount({ surface: "message-page", seat, message: MESSAGE[state], pane: "envelope" });
   const page = RECORDED.messagePage[seat][state];
   if (!("data" in page) || !page.data.messages_by_pk) throw new Error("The message page row is not recorded.");
   const row = page.data.messages_by_pk;
-  fireEvent.click(await screen.findByRole("tab", { name: word("messages.groupEnvelope") }));
+  // The page opens on its Envelope, as its stories do.
+  expect((await screen.findByRole("tab", { name: word("messages.groupEnvelope") })).getAttribute("aria-selected")).toBe("true");
   expect(await screen.findByText(word("messages.deliveryAttempts"))).toBeTruthy();
   expect(screen.getAllByText(String(row.delivery_attempts)).length).toBeGreaterThan(0);
   if (reason) expect(screen.getAllByText(String(row.delivery_error)).length).toBeGreaterThan(0);

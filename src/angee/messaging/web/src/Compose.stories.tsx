@@ -22,46 +22,34 @@ type Surface = "new-message" | "transcript" | "message-page";
 
 const REPLY: ThreadTranscriptReply = { leaves: pathnameChanges };
 
-/** Ana sends on Support alone: Channel is fixed and focus starts in To. Type an address and a message and Send: the toast gives the server's words. */
+// Each story shows its state as it mounts: a fragment's stories have no `play` (that needs the third-party
+// `storybook/test`, which no fragment declares), so a state reached only by typing or clicking is the native
+// tests', and the workshop reaches it by hand from the story that opens on it.
+
+/** Ana's New message, as the inbox header shows it: she sends on Support alone. Open it: Channel is fixed and focus starts in To; type "ana" and Send for a refusal under To, or an address and a message for the server's toast. */
 export const NewMessage = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="ana" /> };
-/** Dana sends on Billing, Sales and Support: focus starts on Channel, and Send waits for a channel and a message. Billing is offered and refused at send under Channel: its sender is not an address. */
-export const NewMessageChooseChannel = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="dana" /> };
-/** Send to "ana": the server refuses the entry under To, and the banner takes focus with the reason. */
-export const NewMessageRefusedAddress = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="ana" /> };
-/** Fifty-one addresses: refused under To with the bound the server states, the same bound the To hint names. */
-export const NewMessageTooMany = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="ana" /> };
-/** Send later with a time: "Message scheduled.", and the hint says only a manager of the channel can cancel it. */
-export const NewMessageScheduled = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="ana" /> };
-/** The first Send's answer is lost: the banner says it may have been sent and that sending again from this page sends it once; Send again lands on the original. */
-export const NewMessageAnswerLost = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="ana" lose /> };
-/** The Support conversation for Ana: Reply on each email, the box docked under the conversation, sent with Ctrl/Cmd+Enter; the new message shows Queued at the end. */
+/** The Support conversation for Ana: Reply on each email of it, and the delivery of what was written here. Reply on an email: the box docks under the conversation and sends with Ctrl/Cmd+Enter; "Who can see this?" is refused for its Reply-To. */
 export const Reply = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" /> };
-/** The Sales conversation: Ana reads it and sees no Reply; Dana, who may send on Sales, does. */
-export const ReplyGate = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" conversation="sales" /> };
-/** Reply to "Who can see this?": its Reply-To names no address, refused in a toast with the server's words; the text stays. */
-export const ReplyRefused = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" /> };
-/** The first Send's answer is lost: the box's note says so; Send again lands on the original. */
-export const ReplyAnswerLost = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" lose /> };
-/** The answer is lost, then Ana's right to send is revoked: the replay is refused, and the note says an earlier attempt may already have been sent. */
-export const ReplyPermissionLost = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" lose revokeAfterSend /> };
-/** The conversation with the box open in a 420 px column: the row actions wrap and Send stays in view. */
-export const ReplyNarrow = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" width={420} /> };
+/** The Sales conversation for Ana, who reads it and may not send on it: no Reply. */
+export const ReplyGateReader = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" conversation="sales" /> };
+/** The Sales conversation for Dana, who may send on it: Reply on its email. */
+export const ReplyGateSender = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="dana" conversation="sales" /> };
+/** The Support conversation in a 420 px column: rows, their delivery and their actions wrap. */
+export const ConversationNarrow = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" width={420} /> };
 /** Every local delivery state on Support's outgoing mail, with its time and attempts, Delivery details on Failed and Uncertain; synced own mail and the inbound requests show none. A host that offers no Reply (a record aside) shows the same. */
 export const DeliveryStates = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="cleo" noReply /> };
-/** The failed message's page for Cleo, who manages Support: why delivery failed, the attempts, and Retry delivery. */
-export const FailedForManager = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="cleo" message={MESSAGE.failed} /> };
-/** The failed message's page for Ana, who wrote on Support: the status and the attempts, no reason and no verb. */
-export const FailedForAuthor = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="ana" message={MESSAGE.failed} /> };
-/** The uncertain message's page for Cleo: the reason, Retry delivery and Mark as sent. */
-export const UncertainForManager = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="cleo" message={MESSAGE.uncertain} /> };
-/** An administrator previews Ana: the box is read-only under the preview's notice, and the dialog's Send is off. */
-export const PreviewSendsNothing = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" preview withNewMessage /> };
+/** The failed message's Envelope for Cleo, who manages Support: why delivery failed, the attempts, and Retry delivery. */
+export const FailedForManager = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="cleo" message={MESSAGE.failed} pane="envelope" /> };
+/** The failed message's Envelope for Ana, who wrote on Support: the attempts, no reason and no verb. */
+export const FailedForAuthor = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="ana" message={MESSAGE.failed} pane="envelope" /> };
+/** The uncertain message's Envelope for Cleo: the reason, Retry delivery and Mark as sent. */
+export const UncertainForManager = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="cleo" message={MESSAGE.uncertain} pane="envelope" /> };
 /** Ben reads Support and may send nowhere: no New message and no Reply; everything reads as it did. */
 export const ReaderCannotSend = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ben" withNewMessage /> };
 
 /** The real New message action, transcript and message page over the composer's wire fake, in the routed console shell. */
 export function ComposerStory({
-  appearance, surface, seat = "ana", conversation = "support", anchor = "", message, width, noReply = false, withNewMessage = false,
+  appearance, surface, seat = "ana", conversation = "support", anchor = "", message, pane, width, noReply = false, withNewMessage = false,
   lose = false, revokeAfterSend = false, preview = false, onSent, onRequest, onCall, onFixture, queryClient,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
@@ -72,6 +60,8 @@ export function ComposerStory({
   anchor?: string;
   /** The message whose page opens (`message-page`). */
   message?: string;
+  /** The message page's pane it opens on (`envelope`). */
+  pane?: string;
   /** A column this wide, in pixels. */
   width?: number;
   /** A transcript host that offers no Reply. */
@@ -112,7 +102,7 @@ export function ComposerStory({
   const content = surface === "new-message"
     ? <div className="flex items-center gap-2 p-4"><NewMessageAction onSent={onSent} /></div>
     : surface === "message-page"
-      ? <RegisteredFormView resource="messaging.Message" id={message} />
+      ? <RegisteredFormView resource="messaging.Message" id={message} defaultRecordTab={pane} />
       : <div className="flex h-[40rem] min-h-0 flex-col">
         {withNewMessage ? <div className="flex justify-end p-2"><NewMessageAction onSent={onSent} /></div> : null}
         <PaneToolbarHost>
