@@ -137,6 +137,19 @@ def test_deciders_and_put_to_are_one_rule_read_from_each_side(people):
     assert not Decision.system_queryset().put_to(None).exists()
 
 
+def test_administrators_and_for_administrator_are_one_rule_read_from_each_side(people):
+    requester, reviewer, other, outsider, subject = people
+    admin = create_platform_admin("administrators-admin")
+    retired = create_platform_admin("administrators-retired")
+    question = Decision.objects.ask(request_for(people, assignees=(reviewer,)), actor=requester)
+    with system_context(reason="test.administrators.inactive"):
+        get_user_model().objects.filter(pk=retired.pk).update(is_active=False)
+    everyone = (requester, reviewer, other, outsider, admin, retired)
+    put = [person for person in everyone if Decision.objects.for_administrator(person).filter(pk=question.pk).exists()]
+    assert Decision.system_queryset().filter(pk=question.pk).administrators() == {question.pk: [admin]}
+    assert put == [admin], "the assignee is no administrator, and an administrator is put a question assigned to others"
+
+
 def test_the_console_path_is_the_record_route_the_decisions_fragment_declares(people):
     requester, *_ = people
     question = Decision.objects.ask(request_for(people), actor=requester)

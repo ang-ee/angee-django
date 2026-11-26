@@ -10,7 +10,14 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Q
 from django.db.models.functions import Now
-from rebac import check_permission, generic_target, system_context, to_object_ref, to_subject_ref, user_subject_type
+from rebac import (
+    check_permission,
+    generic_target,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    user_subject_type,
+)
 from rebac.actors import is_sudo
 from rebac.backends import backend
 
@@ -23,6 +30,7 @@ from angee.base.refs import generic_pointer_model
 from angee.base.signals import mute_changes, publish_change
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.signals import decision_asked
+from angee.iam.roles import platform_admin_role, subject_has_role
 from angee.provenance.evidence import readable_records
 
 if TYPE_CHECKING:
@@ -73,21 +81,45 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
         question or a few, not every open question at once.
         """
 
-        holders: dict[Any, set[Any]] = {}
         with system_context(reason="decisions.deciders"):
-            for decision in self.only("pk").order_by("pk"):
-                resource = to_object_ref(decision)
-                act, read = (
-                    {actor_user_id(subject) for subject in backend().lookup_subjects(
-                        resource=resource, action=action, subject_type=user_subject_type(),
-                    )}
-                    for action in ("act", "read")
-                )
-                holders[decision.pk] = (act & read) - {None}
-            people = get_user_model().system_queryset().active_people().filter(
-                pk__in=set().union(*holders.values()),
-            ).in_bulk()
-        return {pk: [people[identity] for identity in sorted(ids) if identity in people] for pk, ids in holders.items()}
+            holders = {
+                decision.pk: _holders(decision, "act") & _holders(decision, "read")
+                for decision in self.only("pk").order_by("pk")
+            }
+            return _active_people(holders)
+
+    def administrators(self) -> dict[Any, list[Any]]:
+        """The platform administrators among each of these questions' :meth:`deciders`, keyed by primary key.
+
+        Deciders who are platform administrators, so an administrator is never put a
+        question they cannot answer: ``act`` takes an owner's ``owner_managed`` off the
+        administrator arm (intake's access questions), and then the question is none of
+        theirs. :meth:`for_administrator` is the same rule read from the person's side.
+        Each decider is judged by :func:`_is_platform_admin`, once per call.
+        """
+
+        deciders = self.deciders()
+        judged: dict[Any, bool] = {}
+        for people in deciders.values():
+            for person in people:
+                if person.pk not in judged:
+                    judged[person.pk] = _is_platform_admin(person)
+        return {pk: [person for person in people if judged[person.pk]] for pk, people in deciders.items()}
+
+    def for_administrator(self, person: Any) -> Any:
+        """The open questions here put to ``person`` as an administrator: :meth:`put_to`, if they are one.
+
+        :meth:`administrators` read from the person's side: ``person`` is among a
+        question's administrators exactly when the question is in
+        ``for_administrator(person)``, so anyone but a platform administrator among the
+        question's deciders is put none.
+        """
+
+        if person is None:
+            return self.none()
+        if not _is_platform_admin(person):
+            return self.with_actor(person).none()
+        return self.put_to(person)
 
     def put_to(self, person: Any) -> Any:
         """The open questions here that can be put to ``person``: those they hold both ``act`` and ``read`` on.
@@ -105,7 +137,7 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
         if identity is None:
             return self.none()
         rows = self.with_actor(person)
-        if not get_user_model().system_queryset().active_people().filter(pk=identity).exists():
+        if identity not in _active_people_among({identity}):
             return rows.none()
         return rows.with_action("act").open().filter(pk__in=self.model.objects.with_actor(person).values("pk"))
 
@@ -151,6 +183,43 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
                 records__object_id=OuterRef("pk"),
             )
         )
+
+
+def _holders(decision: Any, action: str) -> set[Any]:
+    """The user ids REBAC's reverse lookup finds holding ``action`` on ``decision``; the caller is system work."""
+
+    return {
+        identity for subject in backend().lookup_subjects(
+            resource=to_object_ref(decision), action=action, subject_type=user_subject_type(),
+        )
+        if (identity := actor_user_id(subject)) is not None
+    }
+
+
+def _active_people_among(identities: set[Any]) -> dict[Any, Any]:
+    """The active people (``active_people``) among ``identities``, by primary key: the one spelling of who counts."""
+
+    return get_user_model().system_queryset().active_people().filter(pk__in=identities).in_bulk()
+
+
+def _active_people(holders: dict[Any, set[Any]]) -> dict[Any, list[Any]]:
+    """Each question's holders who are active people, in primary-key order."""
+
+    people = _active_people_among(set().union(*holders.values()))
+    return {pk: [people[identity] for identity in sorted(ids) if identity in people] for pk, ids in holders.items()}
+
+
+def _is_platform_admin(person: Any) -> bool:
+    """Whether ``person`` reaches IAM's platform-admin role.
+
+    Composes IAM's ``platform_admin_role`` and ``subject_has_role``, since IAM's
+    ``is_platform_admin`` reads the ambient actor rather than its argument. This waits
+    for IAM's lane, which makes ``is_platform_admin(user)`` read its argument and adds
+    ``platform_admin_holders()``.
+    """
+
+    role = platform_admin_role()
+    return role is not None and subject_has_role(to_subject_ref(person), role)
 
 
 _DecisionManagerBase = AngeeManager.from_queryset(DecisionQuerySet)

@@ -40,10 +40,22 @@ person is among a question's deciders exactly when the question is put to them.
 Neither has the "assigned to me or unassigned" clause `waiting_on` has, so an
 administrator is a decider of a question assigned to others. `deciders` makes two
 reverse lookups a question; `put_to` a few statements whatever the number of
-questions. `decision.concern_labels(reader)` is the labels of the concerned records
-`reader` reads, and `decision.requester_name(reader)` the requester's name as
-`reader` reads that user; the console's `concerns_label` and a message sent to a
-person both read them for that person.
+questions. `Decision.objects.administrators()` and `for_administrator(person)` are
+one more rule read from both sides: the platform administrators among a question's
+deciders, so an administrator is never put a question they cannot answer (an owner's
+`owner_managed` takes the administrator arm's `act` away).
+`decision.concern_labels(reader)` is the labels of the concerned records `reader`
+reads, and `decision.requester_name(reader)` the requester's name as `reader` reads
+that user; the console's `concerns_label` and a message sent to a person both read
+them for that person. `decision.facts_for(reader)` is the context's facts `reader`
+is shown, in stored order; the caller slices, as with `concern_labels`. A fact with
+an empty value is left out, as the card leaves it out, and so is one whose evidence
+names a record `reader` may not read, or a model the deployment no longer has. A
+fact's `row` is its widget's context and names no record. `fact.as_text()` is the
+one text form of a fact's value, the card's without a widget: object keys by
+`title_case`, the card's `titleCase`, and a widget fact's bare value. GraphQL's
+`context` field still returns the stored context whole to every reader of the
+question; it does not filter facts by read.
 `decision.get_absolute_url()` is the question's console path,
 `/decisions/<public id>`: the [web fragment's](web/README.md) record route, which a
 link sent outside the app joins to the public origin.

@@ -27,7 +27,13 @@ from angee.base.permissions import actor_user_id, reader_queryset, require_rebac
 from angee.base.prefetch import ReaderBatch, ReaderMemo, prefetched
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
-from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.decisions.contracts import (
+    DecisionContext,
+    DecisionFact,
+    DecisionProposal,
+    DecisionRecordReference,
+    DecisionRequest,
+)
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.decisions.signals import decision_answered, decision_reminder_due
 from angee.provenance.evidence import (
@@ -42,6 +48,15 @@ _UNKEPT_CONCERNS = "_decision_concerns_unkept"
 """Where a batch read without a reader or under sudo lands: no reader's answers come from it."""
 _READER = ReaderMemo("_decisions_reader_answers")
 """A question's context from one reader's batch read (:meth:`Decision.contexts_for`)."""
+
+
+def _known_model(label: str) -> bool:
+    """Whether ``label`` names a model this deployment has; evidence naming one it dropped resolves to nothing."""
+    try:
+        apps.get_model(label)
+    except (LookupError, ValueError):
+        return False
+    return True
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:
@@ -214,6 +229,33 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         else:
             links = prefetched(self, attr, lambda: type(self).concern_records_prefetch(reader))
         return [str(target) for link in links if (target := getattr(link, _CONCERN_TARGET)) is not None]
+
+    def facts_for(self, reader: Any) -> list[DecisionFact]:
+        """The facts of this question's context ``reader`` is shown, in stored order, as the card's grid shows them.
+
+        As :meth:`concern_labels` returns labels, the caller slices and counts. A fact
+        with an empty value (``None`` or ``""``) is left out, as the card leaves it out,
+        and so is a fact whose evidence names a record ``reader`` may not read
+        (``readable_evidence``), value and all, so a revoked read hides it. A fact whose
+        evidence names a model this deployment no longer has is left out for every
+        reader: no one can read that record, and one stale fact must not keep a question
+        from being shown. A fact's ``row`` is its widget's context (a currency) and names
+        no record, so its evidence alone is read. A reader who may not read the question
+        is shown none: the facts sit on the row itself, with no relation whose read
+        scope would hide them, so this asks the question's own read rather than trust
+        the scope the caller read the row in.
+        """
+        if not reader_queryset(type(self), reader).filter(pk=self.pk).exists():
+            return []
+        facts = [
+            fact for fact in DecisionContext.model_validate(self.context).facts
+            if fact.value not in (None, "") and all(_known_model(reference.model) for reference in fact.evidence)
+        ]
+        readable = {
+            reference.named_record
+            for reference in readable_evidence([reference for fact in facts for reference in fact.evidence], reader)
+        }
+        return [fact for fact in facts if all(reference.named_record in readable for reference in fact.evidence)]
 
     def requester_name(self, reader: Any) -> str:
         """The requester's name as ``reader`` reads that user, or ``""`` when there is none or ``reader`` may not.
