@@ -894,9 +894,13 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   await choose(word("field.format"), "HTML");
   const layout = within(form).getByLabelText<HTMLInputElement>(word("field.layout"));
   const source = within(form).getByLabelText<HTMLTextAreaElement>(word("field.source"));
-  // Before anything is refused, the reasons' polite region is already in the pane, empty.
-  const [, reasonsRegion] = politeRegions();
+  // Before anything is refused, the reasons' polite region is already in the pane, empty; the band's region
+  // holds the saved row's warnings.
+  const [toldRegion, reasonsRegion] = politeRegions();
+  const saved = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
   expect(reasonsRegion!.textContent).toBe("");
+  for (const detail of saved) expect(within(toldRegion!).getByText(detail)).toBeTruthy();
+  expect(toldRegion!.parentElement!.className).not.toContain("sr-only");
   fireEvent.change(layout, { target: { value: "" } });
   // The person moves on to Source while the edit settles.
   act(() => source.focus());
@@ -907,8 +911,12 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   expect(edit.result.warnings.map((warning) => [warning.code, warning.field])).toEqual([
     ["SAVE_REFUSED", "layout"], ["SAVE_REFUSED", null],
   ]);
-  // The refusals arrive in that same region, announced politely: none is an alert or a status of its own.
+  // The refusals arrive in that same region, announced politely: none is an alert or a status of its own. The band's
+  // region is the same node, empty and out of flow.
   expect(reasonsRegion!.isConnected && body.contains(reasonsRegion!)).toBe(true);
+  expect(politeRegions()[0]).toBe(toldRegion);
+  expect(toldRegion!.textContent).toBe("");
+  expect(toldRegion!.parentElement!.className).toContain("sr-only");
   expect(reasonsRegion!.querySelectorAll("[role=alert], [role=status]")).toHaveLength(0);
   for (const warning of edit.result.warnings) {
     const words = within(reasonsRegion!).getByText(warning.detail);
@@ -924,6 +932,16 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
   expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
   expect(screen.queryByText(word("preview.refused"))).toBeNull();
+
+  // Discard: the saved row's warnings again in the band's same region, in flow; the reasons' region the same node,
+  // empty.
+  fireEvent.click(screen.getByRole("button", { name: ui("form.discard") }));
+  for (const detail of saved) expect(await within(toldRegion!).findByText(detail)).toBeTruthy();
+  const [toldAfter, reasonsAfter] = politeRegions();
+  expect(toldAfter).toBe(toldRegion);
+  expect(reasonsAfter).toBe(reasonsRegion);
+  expect(toldRegion!.parentElement!.className).not.toContain("sr-only");
+  expect(reasonsRegion!.textContent).toBe("");
 });
 
 test("the same words refused under two fields read apart, each titled by the form's label for its field", async () => {
