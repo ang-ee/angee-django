@@ -133,6 +133,7 @@ export {
   invalidFormSubmit,
   formSubmitError,
   savedFormSubmitResult,
+  SURFACE_RENDERS_FAILURE,
   applyFormErrors,
   formErrorsFromForm,
   useRefusalBannerFocus,

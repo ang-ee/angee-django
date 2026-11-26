@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A relation field can decline inline edit of its selected
+  record with `relationEdit: null` (a form's field, a dialog's field, an
+  authored line field; `edit={null}` on `RelationFieldWidget`, beside
+  `create={null}`); it is otherwise offered whenever the related resource has
+  editable fields. `SURFACE_RENDERS_FAILURE`, the call options of a surface
+  that shows a submission's failure itself, is exported.
 - `@angee/app`: The app's rule for retrying a failed read is exported as
   `retryAppQuery` (three retries, for a failure a retry can fix; a refusal is
   not retried). The workshop's shared runtime fixture passes it to its query
