@@ -55,7 +55,7 @@ import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
-import { RecordFieldMarkControl, UnregisteredImplementationField } from "./record-field-marks";
+import { RecordFieldMarkControl, UnregisteredImplementationField, useUnregisteredImplementationExplanation } from "./record-field-marks";
 import { createLabelForResource } from "../resource/utils/labels";
 
 // The wrapper draws the field's focus ring (`focus-within:focus-ring`). A focused input, textarea or
@@ -774,9 +774,10 @@ function BoundFieldRow({
     : messages;
   const descriptionId = field.description ? `${controlId}-description` : undefined;
   const errorId = displayedMessages.length ? `${controlId}-error` : undefined;
+  const explanation = useUnregisteredImplementationExplanation(field.name);
   const controlProps = {
     id: controlId,
-    "aria-describedby": [descriptionId, errorId].filter(Boolean).join(" ") || undefined,
+    "aria-describedby": [descriptionId, explanation?.id, errorId].filter(Boolean).join(" ") || undefined,
     "aria-invalid": displayedMessages.length > 0 || undefined,
     "aria-required": field.required && !effectiveReadOnly || undefined,
     ...(composite ? { "aria-labelledby": `${controlId}-label` } : {}),
@@ -792,6 +793,7 @@ function BoundFieldRow({
         {field.label ?? field.name}
       </FieldLabel>
       <RecordFieldMarkControl field={field.name} label={field.label} restricted={restricted} /></div>
+      {explanation ? <span id={explanation.id} className="sr-only">{explanation.text}</span> : null}
       {!restricted ? <div
         className={cn(
           FIELD_CONTROL_CLASS,

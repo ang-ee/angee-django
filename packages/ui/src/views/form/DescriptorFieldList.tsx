@@ -21,7 +21,7 @@ import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, missingDraftValues, pathHolding, seedPreset, visibleFields, type FormValues } from "./form-view-model";
 import { usePresetMemory } from "./ActionFormProvider";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
-import { RecordFieldMarkControl } from "./record-field-marks";
+import { RecordFieldMarkControl, useUnregisteredImplementationExplanation } from "./record-field-marks";
 
 /** What a descriptor field needs to offer (and optionally create) a related row. */
 export interface DescriptorFieldRelation {
@@ -263,8 +263,9 @@ export function LabeledDescriptorField({
   const errorId = invalid
     ? `${controlId}-error`
     : undefined;
+  const explanation = useUnregisteredImplementationExplanation(field.name);
   const describedBy =
-    [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
+    [descriptionId, explanation?.id, errorId].filter(Boolean).join(" ") || undefined;
 
   return (
     <FieldRoot invalid={invalid}>
@@ -278,6 +279,7 @@ export function LabeledDescriptorField({
         </FieldLabel>
         <RecordFieldMarkControl field={field.name} label={field.label} /></div>
       ) : null}
+      {explanation ? <span id={explanation.id} className="sr-only">{explanation.text}</span> : null}
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       {field.control ? (
         field.control({

@@ -1358,12 +1358,15 @@ describe("FormView", () => {
       acknowledgedSource={{ record, values: record }} />,
     { types: { NoteType: { resource, fields: { backend } } } });
 
-    // The mark's accessible description explains it by case; its name is the one fact.
-    const explanation = (mark: HTMLElement) => document.getElementById(mark.getAttribute("aria-describedby") ?? "")?.textContent;
+    // The mark names the one fact; the control's accessible description explains it by case, so a
+    // screen reader hears it on focus.
+    const description = (element: Element) => (element.getAttribute("aria-describedby") ?? "").split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "").join(" ").trim();
 
     page({});
     const control = await screen.findByRole("combobox", { name: "Backend" });
-    expect(explanation(screen.getByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run until another is chosen.");
+    expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+    expect(description(control)).toBe("Its implementation cannot run until another is chosen.");
     fireEvent.click(control);
     expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
@@ -1372,7 +1375,10 @@ describe("FormView", () => {
     for (const locked of [{ readOnly: true }, { createOnly: true }]) {
       cleanup();
       page(locked);
-      expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run. It cannot be changed on this record.");
+      expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+      const note = screen.getByText("Its implementation cannot run. It cannot be changed here.");
+      expect(note.className).toContain("sr-only");
+      expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
       expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
     }
   });

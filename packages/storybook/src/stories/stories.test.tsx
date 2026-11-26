@@ -156,14 +156,17 @@ test("Views/ListView / Implementation Key Not Registered says so in the warning 
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
 
-/** A mark's explanation: its accessible description. */
-const explanation = (mark: HTMLElement) => document.getElementById(mark.getAttribute("aria-describedby") ?? "")?.textContent;
+/** An element's accessible description: the text of the ids its `aria-describedby` names. */
+const description = (element: Element) => (element.getAttribute("aria-describedby") ?? "").split(" ")
+  .map((id) => document.getElementById(id)?.textContent ?? "").join(" ").trim();
 
 test("Views/FormView / Implementation Key Not Registered marks Backend, says it cannot run until another is chosen and offers them", async () => {
   const said = consoleMessages();
   render(<formView.ImplementationKeyNotRegistered />);
-  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run until another is chosen.");
-  fireEvent.click(screen.getByRole("combobox", { name: "Backend" }));
+  expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+  const control = screen.getByRole("combobox", { name: "Backend" });
+  expect(description(control)).toBe("Its implementation cannot run until another is chosen.");
+  fireEvent.click(control);
   expect(await screen.findByRole("option", { name: "Local folder" })).toBeTruthy();
   expect(screen.getByRole("option", { name: "S3 bucket" })).toBeTruthy();
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
@@ -173,7 +176,9 @@ test("Views/FormView / Implementation Key Not Registered marks Backend, says it 
 test("Views/FormView / Implementation Key Not Registered, Create-only marks Backend as unchangeable on this record", async () => {
   const said = consoleMessages();
   render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
-  expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("Its implementation cannot run. It cannot be changed on this record.");
+  expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+  const note = screen.getByText("Its implementation cannot run. It cannot be changed here.");
+  expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
   expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);

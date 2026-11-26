@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { backendOperations, backendResource, backends } from "./implementation-fixtures";
-import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
+import { storyField, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -173,10 +173,7 @@ function readOnlyFieldFor(field: FormField): FormField {
   return readOnlyField;
 }
 
-const scalar = (name: string, type: string, editable = true) => ({
-  name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
-  creatable: editable, updatable: editable, requiredOnCreate: false,
-});
+const scalar = (name: string, type: string, editable = true) => storyField(name, { scalar: type, creatable: editable, updatable: editable });
 const relation = (name: string, model: string) => ({ ...scalar(name, "ID"), kind: "relation" as const, scalar: null, relationModelLabel: model });
 // The file's resources, once: every story's FormView finds notes.Note in the schema's metadata.
 const personResource = testDataResource("people.Person", {
@@ -308,7 +305,8 @@ const backendField = { name: "backend_class", label: "Backend" } satisfies FormF
 /**
  * Old archive's Backend is editable: it carries the warning mark "Not registered", described "Its
  * implementation cannot run until another is chosen.", and its select offers Local folder and S3
- * bucket. Choosing one clears the mark; a rename saves either way and keeps the key until one is.
+ * bucket. Choosing one clears the mark, and saving it keeps the choice. Renaming it saves, and
+ * Backend keeps its mark.
  */
 export const ImplementationKeyNotRegistered: Story = {
   render: () => (
@@ -318,7 +316,7 @@ export const ImplementationKeyNotRegistered: Story = {
 
 /**
  * The same record with Backend create-only: read-only here, its mark is described "Its implementation
- * cannot run. It cannot be changed on this record."; a rename still saves.
+ * cannot run. It cannot be changed here." Renaming it saves, and Backend keeps its mark.
  */
 export const ImplementationKeyNotRegisteredCreateOnly: Story = {
   name: "Implementation Key Not Registered, Create-only",

@@ -722,7 +722,7 @@ export const enUiMessages: Record<string, string> = {
   "select.label": "Select",
   "implementation.notRegistered": "Not registered",
   "implementation.cannotRunUntilChosen": "Its implementation cannot run until another is chosen.",
-  "implementation.cannotRunUnchangeable": "Its implementation cannot run. It cannot be changed on this record.",
+  "implementation.cannotRunUnchangeable": "Its implementation cannot run. It cannot be changed here.",
   "date.select": "Select date",
   "date.label": "Date",
   "date.clear": "Clear",
