@@ -9,6 +9,7 @@ import email.policy
 import functools
 import inspect
 import itertools
+import json
 import logging
 import math
 import os
@@ -17,7 +18,7 @@ import sys
 import threading
 import time
 import zoneinfo
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from decimal import Decimal
 from email.message import EmailMessage
@@ -70,6 +71,8 @@ from angee.messaging_templates.html_checks import (
     check_html,
     compiled_expression,
 )
+from angee.messaging_templates.models import MessageTemplateQuerySet
+from angee.messaging_templates.rendering import MarkdownFormatHandler
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
@@ -184,8 +187,12 @@ def _reference_seconds() -> float:
 
 
 def _scaled(seconds: float) -> float:
-    """``seconds`` as a bound here: scaled by the reference workload measured now, in this process, so a busy machine
-    slows the case and the unit alike and the bound neither fails for a neighbour nor loosens for a fast host."""
+    """``seconds`` as a smoke bound here: scaled by the reference workload measured now, in this process.
+
+    The timed tests are a smoke measurement on the stated machine class that catches a gross regression; the counted
+    caps (the work the counted tests pin) are the guarantee. The scaling is noisy and does not track load: a case near
+    its bound can pass or fail with its neighbours, and a slower path can pass.
+    """
 
     return seconds * _reference_seconds() / NOMINAL_REFERENCE_SECONDS
 
@@ -391,7 +398,8 @@ LONG = "a" * 1_001
                      "filters an object or a list", id="5-container-filter"),
         pytest.param({"source": "{{ a|linebreaksbr:'x' }}", "variables": {"a": "x"}, "format": "html",
                       "text_source": "x"}, "linebreaksbr takes no argument", id="5-linebreaksbr-argument"),
-        pytest.param({"source": "a {{ b", "format": "html", "text_source": "x"}, "text holds {{", id="6-text-opener"),
+        pytest.param({"source": "a {{ b", "format": "html", "text_source": "x"}, "opens no template code",
+                     id="6-text-opener"),
         pytest.param({"source": "<p>{{ a }}</p>", "format": "html", "text_source": "{{ a|linebreaksbr }}",
                       "variables": {"a": "x"}}, "writes <br> into plain text", id="7-linebreaksbr-text"),
         pytest.param({"source": "Hi{% endblock %}{% block x %}X"}, "a template writes neither", id="8-author-block"),
@@ -866,16 +874,21 @@ def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
     """A NUL forged the checks' placeholders: it hid a value from the style check and raised IndexError."""
 
     del plain
+    stores_nul = connection.vendor != "postgresql"  # PostgreSQL's text columns refuse a NUL: no write stores one
     for source in ('<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>',
                    '<p title="\x009\x00">x</p>'):
         row = _unsaved(format="html", source=source, text_source="x", variables={"name": "x"})
         assert any(R.NO_CONTROL.message in refusal for refusal in _refusals(row)), source
+        if not stores_nul:
+            continue
         saved = _mail(source, {"name": "x"}, format="html", text_source="x", key="tests.nul")
         with pytest.raises(ValidationError, match="no control character"):
             _render(saved, {"name": "x"}, kit)
         with system_context(reason="tests.messaging_templates.render.nul"):
             assert saved.preview(kit=kit).rendered is None
             saved.delete()
+    if not stores_nul:
+        return
     _row("layout", "shipped", is_baseline=True)
     shipped = _row("part", "said", format="html", source="<b>Said.</b>", text_source="Said.", is_baseline=True)
     template = _row("template", "tests.said", source='{% include "parts/said" only %}', layout="shipped",
@@ -1119,7 +1132,7 @@ def test_reference_definitions_off(plain: Any) -> None:
     source = f'[r]: /u "{title}"\n\n' + "\n".join(["[r]" * 30] * 40)
     with _within(0.5):
         refusals = _refusals(_unsaved(source=source))
-        assert any("text holds {{" in message for message in refusals), refusals
+        assert any("opens no template code" in message for message in refusals), refusals
         assert not any("form holds over 60" in message for message in refusals), refusals
     with system_context(reason="tests.messaging_templates.render.forms"):
         forms = TemplateWalker().check(_unsaved(source="[r]: /u\n\n[r] and [r]")).forms
@@ -1226,7 +1239,14 @@ class _Rows:
 
     def named_rows(self, names: Iterable[str], *, language: str) -> dict[str, Any]:
         del language
-        return {name: self.rows[name] for name in names if name in self.rows}
+        found = {name: self.rows[name] for name in names if name in self.rows}
+        for row in found.values():
+            row.text_length = len(row.source) + len(row.text_source)
+            row.variables_length = len(json.dumps(row.variables, ensure_ascii=False))
+        return found
+
+    def with_text(self, rows: Mapping[str, Any]) -> Mapping[str, Any]:
+        return rows
 
     def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
         return frozenset(name for name in names if name in self.rows)
@@ -1711,7 +1731,7 @@ def test_written_past_clean_fails_the_render_before_it_renders(plain: Any, kit: 
         TemplateWarningCode.RENDER_ERROR]
     fine = _mail("Fine.", key="tests.fine")
     with system_context(reason="tests.messaging_templates.render.seed"):
-        BrandKit.objects.filter(pk=kit.pk).update(brand="not a colour")
+        BrandKit.objects.filter(pk=kit.pk).update(brand="#zzzzzz")  # seven characters, as PostgreSQL's column holds
         stale = BrandKit.objects.get(pk=kit.pk)
     with pytest.raises(ValidationError):
         _render(fine, {}, stale)
@@ -1800,6 +1820,8 @@ def test_the_markdown_pass_reads_internals_markdown_it_still_has() -> None:
     for method in ("normalizeLink", "validateLink", "add_render_rule"):
         assert callable(getattr(parser, method)), method
     assert callable(parser.inline.ruler.before) and callable(parser.core.ruler.push)
+    # The label-scan cap reads the block pass alone, before the inline pass runs.
+    assert list(inspect.signature(parser.block.parse).parameters) == ["src", "md", "env", "outTokens"]
     tokens = parser.parse("# Title\n\n[a](https://example.test/) **b**\n")
     assert [token.type for token in tokens] == [
         "heading_open", "inline", "heading_close", "paragraph_open", "inline", "paragraph_close"]
@@ -1945,7 +1967,8 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
     """A value no mail can encode is refused in prepare(), never returned in a subject or raised from preview."""
 
     del plain
-    template = _mail("Hello {{ name }}.", {"name": "x"}, subject="Hi {{ name }}", sample={"name": "a\ud800b"})
+    template = _mail("Hello {{ name }}.", {"name": "x"}, subject="Hi {{ name }}")
+    template.sample = {"name": "a\ud800b"}  # unsaved: PostgreSQL's jsonb refuses a lone surrogate
     with pytest.raises(ValidationError, match="lone surrogate") as caught:
         _render(template, {"name": "a\ud800b"}, kit)
     assert {item.code for item in caught.value.error_list} == {"invalid_values"}
@@ -2266,7 +2289,7 @@ def test_line_caps_bound_lexing(plain: Any) -> None:
             assert _refusals(_unsaved(source=source)), case
     with _within(1.0):
         admitted = (("{{" * 30 + "x" * 999)[:999] + "\n") * 50
-        assert any("text holds {{" in message for message in _refusals(_unsaved(source=admitted)))
+        assert any("opens no template code" in message for message in _refusals(_unsaved(source=admitted)))
 
 
 def test_budget_sticky_through_if(plain: Any, kit: Any) -> None:
@@ -2333,6 +2356,217 @@ def test_walk_stops_expanding_at_its_node_bound(plain: Any) -> None:
     template = _unsaved(source=fan.replace("blocks/next", "blocks/fan"), format="html", text_source="x")
     with _within(1.0):
         assert any("over 1000 nodes" in message for message in _refusals(template))
+
+
+def _text_read(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    """Record what each ``with_text`` call reads: the characters of a level's text, and of its ``variables``."""
+
+    read: list[tuple[int, int]] = []
+    with_text = MessageTemplateQuerySet.with_text
+
+    def recorded(rows: Any, named: Any) -> Any:
+        found = with_text(rows, named)
+        read.append((sum(len(row.source) + len(row.text_source) for row in found.values()),
+                     sum(len(json.dumps(row.variables, ensure_ascii=False)) for row in found.values())))
+        return found
+
+    monkeypatch.setattr(MessageTemplateQuerySet, "with_text", recorded)
+    return read
+
+
+def test_a_level_is_counted_before_its_text_is_read(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row including 600 parts of 48,999 characters made one query load 602 rows, 29.4 million characters, before
+    the source cap was tested: a level's rows now come with their text_length alone, and a level past
+    WALK_SOURCE_LIMIT is refused before any of its text is read, on the render-side judge. The console insert's walk
+    of such a level is the console module's."""
+
+    del plain
+    read = _text_read(monkeypatch)
+    for index in range(600):
+        _row("part", f"wide{index}", source="\n".join(["a" * 999] * 49))
+    wide = "\n".join("".join(f'{{% include "parts/wide{index}" only %}}' for index in range(line, line + 25))
+                     for line in range(0, 600, 25))
+    template = _unsaved(format="html", source=wide, text_source="x", key="tests.wide")
+    counts: dict[str, int] = {}
+    with system_context(reason="tests.messaging_templates.render.wide"), CaptureQueriesContext(connection) as q:
+        walk = TemplateWalker().judge(template, MessageTemplate.objects)
+    assert walk.refusals == ["tests.wide: the rows it reaches hold over 150000 characters of source"], walk.refusals
+    assert list(walk.rows) == ["tests.wide"] and read == [], read
+    counts["judge"] = len(q)
+    assert counts == WIDE_QUERIES, counts
+
+
+WIDE_QUERIES = {"judge": 1}
+"""The queries of the wide level's walks: as many as before, which loaded every row's text in the first."""
+
+
+def _filled(characters: int) -> str:
+    """Text of exactly ``characters`` characters, in lines of 999 ending in an accented and an astral character."""
+
+    lines, rest = divmod(characters, 1_000)
+    return ("x" * 997 + "\u00e9\U0001f600\n") * lines + "x" * rest
+
+
+def test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unread(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap counts characters as len() does, astral ones included, on PostgreSQL and SQLite alike: a tree holding
+    exactly WALK_SOURCE_LIMIT renders, its level read whole, and one character more is refused before it is read."""
+
+    read = _text_read(monkeypatch)
+    template = _mail("\n\n".join(f'{{% include "parts/full{index}" only %}}' for index in range(3)), key="tests.full")
+    held = len(template.source) + len(template.text_source) + len(plain.source) + len(plain.text_source)
+    rows = [_row("part", f"full{index}", source=_filled(49_999)) for index in range(2)]
+    rows.append(_row("part", "full2", source=_filled(150_000 - held - 2 * 49_999)))
+    with system_context(reason="tests.messaging_templates.render.full"):
+        sized: Any = MessageTemplate.objects.named_rows(["parts/full2"], language="en")["parts/full2"]
+        assert sized.text_length == len(rows[2].source) and "\U0001f600" in rows[2].source
+        assert TemplateWalker().judge(template, MessageTemplate.objects).refusals == []
+    assert [text for text, _ in read] == [150_000 - len(template.source) - len(template.text_source)], read
+    assert "\U0001f600" in _render(template, {}, kit).plain_text
+    read.clear()
+    with system_context(reason="tests.messaging_templates.render.full"):
+        rows[2].source += "x"
+        rows[2].save()
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    assert refusals == ["tests.full: the rows it reaches hold over 150000 characters of source"], refusals
+    assert read == [], read
+
+
+def _declaring(characters: int, letter: str = "d") -> dict[str, str]:
+    """Fifty paths described in ``letter`` whose JSON holds exactly ``characters`` characters, within an author's
+    limits."""
+
+    described = characters - 2 - 50 * 9 - 49 * 2  # braces, '"v00": ""' a path, ', ' between them
+    share, rest = divmod(described, 50)
+    return {f"v{index:02}": letter * (share + (index < rest)) for index in range(50)}
+
+
+def test_a_level_s_variables_are_counted_before_they_are_read(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """400 parts each declaring one 40,000-character description, or one 40,000-character path, were admitted, and
+    every walk of a template including them loaded 16 million characters of variables: an author's row can no longer
+    declare either, and a level whose stored variables would carry the walk past WALK_VARIABLES_LIMIT is refused
+    before they are read, on the render-side judge. The console insert's walk of such a level is the console
+    module's."""
+
+    del plain
+    read = _text_read(monkeypatch)
+    shapes = {"described": {"a": "d" * 40_000}, "named": {"a" * 40_000: "x"}}
+    codes = {"described": "variable_description_too_long", "named": "variable_path_too_long"}
+    counts: dict[str, int] = {}
+    for shape, variables in shapes.items():
+        with pytest.raises(ValidationError) as refused, system_context(reason="tests.messaging_templates.render"):
+            _unsaved("part", "alone", variables=variables).full_clean()
+        assert [error.code for error in refused.value.error_dict["variables"]] == [codes[shape]]
+        for index in range(400):
+            _row("part", f"{shape}{index}", source="x", variables=variables)  # stored past clean, as before
+        source = "\n".join("".join(f'{{% include "parts/{shape}{index}" only %}}' for index in range(line, line + 25))
+                           for line in range(0, 400, 25))
+        template = _unsaved(format="html", source=source, text_source="x", key=f"tests.{shape}")
+        with system_context(reason="tests.messaging_templates.render.declared"), CaptureQueriesContext(connection) as q:
+            walk = TemplateWalker().judge(template, MessageTemplate.objects)
+        assert walk.refusals == [f"tests.{shape}: the rows it reaches declare over 100000 characters of variables"]
+        assert list(walk.rows) == [f"tests.{shape}"] and read == [], read
+        counts[f"{shape} judge"] = len(q)
+    assert counts == DECLARED_QUERIES, counts
+
+
+DECLARED_QUERIES = {"described judge": 1, "named judge": 1}
+"""The queries of those walks: the level's query, which no longer reads its rows' variables, and nothing after it."""
+
+
+def test_a_walk_at_the_variables_cap_renders_and_one_character_more_is_refused_unread(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The walk counts a declaration in characters: a tree declaring exactly WALK_VARIABLES_LIMIT renders, its level
+    read whole, and one character more is refused before the level is read. On PostgreSQL the jsonb text is as long as
+    json.dumps writes it unescaped, so the descriptions are Cyrillic there; SQLite holds Django's escapes, so they are
+    ASCII there, and a Cyrillic one counts six a character (the SQLite line of WALK_VARIABLES_LIMIT)."""
+
+    del plain
+    letter = "\u0436" if connection.vendor == "postgresql" else "d"
+    read = _text_read(monkeypatch)
+    template = _mail("\n\n".join(f'{{% include "parts/declared{index}" only %}}' for index in range(2)),
+                     key="tests.declared")
+    held = len(json.dumps(template.variables)) + len(json.dumps({}))  # the template and its layout
+    rows = [_row("part", "declared0", source="x", variables=_declaring(50_000, letter)),
+            _row("part", "declared1", source="x", variables=_declaring(100_000 - held - 50_000, letter))]
+    assert max(len(path) for row in rows for path in row.variables) <= 200
+    assert max(len(text) for row in rows for text in row.variables.values()) < 1_000
+    with system_context(reason="tests.messaging_templates.render.declared"):
+        for row in rows:
+            row.full_clean()
+        sized: Any = MessageTemplate.objects.named_rows(["parts/declared1"], language="en")["parts/declared1"]
+        assert sized.variables_length == len(json.dumps(rows[1].variables, ensure_ascii=False)), sized.variables_length
+        assert TemplateWalker().judge(template, MessageTemplate.objects).refusals == []
+    assert [declared for _, declared in read] == [100_000 - len(json.dumps(template.variables))], read
+    assert _render(template, {}, kit).plain_text
+    read.clear()
+    with system_context(reason="tests.messaging_templates.render.declared"):
+        rows[1].variables["v00"] += letter
+        rows[1].save()
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    assert refusals == ["tests.declared: the rows it reaches declare over 100000 characters of variables"], refusals
+    assert read == [], read
+    if connection.vendor == "sqlite":
+        escaped = _row("part", "escaped", source="x", variables={"a": "\u0436" * 10})
+        with system_context(reason="tests.messaging_templates.render.declared"):
+            stored: Any = MessageTemplate.objects.named_rows(["parts/escaped"], language="en")["parts/escaped"]
+        # Ten escapes of six characters, and '{"a": ""}'.
+        assert stored.variables_length == len(json.dumps(escaped.variables)) == 69
+
+
+@pytest.mark.parametrize("letter", ["\u0436", "\u4e2d", "\U00020000"], ids=["cyrillic", "cjk", "astral"])
+def test_a_declaration_in_any_script_is_counted_in_characters(plain: Any, kit: Any, letter: str) -> None:
+    """A part declaring 20 paths, each described in 1,000 Cyrillic, CJK or astral characters (20,220 characters, within
+    an author's limits), was counted in JSON escapes, six a character or twelve, so its own full_clean() refused it and
+    it could not be previewed: a row's walk now counts characters. Included by a template, it renders on PostgreSQL,
+    whose jsonb text counts characters too; on SQLite the level's count reads Django's escaped text, 120,220 or
+    240,220, and refuses it, the documented SQLite limit."""
+
+    del plain
+    part = _unsaved("part", "script", source="Said.", variables={f"v{index:02}": letter * 1_000 for index in range(20)})
+    assert len(json.dumps(part.variables, ensure_ascii=False)) == 20_220
+    with system_context(reason="tests.messaging_templates.render.script"):
+        part.full_clean()
+        part.save()
+        assert part.preview(kit=kit).rendered is not None
+    template = _mail('{% include "parts/script" only %}', key="tests.script")
+    with system_context(reason="tests.messaging_templates.render.script"):
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    if connection.vendor == "postgresql":
+        assert refusals == [], refusals
+        assert "Said." in _render(template, {}, kit).plain_text
+    else:
+        assert refusals == ["tests.script: the rows it reaches declare over 100000 characters of variables"], refusals
+        assert len(json.dumps(part.variables)) in (120_220, 240_220)
+
+
+def test_an_author_s_paths_and_descriptions_are_held_to_their_lengths_and_a_stored_row_still_renders(
+    plain: Any, kit: Any,
+) -> None:
+    """A root is loaded by its caller, uncounted by any level read, so clean() holds an author's row to paths of 200
+    characters and descriptions of 1,000; a row stored longer before the rule renders until it is next edited, its
+    declaration counted by the walk's cap, and its next full_clean() refuses it."""
+
+    del plain
+    for variables, code in (({"a" * 201: "x"}, "variable_path_too_long"),
+                            ({"a": "d" * 1_001}, "variable_description_too_long")):
+        with pytest.raises(ValidationError) as refused, system_context(reason="tests.messaging_templates.render"):
+            _unsaved(variables=variables).full_clean()
+        assert [error.code for error in refused.value.error_dict["variables"]] == [code], refused.value
+    with system_context(reason="tests.messaging_templates.render"):
+        _unsaved(variables={"a" * 200: "d" * 1_000}).full_clean()
+    stored = _mail("Hello.", {"a" * 300: "d" * 5_000}, key="tests.stored")
+    assert _render(stored, {}, kit).plain_text.strip() == "Hello."
+    with system_context(reason="tests.messaging_templates.render"):
+        assert stored.preview(kit=kit).rendered is not None
+        stored.name = "Renamed"
+        with pytest.raises(ValidationError) as refused:
+            stored.full_clean()
+    assert [error.code for error in refused.value.error_dict["variables"]] == ["variable_path_too_long"]
 
 
 def test_walk_character_cap(plain: Any) -> None:
@@ -2406,7 +2640,7 @@ def _pass_case(name: str) -> tuple[TemplateWalk, dict[str, Any]]:
     return _walk(template), values
 
 
-ADMITTED_PREVIEWS = ("admitted", "review", "dated")
+ADMITTED_PREVIEWS = ("admitted", "review", "dated", "onebracket")
 
 
 def _preview_cases() -> dict[str, Any]:
@@ -2470,12 +2704,68 @@ def _preview_cases() -> dict[str, Any]:
         **{name: _mail("\n".join(f'{{% include "parts/{name}{index}" only %}}' for index in range(count)),
                        format="html", text_source="x", key=f"tests.{name}")
            for name, (_, count) in WALKED_PARTS.items()},
+        "onebracket": _bracketed("onebracket", "![" + STARS[:997]),
+        "images": _bracketed("images", IMAGES),
         "combined": _mail(
             combined + "\n" + "\n".join(f'{{% include "parts/commented{index}" only %}}' for index in range(45)),
             {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"}, format="html", text_source=combined,
             key="tests.combined", subject=LINE, sample={**review, "items": [0] * 450, "few": [0] * 50},
         ),
     }
+
+
+STARS = ("*_" * 499)[:999]
+IMAGES = "".join(("![" if index % 33 == 0 else "") + "*_" for index in range(485))[:999]
+"""A line of emphasis delimiters, and one with thirty image openers among them: an author's costliest Markdown."""
+
+
+def _bracketed(prefix: str, first: str) -> Any:
+    """The review loop beside three commented parts of star lines, each opening on ``first``: the same caps."""
+
+    lines = "\n".join([first] + [STARS] * 48)
+    heavy = _loop(DATED + _deep_ifs(10) + CHAINS)
+    hidden = f'\n{{% include "parts/{prefix}0" only %}}{{% include "parts/{prefix}1" only %}}'
+    commented = "{% comment %}\n\n" + lines + "\n\n{% endcomment %}"
+    for index in range(2):
+        _row("part", f"{prefix}{index}", source=commented)
+    room = 150_000 - len(heavy + hidden) - len(heavy) - 2 * len(commented) - 300
+    _row("part", f"{prefix}2", source="{% comment %}\n\n" + lines[:room] + "\n\n{% endcomment %}")
+    return _mail(heavy + hidden + f'{{% include "parts/{prefix}2" only %}}',
+                 {**TIMED_VARIABLES, "x": "x", "y": "x", "few.*": "x"}, format="html", text_source=heavy,
+                 key=f"tests.{prefix}", subject=LINE,
+                 sample={**TIMED_VALUES, "x": "a" * 9_999 + "b", "y": "a" * 9_999 + "c", "items": [0] * 450,
+                         "few": [0] * 50})
+
+
+def test_a_markdown_row_s_label_scans_are_capped(plain: Any) -> None:
+    """Each [ makes the Markdown pass scan the rest of its paragraph, list item or heading: a row whose scans would
+    cover over 50,000 characters is refused before the pass runs; one [ before a whole paragraph, and a list of fifty
+    links, are admitted."""
+
+    del plain
+    paragraph = "\n".join(["![" + STARS[:997]] + [STARS] * 48)
+    assert _refusals(_unsaved("part", "one", source="{% comment %}\n\n" + paragraph + "\n\n{% endcomment %}")) == []
+    links = "\n".join(f"- [Link {index}](https://example.test/{index})" for index in range(50))
+    assert _refusals(_unsaved("part", "list", source=links)) == []
+    for source in ("![![" + paragraph[4:], "\n".join([IMAGES] * 49)):
+        refusals = _refusals(_unsaved("part", "many", source=source))
+        assert len(refusals) == 1 and "would scan across" in refusals[0] and "over 50000" in refusals[0], refusals
+
+
+def test_an_opener_that_opens_no_template_code_is_refused_before_the_markdown_pass(
+    plain: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unclosed {{ inside a comment renders nothing, but the Markdown pass scanned each to the end of its line:
+    refused before it runs, comments included; template code holding {{ as text stays."""
+
+    del plain
+    passes: list[Any] = []
+    _recording(monkeypatch, MarkdownFormatHandler, "forms", lambda handler, row: passes.append(row))
+    refusals = _refusals(_unsaved("part", "open", source="{% comment %}{{ x{% endcomment %}"))
+    assert refusals == ["parts/open: source holds {{, {% or {# that opens no template code: write "
+                        "{% templatetag openvariable %} and its kin for a literal one"], refusals
+    assert passes == []
+    assert _refusals(_unsaved("part", "noted", source="Hi {# a {{ b #}")) == []
 
 
 COMMENTED_QUOTES = "{% comment %}\n\n" + "\n\n".join(["> > > a"] * 333) + "\n\n{% endcomment %}"
@@ -2504,22 +2794,23 @@ CHECKED_FOR_THE_READ_CAP = 4
 
 
 WALKED_PARTS = {
-    "quotes": ("\n\n".join(["> > > a"] * 50), 325),
-    "single": ("\n\n".join(["> a"] * 150), 195),
-    "fivedeep": ("\n\n".join(["> > > > > a"] * 200), 57),
+    "quotes": ("\n\n".join(["> > > a"] * 50), 309),
+    "single": ("\n\n".join(["> a"] * 150), 190),
+    "fivedeep": ("\n\n".join(["> > > > > a"] * 200), 56),
     "thousand": ("\n\n".join(["> a"] * 1_000), 29),
 }
-"""Templates including many Markdown parts of quotes, each quote an element carrying two brand outputs: 325 parts of
-three-deep quotes and 195 of single ones, each admitted alone; 57 of five-deep quotes and 29 of a thousand, written
+"""Templates including many Markdown parts of quotes, each quote an element carrying two brand outputs: 309 parts of
+three-deep quotes and 190 of single ones, each admitted alone; 56 of five-deep quotes and 29 of a thousand, written
 past their check. A walk over them cost 2.4 to 3.9 s of CPU before the tree's caps refused it; it now stops as soon as
-the rows it has checked pass one."""
+the rows it has checked pass one. Each is the most whose level fits WALK_SOURCE_LIMIT, since a level past it is refused
+before any of its rows is checked, so these hold the tree's caps to the walk."""
 
 
 def test_a_walk_over_parts_each_admitted_alone_stops_at_the_trees_caps(
     plain: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A part of 50 three-deep quotes passes clean() alone; a template including 325 of them is refused after the
-    template, its layout and one part are checked, at the tree's caps, never after all 325."""
+    """A part of 50 three-deep quotes passes clean() alone; a template including 309 of them is refused after the
+    template, its layout and one part are checked, at the tree's caps, never after all 309."""
 
     del plain
     source, count = WALKED_PARTS["quotes"]
@@ -2557,8 +2848,77 @@ def test_a_saving_walk_resolves_a_level_in_one_query(plain: Any) -> None:
     assert len(queries) == SAVING_WALK_QUERIES, len(queries)
 
 
-SAVING_WALK_QUERIES = 22
-"""The queries of that saving walk: 520 before a level resolved in one query."""
+SAVING_WALK_QUERIES = 24
+"""The queries of that saving walk: 520 before a level resolved in one query, and 22 before a level's text was read
+after its sizes, one query a level more."""
+
+
+def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(plain: Any, kit: Any) -> None:
+    """A chain of 900 includes cost a query or more a level: the gather now stops at the depth a tree reaches, in the
+    tree's own words, so the saving walk and the render-side judge each make queries bounded by INCLUDE_DEPTH_LIMIT,
+    whatever the chain's length. The console insert's walk of a chain is the console module's."""
+
+    del plain
+    for index in range(900):
+        source = "x" if index == 899 else f'{{% include "parts/chain{index + 1}" only %}}'
+        _row("part", f"chain{index}", source=source)
+    counts: dict[str, int] = {}
+    for length in (5, 900):
+        head = _unsaved("part", f"head{length}", source=f'{{% include "parts/chain{900 - length}" only %}}')
+        with system_context(reason="tests.messaging_templates.render.chain"), CaptureQueriesContext(connection) as q:
+            with pytest.raises(ValidationError) as raised:
+                head.full_clean()
+        assert raised.value.messages == [f"parts/chain{902 - length}: includes nest over 3 deep"], raised.value
+        counts[f"saving {length}"] = len(q)
+    template = _mail('{% include "parts/chain0" only %}', key="tests.chained")
+    with system_context(reason="tests.messaging_templates.render.chain"), CaptureQueriesContext(connection) as q:
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    assert refusals == ["parts/chain2: includes nest over 3 deep"]
+    counts["judge"] = len(q)
+    assert counts == CHAIN_QUERIES, counts
+
+
+CHAIN_QUERIES = {"saving 5": 27, "saving 900": 27, "judge": 6}
+"""The queries each walk of a chain makes; before the gather stopped at the tree's depth, a 900 chain cost 1,018 as
+system work and 499 on the render-side judge. Reading a level's text after its sizes adds one query to each of the
+three levels a walk reads (24, 24 and 3 before)."""
+
+
+def test_an_include_inside_a_condition_keeps_the_condition(plain: Any, kit: Any) -> None:
+    """An include inside {% if link %} read link through a fresh frame without the caller's guard, so link became
+    required: the included row now keeps the guards on the values it is passed, as the same content inline does, and a
+    value it reads unguarded is still required."""
+
+    del plain
+    _row("part", "linked", format="html", source='<a href="{{ link|url }}">Open</a>', text_source="{{ link|url }}",
+         variables={"link": "x"})
+    _row("part", "both", format="html", source="{{ link|url }} {{ other }}", text_source="{{ other }}",
+         variables={"link": "x", "other": "x"})
+    inline = _mail('{% if link %}<a href="{{ link|url }}">Open</a>{% endif %}', {"link": "x"}, format="html",
+                   text_source="{% if link %}{{ link|url }}{% endif %}", key="tests.inline")
+    included = _mail('{% if link %}{% include "parts/linked" with link=link only %}{% endif %}', {"link": "x"},
+                     format="html", text_source="x", key="tests.included", sample={})
+    for template in (inline, included):
+        assert _walk(template).required == set(), template.key
+        for values in ({"link": "https://example.test/"}, {"link": None}, {}):
+            _render(template, values, kit)
+    with system_context(reason="tests.messaging_templates.render.guard"):
+        assert included.preview(kit=kit).rendered is not None
+    leaking = _mail('{% if link %}{% include "parts/both" with link=link other=other only %}{% endif %}',
+                    {"link": "x", "other": "x"}, format="html", text_source="x", key="tests.leaking")
+    assert _walk(leaking).required == {("other",)}
+
+
+def test_a_chain_at_the_include_depth_renders(plain: Any, kit: Any) -> None:
+    """A template including a chain exactly INCLUDE_DEPTH_LIMIT deep is admitted and renders every link."""
+
+    del plain
+    for index in range(3):
+        source = "Last." if index == 2 else f'Link {index}.\n\n{{% include "parts/link{index + 1}" only %}}'
+        _row("part", f"link{index}", source=source)
+    template = _mail('{% include "parts/link0" only %}', key="tests.linked")
+    assert _refusals(template) == []
+    assert "Last." in _render(template, {}, kit).plain_text
 
 
 def test_a_walk_compiles_each_span_once(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2666,11 +3026,18 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
     "refused": (100_012, [], []),
     # Refused at the root's own check: its form holds over 2,000 spans, so no part is reached and nothing walked.
     "headings": (49_076, [], []),
-    "quotes": (12_577, [], []),
-    "single": (8_067, [], []),
-    "fivedeep": (4_968, [], []),
+    "quotes": (11_985, [], []),
+    "single": (7_882, [], []),
+    "fivedeep": (4_930, [], []),
     "thousand": (6_304, [], []),
     "combined": (19_515, [], []),
+    # The costliest admitted Markdown: the review case's work exactly, its parts opening on one [ each.
+    "onebracket": (
+        149_985, [("html", 983, 4, 144), ("text", 966, 0, 42), ("subject", 8, 0, 0), LINES[1]],
+        [(50, 0, 30_000), (453, 18_900, 450_000), (450, 18_900, 450_000)],
+    ),
+    # Refused by each part's own label-scan cap, before the Markdown pass runs.
+    "images": (149_981, [], []),
     "rules": (49_068, [], []),
     "dated": (
         23_322, [("html", 579, 284, 382), ("text", 569, 280, 281), *LINES], [(0, 0, 0), (500, 0, 0), (500, 0, 0)],
@@ -2720,7 +3087,8 @@ def test_the_costliest_preview_does_bounded_work(plain: Any, kit: Any, work: dic
 @TIMED
 @pytest.mark.parametrize("name", list(PASS_CASES))
 def test_pass_time(plain: Any, kit: Any, name: str) -> None:
-    """One pass of the costliest rows the caps admit takes under a second of CPU (passes 2 to 4, one heavy)."""
+    """A smoke measurement: one pass of the costliest rows the caps admit stays under a second of CPU at the reference
+    (passes 2 to 4, one heavy). The counted work of ``test_the_costliest_pass_does_bounded_work`` is the guarantee."""
 
     del plain
     walk, values = _pass_case(name)
@@ -2734,9 +3102,10 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest previews and renders the caps admit take under two seconds of CPU, and so do their walk and
-    prepare() alone, and ``review`` written into another saved row as a patch, validated as its save would be; the
-    refused cases stop as soon."""
+    """A smoke measurement: the costliest previews and renders the caps admit, their walks and prepare(), and
+    ``review`` written into another saved row as a patch, validated as its save would be, stay under two seconds of
+    CPU at the reference, and the refused cases stop as soon. It catches a gross regression; the counted work of
+    ``test_the_costliest_preview_does_bounded_work`` is the guarantee."""
 
     del plain
     cases, edited, patch = _patched_cases()
@@ -2768,6 +3137,8 @@ def test_preview_time(plain: Any, kit: Any) -> None:
     bound = _scaled(2.0)
     print(f"preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < bound, (spent, bound)
+    # The costliest admitted Markdown, measured back to back with the review case it extends.
+    assert spent["onebracket"] < 1.3 * spent["review"], spent
 
 
 PATCHED_COLUMNS = ("source", "text_source", "subject", "variables", "sample")
@@ -3093,6 +3464,51 @@ def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
         for user, code in ((admin, "VALIDATION"), (member, "PERMISSION_DENIED")):
             result = execute_schema(schema, _UPDATE, {"id": public_id_of(own), "set": written}, user=user)
             assert [(error.extensions or {}).get("code") for error in result.errors or ()] == [code], (written, user)
+
+
+def test_the_console_stores_a_carriage_return_as_a_newline(plain: Any, kit: Any) -> None:
+    """A writer that saves an instance clean() never saw lost clean()'s newlines: every writer now stores a carriage
+    return as a newline, a save past clean() and a console update alike, the content hash describes what is stored,
+    and the row renders. The console insert, which seeds its text, is the console module's."""
+
+    del plain
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    admin = create_platform_admin("messaging-templates-crlf")
+    written = {"source": "<p>a</p>\r\n<p>b</p>", "text_source": "a\r\nb", "subject": "Hi\r\nthere",
+               "preheader": "pre\rheader"}
+    _row("template", "tests.crlf", format="html", layout="plain", **written)
+    with system_context(reason="tests.messaging_templates.render.crlf"):
+        row = MessageTemplate.objects.get(key="tests.crlf")
+        assert not any("\r" in getattr(row, column) for column in written), [getattr(row, c) for c in written]
+        assert row.content_hash == row.compute_content_hash()
+        assert row.preview(kit=kit).rendered is not None
+    assert _render(row, {}, kit).subject == "Hi there"
+    result = execute_schema(schema, _UPDATE, {"id": public_id_of(row), "set": {"source": "<p>c</p>\r\n"}}, user=admin)
+    assert result.errors is None, result.errors
+    with system_context(reason="tests.messaging_templates.render.crlf"):
+        row.refresh_from_db()
+    assert row.source == "<p>c</p>\n" and row.content_hash == row.compute_content_hash()
+
+
+def test_a_partial_save_hashes_what_the_row_stores(plain: Any) -> None:
+    """A save naming some hashed columns hashed the instance's other values too, stored or not: it now hashes the
+    stored values of the columns it omits, read under a lock, so the hash describes the stored row."""
+
+    del plain
+    row = _row("part", "partial", source="One.")
+    with system_context(reason="tests.messaging_templates.render.partial"):
+        row.source, row.text_source = "Two.", "never stored"
+        row.save(update_fields=["source"])
+        stored = MessageTemplate.objects.get(pk=row.pk)
+        assert (stored.source, stored.text_source) == ("Two.", "")
+        assert stored.content_hash == stored.compute_content_hash()
+        first, second = MessageTemplate.objects.get(pk=row.pk), MessageTemplate.objects.get(pk=row.pk)
+        second.variables = {"a": "x"}
+        second.save()
+        first.source = "Three."
+        first.save(update_fields=["source"])  # first still holds the variables second replaced
+        stored = MessageTemplate.objects.get(pk=row.pk)
+        assert stored.variables == {"a": "x"} and stored.content_hash == stored.compute_content_hash()
 
 
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(

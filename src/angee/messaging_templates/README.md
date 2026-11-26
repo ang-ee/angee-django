@@ -38,7 +38,12 @@ write-once kind, key, language and flag, so the querysets refuse `update()`,
 `variables` declares the values a row reads, as dotted paths of lower-case names
 to a description (`{"order.total": "The total, formatted"}`); a later segment may
 be `*`, every item of a list (`tags.*`). A block's or part's `variables` are its
-arguments. A row declares at most 50 paths, each joining at most 8 names. No path
+arguments. A row declares at most 50 paths, each joining at most 8 names, a path
+of at most 200 characters (`MAX_VARIABLE_PATH_LENGTH`) and a description of at most
+1,000 (`MAX_VARIABLE_DESCRIPTION_LENGTH`). `clean()` holds an author's row to the two
+lengths; a walk judges a stored row's grammar without them, so a row stored longer
+renders until it is next edited, its declaration counted by the walk's
+`WALK_VARIABLES_LIMIT`, and its next `full_clean()` refuses it under `variables`. No path
 is a proper prefix of another, none reads one value both as a list and as an
 object (`items.*` beside `items.count`), and none starts with a name the mail
 around a row supplies (`brand`, `lang`, `dir`, `subject`, `preheader`) or Django's
@@ -109,7 +114,7 @@ the table as a whole.
 | Filters | `ALLOWED_FILTERS`: Django's thirteen and `url`; at most four to an expression; literal arguments | `register`; walker `_RowRules.expression` | `test_the_walker_refuses_each_rule` |
 | Filter order and markup | `MARKUP_FILTERS` (`linebreaksbr`) the last filter of a printed value; `url` last, after `default` alone; `date` first; no other filter's result marked safe | `_RowRules.expression`; engine `_charged` | `test_a_cut_line_break_is_refused_since_markup_is_the_last_filter`, `test_only_a_markup_filter_returns_markup`, `test_no_chain_of_filters_lets_a_value_become_markup` |
 | Literals | no `<`, `>` or `"`; at most 200 characters; never `_(…)` | walker `_literal_refusal` | `test_the_walker_refuses_each_rule` |
-| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); `clean()` writes a carriage return as a newline; in no column a lone surrogate, a NUL, a value nested over 64 levels, what JSON cannot write (NaN, an infinity, over 4,300 digits), nor `None` where the column is not null, refused by `clean_fields()` before anything hashes or stores it | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean_fields`, `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline`, `test_clean_raises_only_validation_error_and_what_it_admits_saves`, `test_a_nul_is_refused_by_full_clean`, `test_the_console_refuses_what_no_column_can_store` |
+| A row's characters | none of `CONTROL_CHARACTERS` and no carriage return (rule 1); every save writes a carriage return as a newline, as `clean()` does; in no column a lone surrogate, a NUL, a value nested over 64 levels, what JSON cannot write (NaN, an infinity, over 4,300 digits), nor `None` where the column is not null, refused by `clean_fields()` before anything hashes or stores it | walker `_check`, `check_html` (`SOURCE_CONTROLS`), `MessageTemplate.clean_fields`, `MessageTemplate.clean` | `test_a_row_holds_no_control_character_and_a_return_is_a_newline`, `test_the_console_stores_a_carriage_return_as_a_newline`, `test_clean_raises_only_validation_error_and_what_it_admits_saves`, `test_a_nul_is_refused_by_full_clean`, `test_the_console_refuses_what_no_column_can_store` |
 | HTML spelling | `SpellingRule` 2 to 6 and 8 | [HTML checks](html_checks.py) | `test_each_spelling_rule_refuses_with_its_message`, `test_the_strict_spelling_admits_what_every_reader_reads_alike`, `test_a_refusal_says_how_to_write_the_row` |
 | Elements | `MAIL_ELEMENTS`, for start and end tags alike; `OFFICE_ELEMENTS` inside a layout's Outlook comment alone | HTML checks (rule 7) | `test_a_mail_is_written_with_its_own_elements_and_attributes` |
 | Attributes | `MAIL_ATTRIBUTES`; a link attribute on the elements it links on alone (`LINK_ATTRIBUTES`: `href` on `a`, `src` on `img`, `background` on `body`, `table`, `td`, `th`, `cite` on `blockquote`) | HTML checks | `test_a_mail_is_written_with_its_own_elements_and_attributes`, `test_link_attributes_follow_url_and_text_attributes_are_text` |
@@ -123,7 +128,7 @@ the table as a whole.
 | Numbers and dates | a number a float holds where `floatformat` or `pluralize` reads it; a date, or an aware datetime where a time is printed, where `date` reads it | `TemplateWalk.prepare` | `test_cheap_filters_spend_a_constant_and_a_raw_number_is_text`, `test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date` |
 | Conditions | at most `CONDITION_OPERATOR_LIMIT` (10) operators, each a node; a test reads a declared value, its length or a name the mail supplies; `in` takes a literal | walker | `test_a_condition_holds_at_most_ten_operators_each_a_node`, `test_condition_filters_refused` |
 | Work | not a list but caps, each bounding the work where it applies: see the next table | walker, engine | the timed and counted cases named there |
-| Markdown | raw HTML off; template spans whole; a link's target one output through `url` | `MarkdownFormatHandler` | `test_markdown_spans_reach_the_engine_whole`, `test_a_markdown_link_whose_label_and_target_are_values_is_admitted` |
+| Markdown | raw HTML off; template spans whole; a link's target one output through `url`; what its `[` make the pass scan, `MARKDOWN_LABEL_SCAN_LIMIT` | `MarkdownFormatHandler` | `test_markdown_spans_reach_the_engine_whole`, `test_a_markdown_link_whose_label_and_target_are_values_is_admitted` |
 | Subject and preheader | one line; the control characters and the bidirectional overrides dropped; every encoded-word opener broken to `= ?` (`ENCODED_WORD_OPENER`: `=?`, a charset, `?`, `b` or `q`, `?`, in either case, terminated or not, inside a word too); at most 1,000 characters | walker `_one_line` | `test_subject_and_preheader_drop_control_and_bidirectional_characters`, `test_a_subject_never_holds_an_encoded_word`, `test_a_subject_never_becomes_an_encoded_word` (the standard library's header machinery the judge) |
 | Author CSS | not closed: the text an author writes in a `<style>` element or a `style` attribute. A value reaches it as the brand's outputs (above), or by the author's own choice: CSS reads an output's attribute (`content: attr(title)`, `[title^=…]` selectors) | — | — |
 
@@ -142,13 +147,35 @@ preview's 2 s (`review patched` in `test_preview_time`).
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|
-| One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`; then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`: the costliest row checks |
+| One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, no opener that opens no template code, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`, `MARKDOWN_LABEL_SCAN_LIMIT` (50,000 characters of label scans, from the block pass alone); then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`, `images`: refused before the Markdown pass; the construct table below |
 | One form, straight after the Markdown pass | `FORM_SPAN_LIMIT` (2,000 spans), `TEXT_LIMIT` characters of text, `FORM_OPENERS_PER_LINE` | `headings`, `rules`, refused before the HTML checks read them |
-| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; `review`, the worst admitted walk; `test_a_saving_walk_resolves_a_level_in_one_query` (22 queries) |
+| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source), each level counted from its rows' `text_length` (the database's `Length`, in characters) before their text is read; `WALK_VARIABLES_LIMIT` (100,000 characters of the rows' `variables` as JSON), each level counted from its rows' `variables_length` before their `variables` are read, and each row again in characters (`json.dumps(..., ensure_ascii=False)`): a bound, not an exact count. On PostgreSQL the two agree in length; on SQLite the level's count reads Django's stored text, which writes each non-ASCII character as a six-character escape (an astral one as twelve), so there the rows a walk includes declare at most about 16,600 non-ASCII characters together (8,300 astral), while a row's own walk counts characters; `description` and `sample` never read; each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; no row fetched past `INCLUDE_DEPTH_LIMIT` includes below its tree's root; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; a chain of 900 includes: 27 queries on the saving walk, 6 on the render-side judge (`test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it`); a level of 600 parts of 48,999 characters: refused with none of its text read, in one query (`test_a_level_is_counted_before_its_text_is_read`); a tree of exactly 150,000 characters, astral ones among them, renders (`test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unread`); 400 parts each declaring one 40,000-character description or path: refused with none of their variables read (`test_a_level_s_variables_are_counted_before_they_are_read`); a tree declaring exactly 100,000 characters renders (`test_a_walk_at_the_variables_cap_renders_and_one_character_more_is_refused_unread`); `test_a_saving_walk_resolves_a_level_in_one_query` (24 queries: a level is two, its sizes and rows, then its text) |
 | Each tree a pass renders | `NODE_LIMIT`, `OUTPUT_LIMIT`, `TEXT_LIMIT`, `LOOP_DEPTH_LIMIT`, `INCLUDE_DEPTH_LIMIT` | `review` |
 | Each pass | `RenderBudget`: 500 loop or include renders, 200,000 characters of loop output, 500,000 of filter input; a tenth for the subject and preheader | `q11b-combined`, `review`'s render, `review-subject` |
 | The values | `prepare()` costs a constant per declared path per value; `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` | `dated` |
 | The call stack | the caps above keep the deepest admitted row (16 nested tags in each of four rows, three includes, two loops, a ten-operator condition) 254 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
+
+The Markdown pass and the row checks scan per opener in the inline constructs below, and nowhere else; the block
+rules scan each line once, and the HTML rules are off. Each row's worst cost is measured on one row of 49 lines of 999
+characters, the most the source caps admit, at load 49 to 52 on the machine class above (the last two rows at load 27),
+beside the review case's heaviest row (its commented emphasis runs, 0.28 s):
+
+| Construct | What scans per opener | Cap | Worst row |
+|---|---|---|---|
+| `[`, `![` (link and image labels) | markdown-it's `parseLinkLabel`, token by token to its `]` or the end of its paragraph, list item or heading | 30 a line; `MARKDOWN_LABEL_SCAN_LIMIT` a row | one `![` before a 49,000-character paragraph of emphasis runs: 0.34 s, admitted; thirty a line: refused before the pass |
+| `[…]({{ … }})` (a link to an output) | the addon's `_template_link`, a `str.find` to the end of the line | 30 `[` a line | within the line above |
+| `{{`, `{%`, `{#` (template spans) | the addon's `_template_span`, Django's `tag_re` to the end of the line | `OPENERS_PER_LINE` (30); none left unclosed | an unclosed one in a comment: refused before the pass |
+| `` ` `` (code spans) | markdown-it's backticks rule, its closers cached | the source caps | 0.13 s |
+| `<` (autolinks) | to the next `<` or `>` | the source caps | 0.18 s |
+| `&` (entities), `\` (escapes) | a bounded pattern; one character | the source caps | 0.20 s; 0.18 s |
+| `*`, `_` (emphasis runs) | markdown-it's `balance_pairs`, its openers bounded by run | the source caps | 0.28 s (the review row); `***` runs 0.23 s |
+| link reference definitions | none: the rule is off | — | — |
+| block rules: fences, indented code, block quotes, rules, lists, ATX and setext headings, paragraphs | each line once a block, linearly; its inline content then as above | the source caps; markdown-it's `maxNesting` (20) for nested lists and quotes | 0.005 s at most (49 list items; a fence opening on every line: 0.004 s), against 0.21 s for the `review` row, at load 27 |
+| HTML blocks and inline HTML | none: with `html` off both rules return at once, so a `<` is text or an autolink (above) | — | `<b>x</b>` runs: 0.05 s at load 27 |
+
+The costliest admitted template found is `onebracket`: the review case's loop beside three commented parts of
+emphasis runs, each opening on one `![`. It previews at 1.09 to 1.10 times the review case measured back to back
+(2.03 to 2.06 s against 1.85 to 1.89 s at load 55 to 57); `test_preview_time` holds it under 1.3 times.
 
 ## Rendering
 
@@ -208,7 +235,8 @@ An addon ships rows in its `install` resources, loaded through
 `MessageTemplateResource` (resources' `BaselineResource`): each is a
 **baseline**, readable by every signed-in person and written only by loads; a
 changed row in a later release re-applies to it. A row's `content_hash`
-fingerprints its kind and what it renders. A load saves rows in file order and a
+fingerprints its kind and what it renders as stored; a save naming some of those
+columns hashes the stored values of the rest, read under a lock. A load saves rows in file order and a
 save walks what the row includes, so a template's layout and every block or part
 a row includes load before it (`depends_on`).
 

@@ -96,6 +96,16 @@ LINE_LIMIT = 1_000
 OPENERS_PER_LINE = 30
 FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
+WALK_VARIABLES_LIMIT = 100_000
+"""The most characters the ``variables`` of the rows a walk reaches hold together, as JSON: counted from the
+database's text of each level before the level is read, and again in characters (``json.dumps`` with
+``ensure_ascii=False``) as each row is checked, the root among them. A bound, not an exact count: on PostgreSQL the
+``jsonb`` text agrees with the recount in length, its keys in its own order. On SQLite the level's count reads Django's
+stored text, which writes each non-ASCII character as a six-character escape (an astral one as twelve), so there the
+rows a walk includes declare at most about 16,600 non-ASCII characters together (8,300 astral), while a row's own walk
+counts characters. An author's row declares at most about 60,400 characters: 50 paths of
+:data:`~angee.messaging_templates.rendering.MAX_VARIABLE_PATH_LENGTH`, each described in
+:data:`~angee.messaging_templates.rendering.MAX_VARIABLE_DESCRIPTION_LENGTH`; so no row fills it alone."""
 WALK_READ_LIMIT = 600_000
 WALK_SPAN_READ_LIMIT = 4_000
 """What the checks of the rows a walk reaches read at most, summed as it gathers them: characters of their forms and
@@ -242,9 +252,16 @@ class WalkedRow(Protocol):
 
 
 class RowReader(Protocol):
-    """Where a walk reads the rows it names: the model's scoped manager, or a queryset of it."""
+    """Where a walk reads the rows it names: the model's scoped manager, or a queryset of it.
+
+    :meth:`named_rows` returns each row with its ``text_length``, the characters its ``source`` and ``text_source``
+    hold, and its ``variables_length``, the characters of its ``variables``, those three unread; :meth:`with_text`
+    reads them in one query, a row gone since absent.
+    """
 
     def named_rows(self, names: Iterable[str], *, language: str) -> Mapping[str, Any]: ...
+
+    def with_text(self, rows: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
     def resolving_names(self, names: Iterable[str]) -> frozenset[str]: ...
 
@@ -413,6 +430,24 @@ def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
         sum(type(node) is VariableNode for node in nodes),
         sum(len(cast(TextNode, node).s) for node in nodes if type(node) is TextNode),
     )
+
+
+def _too_much_source(root_name: str) -> str:
+    """The refusal of a walk whose rows hold over :data:`WALK_SOURCE_LIMIT` characters, counted or about to load."""
+
+    return f"{root_name}: the rows it reaches hold over {WALK_SOURCE_LIMIT} characters of source"
+
+
+def _too_much_declared(root_name: str) -> str:
+    """The refusal of a walk whose rows declare over :data:`WALK_VARIABLES_LIMIT` characters, counted or to load."""
+
+    return f"{root_name}: the rows it reaches declare over {WALK_VARIABLES_LIMIT} characters of variables"
+
+
+def _nested_too_deep(name: str) -> str:
+    """The refusal of a row whose include sits past :data:`INCLUDE_DEPTH_LIMIT`, as the tree and the gather word it."""
+
+    return f"{name}: includes nest over {INCLUDE_DEPTH_LIMIT} deep"
 
 
 def _over_caps(root_name: str, form: RowPiece, nodes: int, outputs: int, text: int) -> list[str]:
@@ -1158,7 +1193,7 @@ class TemplateWalker:
             refuse(f"{', '.join(holding)}: {rule.message} (rule {rule.value})")
             return _RowCheck(name, refusals=tuple(refusals))
         try:
-            validate_variables(row.variables)
+            validate_variables(row.variables, lengths=False)
         except ValidationError as error:
             refuse(" ".join(error.messages))
         try:
@@ -1173,6 +1208,10 @@ class TemplateWalker:
                     line.count(opener) for opener in OPENERS) > OPENERS_PER_LINE), None)) is not None:
                 refuse(f"a line of {column} is over {LINE_LIMIT} characters or holds over {OPENERS_PER_LINE} "
                        f"{{{{, {{% or {{# ({line[:40]!r})")
+            elif any(opener in tag_re.sub("", text) for opener in OPENERS):
+                # A comment swallows one at render, but the Markdown pass scans each to the end of its line first.
+                refuse(f"{column} holds {{{{, {{% or {{# that opens no template code: write "
+                       "{% templatetag openvariable %} and its kin for a literal one")
         refusals.extend(f"{name}: {reason}" for reason in markup.source_refusals(row.source))
         if refusals:
             return _RowCheck(name, refusals=tuple(refusals))
@@ -1295,21 +1334,33 @@ class TemplateWalker:
         Each checked row's own size (:attr:`_RowCheck.sizes`) adds to the walk's totals, and the walk stops as soon as
         a total passes a tree cap: every row reached is in the tree at least once, so no admitted walk reaches it.
         What each row's checks read (:attr:`_RowCheck.read`) adds up too, against :data:`WALK_READ_LIMIT`.
+        A row is fetched only at an include depth the tree reaches: the root and its layout stand at 0, a row they
+        include at 1, and a target past :data:`INCLUDE_DEPTH_LIMIT` is refused in the tree's own words
+        (:func:`_nested_too_deep`) before it is read, so a chain costs queries bounded by the limit, not its length.
+        A level is read in two queries: its rows with their ``text_length`` and ``variables_length``, then their text
+        and ``variables``, read only when the walk's counts with theirs stay within :data:`WALK_SOURCE_LIMIT` and
+        :data:`WALK_VARIABLES_LIMIT`, so a level wider than either is refused before they are fetched; a row gone
+        between the two is not found. Each row is counted again as it is checked, the root among them, so the caps
+        hold for what was read.
         """
 
         checks: dict[str, _RowCheck] = {}
         totals: dict[RowPiece, tuple[int, int, int]] = {}
-        characters = read = spans = 0
+        depths: dict[str, int] = {walk.root_name: 0}
+        includers: dict[str, str] = {}
+        characters = declaring = read = spans = 0
         level = [walk.root_name]
         while level:
             wanted: list[str] = []
             for name in level:
                 row = walk.rows[name]
                 characters += len(row.source) + len(row.text_source)
+                declaring += len(json.dumps(row.variables, default=str, ensure_ascii=False))
                 if characters > WALK_SOURCE_LIMIT:
-                    walk.refusals.append(
-                        f"{walk.root_name}: the rows it reaches hold over {WALK_SOURCE_LIMIT} characters of source",
-                    )
+                    walk.refusals.append(_too_much_source(walk.root_name))
+                    return checks
+                if declaring > WALK_VARIABLES_LIMIT:
+                    walk.refusals.append(_too_much_declared(walk.root_name))
                     return checks
                 check = checks[name] = self.check(row)
                 walk.refusals.extend(check.refusals)
@@ -1331,11 +1382,27 @@ class TemplateWalker:
                 walk.includes |= check.includes
                 layout = row.handler.layout_name(row)
                 for target in sorted(check.includes | ({layout} if layout else set())):
-                    if target not in walk.rows and target not in wanted:
+                    if target in walk.rows:
+                        continue
+                    depth = 0 if target == layout else depths[name] + 1
+                    if depth < depths.get(target, depth + 1):
+                        depths[target], includers[target] = depth, name
+                    if target not in wanted:
                         wanted.append(target)
             if walk.refusals or not wanted:
                 return checks
+            if too_deep := sorted({includers[target] for target in wanted if depths[target] > INCLUDE_DEPTH_LIMIT}):
+                walk.refusals.extend(_nested_too_deep(name) for name in too_deep)
+                return checks
             found = reader.named_rows(wanted, language=walk.language)
+            # Counted before its text is read, so a level wider than the cap costs one query of sizes, not its text.
+            if characters + sum(row.text_length for row in found.values()) > WALK_SOURCE_LIMIT:
+                walk.refusals.append(_too_much_source(walk.root_name))
+                return checks
+            if declaring + sum(row.variables_length for row in found.values()) > WALK_VARIABLES_LIMIT:
+                walk.refusals.append(_too_much_declared(walk.root_name))
+                return checks
+            found = reader.with_text(found)
             # One query a level for what a save asks of every included key, never one a target.
             resolving = reader.resolving_names(
                 [target for target in wanted if target in walk.includes]) if self.saving else frozenset()
@@ -1362,7 +1429,7 @@ class TemplateWalker:
         declared = dict(walk.rows[layout].variables) if layout else {}
         declared.update(walk.root.variables)
         try:
-            validate_variables(declared, max_paths=DECLARED_LIMIT)
+            validate_variables(declared, max_paths=DECLARED_LIMIT, lengths=False)
         except ValidationError as error:
             walk.refusals.append(f"{walk.root_name}: with its layout, {' '.join(error.messages)}")
         walk.declared = declared
@@ -1402,12 +1469,13 @@ def _date_format(expression: FilterExpression) -> str:
 
 
 def _frame(name: str, row: WalkedRow, form: RowPiece, *, top: bool, scope: Mapping[str, _Binding] | None = None,
-           loops: int = 0, includes: tuple[str, ...] = ()) -> _Frame:
+           loops: int = 0, includes: tuple[str, ...] = (),
+           guards: frozenset[tuple[str, Path]] = frozenset()) -> _Frame:
     variables = row.variables if isinstance(row.variables, dict) else {}
     leaves = frozenset(tuple(path.split(".")) for path in variables)
     return _Frame(
         name=name, row=row, form=form, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {},
-        loops=loops, includes=includes,
+        loops=loops, includes=includes, guards=guards,
     )
 
 
@@ -1660,7 +1728,7 @@ class _TreeWalker:
             self.refuse(frame, f"includes itself: {' -> '.join((*stack, target))}")
             return
         if len(stack) > INCLUDE_DEPTH_LIMIT:
-            self.refuse(frame, f"includes nest over {INCLUDE_DEPTH_LIMIT} deep")
+            self.walk.refusals.append(_nested_too_deep(frame.name))
             return
         row = self.walk.rows[target]
         arguments = row.variables if isinstance(row.variables, dict) else {}
@@ -1673,8 +1741,11 @@ class _TreeWalker:
                 self.refuse(frame, f"passes {name} to {target}, which does not declare it")
             binding = self.bind(frame, expression)
             scope[name] = _Binding(binding.kind, local=(name,), effective=binding.effective)
+        # The included row keeps the guards on the values it is passed (their effective paths), never the caller's
+        # own names, so an include inside {% if link %} reads link as optional, as the same content inline does.
+        guards = frozenset(key for key in frame.guards if key[0] == "e")
         self.nodes(
-            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack),
+            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack, guards=guards),
             self.checks[target].pieces[tree.form].nodelist,
             tree,
         )
