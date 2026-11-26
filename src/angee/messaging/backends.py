@@ -374,7 +374,9 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         """Return this channel's validated default ``(name, address)`` email sender.
 
         A backend without outbound email refuses with
-        :class:`OutboundEmailChannelMissing`.
+        :class:`OutboundEmailChannelMissing`. Whatever a backend returns,
+        ``MessageManager.compose`` lands the address in the handle owner's stored form
+        and refuses, under ``channel``, one the handle owner cannot land.
         """
 
         raise OutboundEmailChannelMissing

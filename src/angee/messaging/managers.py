@@ -101,9 +101,10 @@ from angee.messaging.constants import (
     MAX_DELIVERY_ATTEMPTS,
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
+    SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import SystemChannelBackend, header_text
+from angee.messaging.email import header_text
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -119,6 +120,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
+    from angee.messaging.email import AnymailEmailChannelBackend
     from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
@@ -3270,8 +3272,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             channel=None, parent=None, record=None, sender=None, to=to, cc=cc, bcc=bcc, subject=subject,
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
-        SystemChannelBackend.default_sender()
-        channel = apps.get_model("messaging", "Channel").objects.system_channel()
+        channel_model = apps.get_model("messaging", "Channel")
+        system_backend = cast("type[AnymailEmailChannelBackend]",
+                              channel_model.backend_class.field.resolve_class(SYSTEM_CHANNEL_BACKEND))
+        system_backend.default_sender()
+        channel = channel_model.objects.system_channel()
         return self._write_outgoing(
             replace(outgoing, channel=channel), actor=None, fingerprint={}, idempotency_key=None, admit=None,
             reason=reason,
