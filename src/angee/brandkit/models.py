@@ -50,9 +50,11 @@ from angee.base.models.base import AngeeDataModel
 from angee.base.querysets import row_lock_queryset
 from angee.base.validators import HEX_COLOR_VALIDATOR
 from angee.brandkit.fields import FontStackField
+from angee.brandkit.resources import BrandKitResource
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+from angee.resources.mixins import ResourceLoadMixin
 
 DEFAULT_DELETE_MESSAGE = "This is the default kit. Make another kit the default before deleting it."
 DEFAULT_UNTICK_MESSAGE = "This is the default kit: make another kit the default instead."
@@ -290,9 +292,10 @@ class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
         ).update(is_default=False)
 
 
-class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
+class BrandKit(ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One brand: its name, colours, fonts, logos, mail footer and voice."""
 
+    resource_class = BrandKitResource
     sqid_prefix = "bkt_"
 
     name = models.CharField(max_length=128)

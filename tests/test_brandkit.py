@@ -395,7 +395,7 @@ def test_the_kits_lock_is_one_statement_each_writer_that_needs_it_takes_once(db:
 
     A save takes it when it can move the default and not otherwise; the console
     takes it before its subject, whatever the kit, and once more when its save moves
-    the default.
+    the default; a resource load that writes kits takes it once.
     """
 
     del db
@@ -432,6 +432,8 @@ def test_the_kits_lock_is_one_statement_each_writer_that_needs_it_takes_once(db:
     assert locks(save(second)) == 1  # an edit of the default kit, which keeps it
     assert locks(console(first, {"accent": "#0e7490"})) == 1  # a console edit of a kit that is not the default
     assert locks(console(first, {"is_default": True})) == 2  # a console change of default
+    shipped = apps.get_app_config("brandkit")
+    assert locks(lambda: Resource.objects.load_addons((shipped,), tiers=[Resource.Tier.INSTALL])) == 1
 
 
 def test_the_constraint_refuses_a_second_default_written_past_the_save(db: None) -> None:

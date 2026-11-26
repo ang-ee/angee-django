@@ -68,14 +68,27 @@ def _console_update(kit: Any, tmp_path: Path) -> tuple[Callable[[], object], str
     return update, kit.name
 
 
+_SEEDED_KITS = "010_brandkit.brandkit.yaml"
+
+
+def _write_kits(tmp_path: Path, rows: list[dict[str, Any]]) -> None:
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / _SEEDED_KITS).write_text(yaml.safe_dump(rows))
+
+
+def _seed(tmp_path: Path, rows: list[dict[str, Any]]) -> Callable[[], object]:
+    """Return a load of one install-tier addon whose kit file holds ``rows``; :func:`_write_kits` changes the next."""
+
+    _write_kits(tmp_path, rows)
+    addon = make_addon(
+        name="tests.brandkit_seed", label="brandkit_seed", path=tmp_path, resources={"install": [_SEEDED_KITS]},
+    )
+    return lambda: Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL])
+
+
 def _resource_load(kit: Any, tmp_path: Path) -> tuple[Callable[[], object], str]:
     del kit
-    name = "010_brandkit.brandkit.yaml"
-    (tmp_path / "resources").mkdir()
-    row = {**ANGEE, "xref": "loaded", "name": "Loaded", "is_default": True}
-    (tmp_path / "resources" / name).write_text(yaml.safe_dump([row]))
-    addon = make_addon(name="tests.brandkit_seed", label="brandkit_seed", path=tmp_path, resources={"install": [name]})
-    return lambda: Resource.objects.load_addons((addon,), tiers=[Resource.Tier.INSTALL]), "Loaded"
+    return _seed(tmp_path, [{**ANGEE, "xref": "loaded", "name": "Loaded", "is_default": True}]), "Loaded"
 
 
 def _contend_with_a_change_of_default_part_way_through_its_lock(first: Any, contender: Callable[[], object]) -> None:
@@ -243,6 +256,27 @@ def test_a_revert_of_a_change_of_default_takes_the_kits_lock_before_any_kit() ->
 
     _contend_with_a_change_of_default_part_way_through_its_lock(first, revert)
     assert _default_names() == [demoted.name]
+
+
+def test_a_resource_load_that_changes_a_kit_and_then_states_the_default_takes_the_kits_lock_first(
+    tmp_path: Path,
+) -> None:
+    """A load writes its rows in file order, in one transaction; it takes every kit before its first row.
+
+    Without that, the first row holds the kit it changes and the second row's change
+    of default then asks for every kit, closing a cycle with a change of default that
+    holds the first kit.
+    """
+
+    default = _kit("Default")
+    load = _seed(tmp_path, [{**ANGEE, "xref": "changed", "name": "Changed"}])
+    load()
+    _write_kits(tmp_path, [
+        {**ANGEE, "xref": "changed", "name": "Changed", "voice": "Changed."},
+        {**ANGEE, "xref": "stated", "name": "Stated", "is_default": True},
+    ])
+    _contend_with_a_change_of_default_part_way_through_its_lock(default, load)
+    assert _default_names() == ["Stated"]
 
 
 def test_a_delete_waits_for_a_change_of_default_and_refuses_the_new_default() -> None:
