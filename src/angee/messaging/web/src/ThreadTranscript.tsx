@@ -494,6 +494,7 @@ function DeliveryMeta({ message, status, t, timezone }: {
   const href = value === "FAILED" || value === "UNCERTAIN" ? recordHref(MESSAGE_MODEL, message.id) : undefined;
   return <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
     <StatusBadge value={value} options={status.options} tone={status.tone} display={status.display} />
+    {/* The label precedes the time element: the namespace translator interpolates text, never an element. */}
     {due ? <span>{t(value === "DRAFT" ? "transcript.sendsAt" : "transcript.nextTry")}{" "}
       <AbsoluteTime value={due} timeZone={timezone} display="datetime" /></span> : null}
     {message.delivery_attempts > 0 && value !== "SENT"

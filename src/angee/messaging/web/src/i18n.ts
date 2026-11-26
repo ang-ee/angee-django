@@ -204,7 +204,7 @@ export const enMessagingMessages: Record<string, string> = {
   "compose.replyTo": "Reply to {author}, {time}",
   "compose.replyBox": "Reply to {author}",
   "compose.replyPrompt": "Write your reply",
-  "compose.sentFrom": "Sent from {channel}",
+  "compose.sentFrom": "Goes out from {channel}",
 
   // ThreadsPage — the threads list + detail.
   "threads.tabConversation": "Conversation",
