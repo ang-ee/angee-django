@@ -61,13 +61,30 @@ live in code docstrings.
     host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
     the same, and no setting raises it. A resource condition keeps its own
     depth bound of 12, measured by the same walk.
-  - A request body or WebSocket message nested too deeply for Python's JSON
-    decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
-    `decode_json` in `angee.base.serialization`: the GraphQL view answers
-    Strawberry's own 400, a refused view-as preview still answers its 403, the
-    GraphQL WebSocket closes with Strawberry's 4400, anonymous ingress
-    refuses it as `invalid_request`, and an agent's ACP WebSocket skips the
-    record as invalid JSON. Each raised an uncaught `RecursionError` before.
+  - A request body, WebSocket message or ACP record nested deeper than
+    `MAX_JSON_DOCUMENT_DEPTH` (128) is malformed JSON on every machine,
+    through `decode_json` in `angee.base.serialization`: the GraphQL view
+    answers Strawberry's own 400, a refused view-as preview still answers its
+    403, the GraphQL WebSocket closes with Strawberry's 4400, anonymous
+    ingress refuses it as `invalid_request`, and an agent's ACP WebSocket
+    skips the record as invalid JSON. Before, only the decoder's own limit
+    stood in the way, and on Python 3.14 it follows the thread's C stack (some
+    60,000 levels on a macOS main thread, 100,000 and more on GitHub's Linux
+    runners): past it, the decoder raised an uncaught `RecursionError`; within
+    it, the document reached the recursive walks behind the decoder. A
+    document too deep for a small thread's stack is malformed JSON too.
+  - The document bound admits every value the value bound admits. The deepest
+    envelope, a graphql-transport-ws message carrying a nested insert's line
+    field, encloses a value in 7 arrays and objects, so 71 is the least such
+    bound; a GraphQL HTTP body encloses one in 6, an ACP record its view
+    context in 4, and an ingress body its fields in 1. The rest of 128 leaves
+    an envelope room to grow and keeps graphql-core's input coercion and
+    strawberry-django-hasura's input reduction far inside Python's recursion
+    limit. `json_bound_violation` measures it, without the member bound.
+  - `angee.integrate` decodes a pasted key file and a vendor's error body
+    through `decode_json` as well: a key file nested past the document bound
+    is refused as "Paste the provider's JSON key file.", and a refusal keeps
+    no body nested past it.
   - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
     through nested lists and expands shared references; bounding it belongs to
     that library's own release.
