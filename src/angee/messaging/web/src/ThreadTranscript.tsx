@@ -134,24 +134,22 @@ export function ThreadTranscript({
   const replying = reply && target?.threadId === threadId ? target.parent : null;
   // Raised after a send: the body shows its last row (an anchored transcript returns to the latest instead).
   const [revealLatest, setRevealLatest] = React.useState(0);
-  const rootRef = React.useRef<HTMLDivElement>(null);
+  // Where focus goes once the box closes: a row's Reply, else the list, once the rows of the
+  // window it asks for have rendered (an anchored send returns to the latest, a new set of rows).
+  const [focusAfter, setFocusAfter] = React.useState<PendingFocus | null>(null);
+  const clearFocus = React.useCallback(() => setFocusAfter(null), []);
+  const returnsToLatest = Boolean(anchor && onAnchorChange);
   const showLatest = () => {
-    if (anchor && onAnchorChange) onAnchorChange("");
+    if (returnsToLatest) onAnchorChange?.("");
     else setRevealLatest((count) => count + 1);
   };
-  /** Focus the row's Reply when it is rendered, else the transcript's list. */
-  const focusRow = (id: string | null) => requestAnimationFrame(() => {
-    const root = rootRef.current;
-    const button = id ? root?.querySelector<HTMLElement>(`[data-reply-for="${CSS.escape(id)}"]`) : null;
-    (button ?? root?.querySelector<HTMLElement>("ul[aria-label]"))?.focus();
-  });
   const t = useMessagingT();
   const jumpDate = anchor.startsWith("date:") ? anchor.slice(5).split("@")[0] : "";
   // Jump to date is the one date field; it stores a day, the anchor carries the zone.
   const DateEdit = useResolvedWidget("date")?.edit;
   const jumpField = React.useMemo(() => ({ name: "jump", label: t("transcript.jumpDate") }), [t]);
   return (
-    <div ref={rootRef} className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <PaneToolbar
         scope={onAnchorChange && DateEdit ? <DateEdit
           value={jumpDate || null} field={jumpField}
@@ -181,6 +179,8 @@ export function ThreadTranscript({
         onReply={(parent) => setTarget({ threadId, parent })}
         replyingTo={replying?.id}
         revealLatest={revealLatest}
+        focusAfter={focusAfter}
+        onFocused={clearFocus}
       />
       {/* Outside the body and its host's render window: a reply survives every remount of the rows. */}
       {reply && replying ? (
@@ -192,12 +192,12 @@ export function ThreadTranscript({
           onShowLatest={showLatest}
           onSent={() => {
             setTarget(null);
+            setFocusAfter({ id: null, anchor: returnsToLatest ? "" : anchor });
             showLatest();
-            focusRow(null);
           }}
           onClose={() => {
             setTarget(null);
-            focusRow(replying.id);
+            setFocusAfter({ id: replying.id, anchor });
           }}
         />
       ) : null}
@@ -205,8 +205,17 @@ export function ThreadTranscript({
   );
 }
 
+/** Focus a closed reply box gives back: to the Reply of the email `id`, else the list, in the window `anchor`. */
+interface PendingFocus {
+  id: string | null;
+  anchor: string;
+}
+
 interface TranscriptBodyProps extends ThreadTranscriptProps {
   allCopies: boolean;
+  /** Focus to give once this body's rows render, when it is the window asked for. */
+  focusAfter: PendingFocus | null;
+  onFocused: () => void;
   /** Dock the reply box on this email. */
   onReply: (parent: ThreadTranscriptRow) => void;
   /** The email the reply box answers now, if any. */
@@ -230,6 +239,8 @@ function TranscriptBody({
   onReply,
   replyingTo,
   revealLatest,
+  focusAfter,
+  onFocused,
 }: TranscriptBodyProps): React.ReactElement {
   const t = useMessagingT();
   const transcript = useThreadMessageFeed(threadId, anchor, allCopies);
@@ -309,6 +320,15 @@ function TranscriptBody({
     revealed.current = revealLatest;
     virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
   }, [revealLatest, messages.length, virtualizer]);
+
+  // A closed reply box's focus lands once the rows of the window it asked for are rendered.
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    if (focusAfter === null || focusAfter.anchor !== anchor || list === null) return;
+    const reply = focusAfter.id ? list.querySelector<HTMLElement>(`[data-reply-for="${CSS.escape(focusAfter.id)}"]`) : null;
+    (reply ?? list).focus();
+    onFocused();
+  }, [anchor, focusAfter, messages, onFocused]);
 
   function loadOlder(): void {
     if (!transcript.hasNextPage || transcript.isFetching) return;

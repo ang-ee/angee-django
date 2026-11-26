@@ -373,6 +373,15 @@ test("Reply answers an email from the box docked under the conversation, sends o
   expect(within(written_row).getByText("Queued")).toBeTruthy();
 });
 
+test("a reply sent from an anchored conversation returns to the latest and gives focus to the list", async () => {
+  mount({ surface: "transcript", seat: "ana", anchor: `message:${MESSAGE.request}` });
+  const box = await openReply("Please add me.");
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  await row("Thanks, adding you now.");
+  await waitFor(() => expect(document.activeElement).toBe(transcriptList()));
+});
+
 test("Reply is offered on the emails of a channel the seat may send on, and nowhere else", async () => {
   mount({ surface: "transcript", seat: "ana", conversation: "sales" });
   expect(await row("A quote, please.")).toBeTruthy();

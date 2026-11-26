@@ -61,13 +61,15 @@ export const ReaderCannotSend = { render: (_args: unknown, { globals }: StoryCon
 
 /** The real New message action, transcript and message page over the composer's wire fake, in the routed console shell. */
 export function ComposerStory({
-  appearance, surface, seat = "ana", conversation = "support", message, width, noReply = false, withNewMessage = false,
+  appearance, surface, seat = "ana", conversation = "support", anchor = "", message, width, noReply = false, withNewMessage = false,
   lose = false, revokeAfterSend = false, preview = false, onSent, onRequest, onCall, onFixture, queryClient,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
   surface: Surface;
   seat?: ComposerSeat;
   conversation?: "support" | "sales";
+  /** The transcript's window, as a host anchors it (`message:<id>`); it moves as the transcript asks. */
+  anchor?: string;
   /** The message whose page opens (`message-page`). */
   message?: string;
   /** A column this wide, in pixels. */
@@ -105,6 +107,7 @@ export function ComposerStory({
     return made;
   }, [lose, onCall, onRequest, revokeAfterSend, seat]);
   React.useEffect(() => { onFixture?.(fixture); }, [fixture, onFixture]);
+  const [at, setAt] = React.useState(anchor);
   const collectionPath = surface === "message-page" ? COMPOSER_ROUTE_HREF("messaging.messages") : COMPOSER_ROUTE_HREF("messaging.threads");
   const content = surface === "new-message"
     ? <div className="flex items-center gap-2 p-4"><NewMessageAction onSent={onSent} /></div>
@@ -113,7 +116,7 @@ export function ComposerStory({
       : <div className="flex h-[40rem] min-h-0 flex-col">
         {withNewMessage ? <div className="flex justify-end p-2"><NewMessageAction onSent={onSent} /></div> : null}
         <PaneToolbarHost>
-          <ThreadTranscript threadId={THREAD[conversation]} reply={noReply ? undefined : REPLY} />
+          <ThreadTranscript threadId={THREAD[conversation]} anchor={at} onAnchorChange={setAt} reply={noReply ? undefined : REPLY} />
         </PaneToolbarHost>
       </div>;
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={fixture.schemas}
