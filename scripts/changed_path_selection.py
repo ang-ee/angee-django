@@ -16,6 +16,9 @@ changed input every test reads without importing it, a Python change to a shared
 owner every addon composes onto, a change every test reaches, and a changed Python
 file outside the import graph, such as a removed or moved module, whose importers
 the graph cannot name. Other files, such as docs and web code, reach no Python test.
+
+``--host-suites`` prints instead the addons whose own ``tests`` package runs on its
+composed host (``angee.base.testing.host``) rather than in the shared ``testpaths``.
 """
 
 from __future__ import annotations
@@ -44,6 +47,12 @@ REFERENCE = re.compile(r"""["']((?:angee|example|tests)(?:\.\w+)+)""")
 TEMPLATE_READER = re.compile(r"""/\s*["']templates[/"']""")
 
 
+def pytest_options() -> dict:
+    """Return the repository's pytest configuration."""
+
+    return tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+
+
 def module_name(path: str) -> str:
     """Return the dotted module a repository-relative Python path declares."""
 
@@ -55,7 +64,7 @@ def module_name(path: str) -> str:
 def reached(changed: list[str]) -> list[str]:
     """Return the test files the changed paths reach, or the ``testpaths`` for a full run."""
 
-    pytest = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+    pytest = pytest_options()
     sources = [path for path in changed if not path.startswith("templates/")]
     if any(fnmatch(path if "/" in glob else PurePath(path).name, glob) for glob in FULL_RUN for path in sources):
         return pytest["testpaths"]
@@ -110,7 +119,39 @@ def reached(changed: list[str]) -> list[str]:
     return sorted(tests[module] for module in reach & tests.keys())
 
 
+def host_suites() -> list[str]:
+    """Return the framework addons whose own tests run on their composed host.
+
+    That is each ``tests`` package outside ``testpaths`` that holds a module pytest
+    collects. pytest leaves a module that sets ``__test__ = False`` uncollected; such a module
+    runs only inside a composed profile (tests/composed_host.py). The examples' tests
+    run in the examples profile (tests/test_composed_examples.py), which composes them
+    with every framework addon.
+    """
+
+    pytest = pytest_options()
+    shared = {ROOT / root for root in pytest["testpaths"]}
+    suites = []
+    for directory in sorted((ROOT / "src").glob("angee/*/tests")):
+        modules = [path for pattern in pytest["python_files"] for path in directory.rglob(pattern)]
+        if directory not in shared and not all(map(_opts_out, modules)):
+            suites.append(module_name(directory.parent.relative_to(ROOT).as_posix()))
+    return suites
+
+
+def _opts_out(path: Path) -> bool:
+    """Whether a module sets ``__test__ = False`` at its top level."""
+
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(getattr(target, "id", None) == "__test__" for target in node.targets):
+            return isinstance(node.value, ast.Constant) and node.value.value is False
+    return False
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(ROOT))
-    for test in reached([line.strip() for line in sys.stdin if line.strip()]):
-        print(test)
+    if sys.argv[1:] == ["--host-suites"]:
+        print(*host_suites(), sep="\n")
+    else:
+        for test in reached([line.strip() for line in sys.stdin if line.strip()]):
+            print(test)

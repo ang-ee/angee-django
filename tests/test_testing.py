@@ -30,7 +30,6 @@ from angee.projects.testing import models as projects_models
 from angee.sequence.testing import models as sequence_models
 from angee.spaces.testing import models as spaces_models
 from angee.tags.testing import models as tags_models
-from angee.uom.testing import models as uom_models
 from angee.workflows import models as workflow_sources
 from angee.workflows.states import RunOrigin
 from angee.workflows.testing import models as workflow_models
@@ -67,7 +66,7 @@ assert not settings.configured
 @pytest.mark.parametrize("shared_models", (
     agents_models, decisions_models, integrate_models, integration_models,
     messaging_models, nexus_models, portfolio_models, projects_models,
-    sequence_models, spaces_models, tags_models, uom_models, workflow_models,
+    sequence_models, spaces_models, tags_models, workflow_models,
 ))
 def test_native_database_setup_creates_shared_model_tables(db: None, shared_models) -> None:
     """Shared tables exist without requesting the permission-sync fixture."""

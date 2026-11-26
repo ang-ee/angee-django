@@ -7,7 +7,6 @@ from django_compose.model_composition import ModelComposition
 
 from angee.money.models import Currency
 from angee.parties.models import Party
-from angee.uom.models import Uom, UomCategory
 
 
 def test_record_picker_model_names() -> None:
@@ -20,14 +19,6 @@ def test_record_picker_model_names() -> None:
     assert (str(Party._meta.verbose_name), str(Party._meta.verbose_name_plural)) == (
         "party",
         "parties",
-    )
-    assert (str(Uom._meta.verbose_name), str(Uom._meta.verbose_name_plural)) == (
-        "unit of measure",
-        "units of measure",
-    )
-    assert (str(UomCategory._meta.verbose_name), str(UomCategory._meta.verbose_name_plural)) == (
-        "unit of measure category",
-        "unit of measure categories",
     )
 
 

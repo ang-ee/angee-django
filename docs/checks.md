@@ -49,6 +49,8 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
+| Addon host: an addon's own tests on the host the composer generates from its dependency closure; pytest arguments follow | `uv run --locked python -m angee.base.testing.host angee.<addon>` |
+| Host suites: the addons whose own tests run on their addon host | `uv run --locked python scripts/changed_path_selection.py --host-suites` |
 | Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py` |
 | PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
 | PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
@@ -169,8 +171,10 @@ lane's executed coverage.
 
 ### SQLite Version
 
-SQLite runs need SQLite 3.53, and the [test settings](../tests/settings.py) refuse any
-other release. Earlier releases (3.51.2 and older were checked) reject a subquery whose
+SQLite runs need SQLite 3.53, and the test hosts'
+[SQLite policy](../src/angee/base/testing/host.py), which the shared host's
+[test settings](../tests/settings.py) and every addon host use, refuses any other
+release. Earlier releases (3.51.2 and older were checked) reject a subquery whose
 `ORDER BY` names an outer query's column and report `no such column`; messaging's
 redirect-aware follower reads depend on that. SQLite 3.54.0 and 3.54.1 count each common
 table expression against the nesting limit, and django-zed-rebac's permission reads, one
@@ -621,8 +625,20 @@ The current tiers are:
   contract the change can break fails before merge and the member planner-memory
   gate catches a permission change's planning cost. A PostgreSQL-only test runs in
   CI only once the selection lists it. The `uv` job passes only when the static
-  tier, the selection, every SQLite shard that started and every PostgreSQL group
-  pass, so callers keep one check name.
+  tier, the selection, every SQLite shard that started, every PostgreSQL group and
+  the addon hosts pass, so callers keep one check name.
+- **Addon hosts** (the `addon hosts` job): a framework addon whose tests moved into
+  its own `tests` package, outside the shared `testpaths`, runs them on SQLite on a
+  host [`angee.base.testing.host`](../src/angee/base/testing/host.py) writes for
+  that addon and its `testing` app. The composer generates the host from their
+  dependency closure, with no hand-built concrete models. pytest loads the
+  `testing.fixtures` plugin of every enabled app that ships one, and no conftest
+  above the addon. Every event runs every suite that
+  [`--host-suites`](../scripts/changed_path_selection.py) names. The hosts are
+  cached under the key `test-hosts-<hash of uv.lock>-<hash of src/ sources outside
+  tests/>`, restoring the newest host composed against the same lockfile;
+  `compose --if-stale` recomposes a host whose composition inputs, the composer's
+  own snapshot of its apps' sources and settings, changed, so a stale host never runs.
 - **Packages:** framework package typecheck/test/build and export/distribution
   checks.
 - **Composed stack:** compose the host, check generated documents

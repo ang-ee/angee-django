@@ -20,9 +20,9 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py`, `INSTALLED_APPS` in `tests/settings.py` |
 | `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup`; `composed_permissions` (`permissions.py`) | module docstrings |
-| `tests/conftest.py` | actors and schema drivers: `create_user`, `create_platform_admin`, `vault_for`, `addon_schema` | `tests/test_tags.py` |
+| `tests/conftest.py` | actors and schema drivers: `create_user` (owned by `angee.iam.testing`), `create_platform_admin`, `vault_for`, `addon_schema` | `tests/test_tags.py` |
 | `src/angee/graphql/testing/documents.py` | document execution as an actor and statement ceilings: `execute_schema`, `result_data`, `measure_graphql_document` | [GraphQL document budgets](../../../docs/checks.md#graphql-document-budgets) |
-| `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_work_cycles.py`, `examples/src/example/notes/tests/` |
+| `tests/test_<addon>*.py` (framework, shared host) / `src/angee/<addon>/tests/test_*.py` (framework, addon host) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern; an addon-host module reads the composer's models with `apps.get_model` and runs with `python -m angee.base.testing.host angee.<addon>` | `tests/test_work_cycles.py`, `src/angee/uom/tests/`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | `run_composed_tests`: one composed host per profile running its `TransactionTestCase` labels, each test reported as a pytest subtest | `test_composed_examples` in `tests/test_composed_examples.py` |
 | `packages/refine/src/testing-wire.ts` | `graphqlWireFetch`, the GraphQL wire fake: one handler per root field, loud on an unhandled field or a missing required variable | `src/angee/spaces/web/src/SpacesPage.native.test.tsx` |
 | `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon`, `chromeSnapshotForRoute`, `TEST_SCHEMAS`; `createUiTestProviders` (`ui`) | `src/angee/tags/web/src/index.test.ts` |
