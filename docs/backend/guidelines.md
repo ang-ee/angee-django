@@ -1978,7 +1978,11 @@ open fresh evaluator scopes for authorization and change-feed reads.
   [`DomainError`](../../src/angee/base/exceptions.py) with a stable `code`; the
   [GraphQL sanitizer](../../src/angee/graphql/schema.py) maps non-validation
   refusals by type to that code without detail. Never add a domain code to the sanitizer's
-  expected-code allow-list.
+  expected-code allow-list. Refusals are not logged; any other resolver error is
+  logged once, by the sanitizer, as its class, response path and frames. Never log a
+  `GraphQLError` itself: printing one quotes the request where a client may have
+  written a secret inline, and no record carries the request's text, its variables or
+  an exception's value.
 - **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
   alias that needs an annotation is declared on `hasura_model_resource`. Lazy
   preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
