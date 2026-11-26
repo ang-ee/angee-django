@@ -414,11 +414,31 @@ def test_must_print_holds_a_plain_path_to_what_this_mail_shows_and_a_list_path_t
     assert sent == []
 
 
-def test_must_print_is_an_iterable_of_paths_never_one_path(system_channel: Any) -> None:
+def test_a_generator_of_paths_is_read_once_for_both_checks(system_channel: Any, sent: list[str]) -> None:
+    """The text check and the check of this mail both see the paths: a generator is not spent by the first."""
+
+    del system_channel
+    row = _mail("{% if first_name %}[Sign in]({{ link }}){% endif %}Hello.", GATED)
+    with _refused(ValidationError) as refusal:
+        _send(row, {"link": SIGN_IN, "first_name": ""}, must_print=(path for path in ["link"]))
+    assert [item.message for item in refusal.value.error_list] == [HTML_BODY, TEXT_BODY]
+    assert sent == []
+
+
+@pytest.mark.parametrize("entry", ["walk", "render", "send"])
+def test_must_print_is_an_iterable_of_paths_never_one_path(system_channel: Any, entry: str) -> None:
+    """Refused wherever a sender renders: the walk a batch caller renders itself, the row's render, the send."""
+
     del system_channel
     row = _mail("[Sign in]({{ link }})", LINKED)
     with pytest.raises(TypeError, match="Pass must_print as an iterable of paths, not one path."):
-        _send(row, {"link": SIGN_IN}, must_print="link")
+        if entry == "send":
+            _send(row, {"link": SIGN_IN}, must_print="link")
+        with system_context(reason="tests.messaging_templates.send.bare"):
+            if entry == "render":
+                row.render({"link": SIGN_IN}, must_print="link")
+            walk = TemplateWalker().walk(row, MessageTemplate.objects)
+            walk.render({"link": SIGN_IN}, kit=row._brand_kit(None), must_print="link")
 
 
 DECISION = "http://localhost:6173/decisions/dec_1"

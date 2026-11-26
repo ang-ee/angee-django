@@ -34,7 +34,7 @@ import logging
 import math
 import quopri
 import re
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
@@ -583,10 +583,9 @@ class TemplateWalk:
         return filled
 
     @sensitive_variables()
-    @refusals_only()
     def render(
         self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None = None,
-        must_print: Collection[str] = (),
+        must_print: Iterable[str] = (),
     ) -> RenderedMessage:
         """Render the walked row with ``values``, the mail colours from ``kit``.
 
@@ -599,7 +598,9 @@ class TemplateWalk:
         HTML engine, the subject and preheader at its top level; (4) the plain-text
         body on the text engine, from the rows' text forms. ``frame`` renders a
         layout around a fixed body, subject and preheader. Raises ``ValidationError``
-        alone (:func:`refusals_only`). Every variable of this frame, and of every
+        alone (:func:`refusals_only`), but ``must_print`` given as one bare string, a
+        ``TypeError``, before anything else; the paths are read once, so any iterable
+        serves both checks below. Every variable of this frame, and of every
         frame it calls (:meth:`prepare`, the engine, Django's template frames, the
         filters), is Django's ``sensitive_variables``: the values and the text a
         report would show may hold a credential.
@@ -618,49 +619,53 @@ class TemplateWalk:
         every item's value is in this mail, so an empty list passes.
         """
 
-        unprinted = self._unprinted(must_print)
-        if unprinted:
-            raise _refused(unprinted, "value_not_printed")
-        language = self.language
-        with translation.override(language):
-            prepared = self.prepare(values)
-            direction = TextDirection.RTL if translation.get_language_bidi() else TextDirection.LTR
-            mail_globals = {"brand": brand_values(kit), "lang": language, "dir": direction.value}
-            text_engine = self._engine(RowPiece.TEXT, mail_globals)
-            html_engine = self._engine(RowPiece.HTML, mail_globals)
-            with RenderBudget.for_lines().spend():
-                subject = _one_line(
-                    text_engine.from_string(frame.subject if frame else str(self.root.subject)).render(
-                        text_engine.context(prepared)), "subject",
+        if isinstance(must_print, str):
+            raise TypeError("Pass must_print as an iterable of paths, not one path.")
+        must_print = tuple(must_print)
+        with refusals_only():
+            unprinted = self._unprinted(must_print)
+            if unprinted:
+                raise _refused(unprinted, "value_not_printed")
+            language = self.language
+            with translation.override(language):
+                prepared = self.prepare(values)
+                direction = TextDirection.RTL if translation.get_language_bidi() else TextDirection.LTR
+                mail_globals = {"brand": brand_values(kit), "lang": language, "dir": direction.value}
+                text_engine = self._engine(RowPiece.TEXT, mail_globals)
+                html_engine = self._engine(RowPiece.HTML, mail_globals)
+                with RenderBudget.for_lines().spend():
+                    subject = _one_line(
+                        text_engine.from_string(frame.subject if frame else str(self.root.subject)).render(
+                            text_engine.context(prepared)), "subject",
+                    )
+                    preheader = _one_line(
+                        text_engine.from_string(frame.preheader if frame else str(self.root.preheader)).render(
+                            text_engine.context(prepared)), "preheader",
+                    )
+                html_root = (
+                    html_engine.from_string(in_layout(self.root_name, frame.html)) if frame
+                    else html_engine.get_template(self.root_name)
                 )
-                preheader = _one_line(
-                    text_engine.from_string(frame.preheader if frame else str(self.root.preheader)).render(
-                        text_engine.context(prepared)), "preheader",
+                with RenderBudget().spend():
+                    html = html_root.render(
+                        html_engine.context(prepared, extra={"subject": subject, "preheader": preheader}),
+                    )
+                text_root = (
+                    text_engine.from_string(in_layout(self.root_name, frame.text)) if frame
+                    else text_engine.get_template(self.root_name)
                 )
-            html_root = (
-                html_engine.from_string(in_layout(self.root_name, frame.html)) if frame
-                else html_engine.get_template(self.root_name)
+                with RenderBudget().spend():
+                    text = text_root.render(text_engine.context(prepared))
+            rendered = RenderedMessage(
+                subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
+                direction=direction,
             )
-            with RenderBudget().spend():
-                html = html_root.render(
-                    html_engine.context(prepared, extra={"subject": subject, "preheader": preheader}),
-                )
-            text_root = (
-                text_engine.from_string(in_layout(self.root_name, frame.text)) if frame
-                else text_engine.get_template(self.root_name)
-            )
-            with RenderBudget().spend():
-                text = text_root.render(text_engine.context(prepared))
-        rendered = RenderedMessage(
-            subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
-            direction=direction,
-        )
-        unshown = self._unshown(must_print, prepared, rendered)
-        if unshown:
-            raise _refused(unshown, "value_not_printed")
-        return rendered
+            unshown = self._unshown(must_print, prepared, rendered)
+            if unshown:
+                raise _refused(unshown, "value_not_printed")
+            return rendered
 
-    def _unprinted(self, must_print: Collection[str]) -> list[str]:
+    def _unprinted(self, must_print: tuple[str, ...]) -> list[str]:
         """Why the walked text cannot print each of ``must_print`` in both bodies, before anything renders."""
 
         declared = self.root.variables if isinstance(self.root.variables, dict) else {}
@@ -676,7 +681,7 @@ class TemplateWalk:
         return unprinted
 
     def _unshown(
-        self, must_print: Collection[str], prepared: Mapping[str, Any], rendered: RenderedMessage,
+        self, must_print: tuple[str, ...], prepared: Mapping[str, Any], rendered: RenderedMessage,
     ) -> list[str]:
         """Why this render's bodies do not show each of ``must_print`` that names no list item."""
 

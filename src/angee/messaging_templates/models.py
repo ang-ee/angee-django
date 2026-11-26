@@ -669,7 +669,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     @sensitive_variables("values")
     def send_as_system(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
-        must_print: Collection[str] = (),
+        must_print: Iterable[str] = (),
     ) -> Message:
         """Render ``row`` with ``values`` as named system work and record it on the system channel, queued.
 
@@ -839,7 +839,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     @sensitive_variables("values", "rendered")
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
-        subject_prefix: str = "", must_print: Collection[str] = (),
+        subject_prefix: str = "", must_print: Iterable[str] = (),
     ) -> Message:
         """Render ``row`` as named system work and record it on the system channel: the one path of both sends.
 
@@ -1420,7 +1420,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
     @sensitive_variables("values")
     def render(
-        self, values: Mapping[str, Any], *, kit: BrandKit | None = None, must_print: Collection[str] = (),
+        self, values: Mapping[str, Any], *, kit: BrandKit | None = None, must_print: Iterable[str] = (),
     ) -> RenderedMessage:
         """Render this row with ``values``, in ``kit``'s name and colours (the default kit when ``None``).
 
@@ -1451,8 +1451,6 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         pass here.
         """
 
-        if isinstance(must_print, str):
-            raise TypeError("Pass must_print as an iterable of paths, not one path.")
         walk = TemplateWalker().walk(self, type(self).objects)
         return walk.render(values, kit=self._brand_kit(kit), must_print=must_print)
 
