@@ -872,10 +872,7 @@ test("the sample values ride the edits, and edits Save would keep that the sampl
   fireEvent.click(await screen.findByRole("tab", { name: word("form.sample") }));
   pasteInto(await screen.findByRole("textbox", { name: word("field.sample") }), JSON.stringify(edit.patch.sample));
   fireEvent.click(screen.getByRole("tab", { name: word("tab.preview") }));
-  // Today the record form's unsaved-changes guard asks before a routed record tab changes the page's search, though
-  // the form stays; leaving keeps the edits. This step goes once the record form counts only a new path, or a search
-  // key other than the record's tab, as leaving.
-  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+  // Changing the record's tab is not leaving the form: the edits are still the form's.
   expect(await screen.findByRole("button", { name: ui("form.discard") })).toBeTruthy();
 
   await waitFor(() => expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset, patch: edit.patch }));
@@ -971,8 +968,6 @@ test("the same words refused under two fields read apart, each titled by the for
   pasteInto(await screen.findByRole("textbox", { name: word("field.sample") }), "[]");
   pasteInto(within(form).getByRole("textbox", { name: word("field.variables") }), "[]");
   fireEvent.click(screen.getByRole("tab", { name: word("tab.preview") }));
-  // Today's prompt on a record tab switch, as in the sample test above; leaving keeps the edits.
-  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
 
   await waitFor(() => expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset, patch: edit.patch }));
   expect(await screen.findByText(word("preview.unsavedRefused"))).toBeTruthy();
