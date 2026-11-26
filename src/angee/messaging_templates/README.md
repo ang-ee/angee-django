@@ -416,8 +416,16 @@ returns to the shipped default.
 
 The **Preview** pane renders the saved row with its sample, in a brand kit chosen
 there or the default one, and lists what the preview warns about, or why the row
-does not render, in the server's words. It shows a mail's subject, preheader and
-plain text in the direction the mail is rendered in. The HTML shows only in the
+does not render, in the server's words. While the form holds unsaved edits its
+Save would write, sample values included, the pane renders those edits as Save
+would write them (`nextSave`, sent as `patch` once the edits have settled for a
+moment) and says so; with no such edits, after Discard or Save, it shows the saved
+row again at once. Edits Save would refuse are titled so, each refusal in Save's
+words, and one under a column takes the person to that field when chosen; edits
+Save would keep that the sample cannot render say that. The pane says it is busy
+until the preview on screen is the one for the edits now in the form. It shows a
+mail's subject, preheader and plain text in the direction the mail is rendered
+in. The HTML shows only in the
 framework's sandboxed message frame, which runs no script, has no same origin and
 loads remote images only when asked; the frame's own body styles sit under the
 mail, so a mail client may space and size it slightly differently. A message

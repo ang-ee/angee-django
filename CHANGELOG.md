@@ -584,9 +584,11 @@ live in code docstrings.
     `messaging_templates.effective`, New over the four insertable fields,
     Override and Keep override where the record's `can_override` and
     `can_keep_override` admit the reader, Delete, a notice saying what the row
-    is, a Preview pane of the saved row in the framework's sandboxed message
-    frame with a brand kit select, and a Backlinks group in the record's Links
-    tab for whoever may preview message templates.
+    is, a Preview pane in the framework's sandboxed message frame with a brand
+    kit select, showing the saved row or, while the form holds unsaved edits,
+    those edits as Save would write them (what Save would refuse, titled so),
+    and a Backlinks group in the record's Links tab for whoever may preview
+    message templates.
     `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
     stack's JS dependencies, which links the new fragment, then regenerate the
     web codegen.
