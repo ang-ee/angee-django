@@ -1520,6 +1520,18 @@ def _retired_bridge(slug: str) -> Any:
         return VcsBridge._base_manager.get(pk=bridge.pk)
 
 
+def _a_drive() -> Any:
+    """A drive on a local storage backend, which a mount needs."""
+
+    with system_context(reason="test.impl.drive"):
+        backend = apps.get_model("storage", "Backend").objects.create(
+            slug="repair-drive", label="Repair", backend_class="local",
+        )
+        return apps.get_model("storage", "Drive")._base_manager.create(
+            backend=backend, slug="repair", name="Repair", prefix="repair",
+        )
+
+
 def _retired_backend(slug: str) -> Any:
     """A storage backend row whose stored key no implementation is registered under any more."""
 
@@ -1716,6 +1728,131 @@ def test_a_copy_that_writes_a_retired_key_still_refuses_another_spelling_of_a_re
             assert refusal.value.message_dict == {field: [f"Value {spelling!r} is not a valid choice."]}
             rows.update(**{field: "retired"})
             assert rows.values_list(field, flat=True).get() == "retired"
+
+
+def test_an_implementation_carries_the_config_keys_it_reads_defaults_the_rest_and_drops_the_others() -> None:
+    """``carried_config``: a shared key kept, a missing one defaulted, an unreadable one dropped."""
+
+    carried = LocalVCSBackend.carried_config({"local_root": "/srv/team", "retired_option": True})
+    assert carried == {
+        "local_root": "/srv/team", "local_name": "", "local_org": "local", "local_default_branch": "main",
+    }
+    assert _BaseImpl.carried_config({"untyped": 1}) == {"untyped": 1}
+
+
+@pytest.mark.django_db
+def test_a_create_only_selector_moves_off_a_key_not_registered_once_carrying_its_config() -> None:
+    """A repair saves with its config carried over, then create-only holds; no key is ever dropped silently."""
+
+    bridge = _retired_bridge("repaired")
+    with system_context(reason="test.impl.repair"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        row = VcsBridge._base_manager.get(pk=bridge.pk)
+        row.backend_class = "local"
+        row.save()
+        stored = VcsBridge._base_manager.get(pk=bridge.pk)
+        assert (stored.backend_class, stored.config["local_root"], stored.config["local_org"]) == (
+            "local", "/srv/team", "local",
+        )
+        stored.backend_class = "github"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stored.save()
+    assert refused.value.message_dict == {"backend_class": ["Implementation selection is create-only."]}
+
+    dropping = _retired_bridge("dropping")
+    with system_context(reason="test.impl.repair.drop"):
+        VcsBridge._base_manager.filter(pk=dropping.pk).update(
+            config={"local_root": "/srv/team", "retired_option": True},
+        )
+        row = VcsBridge._base_manager.get(pk=dropping.pk)
+        row.backend_class = "local"
+        with pytest.raises(ValidationError) as dropped, transaction.atomic():
+            row.save()
+        assert dropped.value.message_dict == {"config": [
+            "Choosing this backend class drops retired_option from the configuration: send the configuration to save.",
+        ]}
+        row = VcsBridge._base_manager.get(pk=dropping.pk)
+        row.backend_class = "local"
+        row.config = {"local_root": "/srv/sent"}
+        row.save()
+        sent = VcsBridge._base_manager.values_list("backend_class", "config__local_root").get(pk=dropping.pk)
+        assert sent == ("local", "/srv/sent")
+
+
+@pytest.mark.django_db
+def test_a_row_loaded_through_its_model_answers_holds_from_its_loaded_key_reading_nothing(
+    django_assert_num_queries: Any,
+) -> None:
+    """The loaded key decides; a row built without loading reads the stored column, with the context's audit row."""
+
+    bridge = _retired_bridge("holds-loaded")
+    field = VcsBridge._meta.get_field("backend_class")
+    with system_context(reason="test.impl.holds"):
+        loaded = VcsBridge._base_manager.get(pk=bridge.pk)
+    built = VcsBridge(pk=bridge.pk)
+    built._state.adding = False
+    built._state.db = loaded._state.db
+
+    with django_assert_num_queries(0):
+        assert field.holds(loaded, "retired")
+        assert not field.holds(loaded, "other")
+    with django_assert_num_queries(2):
+        assert field.holds(built, "retired")
+
+
+_CREATE_ONLY_SELECTORS = (
+    ("agents", "InferenceProvider", "backend_class"),
+    ("calendar", "CalendarSource", "backend_class"),
+    ("integrate_vcs", "VcsBridge", "backend_class"),
+    ("knowledge_integrate_notion", "NotionConnection", "backend_class"),
+    ("messaging", "Channel", "backend_class"),
+    ("parties", "Directory", "backend_class"),
+    ("posts", "Feed", "feed_backend_class"),
+    ("storage_integrate", "Mount", "backend_class"),
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("app_label", "model_name", "selector"), _CREATE_ONLY_SELECTORS)
+def test_each_create_only_selector_is_repaired_once_then_create_only(
+    app_label: str, model_name: str, selector: str,
+) -> None:
+    """Through each model's own class: a rename keeps the retired key, a repair saves once, then create-only holds."""
+
+    model = apps.get_model(app_label, model_name)
+    field = model._meta.get_field(selector)
+    first, *others = field.registered_keys()
+    extra = {"drive": _a_drive()} if model_name == "Mount" else {}
+    row = make_integration(f"repair-{model_name.lower()}", model=model, **{selector: first}, **extra)
+    store_column(model, row.pk, field.column, "retired")
+    with system_context(reason="test.impl.repair.each"):
+        renamed = model._base_manager.get(pk=row.pk)
+        renamed.display_name = "Renamed"
+        renamed.save()
+        repaired = model._base_manager.get(pk=row.pk)
+        assert getattr(repaired, field.attname) == "retired"
+        setattr(repaired, field.attname, first)
+        repaired.save()
+        assert model._base_manager.values_list(field.attname, flat=True).get(pk=row.pk) == first
+        again = model._base_manager.get(pk=row.pk)
+        setattr(again, field.attname, others[0] if others else "retired")
+        with pytest.raises(ValidationError), transaction.atomic():
+            again.save()
+    assert model._base_manager.values_list(field.attname, flat=True).get(pk=row.pk) == first
+
+
+@pytest.mark.django_db
+def test_a_create_only_selector_holding_a_registered_key_is_as_create_only_as_before() -> None:
+    """No repair is offered off a registered key: the change is refused and the stored key stays."""
+
+    bridge = make_integration("registered", model=VcsBridge, backend_class="local")
+    with system_context(reason="test.impl.repair.registered"):
+        row = VcsBridge._base_manager.get(pk=bridge.pk)
+        row.backend_class = "stub"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            row.save()
+    assert refused.value.message_dict == {"backend_class": ["Implementation selection is create-only."]}
+    assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "local"
 
 
 @pytest.mark.django_db

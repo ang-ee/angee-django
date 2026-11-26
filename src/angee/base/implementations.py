@@ -155,6 +155,25 @@ class ImplBase:
         return validated.model_dump(mode="json", by_alias=True) if validated is not None else {}
 
     @classmethod
+    def carried_config(cls, stored: Any) -> dict[str, Any]:
+        """The config this implementation carries over from another implementation's ``stored`` config.
+
+        The stored keys its wire contract names (by alias) keep their values, its defaults fill the
+        keys it names that the stored config lacks, and any other key is dropped; the result is
+        normalized as a save normalizes it. An implementation without a config model leaves a row's
+        config untyped, so it carries the stored config whole.
+        """
+
+        given = dict(stored) if isinstance(stored, Mapping) else {}
+        schema = cls.config_json_schema()
+        if schema is None:
+            return given
+        readable = set(schema.get("properties", {}))
+        kept = {key: value for key, value in given.items() if key in readable}
+        defaults = cls.effective_defaults(config_schema=schema).get("config")
+        return cls.normalize_config({**(defaults if isinstance(defaults, dict) else {}), **kept})
+
+    @classmethod
     def config_form_spec(cls, *, config_schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 

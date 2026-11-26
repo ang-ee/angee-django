@@ -1726,6 +1726,34 @@ def test_editing_a_row_whose_implementation_key_is_retired_saves_and_keeps_the_k
     assert (stored.display_name, stored.backend_class) == ("Renamed", "retired")
 
 
+def test_a_writer_repairs_a_bridge_s_retired_key_once_and_a_person_who_may_not_write_is_refused(db: None) -> None:
+    """The update mutation carries the repair: the registered key saves for a writer, and only once."""
+
+    del db
+    admin = _platform_admin("retired-key-repairer")
+    outsider = User.objects.create_user(username="retired-key-outsider", email="outsider@example.com")
+    bridge = make_integration("retired-key-repair", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    update = """
+        mutation($id: String!, $set: vcs_bridges_set_input!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: $set) { backend_class }
+        }
+    """
+    target = {"id": _public_id(bridge), "set": {"backend_class": "stub"}}
+
+    refused = execute_schema(_schema(), update, target, user=outsider)
+    assert refused.errors is not None
+    assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "retired"
+    repaired = _data(execute_schema(_schema(), update, target, user=admin))
+    again = execute_schema(_schema(), update, {**target, "set": {"backend_class": "local"}}, user=admin)
+
+    assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "stub"
+    assert repaired["update_vcs_bridges_by_pk"] == {"backend_class": "STUB"}
+    assert again.errors is not None and again.errors[0].extensions["validationErrors"] == {
+        "backend_class": ["Implementation selection is create-only."],
+    }
+
+
 def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(db: None) -> None:
     """An authored owner patch runs the transfer verb before the caller saves its other values."""
 

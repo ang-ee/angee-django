@@ -65,12 +65,20 @@ live in code docstrings.
   row), and it keeps its key; choosing an unregistered key is refused under the
   key's field with its own message. A `create_only` selector (`Channel`,
   `Feed`, `Directory`, `CalendarSource`, `Mount`, `VcsBridge`,
-  `InferenceProvider`, `NotionConnection`) is never chosen again by a save
-  ("Implementation selection is create-only."). `check --database`
+  `InferenceProvider`, `NotionConnection`) holding such a key may move, once,
+  to a registered key, by any save the person may make
+  (`ImplDefaultsMixin.save`): the config its implementations own is carried
+  over by `ImplBase.carried_config` (the stored keys the new class reads kept,
+  its defaults filling the rest; a key it does not read is never dropped
+  silently, the save being refused, naming it, unless the config is sent, in
+  which case what is sent is validated and saved); the new key is written only
+  while the row still holds the old one, so of two repairs at once one wins and
+  the other is refused as create-only; afterwards the selector is create-only
+  again ("Implementation selection is create-only."). `check --database`
   (`angee.E052`) names such rows with the remedy an addon states in
-  `ANGEE_IMPL_KEY_REMEDIES`, and moves none: the key resolves again once the
-  addon that registers it is installed, and only a write outside the model's
-  save (`QuerySet.update` with a registered key) moves such a selector.
+  `ANGEE_IMPL_KEY_REMEDIES`. An update that is not changing such a key writes
+  the column as itself, so a stale save never restores a retired key over one
+  committed since.
   **Upgrade:** a consumer with generated types takes
   `| null` on these fields (one in the framework's own documents:
   `ChannelBackendImpl` in messaging's overview); code that reads a selector's

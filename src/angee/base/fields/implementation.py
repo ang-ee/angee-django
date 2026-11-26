@@ -6,7 +6,7 @@ import copyreg
 from collections.abc import Sequence
 from enum import Enum
 from functools import cache, partialmethod
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -20,6 +20,15 @@ from angee.base.implementations import (
     impl_registry,
     resolve_impl_class,
 )
+
+
+@runtime_checkable
+class _LoadedImplKeys(Protocol):
+    """A row that remembers the implementation keys it was loaded with (``ImplDefaultsMixin``)."""
+
+    def loaded_impl_key(self, field: ImplClassField[Any]) -> Any:
+        """The key ``field`` held when the row was loaded, or ``None`` when it was not loaded."""
+        ...
 
 
 class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
@@ -40,10 +49,11 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     Nothing writes such a key the row does not already hold: choosing another
     is validated as any write is, and an insert, ``bulk_update`` or
     ``QuerySet.update`` has no stored row to keep, so each refuses it. A
-    ``create_only`` selector is never chosen again by a save: ``check
-    --database`` (``angee.E052``) names such rows and moves none, and they
-    resolve again once the addon that registers the key is installed, or move
-    by a write outside the model's save (``QuerySet.update``).
+    ``create_only`` selector holding such a key may move, once, to a registered
+    key (``ImplDefaultsMixin.save``): the config its implementations own is
+    carried over (``ImplBase.carried_config``), the new key is written only
+    while the row still holds the old one, and afterwards the selector is
+    create-only again. ``check --database`` (``angee.E052``) names such rows.
 
     Reads forgive and writes do not: a lookup matches what a person or a URL
     may spell (``" local "``, the member's name ``"LOCAL"``), while a write
@@ -135,17 +145,22 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         return self.key_for(value) in {member.value for member in self.choices_enum}
 
     def holds(self, instance: models.Model, value: Any) -> bool:
-        """Whether ``instance``, a stored row, holds ``value``, a key the choices do not name, as stored.
+        """Whether ``instance``, a stored row, holds ``value``, a key the choices do not name, so an update keeps it.
 
-        The column is read as the row stands, so an update writes such a key back only to the row
-        that holds it, spelled as it is stored. A new row holds nothing. The field imports without
-        REBAC; only this read, under its system context, needs it. Only a row holding such a key
-        pays: a save of one reads the column up to four times (the field's and the model's clean,
-        the config check, ``pre_save``), about ten more statements on a GraphQL rename.
+        A row that remembers the key it was loaded with (:class:`_LoadedImplKeys`) answers from that
+        key, reading nothing: it is the key an update not changing it keeps, even once another save
+        has moved the stored row, as the update then writes the column as itself (:meth:`pre_save`).
+        Any other row reads the column as it stands, spelled as it is stored, under REBAC's system
+        context (the field imports without REBAC), two statements with the context's audit row; a
+        save of such a row reads it up to four times (the field's and the model's clean, the config
+        check, ``pre_save``). A new row holds nothing.
         """
 
         if instance._state.adding or instance.pk is None or value in self.empty_values or self.has_key(value):
             return False
+        spelled = value.value if isinstance(value, Enum) else value
+        if isinstance(instance, _LoadedImplKeys) and (loaded := instance.loaded_impl_key(self)) is not None:
+            return bool(loaded == spelled)
         from rebac import system_context
 
         with system_context(reason="base.impl.held_key"):
@@ -153,7 +168,7 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
                 type(instance)._base_manager.using(instance._state.db).filter(pk=instance.pk)
                 .values_list(self.attname, flat=True).first()
             )
-        return stored is not None and stored == (value.value if isinstance(value, Enum) else value)
+        return stored is not None and stored == spelled
 
     def invalid_key(self, value: Any) -> ValidationError:
         """The field's plain refusal of ``value``, naming the key and nothing internal."""

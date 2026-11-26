@@ -474,7 +474,8 @@ Use these owners instead of maintaining another contract in an addon:
   lookup forgives what a person or a URL may spell. An update does not
   validate a key it is not changing
   ([`ImplClassField.holds`](../../src/angee/base/fields/implementation.py)
-  reads the stored row): the row saves its other fields, the generic GraphQL
+  answers from the key the row was loaded with, else reads the stored row):
+  the row saves its other fields, the generic GraphQL
   update and a model form that leaves the column out included, and keeps the
   key and its config. Resolving
   the key raises naming the field, the key and the setting. Every Angee GraphQL
@@ -488,11 +489,14 @@ Use these owners instead of maintaining another contract in an addon:
   ([`AngeeSchema`](../../src/angee/graphql/schema.py)); the same holds for any
   choices column holding a value its choices no longer name. No "Not
   registered" group exists yet. A
-  `create_only` selector is never chosen again by a save. `angee.E052` and
-  `ANGEE_IMPL_KEY_REMEDIES` name the rows and the remedy but move none: the
-  key resolves again once the addon that registers it is installed, and only a
-  write outside the model's save (`QuerySet.update` with a registered key)
-  moves such a selector.
+  `create_only` selector holding such a key may move, once, to a registered
+  key: the config its implementations own is carried over
+  ([`ImplBase.carried_config`](../../src/angee/base/implementations.py): the
+  keys the new class reads kept, its defaults filling the rest), a key the new
+  class does not read is never dropped silently (the save is refused, naming
+  it, unless the config is sent), the new key is written only while the row
+  still holds the old one, and afterwards the selector is create-only again.
+  `angee.E052` and `ANGEE_IMPL_KEY_REMEDIES` name such rows and the remedy.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs
