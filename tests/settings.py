@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "angee.jobs",
     "angee.resources",
     "tests.iam_app.TestIAMConfig",
+    "angee.iam_messaging",
     "angee.integrate",
     "angee.integrate_vcs",
     "angee.integrate_google",

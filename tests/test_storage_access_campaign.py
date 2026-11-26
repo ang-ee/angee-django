@@ -60,6 +60,12 @@ from tests.mtidemo.models import MtiChild, MtiChildProxy, MtiParent
 from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 
+RECORD_READ_HINT = (
+    "Union the fragment's arm into an extension point the sealed expression composes, "
+    "or grant the need through the fragment's own record's read."
+)
+"""The remedy this seal keeps: its owner offers extension points and a record's own read."""
+
 
 def test_the_policy_decides_every_storage_permission(drive: Any) -> None:
     """One world, every declared storage permission and extension arm with an allow and a deny."""
@@ -572,6 +578,7 @@ def test_a_fragment_cannot_extend_inherit_visibility(tmp_path: Path) -> None:
     bind_rebac_schema(config, extended)
     [error] = check_derived_permissions([config])
     assert error.id == "storage.E001"
+    assert error.hint == RECORD_READ_HINT
     assert "storage/file#inherit_visibility" in error.msg
 
 

@@ -10,6 +10,119 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
+  single-use sign-in link leaves base IAM for its own addon, with everything
+  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
+  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
+  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
+  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
+  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
+  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
+  the document, now `IamMessagingRedeemSignInLink`. The permission
+  `auth/user#issue_sign_in_link` is the addon's own declaration
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
+  Platform administrators send links, and for now no other role can be given the
+  action: the permission merge lets other fragments add arms only to the
+  permissions a resource type's owner declares, so a consumer's
+  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
+  addon joins the template's `full` profile; a host without it, the `base`
+  profile included, offers and redeems no sign-in link. A link's session records
+  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
+  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
+  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
+  (`iam_messaging_signinlink`) and was in no release, so no migration template
+  ships.
+  - Every host that tracks main deletes the old rows, whether or not it keeps
+    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
+    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
+    before it runs `migrate` with what that writes, it deletes them on every
+    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
+    (`--database <alias>` for each other alias), the same statement on SQLite
+    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
+    and, with the addon, its initial migration. After migrating, the host
+    provisions, which syncs the permissions: IAM's schema at revision 32 and,
+    with the addon, its fragment at revision 2.
+  - Until the rows are gone, both commands refuse, on django-compose
+    0.1.0.dev14, which the framework requires since the composer upgrade below:
+    - `makemigrations`, on the databases of the environment that authors the
+      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
+      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
+      migration before native makemigrations." (0.1.0.dev13 said the same, its
+      last sentence "Declare a reviewed cutover migration before native
+      makemigrations.")
+    - `migrate`, and so `provision`, on a database that still holds links when a
+      migration authored where none were drops their table: "unsafe migration
+      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
+      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
+      To proceed, keep the storage, or move its data and declare the drop in
+      that migration of the project's history with
+      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
+      Nothing was applied, the addon's initial migration included. Delete the
+      rows on that database and run `migrate` (or `provision`) again; the links
+      cannot move, so declaring the drop loses them the same way. On a stack, a
+      refused `provision` holds Django stopped until the rows are deleted. Under
+      0.1.0.dev13 that `migrate` dropped the table without a word.
+  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
+    under this heading, so the framework release that brings either brings both.
+  - Such a host loses the links already sent (they stop working; send them
+    again), the record of who was sent a link, and every session a link opened
+    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
+    people sign in again).
+  - The stale `iam.signinlink` content type can be removed with
+    `manage.py remove_stale_contenttypes`, which also deletes that model's
+    `auth.Permission` rows; it lists what it deletes and asks first.
+  - Projects that author `AUTHENTICATION_BACKENDS` replace
+    `angee.iam.auth.SignInLinkBackend` with
+    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
+    raises, a password's included, as does every request that carries a
+    session a link opened before the upgrade; start-up reports
+    `angee.iam.E006`, which names the entry.
+  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
+  seal's own remedy, which a refused fragment's error carries; it no longer gives every
+  seal one hint that names a record's own read. Messaging's `messaging.E003` and
+  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
+  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
+  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
+  open set another addon extends: `User.account_actions()` names the actions
+  `account_actions` offers, in offer order, and it and
+  `User.account_action_blockers` (now a classmethod) are extended through
+  `super()`; a contributed action runs under `User.lock_for_account_action`, the
+  private `_lock_for_account_action` made public, and meets IAM's person-kind
+  and protected-account blockers before its own, whatever its hook returns:
+  `angee.iam.models.account_action_refusals` puts them first, and no override
+  drops them. `account_actions` is
+  typed by one enum of the composed actions, built when the schema is by the
+  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
+  `_permission_enum` made public beside `permissions_field`)
+  and named after its members (`Permissions_10_set_active_…`): its values are the
+  actions' Zed permission names (`issue_password`), where the fixed
+  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
+  leaves the console and public schemas, and the web's TypeScript type
+  `UserAccountAction` goes. `offersAccountAction` compares
+  names exactly, and `@angee/iam` exports `AccountActionBar` and
+  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
+  `useIssueSignInLinkAction` is no longer exported. The disclosures
+  `auth/user#active_account` and `#nonstaff_account` derive from the union points
+  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
+  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
+  a composed account action offered twice or not declared on `auth/user`
+  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
+  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
+  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
+  (`sign_in_account`) and marks a genuine but spent credential with
+  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
+  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
+  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
+  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
+  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
+  that compares `account_actions` values with the old enum's upper-case names
+  compares the permission names, and one typed by `UserAccountAction` reads the
+  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
 - `angee.base`: **Changed behaviour.** A `DATABASE_URL` whose libpq `options`
   carry other server settings now connects with JIT off too:
   `angee.base.conf.disable_jit` puts `-c jit=off` before those options, where

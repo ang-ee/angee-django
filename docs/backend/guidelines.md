@@ -796,19 +796,23 @@ data through REBAC, never a queryset bypass.
 - **Login throttling belongs at the IAM auth seam.** Do not add per-view or
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
-  Every credential a person presents is an authentication backend: a sign-in
-  link redeems through [`SignInLinkBackend`](../../src/angee/iam/auth.py) under
-  the same throttle. Name a credential keyword so Django's cleanser masks it
-  (`token`, `key`, `secret`, `password`) before `user_login_failed` receivers
-  see it, and pass the account it names unmasked so axes records the attempt
-  under that account. Each request makes one attempt
+  Every credential a person presents is an authentication backend: an emailed
+  sign-in link redeems through
+  [`SignInLinkBackend`](../../src/angee/iam_messaging/auth.py) under the same
+  throttle. Name a credential keyword so Django's cleanser masks it (`token`,
+  `key`, `secret`, `password`) before `user_login_failed` receivers see it, and
+  pass the account it names unmasked as `sign_in_account` so axes records the
+  attempt under that account. Each request makes one attempt
   ([`authenticate_once`](../../src/angee/iam/auth.py)). Self-service current-password
   verification uses the same owner: authenticate before taking
   a row lock, require the authenticated user to be the actor, and reject a hash
   changed between authentication and the lock. IAM's autoconfig owns
   the axes policy (the cool-off, no reset on success, the username and
   whitelist callables); a refusal of a genuine but spent credential is not a
-  guess.
+  guess: its backend calls
+  [`mark_spent_credential`](../../src/angee/iam/auth.py). A credential's
+  session records IAM's `SESSION_BACKEND`, so it outlives that credential's
+  backend.
 - **Person accounts have one factory.** Actor-requested accounts go through
   [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
@@ -820,19 +824,33 @@ data through REBAC, never a queryset bypass.
   account holds. A Person whose name a source states keeps that name when the
   account is renamed.
   `create_user` stays the trusted bootstrap and OIDC path.
-- **Managed accounts change through IAM's account verbs.** `User.set_active`,
-  `rename`, `issue_password`, `issue_sign_in_link`, `reset_password` and
-  `set_account_password` lock
-  the row, check their own Zed permission, the expected revision and the shared
-  `User.account_action_blockers`, then write elevated; the `account_actions`
-  projection batches the same conditions. These verbs refuse a protected
+- **Managed accounts change through IAM's account actions.** `User.set_active`,
+  `rename`, `issue_password`, `reset_password` and `set_account_password` lock
+  the row through `User.lock_for_account_action`, which checks the action's own Zed
+  permission, the expected revision and the shared refusals
+  (`account_action_refusals`: IAM's person-kind and protected-account blockers,
+  which no override drops, then the action's own `User.account_action_blockers`),
+  then write elevated; the `account_actions`
+  projection batches the same conditions and names each action by its permission.
+  The actions are an open set: a donor adds its action by extending
+  `User.account_actions` and `account_action_blockers` through `super()`, as
+  [`iam_messaging`](../../src/angee/iam_messaging/models.py) does for the
+  emailed sign-in link, and unions its permission into
+  `auth/user#active_account_granted` or `#nonstaff_account_granted`; IAM seals
+  the disclosures it derives from them (`angee.iam.E004`). Start-up refuses an
+  action offered twice or not declared on the composed `auth/user`
+  (`angee.iam.E005`). These actions refuse a protected
   account: staff, superusers, the actor's own and effective members of
   `iam/protected:main#member`, except Set password admits another person's protected
   account for a concrete platform-administrator user. Self
   still requires Change password; non-person accounts remain refused.
   A consumer marks an elevated role by unioning it
   into that permission from its fragment, never by mirroring holders; see
-  [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
+  [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). It
+  gives its role IAM's own actions the same way. An action another addon
+  contributes is that addon's own permission declaration, which the merge lets
+  no other fragment extend, so no consumer role can be given it yet: the
+  emailed sign-in link is for platform administrators. Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
   protected accounts additionally need `administer`. Generic updates do not
   accept `password`; use `set_user_password` with the observed revision.
@@ -1831,7 +1849,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,
-  validates names at schema build and batches list evaluation in SQL.
+  validates names at schema build and batches list evaluation in SQL. The
+  enum it types the field with, `permission_enum(names)`, also types a
+  composed set of permission names, as IAM's `account_actions` field does.
   Server predicates compose the same owner's `held_permissions(record, names)`.
   View-as therefore reports the target's permissions. Clients consume these
   answers; they never reconstruct authority from roles or identity.
