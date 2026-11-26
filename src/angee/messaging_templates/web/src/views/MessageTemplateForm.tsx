@@ -93,8 +93,7 @@ function MessageTemplateForm({
     idArgument: "template", linkTo: MESSAGE_TEMPLATE_MODEL, invalidateModels: [MESSAGE_TEMPLATE_MODEL],
   });
   const [keep] = useRecordActionMutation<ActionFieldName>("keep_message_template_override", {
-    // Settled as Override is: the shared result owner toasts the server's words, its reasons with a refusal.
-    idArgument: "template", invalidateModels: [MESSAGE_TEMPLATE_MODEL], settle: true,
+    idArgument: "template", invalidateModels: [MESSAGE_TEMPLATE_MODEL],
   });
   return (
     <Form {...props} resource={MESSAGE_TEMPLATE_MODEL} returning={selected} recordTabs={tabs}

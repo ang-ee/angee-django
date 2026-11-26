@@ -193,20 +193,23 @@ test("a current override offers no Keep override, and says Delete returns to the
   expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
 });
 
-test("a refused Keep override says why, in the server's words for this row, and the warning stays", async () => {
+test("a refused Keep override says why under the verb's name, in the server's words for this row, and the warning stays", async () => {
   render(<MessageTemplateStory open={ROW.recordCard} refuseKeep />);
   await screen.findByText(word("notice.defaultUpdated"));
   fireEvent.click(await screen.findByRole("button", { name: word("action.keepOverride") }));
 
-  // The toast is also announced in a live region, so the words are on the page more than once.
-  expect((await screen.findAllByText(KEEP_REFUSAL.message, { exact: false })).length).toBeGreaterThan(0);
-  // Its reason names this row, which another session deleted since it opened; nothing says it overrides no default.
+  // The action bar toasts the refusal once, titled with the verb, its body the server's reason; the toast is
+  // also announced in a live region, so its words are on the page more than once. The reason names this row,
+  // which another session deleted since it opened; nothing says it overrides no default.
   const reasons = Object.values(KEEP_REFUSAL.validation_errors ?? {}).flat().map(String);
   expect(reasons.length).toBeGreaterThan(0);
   for (const reason of reasons) {
     expect(reason).toContain(ROW.recordCard);
     expect((await screen.findAllByText(reason, { exact: false })).length).toBeGreaterThan(0);
   }
+  expect(screen.getAllByText(word("action.keepOverride")).length).toBeGreaterThan(1);
+  // The server's summary gives way to its reasons: no second toast says it.
+  expect(screen.queryByText(KEEP_REFUSAL.message, { exact: false })).toBeNull();
   expect(screen.getByText(word("notice.defaultUpdated"))).toBeTruthy();
 });
 
@@ -577,6 +580,8 @@ test("Backlinks is absent where nothing names the row", async () => {
   await waitFor(() => expect(requests.some((request) => request.operationName === "MessageTemplateBacklinks")).toBe(true));
   await waitFor(() => expect(screen.queryByText(word("backlinks.label"))).toBeNull());
   expect(screen.queryAllByRole("link")).toEqual([]);
+  // With no group showing anything, the Links tab says it is empty.
+  expect(await screen.findByText(ui("related.empty.title"))).toBeTruthy();
 });
 
 test("Backlinks is no part of a member's Links tab, which reads nothing for it", async () => {
