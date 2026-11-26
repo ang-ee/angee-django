@@ -99,10 +99,14 @@ declare module "@tanstack/react-table" {
   }
 }
 
+/** Whether the records of one group of the list share the key `id` (`GroupAxis.shares`). */
+function sharedByGroups<TRow extends Row>(table: TableModel<TRow>, id: string): boolean {
+  return (table.options.meta?.groupAxes ?? []).some((axis) => axis.shares(id));
+}
+
 /** The keys the rows visibly follow, in order: the table's sorting without the keys a group axis shares. */
 function followedSorting<TRow extends Row>(table: TableModel<TRow>): SortingState {
-  const axes = table.options.meta?.groupAxes ?? [];
-  return table.getState().sorting.filter(({ id }) => !axes.some((axis) => axis.shares(id)));
+  return table.getState().sorting.filter(({ id }) => !sharedByGroups(table, id));
 }
 
 /**
@@ -113,18 +117,9 @@ function followedSorting<TRow extends Row>(table: TableModel<TRow>): SortingStat
  * value (a `Date` grouped by day or a finer unit included) and a grouped relation's members. A header shows
  * the direction of the first key the rows follow; every other header shows none, a later
  * key's (it only breaks ties, `breaksTies`) and a shared key's. A grouping column's key
- * orders the groups in the browser; a server's groups read keeps its own group order.
- *
- * A press on a column that only breaks ties sorts it in its first direction
- * (`getFirstSortDir`), where the table's toggle would turn it to its next direction or keep
- * it behind the key the rows follow. Every other press is the table's own single-sort toggle
- * (`enableMultiSort: false`), a grouping column's too. A press sets a fresh single-key
- * order, so every other key goes, a grouping key's included (groups made in the browser then
- * lose its order: the table orders them by the pressed column's value on each group, a text
- * column by each group's first record), except in the toggle's own case: a press on the order's last
- * key, unless it only breaks ties, flips or removes that key in place and keeps the keys
- * ahead of it. The URL (`model/search.ts`) and a saved view (`model/favorites.ts`) keep the
- * whole order.
+ * orders the groups in the browser; a server's groups read keeps its own group order. A
+ * press sets the order `pressedSorting` gives. The URL (`model/search.ts`) and a saved view
+ * (`model/favorites.ts`) keep the whole order.
  */
 export function headerSort<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
@@ -134,8 +129,47 @@ export function headerSort<TRow extends Row>(
   return followed?.id === column.id ? (followed.desc ? "desc" : "asc") : false;
 }
 
+/**
+ * The order a press on `column`'s header sets, decided from the table's live state: one rule
+ * for every press. A press never drops the keys a group of the list shares (`headerSort`) that
+ * the order holds: they are kept, ahead of the pressed column, so a list grouped in the browser
+ * whose order leads with them keeps its groups in their order, and one grouped on the server
+ * keeps asking for each group's records behind them. Behind them, a press is the table's own
+ * single-sort toggle (`enableMultiSort: false`) over the keys the rows follow: on the last of
+ * them it turns that key to its next direction (`getNextSortingOrder`) or removes it; on any
+ * other column it sets that column alone in its next direction, except that a column that only
+ * breaks ties sorts in its first direction (`getFirstSortDir`), where the toggle would turn it.
+ * A press on a key a group shares (a grouping column's) turns that key in place, ascending and
+ * descending, and the keys the rows follow go: in the browser it turns the groups; a server's
+ * groups read keeps its own group order.
+ */
+export function pressedSorting<TRow extends Row>(
+  column: TableColumn<TRow, unknown>,
+  table: TableModel<TRow>,
+): SortingState {
+  const sorting = table.getState().sorting;
+  const shared = sorting.filter(({ id }) => sharedByGroups(table, id));
+  const held = sorting.find(({ id }) => id === column.id);
+  if (sharedByGroups(table, column.id)) {
+    const turned = { id: column.id, desc: held ? !held.desc : column.getFirstSortDir() === "desc" };
+    if (held) return shared.map((key) => (key.id === column.id ? turned : key));
+    // A grouping key joins the others at its level of the grouping.
+    const axes = table.options.meta?.groupAxes ?? [];
+    const level = (id: string) => axes.findIndex((axis) => axis.shares(id));
+    return [...shared, turned].sort((left, right) => level(left.id) - level(right.id));
+  }
+  if (breaksTies(column, table)) return [...shared, { id: column.id, desc: column.getFirstSortDir() === "desc" }];
+  const followed = followedSorting(table);
+  const next = column.getNextSortingOrder();
+  // The only key the rows follow, since a later one only breaks ties.
+  if (held && followed.at(-1)?.id === column.id) {
+    return [...shared, ...(next ? [{ id: column.id, desc: next === "desc" }] : [])];
+  }
+  return [...shared, { id: column.id, desc: next === "desc" }];
+}
+
 /** Whether a column only breaks ties: a later key of the order the rows follow (`headerSort`). */
-export function breaksTies<TRow extends Row>(
+function breaksTies<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
   table: TableModel<TRow>,
 ): boolean {

@@ -10,6 +10,27 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: one rule for every press on a list header: it never drops the
+  keys a group of the list shares that the order holds. A press on a
+  tie-breaker, on the shown key
+  when it is not the order's last, or on a column the order does not hold set
+  that column alone, so a list grouped in the browser lost its grouping key and
+  reordered its groups. Now `pressedSorting` (the `headerSort` owner in
+  `list-body/cell-utils.tsx`) keeps those keys ahead of the pressed column
+  (`status:asc,title:asc`) and, behind them, is the table's single-sort toggle
+  over the keys the rows follow, a tie-breaker still sorting in its first
+  direction; the groups keep their order on the server, and in the browser
+  wherever the list's order leads with the keys its groups share; a list grouped
+  in the browser by a field its order does not lead with still reorders its
+  groups on a press: by the pressed column where its order does not hold the
+  grouping key, and into the grouping key's own order where the order holds it
+  behind another key, since the press moves it ahead. The URL and a reload keep
+  the order. A grouping
+  column's press turns its key in place and drops the keys the rows follow, as
+  before; other grouping levels' keys now stay at their levels, and its key
+  turns back to ascending rather than being removed. `breaksTies` is no longer
+  exported from the module.
+
 - `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
   order the list declares, and only an explicit `sort: null` clears it.
   Applying such a view cleared the order, opening the same shipped view as a

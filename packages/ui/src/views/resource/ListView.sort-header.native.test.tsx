@@ -335,17 +335,72 @@ test("a press on the grouping column of rows grouped in the browser is the table
   expect(shown("Status", "Rank")).toEqual({ Status: "none", Rank: "none" });
 });
 
-test("a press on a tie-breaker of rows grouped in the browser sets that key alone: the grouping key goes with the rest, so the groups lose its order", () => {
+test("a press on a tie-breaker of rows grouped in the browser keeps the grouping key ahead of it, so the groups keep its order", () => {
   const list = renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }, { field: "title", direction: "ASC" }], { grouped: true });
   const groups = () => screen.getAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0]);
   expect(groups()).toEqual(["closed", "open"]);
   expect(shown("Status", "Title", "Rank")).toEqual({ Status: "none", Title: "none", Rank: "ascending" });
 
   press("Title");
-  // A fresh single-key order: the open group's first record, Alpha, now sorts first.
-  expect([list.sorting(), groups()]).toEqual([[{ id: "title", desc: false }], ["open", "closed"]]);
+  // The status key stays ahead of the pressed column; the rank tie-breaker goes.
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: false }, { id: "title", desc: false }], ["closed", "open"]]);
   expect(shown("Status", "Title", "Rank")).toEqual({ Status: "none", Title: "ascending", Rank: "none" });
 });
+
+test("a grouping column's key turns in place at each press and is never removed: the groups turn back", () => {
+  const list = renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { grouped: true });
+  const groups = () => screen.getAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0]);
+  press("Status");
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }], ["open", "closed"]]);
+  press("Status");
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: false }], ["closed", "open"]]);
+});
+
+test("on rows grouped in the browser by two levels, a press keeps both levels' keys, each at its level", () => {
+  const query = ResourceQuery.forRows({ fields: { ...fields, kind: { scalar: "String" } } });
+  const rows = records.map((row, index) => ({ ...row, kind: index % 2 ? "task" : "bug" }));
+  const list = renderRows([], { query, rows, columns: [{ field: "status", header: "Status" }, { field: "kind", header: "Kind" }, { field: "title", header: "Title" }],
+    initialState: { groupStack: [{ field: "status" }, { field: "kind" }], sorting: [{ id: "status", desc: false }] } });
+  // Kind joins the status key at its own level, behind it.
+  press("Kind");
+  expect(list.sorting()).toEqual([{ id: "status", desc: false }, { id: "kind", desc: false }]);
+  // Status turns in place, and the kind key stays.
+  press("Status");
+  expect(list.sorting()).toEqual([{ id: "status", desc: true }, { id: "kind", desc: false }]);
+});
+
+const pressCases = [
+  // [the press, the declared order, the pressed column, the order it leaves, what the headers then show]
+  ["a tie-breaker", "status rank title", "Title", "status:asc,title:asc", { Title: "ascending", Rank: "none" }],
+  ["the shown key, not the order's last", "status rank title", "Rank", "status:asc,rank:desc", { Title: "none", Rank: "descending" }],
+  ["the shown key, the order's last", "status rank", "Rank", "status:asc,rank:desc", { Title: "none", Rank: "descending" }],
+  ["a column outside the order", "status rank", "Title", "status:asc,title:asc", { Title: "ascending", Rank: "none" }],
+] as const;
+test.each((["client", "server"] as const).flatMap((rowModel) => pressCases.map((press) => [rowModel, ...press] as const)))(
+  "on a route list grouped by status (%s row model), a press on %s keeps the grouping key ahead: the groups keep their order, the column shows its direction, the URL and a reload agree",
+  async (rowModel, _name, declared, column, sort, headers) => {
+    const order: Order = declared.split(" ").map((field) => ({ field, direction: "ASC" }));
+    const initialState = { groupStack: [{ field: "status" }], sorting: order.map(({ field }) => ({ id: field, desc: false })) };
+    // In the browser the groups' order is the table's; on the server, the order the groups read asks for.
+    const groups = (rendered: ReturnType<typeof renderList>) => rowModel === "client"
+      ? screen.queryAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0])
+      : rendered.groupOrder();
+    const groupsInStatusOrder = rowModel === "client" ? ["closed", "open"] : ["status asc"];
+    const recordsRead = sort.split(",").map((key) => key.replace(":", " "));
+    const list = renderList(order, { scope: "route", rowModel, columns: withStatus, initialState });
+    await waitFor(() => expect([shown("Rank"), groups(list)]).toEqual([{ Rank: "ascending" }, groupsInStatusOrder]));
+    press(column);
+    await waitFor(() => expect(list.urlSort()).toBe(sort));
+    await waitFor(() => expect([shown("Status", "Title", "Rank"), groups(list)]).toEqual([{ Status: "none", ...headers }, groupsInStatusOrder]));
+    if (rowModel === "server") await waitFor(() => expect(list.groupRowsOrder()).toEqual(recordsRead));
+
+    const href = list.href();
+    cleanup(); clearClients();
+    const reloaded = renderList(order, { scope: "route", rowModel, columns: withStatus, initialState, path: href });
+    await waitFor(() => expect([shown("Status", "Title", "Rank"), groups(reloaded)]).toEqual([{ Status: "none", ...headers }, groupsInStatusOrder]));
+    if (rowModel === "server") expect(reloaded.groupRowsOrder()).toEqual(recordsRead);
+  },
+);
 
 test("rows grouped in the browser by a hidden column still show the sort of the next key", () => {
   renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { grouped: true, initialState: { columnVisibility: { status: false } } });

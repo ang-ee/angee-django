@@ -134,9 +134,9 @@ export const SearchShortcuts: Story = {
  * Grouped by status and ordered by status, then rank, then title; open both groups to see their
  * rows. At load the Status header shows no sort (a group's tasks share their status), Rank shows
  * ascending (each group's rows follow it) and Title shows not sorted (it only breaks rank ties: Book
- * the room before Draft the brief). Press Title's sort button: Title sorts ascending as the only key,
- * Rank shows not sorted, and each group's rows follow their titles (Collect quotes moves above Draft
- * the brief); the status key goes too, so the groups no longer follow it.
+ * the room before Draft the brief). Press Title's sort button: Title sorts ascending behind the
+ * status key, which a press never drops, Rank shows not sorted, and each group's rows follow their
+ * titles (Collect quotes moves above Draft the brief) while the groups keep their status order.
  */
 export const GroupedWithTieBreakers: Story = {
   name: "Grouped With Tie-breakers",

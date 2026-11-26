@@ -7,7 +7,7 @@ import { useUiT, type UiTranslate } from "../../../i18n";
 import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
-import { breaksTies, cellContent, columnLabelText, groupFieldLabel, headerSort, readPath } from "./cell-utils";
+import { cellContent, columnLabelText, groupFieldLabel, headerSort, pressedSorting, readPath } from "./cell-utils";
 import { groupLabel, tableGroupAxes } from "./grouping";
 import { queryForColumns } from "../resource-query";
 export interface BuildColumnsOptions {
@@ -207,11 +207,8 @@ function SortHeader<TRow extends Row>({
       className="inline-flex min-w-0 items-center gap-1 rounded-6 text-left outline-none hover:text-fg focus-visible:focus-ring"
       aria-label={t(sortKey, { label })}
       // Decided from the table's live state when pressed, since a list re-shows its last settled
-      // headers while a read is in flight: a tie-breaker sorts in its first direction, every
-      // other press is the table's toggle (`headerSort`).
-      onClick={(event) => breaksTies(tableColumn, table)
-        ? table.setSorting([{ id: tableColumn.id, desc: tableColumn.getFirstSortDir() === "desc" }])
-        : tableColumn.getToggleSortingHandler()?.(event)}
+      // headers while a read is in flight (`pressedSorting`).
+      onClick={() => table.setSorting(pressedSorting(tableColumn, table))}
     >
       <span className="truncate">{children}</span>
       <Glyph name={iconName} className="size-3 text-fg-subtle" />
