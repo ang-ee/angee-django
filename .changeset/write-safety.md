@@ -108,7 +108,10 @@ pending write and typed values.
   (`pointer-coarse:opacity-100`), as touch never hovers.
 - `useUnsavedChangesNavigationGuard` takes `leaves(move)`, which says whether a
   route move abandons the form (default: every move), in place of
-  `allowSearchChanges`; `pathnameChanges` is the old behaviour.
+  `allowSearchChanges`; `pathnameChanges` is the old behaviour. The record
+  form passes one: a move leaves it when the pathname changes, or any search
+  key but the record's tab (`RECORD_TAB_SEARCH_KEY`) does, so a tab switch on
+  a form with unsaved edits no longer asks to leave.
 
 Upgrade:
 

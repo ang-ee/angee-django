@@ -26,6 +26,7 @@ import {
 } from "@refinedev/core";
 import { get, set, useForm } from "react-hook-form";
 import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
+import { deepEqual } from "@tanstack/react-router";
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
@@ -69,10 +70,11 @@ import { useSaveOperation } from "../resource/resource-operations";
 import {
   applyFormErrors, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalBannerFocus, type FormSubmitResult,
 } from "./validation-errors";
-import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
+import { useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
 import { useFieldValidation, type FieldValidationForm, type FieldValidationMethods } from "./use-field-validation";
 import { useAppRuntime, useRuntimeViewAs } from "../../runtime";
+import { RECORD_TAB_SEARCH_KEY } from "../../runtime/route-href";
 import { useLatestRef } from "../../lib/use-latest-ref";
 
 type RowRecord = BaseRecord & Row;
@@ -279,6 +281,19 @@ export interface FormViewSaveSurface {
   registerFieldValidation: FieldValidationMethods["registerFieldValidation"];
   /** Request departure through the same owner as routed unsaved-change guards. */
   requestLeave: () => Promise<boolean>;
+}
+
+/**
+ * Whether a route move leaves a record form: its pathname changes, or any search key but the
+ * record's tab does. A tab switch keeps the form mounted; the search's other keys (a list's view,
+ * filter, sort or page beside the record) are not each known to.
+ */
+function leavesRecordForm({ current, next }: UnsavedChangesMove): boolean {
+  if (current.pathname !== next.pathname) return true;
+  const before: Record<string, unknown> = current.search ?? {};
+  const after: Record<string, unknown> = next.search ?? {};
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .some((key) => key !== RECORD_TAB_SEARCH_KEY && !deepEqual(before[key], after[key]));
 }
 
 /** RHF owns values/baselines/errors; Refine owns resource reads and mutations. */
@@ -598,6 +613,7 @@ export function useFormViewSave({
     isDirty: formIsDirty,
     isDirtyNow,
     readOnly: formReadOnly,
+    leaves: leavesRecordForm,
   });
 
   // A create carries its draft's key when its writer takes one (a custom owner always does).

@@ -259,7 +259,7 @@ async function fixture(options: {
   if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
     await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
   }
-  return { surface: () => surface, onSaved, getOne, update, client,
+  return { surface: () => surface, onSaved, getOne, update, client, router,
     setRecord: (next: Row) => { record = next; },
     setAcknowledgedSource: (next: FormViewAcknowledgedSource) => { acknowledgedSource = next; },
     rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
@@ -457,6 +457,21 @@ test("a pane focuses a sheet field's native control in place", async () => {
 });
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, as leaving does", async () => {
+  const f = await fixture();
+  edit("title", "Local edit");
+  // The form publishes its dirty state a render after the value, as the person's next move finds it.
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await f.router.history.push("/?recordTab=activity"); });
+  await waitFor(() => expect(f.router.history.location.search).toBe("?recordTab=activity"));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
+
+  act(() => { void f.router.history.push("/?recordTab=activity&page=2"); });
+  expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+});
 
 test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
   const f = await fixture({ readOnlyWhen: (record) => record.status === "confirmed" });
