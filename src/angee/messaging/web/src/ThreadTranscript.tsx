@@ -1,6 +1,9 @@
 import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
+import { useModelMetadata } from "@angee/metadata";
+import { useAuthoredQuery } from "@angee/refine";
 import * as React from "react";
 import {
+  AbsoluteTime,
   Avatar,
   Button,
   Chip,
@@ -12,26 +15,38 @@ import {
   MessageActions,
   MessagePartsView,
   MessageRow,
+  NavLink,
   PaneToolbar,
   ReactionBar,
+  StatusBadge,
   avatarInitials,
+  formatDateTime,
   formatDayLabel,
+  isTone,
+  useEnumOptions,
   useReactionGroups,
   useResolvedWidget,
   useResourceRecordHrefLookup,
   type MessagePart,
   type PaneToolbarAction,
+  type StatusDisplay,
+  type Tone,
+  type UnsavedChangesMove,
+  type WidgetOption,
 } from "@angee/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { useMessagingT } from "./i18n";
 import { MessageSourceCopies } from "./MessageSourceCopies";
-import type { MessageReplyData, ThreadTranscriptRow } from "./documents";
+import { CHANNEL_MODEL, MessagingSendableChannelIds, type MessageReplyData, type ThreadTranscriptRow } from "./documents";
 import { MessageReplyQuote } from "./MessageReplyQuote";
 import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
+import { ThreadReply } from "./ThreadReply";
 
 const ESTIMATED_ROW_HEIGHT = 96;
+const MESSAGE_MODEL = "messaging.Message";
+const CHANNEL_MODELS = [CHANNEL_MODEL];
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -67,6 +82,26 @@ export interface ThreadTranscriptProps {
   /** Open an attachment in the host's preview. Without it, a chip opens the file
    *  URL itself (see `MessagePartsView`). */
   onPreviewFile?: (message: ThreadTranscriptRow, part: MessagePart) => void;
+  /** Offer Reply on each email of a channel the viewer may send on (see {@link ThreadTranscriptReply});
+   *  a host that passes nothing offers none. */
+  reply?: ThreadTranscriptReply;
+}
+
+/**
+ * A host's opt-in to answering email from its transcript: each email whose channel the server
+ * lists as `sendable` for the viewer offers Reply, which docks a reply box under the
+ * conversation. `leaves` names the route moves that abandon unsent text, in the host's route
+ * vocabulary: those ask first, every other move keeps the box and its text.
+ */
+export interface ThreadTranscriptReply {
+  leaves: (move: UnsavedChangesMove) => boolean;
+}
+
+/** How a message's status reads: its field's options, display and scoped tones, from the resource metadata. */
+interface StatusPresentation {
+  options: readonly WidgetOption[];
+  display?: StatusDisplay;
+  tone?: Record<string, Tone>;
 }
 
 /**
@@ -90,15 +125,33 @@ export function ThreadTranscript({
   onPreviewFile,
   onOpenReply,
   toolbarActions = [],
+  reply,
 }: ThreadTranscriptProps): React.ReactElement {
   const [allCopies, setAllCopies] = React.useState(false);
+  // The email the reply box answers, kept here, outside the remounted body, so the box and its
+  // text survive every anchor and copy-mode move; it belongs to the thread it was opened on.
+  const [target, setTarget] = React.useState<{ threadId: string; parent: ThreadTranscriptRow } | null>(null);
+  const replying = reply && target?.threadId === threadId ? target.parent : null;
+  // Raised after a send: the body shows its last row (an anchored transcript returns to the latest instead).
+  const [revealLatest, setRevealLatest] = React.useState(0);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const showLatest = () => {
+    if (anchor && onAnchorChange) onAnchorChange("");
+    else setRevealLatest((count) => count + 1);
+  };
+  /** Focus the row's Reply when it is rendered, else the transcript's list. */
+  const focusRow = (id: string | null) => requestAnimationFrame(() => {
+    const root = rootRef.current;
+    const button = id ? root?.querySelector<HTMLElement>(`[data-reply-for="${CSS.escape(id)}"]`) : null;
+    (button ?? root?.querySelector<HTMLElement>("ul[aria-label]"))?.focus();
+  });
   const t = useMessagingT();
   const jumpDate = anchor.startsWith("date:") ? anchor.slice(5).split("@")[0] : "";
   // Jump to date is the one date field; it stores a day, the anchor carries the zone.
   const DateEdit = useResolvedWidget("date")?.edit;
   const jumpField = React.useMemo(() => ({ name: "jump", label: t("transcript.jumpDate") }), [t]);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={rootRef} className="flex min-h-0 flex-1 flex-col">
       <PaneToolbar
         scope={onAnchorChange && DateEdit ? <DateEdit
           value={jumpDate || null} field={jumpField}
@@ -124,9 +177,41 @@ export function ThreadTranscript({
         timezone={timezone}
         onPreviewFile={onPreviewFile}
         onOpenReply={onOpenReply}
+        reply={reply}
+        onReply={(parent) => setTarget({ threadId, parent })}
+        replyingTo={replying?.id}
+        revealLatest={revealLatest}
       />
+      {/* Outside the body and its host's render window: a reply survives every remount of the rows. */}
+      {reply && replying ? (
+        <ThreadReply
+          key={threadId}
+          parent={replying}
+          leaves={reply.leaves}
+          onShowLatest={showLatest}
+          onSent={() => {
+            setTarget(null);
+            showLatest();
+            focusRow(null);
+          }}
+          onClose={() => {
+            setTarget(null);
+            focusRow(replying.id);
+          }}
+        />
+      ) : null}
     </div>
   );
+}
+
+interface TranscriptBodyProps extends ThreadTranscriptProps {
+  allCopies: boolean;
+  /** Dock the reply box on this email. */
+  onReply: (parent: ThreadTranscriptRow) => void;
+  /** The email the reply box answers now, if any. */
+  replyingTo?: string;
+  /** Show the last row when it rises. */
+  revealLatest: number;
 }
 
 function TranscriptBody({
@@ -140,7 +225,11 @@ function TranscriptBody({
   onPreviewFile,
   onOpenReply,
   onAnchorChange,
-}: ThreadTranscriptProps & { allCopies: boolean }): React.ReactElement {
+  reply,
+  onReply,
+  replyingTo,
+  revealLatest,
+}: TranscriptBodyProps): React.ReactElement {
   const t = useMessagingT();
   const transcript = useThreadMessageFeed(threadId, anchor, allCopies);
   // Render oldest-to-newest so the latest turn sits at the bottom.
@@ -148,6 +237,10 @@ function TranscriptBody({
     () => messageFeedRows(transcript.data).reverse(),
     [transcript.data],
   );
+  const status = useStatusPresentation();
+  // The channels the loaded email rows are on: what the Reply gate asks the server about, once.
+  const emailChannels = React.useMemo(() => [...new Set(messages.flatMap((message) =>
+    message.message_type === "EMAIL" && message.channel ? [message.channel.id] : []))].sort(), [messages]);
   const hasOlder = transcript.hasNextPage;
   const conversation = order === "conversation";
 
@@ -207,6 +300,15 @@ function TranscriptBody({
     }
   }, [conversation, threadId, messages, totalSize, anchor, virtualizer]);
 
+  // A rise of `revealLatest` (a reply was sent) brings the last row into view; a row that lands
+  // later is followed by the virtualizer's own follow-on-append.
+  const revealed = React.useRef(revealLatest);
+  React.useLayoutEffect(() => {
+    if (revealed.current === revealLatest || messages.length === 0) return;
+    revealed.current = revealLatest;
+    virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
+  }, [revealLatest, messages.length, virtualizer]);
+
   function loadOlder(): void {
     if (!transcript.hasNextPage || transcript.isFetching) return;
     void transcript.fetchNextPage({ cancelRefetch: false });
@@ -250,7 +352,9 @@ function TranscriptBody({
         <ul
           ref={listRef}
           aria-label={t("transcript.label")}
-          className="relative w-full p-3"
+          // Focus lands here when a reply box closes away from its row.
+          tabIndex={-1}
+          className="relative w-full p-3 outline-none"
           style={{ height: totalSize }}
         >
           {virtualItems.map((item) => {
@@ -279,6 +383,11 @@ function TranscriptBody({
                   <TranscriptMessage
                     message={message}
                     t={t}
+                    status={status}
+                    reply={reply && message.message_type === "EMAIL" && message.channel ? {
+                      channel: message.channel.id, channels: emailChannels,
+                      pressed: replyingTo === message.id, onReply: () => onReply(message),
+                    } : undefined}
                     timezone={timezone}
                     onPreviewFile={onPreviewFile}
                     active={anchor === `message:${message.id}`}
@@ -327,9 +436,79 @@ function LoadMore({ direction, label, disabled, onClick }: {
   );
 }
 
+/** The status field's options, display and app-scoped tones, read once for every row. */
+function useStatusPresentation(): StatusPresentation {
+  const options = useEnumOptions(MESSAGE_MODEL, "status", { casing: "upper" });
+  const field = useModelMetadata(MESSAGE_MODEL)?.fields.status;
+  return React.useMemo(() => ({
+    options,
+    display: field?.statusDisplay ?? undefined,
+    tone: field?.tones ? Object.fromEntries(Object.entries(field.tones)
+      .filter((entry): entry is [string, Tone] => isTone(entry[1]))) : undefined,
+  }), [field, options]);
+}
+
+/**
+ * The delivery of a message written here and going out: its status, when it is due to go out
+ * (a scheduled draft) or to be tried again (a queued retry), the attempts made, and for a failed
+ * or uncertain one the way to its page, where those who may act read why and retry. A row shows it
+ * only when written here (`is_locally_written`) and outgoing: synced mail and internal notes have none.
+ */
+function DeliveryMeta({ message, status, t, timezone }: {
+  message: ThreadTranscriptRow;
+  status: StatusPresentation;
+  t: MessagingT;
+  timezone?: string;
+}): React.ReactElement {
+  const recordHref = useResourceRecordHrefLookup();
+  const value = message.status;
+  const due = message.scheduled_at && (value === "DRAFT" || value === "QUEUED") ? message.scheduled_at : null;
+  const href = value === "FAILED" || value === "UNCERTAIN" ? recordHref(MESSAGE_MODEL, message.id) : undefined;
+  return <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+    <StatusBadge value={value} options={status.options} tone={status.tone} display={status.display} />
+    {due ? <span>{t(value === "DRAFT" ? "transcript.sendsAt" : "transcript.nextTry")}{" "}
+      <AbsoluteTime value={due} timeZone={timezone} display="datetime" /></span> : null}
+    {message.delivery_attempts > 0 && value !== "SENT"
+      ? <span>{t("transcript.attempts", { count: message.delivery_attempts })}</span> : null}
+    {href ? <NavLink href={href} variant="inline">{t("transcript.deliveryDetails")}</NavLink> : null}
+  </span>;
+}
+
+interface ReplyButtonProps {
+  /** The channel the email is on. */
+  channel: string;
+  /** Every channel the loaded email rows are on: one gate read for the whole window. */
+  channels: readonly string[];
+  pressed: boolean;
+  onReply: () => void;
+}
+
+/**
+ * Reply on one email, offered when the server lists its channel as `sendable` for the viewer.
+ * Every row asks the one read over the window's channels, so only a host that offers Reply reads
+ * the gate, once per window; until it answers, no Reply shows.
+ */
+function ReplyButton({ channel, channels, pressed, onReply, message, label }: ReplyButtonProps & {
+  message: string;
+  label: string;
+}): React.ReactElement | null {
+  const t = useMessagingT();
+  const gate = useAuthoredQuery(MessagingSendableChannelIds, { ids: [...channels] }, { models: CHANNEL_MODELS });
+  if (!gate.data?.channels.some((row) => row.id === channel)) return null;
+  return (
+    <Button size="sm" variant="ghost" data-reply-for={message} aria-pressed={pressed} aria-label={label} onClick={onReply}>
+      <Glyph decorative name="reply" />
+      {t("compose.reply")}
+    </Button>
+  );
+}
+
 interface TranscriptMessageProps {
   message: ThreadTranscriptRow;
   t: MessagingT;
+  status: StatusPresentation;
+  /** Reply on this email, on its `channel`, shown when the gate admits it, pressed while the box answers it. */
+  reply?: ReplyButtonProps;
   timezone?: string;
   onPreviewFile?: ThreadTranscriptProps["onPreviewFile"];
   actions?: React.ReactNode;
@@ -339,14 +518,21 @@ interface TranscriptMessageProps {
 }
 
 /** One transcript turn as the shared feed row: sender, direction chip, the absolute
- *  time, body, read-only reaction pills, and the host's verbs on hover. */
-function TranscriptMessage({ message, t, timezone, onPreviewFile, onOpenReply, active, actions, copies }: TranscriptMessageProps): React.ReactElement {
+ *  time, a message's delivery when it was written here, body, read-only reaction pills,
+ *  Reply where the gate offers it, and the host's verbs on hover. */
+function TranscriptMessage({ message, t, status, reply, timezone, onPreviewFile, onOpenReply, active, actions, copies }: TranscriptMessageProps): React.ReactElement {
   const recordHref = useResourceRecordHrefLookup();
   // Read the SDL's UPPERCASE `Direction` enum verbatim — one enum-casing convention
   // across the messaging web surface (see `message_type` reads in RecordChatterPane).
   const direction = message.direction;
-  const author = senderDisplayName(message.sender, t("message.author"));
+  // An outgoing message whose sender the viewer cannot read went out from its channel.
+  const author = senderDisplayName(message.sender,
+    direction === "OUTBOUND" && message.channel?.display_name ? message.channel.display_name : t("message.author"));
   const timestamp = message.sent_at ?? message.created_at;
+  const replyButton = reply ? (
+    <ReplyButton {...reply} message={message.id}
+      label={t("compose.replyTo", { author, time: formatDateTime(timestamp, { timeZone: timezone }) })} />
+  ) : null;
   const reactions = useReactionGroups(message.reaction_groups);
   const channel = direction === "INTERNAL"
     ? <Chip tone="warning">{t("transcript.noteLabel")}</Chip>
@@ -362,8 +548,10 @@ function TranscriptMessage({ message, t, timezone, onPreviewFile, onOpenReply, a
       channel={channel}
       timestamp={timestamp}
       timeZone={timezone}
+      meta={message.is_locally_written && direction === "OUTBOUND"
+        ? <DeliveryMeta message={message} status={status} t={t} timezone={timezone} /> : undefined}
       reactions={reactions.length > 0 ? <ReactionBar reactions={reactions} label={t("message.reactions")} /> : undefined}
-      actions={actions || copies ? <MessageActions className="flex-wrap">{copies}{actions}</MessageActions> : undefined}
+      actions={replyButton || actions || copies ? <MessageActions className="flex-wrap">{replyButton}{copies}{actions}</MessageActions> : undefined}
     >
       {message.parent ? <MessageReplyQuote message={message.parent} className="mb-2"
         href={onOpenReply ? undefined : recordHref("messaging.Message", message.parent.id)}
