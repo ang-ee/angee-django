@@ -33,7 +33,8 @@ jobs:
       # Match the bridge dependency artifacts to this framework's manifests.
       bridges-ref: "b5bfc0aa85b95f9c7655f61c9fcdcc51ad91c349"
       # CI_RUNS_ON (a JSON runs-on value) moves every job to self-hosted runners; a
-      # pull request from a fork always runs on GitHub-hosted ones.
+      # pull request from a fork always runs on GitHub-hosted ones. This public
+      # repository leaves it unset (docs/checks.md#what-ci-actually-runs).
       runs-on: ${{ (github.event.pull_request.head.repo.fork && '"ubuntu-latest"') || vars.CI_RUNS_ON || '"ubuntu-latest"' }}
 
   # The public repository's guards, one job: no secret anywhere in the history

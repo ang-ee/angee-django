@@ -557,7 +557,12 @@ push to `main` runs to completion. Every job runs where the reusable workflow's
 `runs-on` input says: CI passes the `CI_RUNS_ON` repository or organization
 variable, a JSON `runs-on` value such as `["self-hosted", "angee-local"]`, and
 GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork always
-runs on GitHub-hosted runners.
+runs on GitHub-hosted runners. This repository leaves it unset: GitHub-hosted
+runners cost a public repository nothing, and self-hosted runners shared between
+repositories queue a pull request's jobs behind each other's. The organization's free
+plan runs at most 20 GitHub-hosted jobs at once, and one pull request's run is 19
+jobs, so a second run started meanwhile waits for runners. A private consumer, whose
+GitHub-hosted minutes are billed, sets it to its self-hosted runners.
 The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
