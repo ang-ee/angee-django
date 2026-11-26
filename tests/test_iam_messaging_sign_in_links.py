@@ -1049,27 +1049,29 @@ Use the link below to sign in to {{ brand.name }}.
                  id="the-link-dropped-from-the-text-body"),
 ])
 def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fault(
-    deliverable, iam_admin, sent, caplog, django_capture_on_commit_callbacks, override,
+    deliverable, iam_admin, sent, monkeypatch, caplog, django_capture_on_commit_callbacks, override,
 ):
     """Offered, since only the send can tell; refused in band, nothing written, the earlier link still current."""
 
     target = _person("guest-hidden")  # no first name
     earlier = sent(target, iam_admin)
     override()
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
     with system_context(reason=READ):
         links = list(SignInLink._base_manager.values_list("pk", flat=True))
         mails = list(Message._base_manager.values_list("pk", flat=True))
-    with (
-        caplog.at_level(logging.WARNING, logger="angee.iam_messaging.models"),
-        django_capture_on_commit_callbacks(execute=True) as callbacks,
-        actor_context(iam_admin),
-        _refused(ValidationError) as refusal,
-    ):
-        target.with_actor(iam_admin).issue_sign_in_link()
+    with caplog.at_level(logging.DEBUG):
+        with (
+            django_capture_on_commit_callbacks(execute=True) as callbacks,
+            actor_context(iam_admin),
+            _refused(ValidationError) as refusal,
+        ):
+            target.with_actor(iam_admin).issue_sign_in_link()
+        answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert (refusal.value.code, refusal.value.messages) == ("link_not_shown", [SIGN_IN_LINK_NOT_SHOWN_MESSAGE])
     assert "does not show the link" in caplog.text and callbacks == []
-    answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": SIGN_IN_LINK_NOT_SHOWN_MESSAGE}
+    assert not any(SECRET in text for text in (caplog.text, repr(refusal.value), str(answered.errors)))
     with system_context(reason=READ):
         assert list(SignInLink._base_manager.values_list("pk", flat=True)) == links
         assert list(Message._base_manager.values_list("pk", flat=True)) == mails
@@ -1303,7 +1305,7 @@ def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
 
 
 def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
-    deliverable, iam_admin, settings, monkeypatch, django_capture_on_commit_callbacks,
+    deliverable, iam_admin, settings, monkeypatch, caplog, django_capture_on_commit_callbacks,
 ):
     """The worker's path: the transport fails, then recording it fails too; the report chains both."""
 
@@ -1321,10 +1323,11 @@ def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
     def recording(sql: str, params: Any) -> bool:
         return failure.__traceback__ is not None and sql.startswith(f'UPDATE "{Message._meta.db_table}" ')
 
-    with _failing(recording), pytest.raises(DatabaseError) as failed:
+    with _failing(recording), caplog.at_level(logging.DEBUG), pytest.raises(DatabaseError) as failed:
         deliver_message(label, pk, key)
     assert failure in _chain(failed.value)
     assert _reported(failed.value, address=target.email) == ([], [])
+    assert SECRET not in caplog.text
 
 
 @pytest.mark.parametrize("entry", ["the-manager", "the-backend"])
@@ -1388,14 +1391,16 @@ def test_a_link_whose_delivery_fails_is_still_sent_and_replaces_the_link_that_wo
     pytest.param(DroppingTransport, "uncertain", id="a-delivery-that-drops-mid-send-is-not"),
 ])
 def test_a_recorded_link_is_current_whether_its_delivery_is_retried_or_left_uncertain(
-    deliverable, iam_admin, sent, transport, status,
+    deliverable, iam_admin, sent, caplog, transport, status,
 ):
     target = _person(f"guest-{status}")
     earlier = sent(target, iam_admin)
-    with override_settings(MAILERS=_transport(transport)):
+    with override_settings(MAILERS=_transport(transport)), caplog.at_level(logging.DEBUG):
         current = sent(target, iam_admin)
         message = _mails(target)[-1]
         assert _deliver(message)["status"] == status
+    logged = current.partition(".")[2] in caplog.text
+    assert not logged
     with system_context(reason="tests.iam_messaging.sign_in_link.due"):
         # Time passes: a retry falls due; an uncertain delivery is scheduled for nothing.
         Message._base_manager.filter(pk=message.pk, scheduled_at__isnull=False).update(
