@@ -17,9 +17,14 @@ live in code docstrings.
     a new email on, their `reply` on a channel that can send email now.
     `ChannelQuerySet.outbound_email_rule` is that condition (connected, on a
     backend whose outbound email is configured), which `outbound_email` filters by.
+    The channel's sender is checked when a message is sent, not by the filter: a
+    listed channel whose configured sender is not an address refuses the message
+    under `channel`.
   - **New.** `MessageType.is_locally_written` (`Message.is_locally_written`):
-    whether messaging wrote the message and owns its delivery, rather than
-    syncing it from its source.
+    whether the message was written here rather than synced from its source, a
+    function of its status alone. An internal note is written here and has no
+    delivery: a reader showing delivery status also requires an outgoing
+    `direction`.
   - **New.** The console root `message_recipient_limit`, the most addresses
     `compose_message` takes, read with `compose` from
     `MessageManager.recipient_limit()`, the one reader of

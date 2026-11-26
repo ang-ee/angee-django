@@ -86,12 +86,14 @@ message, fresh or replayed. Readers of a message read back its `status`,
 `scheduled_at` and [`Message.delivery_attempts`](models.py); those who hold
 `send_held` also read why delivery last failed,
 [`Message.delivery_error`](models.py), as they read `delivery_actions`. Every
-reader reads `is_locally_written`, which tells a message messaging wrote from own
-mail synced from its source ([`Message.is_locally_written`](models.py)). A
-channel's `permissions` answer `reply`; the channels filter `sendable` keeps
-the channels the reader may send a new email on, `reply` on a channel
-[`ChannelQuerySet.outbound_email_rule`](managers.py) admits; and
-`message_recipient_limit` states the recipient bound.
+reader reads `is_locally_written`, which tells a message written here, an
+internal note included, from one synced from its source
+([`Message.is_locally_written`](models.py)); delivery status belongs to an
+outgoing one. A channel's `permissions` answer `reply`; the channels filter
+`sendable` keeps the channels the reader may send a new email on, `reply` on a
+channel [`ChannelQuerySet.outbound_email_rule`](managers.py) admits, whose
+sender is checked only when a message is sent; and `message_recipient_limit`
+states the recipient bound.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from

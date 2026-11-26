@@ -293,7 +293,10 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         """:meth:`outbound_email` as a condition, for an expression that decides it per row.
 
         It reads the backend registry and settings, never a row, so it builds on
-        any selection of this model, an empty one included.
+        any selection of this model, an empty one included. It does not check the
+        channel's sender, which lives in its config or the settings, beyond SQL:
+        that is checked when a message is sent (the backend's ``outbound_sender``),
+        so a channel this admits can still refuse a message under ``channel``.
         """
 
         return models.Q(

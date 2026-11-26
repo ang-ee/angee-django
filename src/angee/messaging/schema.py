@@ -339,7 +339,11 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 
     @strawberry_django.field(only=["status"])
     def is_locally_written(self) -> bool:
-        """Whether messaging wrote this message and owns its delivery, rather than syncing it from its source."""
+        """Whether this message was written here rather than synced from its source: a function of its status alone.
+
+        An internal note is written here too and has no delivery, so a reader that
+        shows delivery status also requires an outgoing ``direction``.
+        """
 
         return cast(Any, self).is_locally_written
 
@@ -1830,7 +1834,12 @@ class _ChannelWriteBackend(AngeeHasuraWriteBackend):
 
 
 def _sendable_expression(queryset: models.QuerySet[Any]) -> models.Expression:
-    """The channels the actor may send a new email on: their ``reply``, on a channel that can send email now."""
+    """The channels the actor may send a new email on: their ``reply``, on a channel that can send email now.
+
+    The channel's sender is not checked here but when a message is sent
+    (:meth:`ChannelQuerySet.outbound_email_rule`), so a listed channel whose
+    configured sender is not an address still refuses a message under ``channel``.
+    """
 
     return models.Case(
         models.When(
