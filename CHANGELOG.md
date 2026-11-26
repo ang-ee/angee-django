@@ -23,8 +23,11 @@ live in code docstrings.
   model form, a deserialized fixture) refuses it as before. Resolving its
   implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
   `ImproperlyConfigured` naming the field, the key and the registry's setting.
-  Not changed: a GraphQL read that selects the column still fails, now at the
-  field's enum, which cannot represent the key. **Upgrade:** code that reads a
+  A GraphQL read that selects the column still fails, but differently: it
+  failed on the list with the public `VALIDATION` error "Value '…' is not a
+  valid choice."; it now fails on the cell with a masked `INTERNAL` error, which
+  the console shows as "Request failed." and retries up to three times.
+  **Upgrade:** code that reads a
   selector's value as a member (`.label`, `.value`) takes `field.key_for(value)`
   instead; none in the framework does.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
