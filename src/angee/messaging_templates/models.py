@@ -789,6 +789,17 @@ class _Backlinks(InstancePrefetch):
         return answers, lambda answer: answer[0], lambda row: identities.get(row.pk)
 
 
+def _refusals(error: ValidationError, code: TemplateWarningCode) -> list[TemplateWarning]:
+    """``error`` as a preview's ``code`` warnings: one for each distinct refusal and the column it names, ``None`` for
+    a refusal of the row as a whole (Django's ``NON_FIELD_ERRORS``)."""
+
+    refusals: Iterable[tuple[str, list[str]]] = (
+        error.message_dict.items() if hasattr(error, "error_dict") else [(NON_FIELD_ERRORS, error.messages)]
+    )
+    distinct = dict.fromkeys((name, message) for name, messages in refusals for message in messages)
+    return [TemplateWarning(code, message, None if name == NON_FIELD_ERRORS else name) for name, message in distinct]
+
+
 class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One message template: a layout, template, block or part, for one key and one language."""
 
@@ -1166,8 +1177,11 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         body, subject and preheader, and a block or part alone, its sample as its
         arguments. ``rendered`` is ``None`` when the validation, the walk, the
         render or its warnings refused, and each distinct refusal is then one
-        ``render_error`` warning naming its column (``field``; ``None`` for one of
-        the row as a whole); only a ``ValidationError`` leaves any of them
+        warning naming its column (``field``; ``None`` for one of the row as a
+        whole): ``save_refused`` when saving the patch would be refused (the
+        copy's validation), ``render_error`` when the row, as saved or as the
+        patch would save it, does not render with its sample. Only a
+        ``ValidationError`` leaves any of them
         (:func:`~angee.messaging_templates.walker.refusals_only`).
         """
 
@@ -1175,24 +1189,20 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if patch is not None:
             self.require_access("write")
         row = self if patch is None else self._patched(patch)
-        try:
-            walk = None
-            if patch is not None:
+        walk = None
+        if patch is not None:
+            try:
                 row.full_clean()
-                walk = None if row.is_baseline else row._clean_walk
+            except ValidationError as error:
+                return TemplatePreview(rendered=None, warnings=_refusals(error, TemplateWarningCode.SAVE_REFUSED))
+            walk = None if row.is_baseline else row._clean_walk
+        try:
             if walk is None:
                 walk = TemplateWalker().walk(row, type(row).objects)
             rendered = walk.render(row.sample, kit=self._brand_kit(kit), frame=row.handler.preview_frame)
             warnings = walk.preview_warnings(rendered, row.sample)
         except ValidationError as error:
-            refusals: Iterable[tuple[str, list[str]]] = (
-                error.message_dict.items() if hasattr(error, "error_dict") else [(NON_FIELD_ERRORS, error.messages)]
-            )
-            distinct = dict.fromkeys((name, message) for name, messages in refusals for message in messages)
-            return TemplatePreview(rendered=None, warnings=[
-                TemplateWarning(TemplateWarningCode.RENDER_ERROR, message, None if name == NON_FIELD_ERRORS else name)
-                for name, message in distinct
-            ])
+            return TemplatePreview(rendered=None, warnings=_refusals(error, TemplateWarningCode.RENDER_ERROR))
         return TemplatePreview(rendered=rendered, warnings=warnings)
 
     def _patched(self, patch: Mapping[str, Any]) -> Self:

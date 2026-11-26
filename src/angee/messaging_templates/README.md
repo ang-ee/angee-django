@@ -193,7 +193,10 @@ ask of the columns it edits (a deployment's `write__<field>` among them), all
 before anything is copied or walked, so a shipped default, which only a resource
 load writes, takes no patch. Its copy of the row is validated as the save would
 validate it (`full_clean()`), refused for whatever the save would refuse, and
-never saved.
+never saved. What saving it would refuse is `save_refused`; `render_error` keeps
+meaning that the row, as saved or as the patch would save it, does not render
+with its sample, so an edit that would save but that its sample cannot render
+is told apart from one Save would refuse.
 One walk serves it: the one that validation ran, or the row's own when the
 patch changed only the name, the description or the sample. The console's
 `message_template_preview` read returns it to administrators (`preview`
@@ -353,8 +356,10 @@ for a caller who may also write the row. It refuses as the verbs do: a
 signed-out caller gets the session's GraphQL error, and a caller who reads the
 row but may not preview it, or write it with a patch, a `PERMISSION_DENIED`
 GraphQL error. What Save would refuse comes back in band: `rendered` is null
-and each refusal is a `RENDER_ERROR` warning in the update's words, its `field`
-the column the update reports it under, null for one of its `formErrors`.
+and each refusal is a `SAVE_REFUSED` warning in the update's words, its `field`
+the column the update reports it under, null for one of its `formErrors`. An
+edit Save admits that does not render with its sample answers `RENDER_ERROR`,
+as a saved row that does not render does.
 Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
 (`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
 says), which a page sets as `dir` on the subject, preheader and plain text it

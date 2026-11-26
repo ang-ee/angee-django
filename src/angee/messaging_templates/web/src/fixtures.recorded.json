@@ -4470,6 +4470,26 @@
   {
    "id": "mtl_template_example_password_reset_en",
    "patch": {
+    "sample": {
+     "person": {
+      "first_name": "Ana"
+     }
+    }
+   },
+   "result": {
+    "rendered": null,
+    "warnings": [
+     {
+      "code": "RENDER_ERROR",
+      "detail": "reset_url is required and missing or null.",
+      "field": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
     "format": "html",
     "layout": ""
    },
@@ -4477,12 +4497,12 @@
     "rendered": null,
     "warnings": [
      {
-      "code": "RENDER_ERROR",
+      "code": "SAVE_REFUSED",
       "detail": "Name the layout this template sits in: a mail renders inside its layout, which gives it its document, its brand and its stop link.",
       "field": "layout"
      },
      {
-      "code": "RENDER_ERROR",
+      "code": "SAVE_REFUSED",
       "detail": "An HTML message template has a plain-text form; a Markdown one has none.",
       "field": null
      }

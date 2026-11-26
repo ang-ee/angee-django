@@ -7,8 +7,9 @@ host enabling the addon alone emits it, the library's rows as an administrator r
 them and what a member reads differently, the brand kits, and, for the rows the
 stories open, their backlinks, previews and delete previews and what Override, Keep
 override, the insert and a refused save answer, each with what it changed in the
-library, what Keep override answers on an override another session deleted, and two
-previews of unsaved edits, one that renders and the refused save's own.
+library, what Keep override answers on an override another session deleted, and three
+previews of unsaved edits: one that renders, one that saves but does not render with its
+sample, and the refused save's own.
 Public ids are stable aliases (:func:`_alias`), also inside the server's words, and
 timestamps fixed, so an unchanged server records the same file.
 
@@ -197,8 +198,13 @@ _UPDATE = (
 _SAVED_AT = "2026-11-24T09:00:00+00:00"
 _REFUSED_SET = {"format": "html", "layout": ""}
 """An edit Save refuses for two reasons at once: a template with no layout, in HTML with no plain-text form."""
-_UNSAVED = ({"subject": "Your new {{ brand.name }} password"}, _REFUSED_SET)
-"""The edits previewed unsaved on the password reset: a subject that renders, and the refused save's own."""
+_UNSAVED = (
+    {"subject": "Your new {{ brand.name }} password"},
+    {"sample": {"person": {"first_name": "Ana"}}},
+    _REFUSED_SET,
+)
+"""The edits previewed unsaved on the password reset: a subject that renders, a sample without the reset link, which
+saves but does not render (``RENDER_ERROR``), and the refused save's own (``SAVE_REFUSED``)."""
 
 
 def _alias(kind: str, key: str, language: str, shipped: bool) -> str:

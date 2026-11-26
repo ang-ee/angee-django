@@ -307,6 +307,9 @@ class TemplateWarningCode(StrEnum):
     PLAIN_TEXT = "plain_text"
     SIZE = "size"
     RENDER_ERROR = "render_error"
+    """The row, as saved or as a patch would save it, does not render with its sample."""
+    SAVE_REFUSED = "save_refused"
+    """Saving the patch the preview was asked for would be refused: what the save's validation says."""
 
 
 @dataclass

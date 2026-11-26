@@ -266,7 +266,8 @@ live in code docstrings.
     as that patch would save: `write` is asked as well as `preview`, and what the
     save's gates ask of the columns it edits (`write__<field>` included), before
     anything is copied or walked; the copy is validated as the save validates it,
-    refused for what the save refuses, and never saved. The console's
+    refused for what the save refuses (`save_refused`, apart from the render's
+    `render_error`), and never saved. The console's
     `message_template_preview(template, brand_kit, patch)` read returns it to
     callers holding the new `preview` permission (platform admins;
     `messaging_templates/message_template` revision 2); `patch` is the resource's

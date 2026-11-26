@@ -31,8 +31,9 @@ the row as that patch would save it, for a caller who may also write the row,
 and saves nothing. It refuses as the verbs do: a signed-out caller gets the
 session's GraphQL error, and a reader who may not preview the row, or write it
 with a patch, a ``PERMISSION_DENIED`` GraphQL error. What the row or its patch
-would be refused for comes back in band, one ``RENDER_ERROR`` warning a refusal,
-each naming its column (``field``). Its rendered message carries the row's
+would be refused for comes back in band, one warning a refusal, each naming its
+column (``field``): ``SAVE_REFUSED`` for what saving the patch would refuse,
+``RENDER_ERROR`` for what does not render. Its rendered message carries the row's
 ``language`` and the ``direction`` of the mail's own text
 (``RenderedMessage.direction``, a ``MessageTemplateTextDirection``), for a page
 that shows the subject, preheader or plain text outside the HTML.

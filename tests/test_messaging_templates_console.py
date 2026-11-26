@@ -573,9 +573,9 @@ validator, a check constraint, and the layout with a constraint at once."""
 
 @pytest.mark.parametrize("name", list(_REFUSED_PATCHES))
 def test_a_patch_is_refused_as_its_save_is(library: dict[str, Any], name: str) -> None:
-    """The preview of a patch the update refuses renders nothing and says why in the update's words: one warning for
-    each refusal of the row as a whole (``formErrors``) and for each of a column's (``validationErrors``), naming
-    the column."""
+    """The preview of a patch the update refuses renders nothing and says why in the update's words: one
+    ``SAVE_REFUSED`` warning for each refusal of the row as a whole (``formErrors``) and for each of a column's
+    (``validationErrors``), naming the column."""
 
     del library
     admin = create_platform_admin("messaging-templates-console-refused")
@@ -591,11 +591,30 @@ def test_a_patch_is_refused_as_its_save_is(library: dict[str, Any], name: str) -
     preview = result_data(execute_schema(_schema(), _PATCHED, {"id": public_id_of(row), "patch": patch}, user=admin))
     warnings = preview["message_template_preview"]["warnings"]
     assert preview["message_template_preview"]["rendered"] is None
-    assert {warning["code"] for warning in warnings} == {"RENDER_ERROR"}
+    assert {warning["code"] for warning in warnings} == {"SAVE_REFUSED"}
     assert len(warnings) == len(refused)
     assert {(warning["field"], warning["detail"]) for warning in warnings} == refused
     assert {warning["detail"] for warning in warnings} == {*error.extensions["formErrors"], *(
         message for messages in error.extensions["validationErrors"].values() for message in messages)}
+
+
+def test_an_edit_the_save_admits_that_its_sample_cannot_render_is_a_render_error(library: dict[str, Any]) -> None:
+    """A sample that lacks a value the template requires saves, and does not render: the preview says so with
+    ``RENDER_ERROR``, never ``SAVE_REFUSED``, so a page tells "Save would refuse these edits" from "these edits would
+    save, but do not render with these sample values"."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-unrendered")
+    row = _row("template", "tests.unrendered", source="Hello {{ name }}.", variables={"name": "x"},
+               sample={"name": "Ana"})
+    patch: dict[str, Any] = {"sample": {}}
+    with transaction.atomic():
+        updated = execute_schema(_schema(), _UPDATE, {"id": public_id_of(row), "set": patch}, user=admin)
+        transaction.set_rollback(True)
+    assert not updated.errors, updated.errors
+    preview = result_data(execute_schema(_schema(), _PATCHED, {"id": public_id_of(row), "patch": patch}, user=admin))
+    assert preview["message_template_preview"] == {"rendered": None, "warnings": [
+        {"code": "RENDER_ERROR", "detail": "name is required and missing or null.", "field": None}]}
 
 
 def test_a_patch_is_decoded_as_the_update_decodes_its_input(library: dict[str, Any]) -> None:
