@@ -22,12 +22,15 @@ live in code docstrings.
   replaces two `"postgresql" in ENGINE` checks. The test settings compose the
   same rule, so the PostgreSQL CI lane's sessions now run with JIT off, as
   deployed ones do. A hand-written `DATABASES` entry opts in by calling
-  `disable_jit`. `PGOPTIONS` stays ignored on Django connections, because they
-  always pass `options`. A direct client such as psql or `dbshell` still gets
-  the server's default; a diagnostic runs `SET jit = off` first, or
-  `PGOPTIONS='-c jit=off' manage.py dbshell`. **Upgrade:** nothing, unless a
-  deployment relied on URL options to leave JIT on; it now adds `-c jit=on` to
-  them. A PostGIS deployment with `ANGEE_DB_POOL` set now gets the pool.
+  `disable_jit`, which recognises only those four engines; a custom backend
+  path gets no setting. `PGOPTIONS` stays ignored on the connections built from
+  `DATABASE_URL`, because they always pass `options`; a hand-written `DATABASES`
+  entry without `options` still uses it. A direct client such as psql or
+  `dbshell` still gets the server's default; a diagnostic runs `SET jit = off`
+  first, or `PGOPTIONS='-c jit=off' manage.py dbshell`. **Upgrade:** nothing,
+  unless a deployment relied on URL options to leave JIT on; it now adds
+  `-c jit=on` to them. A PostGIS deployment with `ANGEE_DB_POOL` set now gets
+  the pool.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the

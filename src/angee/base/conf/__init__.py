@@ -80,9 +80,8 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         _start_error_reporting(namespace, env)
 
 
-# The PostgreSQL engines django-environ's URL schemes select. Naming them keeps the
-# backends (PostGIS imports GDAL) unloaded at settings time; a test holds this set to
-# django-environ's own scheme mapping.
+# The PostgreSQL engines django-environ's URL schemes select. Its `POSTGRES_FAMILY` is
+# undocumented, so the set is explicit, and a test pins it to django-environ's mapping.
 _POSTGRESQL_ENGINES = frozenset({
     "django.db.backends.postgresql",
     "django.contrib.gis.db.backends.postgis",
@@ -99,7 +98,9 @@ def disable_jit(database: MutableMapping[str, Any]) -> None:
     ``DATABASE_URL`` selects; a hand-written ``DATABASES`` entry opts in by
     calling it. ``-c jit=off`` goes before the libpq ``options`` the entry
     already carries, so a ``jit`` set in them wins: PostgreSQL applies the
-    last setting. Other engines are left unchanged.
+    last setting. Only the four PostgreSQL engines django-environ selects are
+    recognised; any other engine, a custom backend path included, is left
+    unchanged.
     """
     if database.get("ENGINE") not in _POSTGRESQL_ENGINES:
         return
