@@ -105,6 +105,8 @@ function fill(dialog: HTMLElement, values: { subject?: string; text: string }): 
 async function send(dialog: HTMLElement): Promise<void> {
   const button = within(dialog).getByRole("button", { name: word("compose.send") });
   await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  // A real click moves focus to Send; `fireEvent.click` does not, which would leave it on the field it opened in.
+  act(() => button.focus());
   fireEvent.click(button);
 }
 
@@ -151,6 +153,18 @@ async function banner(dialog: HTMLElement): Promise<HTMLElement> {
   return focused!;
 }
 
+/** The banner's lines, one per reason it holds. */
+function bannerLines(node: HTMLElement): string[] {
+  const items = [...node.querySelectorAll("li")];
+  return items.length ? items.map((item) => item.textContent ?? "") : [node.textContent ?? ""];
+}
+
+/** The banner's line that names a refused field, whose own reason shows under it. */
+function namesField(label: string): string {
+  return ui("form.fixHighlightedFieldsNamed").replace("{fields}", label);
+}
+
+
 test("Dana chooses among the channels the server lists as sendable, and Billing is refused at send under Channel", async () => {
   const { calls, sends } = mount({ surface: "new-message", seat: "dana" });
   const dialog = await openNewMessage();
@@ -168,8 +182,9 @@ test("Dana chooses among the channels the server lists as sendable, and Billing 
   if (!("data" in refusal)) throw new Error("The recorded Billing send was answered with an error.");
   const [reason = ""] = reasonsUnder(refusal, "channel");
   expect(reason).toBeTruthy();
-  expect(within(await banner(dialog)).getByText(refusal.data.compose_message?.message ?? "")).toBeTruthy();
-  expect(within(dialog).getAllByText(reason).length).toBeGreaterThan(0);
+  // The banner names the field; its reason shows once, under it.
+  expect(bannerLines(await banner(dialog))).toEqual([namesField(word("compose.channel"))]);
+  expect(within(dialog).getAllByText(reason)).toHaveLength(1);
   expect(sends()).toHaveLength(1);
 });
 
@@ -186,8 +201,9 @@ test.each([
   const answer = RECORDED.sends.find((entry) => entry.seat === "ana" && entry.variables.text === text
     && JSON.stringify(entry.variables.to) === JSON.stringify(to))?.answer;
   const [reason = ""] = reasonsUnder(answer, "to");
-  await banner(dialog);
-  expect(within(dialog).getAllByText(reason).length).toBeGreaterThan(0);
+  // The banner names the field; its reason shows once, under it.
+  expect(bannerLines(await banner(dialog))).toEqual([namesField(word("compose.to"))]);
+  expect(within(dialog).getAllByText(reason)).toHaveLength(1);
   expect((within(dialog).getByRole("textbox", { name: word("compose.message") }) as HTMLTextAreaElement).value).toBe(text);
 });
 
