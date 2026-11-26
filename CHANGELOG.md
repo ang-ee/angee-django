@@ -54,7 +54,8 @@ live in code docstrings.
     name of the channel permission to send, which `require_reply` and `compose`
     decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
-    fields it only fills while blank, and `Handle.email_value` is the one form an
+    fields it only fills while blank (a fill locks and reads the row again, so
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
     email address is stored in on a handle. `PartManager.attach_files` attaches
     several files under one message lock. `HandleManager.find_identities` (and so
     `find_identity`, `upsert` and every compose lookup) names the platform in each
