@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed API.** A list resolves its group axes once:
+  `buildColumns` takes them as `BuildColumnsOptions.axes` from the table state
+  (`useResourceViewTableState`), which also gives them to the table's grouping
+  and its headers, instead of resolving `groupStack` a second time from the
+  same inputs. Nothing a list renders or reads changes.
+
 - `@angee/ui`: **Changed API.** A pane list's Order select shows what the
   headers show and chooses through the header's press rule. It read the first
   key of the list's state, so a grouped list's select checked the grouping key

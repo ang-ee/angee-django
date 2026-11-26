@@ -1,17 +1,17 @@
 import * as React from "react";
 import { type CellContext, type Column as TableColumn, type ColumnDef, type Row as TableRow, type Table as TableModel } from "@tanstack/react-table";
-import { resourceOrderFieldForPath, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { resourceOrderFieldForPath, type GroupAxis, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { DefinitionPair } from "../../../fragments/DefinitionPair";
 import { useUiT, type UiTranslate } from "../../../i18n";
 import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
-import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, headerSort, pressedSorting, readPath } from "./cell-utils";
-import { groupLabel, tableGroupAxes } from "./grouping";
+import { groupLabel } from "./grouping";
 import { queryForColumns } from "../resource-query";
 export interface BuildColumnsOptions {
-  groupStack?: readonly ResourceViewGroup[];
+  /** The list's group axes, as the table state resolves them once (`useResourceViewTableState`). */
+  axes?: readonly GroupAxis[];
   metadata?: ModelMetadata | null;
   clientOperations?: boolean;
   query?: ResourceQuery;
@@ -21,10 +21,10 @@ export function buildColumns<TRow extends Row>(
   columns: readonly ColumnDescriptor<TRow>[],
   options: BuildColumnsOptions,
 ): ColumnDef<TRow>[] {
-  const axes = tableGroupAxes(options.groupStack ?? [], options.metadata, columns, options.query);
+  const axes = options.axes ?? [];
   const definitions = displayColumns(columns, options);
   if (options.clientOperations) {
-    const query = options.query ?? queryForColumns(columns, options.metadata, options.groupStack);
+    const query = options.query ?? queryForColumns(columns, options.metadata, axes.map((axis) => axis.spec));
     for (const [field, capability] of Object.entries(query.fields)) {
       if (!capability.sort) continue;
       let definition = definitions.find((column) => column.id === field);
