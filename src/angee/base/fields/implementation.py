@@ -12,7 +12,6 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django_choices_field import TextChoicesField
-from rebac import system_context
 
 from angee.base.fields.state import enum_member_for
 from angee.base.implementations import (
@@ -139,11 +138,14 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         """Whether ``instance``, a stored row, holds ``value``, a key the choices do not name, as stored.
 
         The column is read as the row stands, so an update writes such a key back only to the row
-        that holds it, spelled as it is stored. A new row holds nothing.
+        that holds it, spelled as it is stored. A new row holds nothing. The field imports without
+        REBAC; only this read, under its system context, needs it.
         """
 
         if instance._state.adding or instance.pk is None or value in self.empty_values or self.has_key(value):
             return False
+        from rebac import system_context
+
         with system_context(reason="base.impl.held_key"):
             stored = (
                 type(instance)._base_manager.using(instance._state.db).filter(pk=instance.pk)
