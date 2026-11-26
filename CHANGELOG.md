@@ -130,7 +130,24 @@ live in code docstrings.
     record's chatter (the customer's answer to a mail sent from the record) is
     ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
     answers it by email; before, the answer was refused for want of a sender.
-    Like every email it is a retained record: a moderator no longer trashes it.
+    A stored message keeps the kind it was ingested with through every re-sync,
+    identical or edited, so replies received before the upgrade stay comments
+    and cannot be answered by email; new ones can. No data migration.
+    Anyone who has seen a chatter mail's Message-ID can answer onto the record,
+    so a message received on a record's chatter, email or comment, is one its
+    moderator may trash; mail sent from the record, system notes, and mail in a
+    mailbox conversation an earlier version merged into the record (a
+    colleague's own thread, still in the chatter's group) stay retained, that
+    last its owner's to remove, and that refusal is now a coded `ValidationError` (`retained`,
+    "Only comments and received messages can be removed.") where it was a bare
+    `ValueError`. Whether such mail should land on the record at all is open.
+  - **Changed.** A record's chatter thread is never folded with a mailbox thread.
+    The copy of a chatter mail (or of an answer to one) that reaches a
+    colleague's own connected mailbox still folds as a message, but the
+    colleague's thread stays theirs: it was merged into the chatter, dropped out
+    of their inbox, and took their later mail on that conversation onto the
+    record. Threads already folded this way are left as they are; a person
+    keeps them separate through the source-copy decision.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
@@ -144,7 +161,10 @@ live in code docstrings.
     default sender is invalid is refused; a keyed retry still returns its
     original. A reply to a message whose `Reply-To` names no address the handle
     owner accepts is refused (`reply_to`) rather than sent to the sender, which
-    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    may be a relay; the sender an answer falls back to is checked the same way,
+    so one stored with an address the handle owner does not take (a control or
+    an invisible character in it) is refused (`parent`, `reply_unaddressed`)
+    instead of being written and failing at delivery. Idempotency keys claimed through `compose_reply` (scope
     `messaging.reply:`) do not replay through `compose` (scope
     `messaging.compose:`): a posts workflow reply retried across the upgrade
     does not replay, and if its original was trashed or failed, which the
