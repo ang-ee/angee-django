@@ -1585,8 +1585,12 @@ def test_an_update_keeps_a_key_its_row_holds_and_nothing_writes_one_the_row_does
         retired.label = "Renamed"
         retired.full_clean()
         retired.save()
+        # The update wrote the column as itself; the instance still reads its key, not an expression.
+        assert type(retired.backend_class) is str and retired.backend_class == "retired"
         retired.label = "Again"
         retired.save(update_fields=["label"])
+        retired.refresh_from_db()
+        assert retired.backend_class == "retired"
 
     stored = backend_model._base_manager.get(pk=retired.pk)
     assert (stored.label, stored.backend_class) == ("Again", "retired")

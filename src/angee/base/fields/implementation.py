@@ -139,7 +139,9 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
         The column is read as the row stands, so an update writes such a key back only to the row
         that holds it, spelled as it is stored. A new row holds nothing. The field imports without
-        REBAC; only this read, under its system context, needs it.
+        REBAC; only this read, under its system context, needs it. Only a row holding such a key
+        pays: a save of one reads the column up to four times (the field's and the model's clean,
+        the config check, ``pre_save``), about ten more statements on a GraphQL rename.
         """
 
         if instance._state.adding or instance.pk is None or value in self.empty_values or self.has_key(value):
@@ -178,11 +180,15 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         return super().clean(value, model_instance)
 
     def pre_save(self, model_instance: models.Model, add: bool) -> Any:
-        """Mark a key the choices do not name that an update writes back to the stored row holding it."""
+        """Write a key the choices do not name back as the column itself, on an update of the row holding it.
+
+        The update sets the column to its own stored value (``F``), not to the key read before the
+        row was locked, so a stale save cannot write a retired key back over a key changed since.
+        """
 
         value = super().pre_save(model_instance, add)
         if not add and not hasattr(value, "as_sql") and self.holds(model_instance, value):
-            return _HeldKey(value)
+            return models.F(self.attname)
         return value
 
     def from_db_value(self, value: Any, expression: Any, connection: Any) -> Any:
@@ -224,8 +230,8 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         after the save's REBAC gates, so a caller who may not save the row gets
         that refusal. A stored row saves a key its choices name, even once the
         registry dropped it; a save that leaves the column out writes nothing
-        here, and an update writes back the key its row holds (:meth:`pre_save`
-        marks it). A history copy and a historical migration field write a key
+        here, and an update writes back the key its row holds as the column itself
+        (:meth:`pre_save`). A history copy and a historical migration field write a key
         the choices no longer name (the one their row stored), but they refuse
         another spelling of a key the choices name as every field does.
         """
@@ -233,8 +239,7 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         written = value.value if isinstance(value, models.Value) else value
         spelled = written.value if isinstance(written, Enum) else written
         if (
-            not isinstance(written, _HeldKey)
-            and not hasattr(written, "as_sql")
+            not hasattr(written, "as_sql")
             and written not in self.empty_values
             and spelled not in tuple(member.value for member in self.choices_enum)
             and (self.has_key(spelled) or (self.refuses_unknown_keys and self.base_class is not None))
@@ -293,12 +298,6 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
                 keys = (default if isinstance(default, str) and default else "historical",)
             return _impl_choices_enum(self.registry_setting, keys)
         return impl_choices_enum(self.base_class)
-
-
-class _HeldKey(str):
-    """A key its field's choices do not name, written back by an update to the stored row that holds it."""
-
-    __slots__ = ()
 
 
 def _resolve_bound_implementation[T: RegistryBase](
