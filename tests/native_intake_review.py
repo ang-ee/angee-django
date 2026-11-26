@@ -345,10 +345,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
         self.assertFalse(self.Need._base_manager.filter(source_message=answer).exists())
 
-    @override_settings(
-        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
-        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
-    )
+    @override_settings(MAILERS=TRANSPORT)
     def test_an_answer_in_another_domain_spelling_of_the_reply_to_wakes_the_task(self):
         """The answer lands on the handle a contact stored in the Unicode spelling, and still answers the request."""
 
@@ -377,7 +374,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(answer.sender_id, stored.pk)
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS=TRANSPORT)
     def test_requests_are_one_requester_when_their_addresses_are_one_account(self):
         """A letter case is one account and so one requester; a domain spelling iam keeps as two accounts is two
         requesters, so the task names the request to ask instead of awaiting an account the answer never wakes."""

@@ -1213,7 +1213,7 @@ def test_a_channels_sender_is_landed_as_configured(db: None, settings: Any) -> N
     """The desk's configured address is its sender handle's spelling, written on the wire as configured."""
 
     del db
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     channel = make_integration("compose-sender-case", model=Channel, backend_class="email",
                                config={"from_email": "Desk <Desk@Example.TEST>"})
     message = Message.objects.compose(channel=channel, to=["client@example.test"], text="Hi.", actor=channel.owner)
