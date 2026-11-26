@@ -20,7 +20,7 @@ import {
 } from "@angee/metadata";
 
 import { ModalsHost } from "./feedback/ModalsHost";
-import { AppRuntimeProvider } from "./runtime/runtime";
+import { AppRuntimeProvider, type AppRuntime } from "./runtime/runtime";
 import { createClientKey } from "./lib/client-key";
 import { InAppLinkProvider, type InAppNavigator } from "./lib/in-app-link";
 import { TooltipProvider } from "./ui/tooltip";
@@ -46,17 +46,54 @@ export interface UiTestProviderOptions<T extends RefineTestDataProvider = Refine
    * Render under a memory router at these entries (`true`: `/`), as an app page is: a form
    * dialog guards route moves while it holds work. Each mount's router is kept in `routers`.
    */
+  router?: AppShellTestProvidersProps["router"];
+}
+
+export interface AppShellTestProvidersProps {
+  children?: React.ReactNode;
+  /** The runtime the app shell provides; by default the app's defaults. */
+  runtime?: Partial<AppRuntime>;
+  /**
+   * Render under a memory router at these entries (`true`: `/`), as an app page is: a form
+   * dialog guards route moves while it holds work.
+   */
   router?: true | { initialEntries: readonly string[] };
+  /** Receives the memory router `router` creates, once per mount. */
+  onRouter?: (router: AnyRouter) => void;
+}
+
+/**
+ * What every rendered surface has from the app shell, for a test: the root `AppRuntimeProvider`
+ * (with it the runtime's idempotency keys, fresh per mount), `ModalsHost`, which answers the
+ * confirmations a surface asks, and with `router` a memory router. `createUiTestProviders` and
+ * `@angee/app/testing`'s `ShellPageTestProviders` both render it.
+ * @kind null
+ * @reason Test infrastructure: the app shell's providers.
+ */
+export function AppShellTestProviders({ children, runtime = NO_RUNTIME, router: routed, onRouter }: AppShellTestProvidersProps): React.ReactElement {
+  const [router] = React.useState(() => {
+    if (!routed) return null;
+    const created = createRouter({
+      routeTree: createRootRoute(),
+      history: createMemoryHistory({ initialEntries: routed === true ? ["/"] : [...routed.initialEntries] }),
+    });
+    onRouter?.(created);
+    return created;
+  });
+  const shell = <AppRuntimeProvider runtime={runtime}>
+    <ModalsHost>{children}</ModalsHost>
+  </AppRuntimeProvider>;
+  return router ? <RouterContextProvider router={router}>{shell}</RouterContextProvider> : shell;
 }
 
 /**
  * Add resource projection and metadata context to the native Refine test harness.
  * Tooltips open as soon as the pointer enters their trigger, so a hover assertion
  * never races Base UI's wall-clock open delay; a nested `TooltipProvider` keeps
- * its own delay. `ModalsHost` answers the confirmations a surface asks, as the app's
- * does; an `AppRuntimeProvider` holds the runtime's idempotency keys, fresh per mount,
- * under any the test renders; and `router` renders under a memory router whose instance
- * lands in `routers`.
+ * its own delay. Under them, the app shell's providers (`AppShellTestProviders`):
+ * `ModalsHost`, an `AppRuntimeProvider` holding the runtime's idempotency keys, fresh
+ * per mount, under any the test renders, and with `router` a memory router whose
+ * instance lands in `routers`.
  */
 export function createUiTestProviders<T extends RefineTestDataProvider = Pick<RefineTestDataProvider, never>>(
   defaults: UiTestProviderOptions<T> = {},
@@ -82,34 +119,22 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
     router: routed = initialRouter,
     ...refineOptions
   }: UiTestProviderOptions & { children?: React.ReactNode }) {
-    const [router] = React.useState(() => {
-      if (!routed) return null;
-      const created = createRouter({
-        routeTree: createRootRoute(),
-        history: createMemoryHistory({ initialEntries: routed === true ? ["/"] : [...routed.initialEntries] }),
-      });
-      routers.push(created);
-      return created;
-    });
     const schema = React.useMemo(
       () => metadata ?? (resources && schemaFieldMetadataFromDataResources(resources)),
       [metadata, resources],
     );
     const content = schema ? <ModelMetadataProvider metadata={schema}>{children}</ModelMetadataProvider> : children;
-    const tree = <refine.Provider
+    return <refine.Provider
       {...refineOptions}
       resources={refineResources ?? [...refineResourcesFromDataResources(resources ?? [])]}
       providerNames={providerNames ?? ["console", ...(resources ?? []).map((resource) => resource.schemaName)]}
     >
       <TooltipProvider delay={0}>
-        <AppRuntimeProvider runtime={NO_RUNTIME}>
-          <ModalsHost>
-            {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
-          </ModalsHost>
-        </AppRuntimeProvider>
+        <AppShellTestProviders router={routed} onRouter={(router) => routers.push(router)}>
+          {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
+        </AppShellTestProviders>
       </TooltipProvider>
     </refine.Provider>;
-    return router ? <RouterContextProvider router={router}>{tree}</RouterContextProvider> : tree;
   }
 
   return { ...refine, Provider, routers };

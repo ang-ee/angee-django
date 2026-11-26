@@ -7,13 +7,13 @@ import { waitFor } from "@testing-library/react";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
 import type { Root } from "react-dom/client";
 import {
-  AppRuntimeProvider,
   ChatterProvider,
   PrimaryPaneProvider,
   baseIcons,
   useChatter,
   usePrimaryPaneContent,
 } from "@angee/ui";
+import { AppShellTestProviders, type AppShellTestProvidersProps } from "@angee/ui/testing";
 import type { AppRuntime, ContainerAlteration, ContainerChild } from "@angee/ui/runtime";
 
 import {
@@ -34,7 +34,7 @@ import { compileContainers } from "./containers";
 import { CORE_CONTAINERS } from "./core-containers";
 import type { BaseAddonRoute } from "./define-base-addon";
 
-export interface ShellPageTestProvidersProps {
+export interface ShellPageTestProvidersProps extends Pick<AppShellTestProvidersProps, "router" | "onRouter"> {
   children: ReactNode;
   runtime?: Partial<AppRuntime>;
 }
@@ -42,16 +42,27 @@ export interface ShellPageTestProvidersProps {
 /** The framework's containers with their own children, as a composed app has them before any addon. */
 const FRAMEWORK_CONTAINERS = compileContainers([], CORE_CONTAINERS);
 
+/**
+ * A shell page's providers for a test: the app shell's (`AppShellTestProviders`: the runtime with
+ * the framework's icons and containers, `ModalsHost`, and with `router` a memory router), then the
+ * primary pane and the chatter a page publishes to.
+ */
 export function ShellPageTestProviders({
   children,
   runtime = {},
+  router,
+  onRouter,
 }: ShellPageTestProvidersProps): ReactElement {
   return (
-    <AppRuntimeProvider runtime={{ icons: baseIcons, containers: FRAMEWORK_CONTAINERS, ...runtime }}>
+    <AppShellTestProviders
+      runtime={{ icons: baseIcons, containers: FRAMEWORK_CONTAINERS, ...runtime }}
+      router={router}
+      onRouter={onRouter}
+    >
       <PrimaryPaneProvider>
         <ChatterProvider>{children}</ChatterProvider>
       </PrimaryPaneProvider>
-    </AppRuntimeProvider>
+    </AppShellTestProviders>
   );
 }
 
