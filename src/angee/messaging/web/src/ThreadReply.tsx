@@ -23,7 +23,11 @@ import { useMessagingT } from "./i18n";
 import { MessageReplyQuote } from "./MessageReplyQuote";
 import { StreamComposer } from "./StreamComposer";
 
-/** The quiet call options: the box tells a failure itself, so refine's generic notice stays off. */
+/**
+ * The quiet call options: the box tells a failure itself, so refine's generic notice stays off. A copy of
+ * `@angee/ui`'s `SURFACE_RENDERS_FAILURE`, which that package does not export yet: debt, deleted for the
+ * import once its owner exports it.
+ */
 const BOX_RENDERS_FAILURE = { errorNotification: false } as const;
 
 export interface ThreadReplyProps {
@@ -69,6 +73,8 @@ export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest
   const sendingRef = React.useRef(false);
   const textRef = useLatestRef(text);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  // The quote describes the box, so two emails of one author are told apart.
+  const quoteId = React.useId();
   // An answer that lands after the box went away (the person left while it sent) is still reported.
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -129,7 +135,8 @@ export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest
     : state?.outcome === "conflict" ? t("compose.sentEarlier")
       : mayAlreadyBeSent(state) ? t("compose.replyMayAlreadyBeSent") : null;
   return (
-    <section id={id} aria-label={t("compose.replyBox", { author })} className="border-t border-border-subtle p-3">
+    <section id={id} aria-label={t("compose.replyBox", { author })} aria-describedby={quoteId} aria-busy={sending || undefined}
+      className="border-t border-border-subtle p-3">
       <StreamComposer
         value={text}
         onChange={setText}
@@ -138,13 +145,13 @@ export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest
         ready={text.trim() !== ""}
         submitKey="mod-enter"
         prompt={t("compose.replyPrompt")}
-        submitLabel={t("compose.send")}
+        submitLabel={t(sending ? "compose.sending" : "compose.send")}
         readerLine={parent.channel?.display_name ? t("compose.sentFrom", { channel: parent.channel.display_name }) : undefined}
         inputRef={inputRef}
         before={<>
           {readOnly ? <Banner tone="warning">{uiT("viewAs.readOnly")}</Banner> : null}
           <p role="status" className={textRoleVariants({ role: "caption" })}>{note}</p>
-          <MessageReplyQuote message={parent} onClear={() => void cancel()} />
+          <div id={quoteId}><MessageReplyQuote message={parent} onClear={() => void cancel()} /></div>
         </>}
       />
     </section>

@@ -358,6 +358,8 @@ test("Reply answers an email from the box docked under the conversation, sends o
   expect(reply.hasAttribute("aria-pressed")).toBe(false);
   expect(within(await row("Who can see this?")).getByRole("button", { name: /^Reply to / }).getAttribute("aria-expanded")).toBe("false");
   expect(within(box).getByText(word("compose.sentFrom", { channel: "Support desk" }))).toBeTruthy();
+  // Described by its quote, so a second email of the same author reads apart.
+  expect(document.getElementById(box.getAttribute("aria-describedby") ?? "")?.textContent).toContain("Please add me.");
   const input = typeReply(box, "Thanks, adding you now.");
   await waitFor(() => expect(document.activeElement).toBe(input));
   // Two presses in one event turn, before the box can lock: its re-entry check keeps them to one request.
@@ -472,6 +474,9 @@ test("a box that went away while sending still reports a lost answer, in the sha
   const box = await openReply("Please add me.");
   const release = fixture().holdNextAnswer();
   submitReply(typeReply(box, "Thanks, adding you now."));
+  // While it sends, the box says so.
+  expect(await within(box).findByRole("button", { name: word("compose.sending") })).toBeTruthy();
+  expect(box.getAttribute("aria-busy")).toBe("true");
   // The person moves to another conversation while it sends: the box goes.
   rerender({ conversation: "sales" });
   await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
