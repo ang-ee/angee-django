@@ -947,7 +947,8 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. Its
+  deliberate exceptions, each with its guard: merge and system mail (below).
 - **Structural reads use Django's `_base_manager`, including in consumers.**
   It is the model's unscoped read manager (`Meta.base_manager_name`), with no
   REBAC scope and no audit row. Use it for membership predicates, existence
@@ -996,13 +997,12 @@ data through REBAC, never a queryset bypass.
     hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
-- **System mail is named system work.** This is a second deliberate exception
-  to the actor-scope rule above: a verb whose own permission decided the send
-  may be a person's button, and it records through
+- **System mail is named system work.** Also a deliberate exception: the
+  calling verb checks its own permission first; only then does it call
   [`MessageManager.compose_as_system`](../../src/angee/messaging/managers.py),
   which consults no send right and records the causing actor in the changeset
   ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
-  Its callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
+  Its direct callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

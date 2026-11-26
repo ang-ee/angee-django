@@ -52,6 +52,7 @@ from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.lookups import In
 from django.utils import timezone
 from django.utils.html import strip_tags
+from django.views.decorators.debug import sensitive_variables
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -120,7 +121,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
-    from angee.messaging.email import AnymailEmailChannelBackend
+    from angee.messaging.email import SystemChannelBackend
     from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
@@ -375,6 +376,35 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
                 return apps.get_model("resources", "Resource").objects.resolve(SYSTEM_CHANNEL_XREF, model=self.model)
             except ValueError as error:
                 raise SystemChannelMissing from error
+
+    def system_mail_configured(self) -> bool:
+        """Whether system mail can be sent, from settings alone: the one answer callers ask.
+
+        The backend the channel's registry binds to the system key
+        (``SYSTEM_CHANNEL_BACKEND``, which a host may rebind) decides, through its
+        ``system_mail_configured()``; :meth:`MessageManager.compose_as_system` refuses
+        exactly when this is false. It reads no row, so a projection may ask it per record.
+        """
+
+        try:
+            self._require_system_mail()
+        except ValidationError:
+            return False
+        return True
+
+    def _require_system_mail(self) -> None:
+        """Refuse unless the registered system backend answers that system mail can be sent.
+
+        The refusal is the sender rule's coded one (under ``channel``) where it is the
+        reason, else :class:`OutboundEmailNotConfigured`.
+        """
+
+        backend = cast("type[SystemChannelBackend]", self.model.backend_class.field.resolve_class(
+            SYSTEM_CHANNEL_BACKEND,
+        ))
+        if not backend.system_mail_configured():
+            backend.default_sender()
+            raise OutboundEmailNotConfigured
 
     def create_disconnected(
         self,
@@ -3232,6 +3262,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
 
+    # The mail's text stays out of error reports, system mail carrying credentials. Django's
+    # filter applies these names to the undecorated frames below, ``_validate_outgoing``'s too.
+    @sensitive_variables("text", "html", "outgoing")
     def compose_as_system(
         self,
         *,
@@ -3249,10 +3282,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         System mail is named system work (each email Django sends, through the system
         mailer, among it): the caller's own gate authorized it, so a caller whose own
         permission decided the send may be a person's button, and no grant is consulted
-        here. Each caller is named, with that permission, in
-        ``tests/test_messaging_system_mail_callers.py``. The causing actor is recorded
-        in the caller's changeset. It runs in the caller's context and transaction, through
-        the writer :meth:`compose` uses: the rows record the causing actor as
+        here. Its direct callers are listed, each with that permission, in
+        ``tests/test_messaging_system_mail_callers.py``. It runs in the caller's context
+        and transaction, through the writer :meth:`compose` uses: the rows record the causing actor as
         ``created_by`` (empty with none), which grants nothing on them, and join
         the caller's changeset; a handle it creates, the system sender's or a
         recipient's, has no creator. It is sent from the system channel's sender,
@@ -3262,7 +3294,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``ValueError``); compose's checks of the arguments (more recipients than
         ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
         ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
-        carry (``require_carried``), under its role with code ``cannot_carry``,
+        carry (:meth:`clean_system_recipient`), under its role with code ``cannot_carry``,
         so a mail that could never leave is never recorded as sent; system mail not configured,
         from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
         ``channel``), none of which writes a permission audit row; then, after
@@ -3279,12 +3311,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
         for addressee in outgoing.recipients:
-            require_carried(addressee.address, key=addressee.role)
+            self.clean_system_recipient(addressee.address, key=addressee.role)
         channel_model = apps.get_model("messaging", "Channel")
-        system_backend = cast("type[AnymailEmailChannelBackend]",
-                              channel_model.backend_class.field.resolve_class(SYSTEM_CHANNEL_BACKEND))
-        system_backend.default_sender()
-        channel = channel_model.objects.system_channel()
+        channels = channel_model.objects
+        channels._require_system_mail()
+        channel = channels.system_channel()
         return self._write_outgoing(
             replace(outgoing, channel=channel), actor=None, fingerprint={}, idempotency_key=None, admit=None,
             reason=reason,
@@ -3340,6 +3371,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )})
         address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
+        return name, address
+
+    def clean_system_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
+        """Return the display name and the address system mail sends ``entry`` to, or refuse it under ``key``.
+
+        System mail's one recipient rule, which :meth:`compose_as_system` applies to
+        each recipient: :meth:`clean_recipient` (``invalid``), then the transport's
+        (:func:`~angee.messaging.email.require_carried`, ``cannot_carry``). It reads
+        and writes nothing, so a caller asks it before offering a send.
+        """
+
+        name, address = self.clean_recipient(entry, key=key)
+        require_carried(address, key=key)
         return name, address
 
     def _validate_outgoing(
@@ -3447,6 +3491,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             scheduled_at=scheduled_at,
         )
 
+    # Its frame holds the text in ``outgoing`` and the written row, whose str is its preview.
+    @sensitive_variables("outgoing", "message")
     def _write_outgoing(
         self,
         outgoing: _Outgoing,

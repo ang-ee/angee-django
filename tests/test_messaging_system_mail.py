@@ -20,8 +20,11 @@ from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.core.mail.backends.base import BaseEmailBackend
 from django.db import transaction
+from django.db.models.signals import post_save
+from django.template.defaultfilters import pprint
 from django.test import override_settings
 from django.utils.log import AdminEmailHandler, configure_logging
+from django.views.debug import ExceptionReporter
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
@@ -107,7 +110,7 @@ def test_system_mail_is_configured_exactly_when_the_system_channel_has_a_sender(
     """The settings-only predicate and the connected channel's sender answer alike."""
 
     with override_settings(MAILERS=mailers, DEFAULT_FROM_EMAIL=sender):
-        assert SystemChannelBackend.system_mail_configured() is configured
+        assert Channel.objects.system_mail_configured() is SystemChannelBackend.system_mail_configured() is configured
         if configured:
             sender = ("Angee", "noreply@example.test")
             assert system_channel.outbound_sender() == SystemChannelBackend.default_sender() == sender
@@ -556,3 +559,136 @@ def test_a_configured_logger_that_would_record_error_mail_is_reported(
 def test_messagings_own_logging_is_not_reported(settings: Any) -> None:
     settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
     assert "messaging.W001" not in {message.id for message in run_checks(tags=[Tags.mail])}
+
+
+SECRET = "https://example.test/sign-in#token=SECRET-7f3a"
+"""A credential in a system mail's text, as a sign-in link carries one."""
+
+
+def _reported_secret(error: BaseException) -> list[tuple[str, str]]:
+    """Each ``(function, variable)`` of an error report that shows ``SECRET``, as Django's reporter renders it."""
+
+    reporter = ExceptionReporter(None, type(error), error, error.__traceback__)
+    return sorted({
+        (frame["function"], name) for frame in reporter.get_traceback_frames() for name, value in frame["vars"]
+        if "SECRET-7f3a" in pprint(value)
+    })
+
+
+def test_an_error_report_of_an_email_the_system_mailer_refuses_shows_none_of_its_body(
+    system_mailer: Any, settings: Any,
+) -> None:
+    """Refused while the mailer reads it: the reported frames hold the body under the mailer's marked names."""
+
+    settings.DEBUG = False
+    email = EmailMultiAlternatives("Sign in", SECRET, None, ["reader@example.test"])
+    email.attach_alternative(SECRET, "text/calendar")
+    with pytest.raises(ValueError) as refused:
+        email.send()
+    assert _reported_secret(refused.value) == []
+
+
+def test_an_error_report_of_system_mail_with_no_system_channel_shows_none_of_its_text(
+    db: None, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refused inside the writer, below the mailer: neither the recorded arguments nor the writer's text show."""
+
+    del db
+    settings.DEBUG = False
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    settings.DEFAULT_FROM_EMAIL = SENDER
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    with pytest.raises(SystemChannelMissing) as missing:
+        EmailMessage("Sign in", SECRET, None, ["reader@example.test"]).send()
+    assert _reported_secret(missing.value) == []
+
+
+def test_an_error_report_of_system_mail_its_arguments_refuse_shows_none_of_its_text(
+    system_channel: Any, settings: Any,
+) -> None:
+    settings.DEBUG = False
+    with pytest.raises(ValidationError) as refused:
+        Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["reader@example.test"],
+                                          subject="Two\nlines", text=SECRET)
+    assert _reported_secret(refused.value) == []
+
+
+def test_an_error_report_of_a_system_mail_write_that_fails_shows_none_of_its_text(
+    system_channel: Any, settings: Any,
+) -> None:
+    """Failing while its recipients land, after the row is written: the writer's frame holds the text and the row."""
+
+    settings.DEBUG = False
+
+    def fail(sender: Any, instance: Any, **kwargs: Any) -> None:
+        if instance.value == "failing@example.test":
+            raise RuntimeError("The recipient cannot be landed.")
+
+    post_save.connect(fail, sender=Handle, weak=False)
+    try:
+        with pytest.raises(RuntimeError) as failed:
+            Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["failing@example.test"],
+                                              subject="Sign in", text=SECRET)
+    finally:
+        post_save.disconnect(fail, sender=Handle)
+    assert _reported_secret(failed.value) == []
+
+
+class UnconfiguredSystemBackend(SystemChannelBackend):
+    """A host's own system backend, bound to the system key, that never has system mail configured."""
+
+    @classmethod
+    def system_mail_configured(cls) -> bool:
+        return False
+
+
+def test_a_rebound_system_backend_gives_callers_and_the_writer_one_answer(system_channel: Any, settings: Any) -> None:
+    """The registry decides: callers ask the channel manager, never a backend class by name."""
+
+    assert Channel.objects.system_mail_configured()
+    settings.ANGEE_CHANNEL_BACKEND_CLASSES = {
+        **settings.ANGEE_CHANNEL_BACKEND_CLASSES,
+        SYSTEM_CHANNEL_BACKEND: "tests.test_messaging_system_mail.UnconfiguredSystemBackend",
+    }
+    assert SystemChannelBackend.system_mail_configured()
+    assert not Channel.objects.system_mail_configured()
+    with _refused(ValidationError, key="channel", code="OUTBOUND_EMAIL_NOT_CONFIGURED"):
+        Message.objects.compose_as_system(reason="tests.system_mail", to=["reader@example.test"], text="Hello.")
+
+
+@override_settings(MAILERS={"transport": LOCMEM}, DEFAULT_FROM_EMAIL=SENDER)
+def test_whether_system_mail_is_configured_and_can_reach_an_address_is_answered_with_no_database() -> None:
+    assert Channel.objects.system_mail_configured()
+    assert Message.objects.clean_system_recipient("Reader <reader@example.test>") == ("Reader", "reader@example.test")
+    with pytest.raises(ValidationError) as refused:
+        Message.objects.clean_system_recipient("jörg@example.test")
+    assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+
+
+def _refusals(call: Any) -> list[tuple[str, str]]:
+    try:
+        call()
+    except ValidationError as error:
+        return [(key, item.code) for key, items in error.error_dict.items() for item in items]
+    return []
+
+
+@pytest.mark.parametrize(
+    ("entry", "refusal"),
+    [
+        pytest.param("reader@example.test", None, id="ordinary"),
+        pytest.param("jörg@example.test", "cannot_carry", id="local-part-outside-ascii"),
+        pytest.param('"a b"@example.test', "invalid", id="quoted-local-part-with-a-space"),
+        pytest.param("", "invalid", id="blank"),
+    ],
+)
+def test_system_mail_refuses_exactly_the_recipients_its_recipient_rule_refuses(
+    system_channel: Any, entry: str, refusal: str | None,
+) -> None:
+    """Django's email validator refuses the first odd address and admits the second; system mail's rule decides."""
+
+    expected = [] if refusal is None else [("cc", refusal)]
+    assert _refusals(lambda: Message.objects.clean_system_recipient(entry, key="cc")) == expected
+    assert _refusals(lambda: Message.objects.compose_as_system(
+        reason="tests.system_mail", to=["reader@example.test"], cc=[entry], text="Hello.",
+    )) == expected

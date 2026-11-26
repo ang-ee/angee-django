@@ -110,7 +110,7 @@ def _default_sender_usable() -> bool:
 
     This is this addon's own check. Messaging's sender rule, which decides whether a
     link's mail can leave where messaging is installed, is stricter: one address as
-    written, which the transport can carry (``SystemChannelBackend.system_mail_configured``).
+    written, which the transport can carry (``ChannelManager.system_mail_configured``).
     """
 
     _name, address = parseaddr(str(settings.DEFAULT_FROM_EMAIL))
@@ -316,7 +316,7 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
         system mailer, which records mail), so this no longer says the mail can leave:
         a host with no transport mailer offers a link whose send raises and stamps
         nothing. Debt: the lane that sends the link's mail replaces this check with
-        messaging's predicate, ``SystemChannelBackend.system_mail_configured()``; this
+        messaging's predicate, ``Channel.objects.system_mail_configured()``; this
         addon does not depend on messaging today, so that lane adds the dependency.
         """
 

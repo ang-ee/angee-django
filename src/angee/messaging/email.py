@@ -26,6 +26,7 @@ from django.core.mail import EmailMessage, EmailMultiAlternatives, mailers
 from django.core.mail.backends.base import BaseEmailBackend
 from django.db import DatabaseError, transaction
 from django.utils.encoding import force_str, punycode
+from django.views.decorators.debug import sensitive_variables
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
@@ -365,7 +366,9 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
     def system_mail_configured(cls) -> bool:
         """Whether system mail can be sent, from settings alone: a transport mailer and a valid sender.
 
-        True exactly when :meth:`default_sender` returns. As installed, the system
+        This backend's own contract: callers ask ``ChannelManager.system_mail_configured()``,
+        which asks the backend the registry binds to the system key. True exactly
+        when :meth:`default_sender` returns. As installed, the system
         channel's row names no ``from_email``, so its :meth:`outbound_sender` is that
         default sender too; a ``from_email`` set on the row would be its own. It
         reads no row, so a projection may ask it per record.
@@ -408,7 +411,9 @@ def require_carried(address: str, *, key: str) -> None:
 class SystemMailer(BaseEmailBackend):
     """Django's default mailer wherever messaging is installed: it records each email on the system channel.
 
-    Each email becomes one queued message through
+    Any code that calls Django's mail API writes system mail through this mailer,
+    which consults no permission: that code's own gate is the send's only
+    authorization. Each email becomes one queued message through
     :meth:`~angee.messaging.managers.MessageManager.compose_as_system`, in the
     caller's transaction, so mail sent in a transaction that rolls back is never
     sent; it sends nothing itself. Delivery runs later through ``MAILERS["transport"]``.
@@ -425,6 +430,8 @@ class SystemMailer(BaseEmailBackend):
         super().__init__(**kwargs)
         self.fail_silently = fail_silently
 
+    # The recorded bodies stay out of error reports: system mail carries credentials.
+    @sensitive_variables("recorded", "arguments")
     def send_messages(self, email_messages: Any) -> int:
         """Record each email with a recipient as one queued system message; return how many were recorded."""
 
@@ -452,6 +459,7 @@ _DROPPED_HEADERS = frozenset({"date", "message-id"})
 """Headers an email may carry that system mail drops: compose mints the Message-ID, and delivery dates the mail."""
 
 
+@sensitive_variables("text", "html", "body", "alternatives", "content")
 def _system_mail(email: EmailMessage) -> dict[str, Any]:
     """Return ``email`` as :meth:`compose_as_system` arguments, reading nothing; refuse what it cannot carry.
 

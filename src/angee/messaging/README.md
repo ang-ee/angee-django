@@ -362,11 +362,20 @@ recipient's, has no creator: the handles are written under messaging's non-user
 attribution (`messaging/system:outgoing`), so their history is a changeset of
 its own beside the caller's, with the caller's change reason, naming no user.
 Each call mints its own Message-ID.
-`SystemChannelBackend.system_mail_configured()` answers from settings alone
-whether system mail can be sent: a transport and a default sender the sender
-rule accepts. That rule is `MessageManager.clean_recipient`, the one check
-every address messaging lands takes, plus `carries_address`: a sender whose part
-before the `@` is outside ASCII is refused, as no transport here speaks SMTPUTF8.
+`Channel.objects.system_mail_configured()` (`ChannelManager`) is the one
+answer callers ask, from settings alone, whether system mail can be sent: the
+backend the registry binds to the system key decides (a transport and a default
+sender the sender rule accepts, for messaging's own), and `compose_as_system`
+refuses exactly when it is false. `SystemChannelBackend.system_mail_configured()`
+is that backend's own contract, which callers do not name. The sender rule is
+`MessageManager.clean_recipient`, the one check every address messaging lands
+takes, plus `carries_address`: a sender whose part before the `@` is outside
+ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
+`Message.objects.clean_system_recipient(entry, key=...)`, which
+`compose_as_system` applies to each recipient and a caller asks before offering
+a send; both read nothing. The system write's frames keep the mail's text out
+of Django's error reports (`sensitive_variables`), down to the ORM's own frames,
+which hold the written rows.
 
 The system mailer carries what a Django email can mean on the system channel:
 `to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.
@@ -417,7 +426,7 @@ selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
 source. `compose` and `Message.require_reply` decide `reply` on the channel,
 which nobody holds there, so `compose(channel=Channel.objects.system_channel())`
 and an answer to a system message are refused for every person, administrators
-included, with no branch of their own: the channels offered to send from are
-exactly the channels a send admits. Its readers, administrators alone, find it
+included, with no branch of their own. On the system channel the selection and
+the send agree: neither admits it. Its readers, administrators alone, find it
 among channels as "System mail", its threads in the inbox and its messages in
 timelines.

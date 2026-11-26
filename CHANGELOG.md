@@ -96,7 +96,7 @@ live in code docstrings.
     `mail_admins` naming `using: transport` (messaging's README gives the block). Tests that observed
     delivery through `MAILERS={"default": ...}` override `transport`. With
     messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
-    say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
+    say mail can be sent: ask `Channel.objects.system_mail_configured()`.
     The emailed sign-in link (`angee.iam_messaging`) still asks the default
     mailer, so a host with no transport offers a link whose send raises and
     stamps nothing, and a recorded link whose delivery later fails is stamped as
@@ -116,9 +116,13 @@ live in code docstrings.
     (`SYSTEM_CHANNEL_MISSING`, under `channel`) when it is absent.
     `AnymailEmailChannelBackend.default_sender()` is the deployment's sender
     (`DEFAULT_FROM_EMAIL`) from settings alone, and
-    `SystemChannelBackend.system_mail_configured()` answers whether system mail
-    can be sent. `carries_address(address)` (`angee.messaging.email`) is the one
-    rule for what the transport can carry. `ChannelBackend.system_only` (read
+    `ChannelManager.system_mail_configured()` answers whether system mail can be
+    sent, as the backend the registry binds to the system key decides.
+    `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
+    recipient rule, which reads nothing. `carries_address(address)`
+    (`angee.messaging.email`) is the one rule for what the transport can carry,
+    and `require_carried(address, key=...)` its refusal. The system write keeps
+    the mail's text out of Django's error reports. `ChannelBackend.system_only` (read
     through `Channel.system_only`) declares a backend that serves the system
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging

@@ -183,8 +183,8 @@ def test_nobody_sends_on_the_system_channel_as_a_person_administrators_included(
     """No seat is offered the system channel to send from, and every seat's send on it is refused.
 
     ``compose`` and ``Message.require_reply`` decide ``reply`` on the channel, which nobody holds
-    there, so the channels offered are exactly the channels a send admits. The framework writes the
-    channel as named system work (``compose_as_system``); the administrator sends on the control.
+    there, so on the system channel the selection and the send agree: neither admits it. The framework
+    writes the channel as named system work (``compose_as_system``); the administrator sends on the control.
     """
 
     seats = sealed.seats
