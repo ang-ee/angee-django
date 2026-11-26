@@ -44,7 +44,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
@@ -70,6 +70,7 @@ from angee.messaging_templates.walker import (
     PreviewFrame,
     RenderedMessage,
     TemplatePreview,
+    TemplateWalk,
     TemplateWalker,
     TemplateWarning,
     TemplateWarningCode,
@@ -797,6 +798,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         "sample",
     )
     """The columns an administrator edits: what an override copies and the console updates."""
+    _clean_walk: TemplateWalk | None = None
+    """The walk the last :meth:`clean` ran (:meth:`validate_source`), or ``None`` when it walked nothing; what
+    :meth:`preview` renders a patch from, read straight after ``full_clean()``."""
     sqid_prefix = "mtl_"
 
     kind = StateField(choices_enum=MessageTemplateKind)
@@ -1041,11 +1045,12 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         admit (:meth:`_walkable`, judged before the row is hashed) and what the row
         renders is new or changed (its content hash differs from the stored
         row's), :meth:`validate_source`, through the
-        same scope: an edit of only the name, the description or the sample walks
-        nothing. The stored layout and hash are a structural read of the row's own
-        columns (``_base_manager``).
+        same scope, kept as :attr:`_clean_walk`: an edit of only the name, the
+        description or the sample walks nothing. The stored layout and hash are a
+        structural read of the row's own columns (``_base_manager``).
         """
 
+        self._clean_walk = None
         if not self._readable():
             return
         super().clean()
@@ -1074,7 +1079,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if errors:
             raise ValidationError(errors)
         if self._walkable() and stored_hash != self.compute_content_hash():
-            self.validate_source()
+            self._clean_walk = self.validate_source()
 
     def _readable(self) -> bool:
         """Whether every column holds what :meth:`clean_fields` admits: text in a text column, what JSON writes in
@@ -1108,8 +1113,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             return False
         return True
 
-    def validate_source(self) -> None:
-        """Walk this row as it would be saved, among its language's effective rows; raise ``ValidationError``.
+    def validate_source(self) -> TemplateWalk:
+        """Walk this row as it would be saved, among its language's effective rows; return the walk, or raise
+        ``ValidationError``.
 
         The walk (:meth:`~angee.messaging_templates.walker.TemplateWalker.walk`)
         refuses what may not render: this row's own source, subject, preheader
@@ -1121,7 +1127,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         """
 
         rows = type(self).objects
-        TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
+        return TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
 
     def render(self, values: Mapping[str, Any], *, kit: BrandKit | None = None) -> RenderedMessage:
         """Render this row with ``values``, in ``kit``'s name and colours (the default kit when ``None``).
@@ -1141,24 +1147,41 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         walk = TemplateWalker().walk(self, type(self).objects)
         return walk.render(values, kit=self._brand_kit(kit))
 
-    def preview(self, *, kit: BrandKit | None = None) -> TemplatePreview:
-        """Render this row with its ``sample`` and say what a sender should know about it.
+    def preview(self, *, kit: BrandKit | None = None, patch: Mapping[str, Any] | None = None) -> TemplatePreview:
+        """Render this row with its ``sample``, or as ``patch`` would save it, and say what a sender should know.
 
-        Requires ``preview`` on the row before anything else (named system work
-        always may); ``PermissionDenied`` otherwise. A template renders whole, a
-        layout around its handler's fixed body, subject and preheader, and a block
-        or part alone, its sample as its arguments. ``rendered`` is ``None`` when
-        the walk, the render or its warnings refused, and each distinct refusal is
-        then one ``render_error`` warning naming its column (``field``; ``None`` for
-        one of the row as a whole); only a ``ValidationError`` leaves any of them
+        Requires ``preview`` on the row, and with a ``patch`` also ``write``,
+        before anything is copied or walked (named system work always may);
+        ``PermissionDenied`` otherwise. So a patch on a shipped default, which
+        only a resource load writes, is refused, and an empty patch is a patch.
+        ``patch`` holds native values of :attr:`edited_fields`, decoded as the
+        console's update decodes its input; the row it makes (:meth:`_patched`)
+        is validated as an update of this row is, ``full_clean()``, and never
+        saved. One walk serves the preview: the one that ``clean()`` ran when the
+        patch changed what renders (:attr:`_clean_walk`, never a shipped default's,
+        which reaches shipped rows alone), else the walk of the row as it would
+        render. A template renders whole, a layout around its handler's fixed
+        body, subject and preheader, and a block or part alone, its sample as its
+        arguments. ``rendered`` is ``None`` when the validation, the walk, the
+        render or its warnings refused, and each distinct refusal is then one
+        ``render_error`` warning naming its column (``field``; ``None`` for one of
+        the row as a whole); only a ``ValidationError`` leaves any of them
         (:func:`~angee.messaging_templates.walker.refusals_only`).
         """
 
         self.require_access("preview")
+        if patch is not None:
+            self.require_access("write")
+        row = self if patch is None else self._patched(patch)
         try:
-            walk = TemplateWalker().walk(self, type(self).objects)
-            rendered = walk.render(self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
-            warnings = walk.preview_warnings(rendered, self.sample)
+            walk = None
+            if patch is not None:
+                row.full_clean()
+                walk = None if row.is_baseline else row._clean_walk
+            if walk is None:
+                walk = TemplateWalker().walk(row, type(row).objects)
+            rendered = walk.render(row.sample, kit=self._brand_kit(kit), frame=row.handler.preview_frame)
+            warnings = walk.preview_warnings(rendered, row.sample)
         except ValidationError as error:
             refusals: Iterable[tuple[str, list[str]]] = (
                 error.message_dict.items() if hasattr(error, "error_dict") else [(NON_FIELD_ERRORS, error.messages)]
@@ -1169,6 +1192,21 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
                 for name, message in distinct
             ])
         return TemplatePreview(rendered=rendered, warnings=warnings)
+
+    def _patched(self, patch: Mapping[str, Any]) -> Self:
+        """This row with ``patch``'s native values over its :attr:`edited_fields`, for :meth:`preview`; never saved.
+
+        ``copy`` keeps the primary key and the saved state, so the row validates
+        as an update of this row does, Django's unique checks leaving this row
+        out. A key outside :attr:`edited_fields` raises ``ValueError``.
+        """
+
+        if unknown := sorted(set(patch) - set(self.edited_fields)):
+            raise ValueError(f"A patch edits {', '.join(self.edited_fields)}, never {', '.join(unknown)}.")
+        row = copy(self)
+        for name, value in patch.items():
+            setattr(row, name, value)
+        return row
 
     @staticmethod
     def _brand_kit(kit: BrandKit | None) -> BrandKit:

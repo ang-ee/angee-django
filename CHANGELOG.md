@@ -257,14 +257,21 @@ live in code docstrings.
     `error_list` (`invalid_values`, `message_template_refused`,
     `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
     for a failure nobody foresaw, logged with its traceback first).
-  - **Preview.** `MessageTemplate.preview(*, kit=None)` renders a row's `sample`
-    (a layout around a fixed body, a block or part alone) and returns a
-    `TemplatePreview` with `TemplateWarning`s: the subject or preheader length,
-    unused variables, a missing stop link, an empty plain-text body, the size, or
-    a render error, one for each refusal, naming its column
-    (`TemplateWarning.field`). The console's `message_template_preview(template,
-    brand_kit)` read returns it to callers holding the new `preview` permission
-    (platform admins; `messaging_templates/message_template` revision 2).
+  - **Preview.** `MessageTemplate.preview(*, kit=None, patch=None)` renders a
+    row's `sample` (a layout around a fixed body, a block or part alone) and
+    returns a `TemplatePreview` with `TemplateWarning`s: the subject or preheader
+    length, unused variables, a missing stop link, an empty plain-text body, the
+    size, or a render error, one for each refusal, naming its column
+    (`TemplateWarning.field`). With a `patch` of edited columns it previews the row
+    as that patch would save: `write` is asked as well as `preview`, before
+    anything is copied or walked, the copy is validated as the save validates it,
+    refused for what the save refuses, and never saved. The console's
+    `message_template_preview(template, brand_kit, patch)` read returns it to
+    callers holding the new `preview` permission (platform admins;
+    `messaging_templates/message_template` revision 2); `patch` is the resource's
+    `message_templates_set_input`, decoded as the update decodes it
+    (`MessageTemplateWriteBackend.patch_values`), and a warning's `field` is the
+    column the update reports a refusal under.
   - **Shipped rows.** The addon's install tier ships the `base` layout, the
     `header`, `footer`, `button`, `quote` and `record_card` blocks and the
     `greeting`, `ignore_notice` and `signature` parts; the layout carries the

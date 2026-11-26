@@ -7,7 +7,8 @@ host enabling the addon alone emits it, the library's rows as an administrator r
 them and what a member reads differently, the brand kits, and, for the rows the
 stories open, their backlinks, previews and delete previews and what Override, Keep
 override, the insert and a refused save answer, each with what it changed in the
-library, and what Keep override answers on an override another session deleted.
+library, what Keep override answers on an override another session deleted, and two
+previews of unsaved edits, one that renders and the refused save's own.
 Public ids are stable aliases (:func:`_alias`), also inside the server's words, and
 timestamps fixed, so an unchanged server records the same file.
 
@@ -170,8 +171,9 @@ _ROW = (
 """Every field a row's list or record read selects; the fixture serves one row shape to both."""
 _KIT = "id display_name name is_default"
 _PREVIEW = (
-    "query($template: ID!, $brand_kit: ID) { message_template_preview(template: $template, brand_kit: $brand_kit) "
-    "{ rendered { subject preheader html plain_text language direction } warnings { code detail field } } }"
+    "query($template: ID!, $brand_kit: ID, $patch: message_templates_set_input) { message_template_preview("
+    "template: $template, brand_kit: $brand_kit, patch: $patch) { rendered { subject preheader html plain_text "
+    "language direction } warnings { code detail field } } }"
 )
 _BACKLINKS = (
     "query($id: String!) { message_templates_by_pk(id: $id) { backlinks { id display_name kind key language "
@@ -193,6 +195,10 @@ _UPDATE = (
     f"{{ update_message_templates_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ {_ROW} }} }}"
 )
 _SAVED_AT = "2026-11-24T09:00:00+00:00"
+_REFUSED_SET = {"format": "html", "layout": ""}
+"""An edit Save refuses for two reasons at once: a template with no layout, in HTML with no plain-text form."""
+_UNSAVED = ({"subject": "Your new {{ brand.name }} password"}, _REFUSED_SET)
+"""The edits previewed unsaved on the password reset: a subject that renders, and the refused save's own."""
 
 
 def _alias(kind: str, key: str, language: str, shipped: bool) -> str:
@@ -377,8 +383,9 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
     kits = read(f"{{ brand_kits {{ {_KIT} }} }}", {}, "brand_kits")
     other_kit = next(kit["id"] for kit in kits if not kit["is_default"])
 
-    def preview(id_: str, kit: str | None = None) -> Any:
-        return read(_PREVIEW, {"template": id_, **({"brand_kit": kit} if kit else {})}, "message_template_preview")
+    def preview(id_: str, kit: str | None = None, patch: dict[str, Any] | None = None) -> Any:
+        variables = {"template": id_, **({"brand_kit": kit} if kit else {}), **({"patch": patch} if patch else {})}
+        return read(_PREVIEW, variables, "message_template_preview")
 
     def backlinks(id_: str) -> Any:
         return read(_BACKLINKS, {"id": id_}, "message_templates_by_pk")["backlinks"]
@@ -444,9 +451,8 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
             assert state["rows"][0] == _settled(inserted.data["insert_message_templates_one"])
             inserts.append(_aliased({"object": object_, "changes": state}, new_ids()))
 
-    # A save the walker and two constraints refuse at once: a template in HTML with no plain-text form and no layout.
     saves = []
-    for id_, set_ in ((opened["passwordReset"], {"format": "html", "layout": ""}),):
+    for id_, set_ in ((opened["passwordReset"], _REFUSED_SET),):
         with _rolled_back():
             refused = execute_schema(schema, _UPDATE, {"id": id_, "set": set_}, user=admin)
             saves.append({"id": id_, "set": set_, "error": _error(refused)})
@@ -467,6 +473,10 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
         "keepRefused": keep_refusals,
         "insert": inserts,
         "save": saves,
+        "unsavedPreviews": [
+            {"id": opened["passwordReset"], "patch": patch, "result": preview(opened["passwordReset"], patch=patch)}
+            for patch in _UNSAVED
+        ],
     }, ids)
 
 

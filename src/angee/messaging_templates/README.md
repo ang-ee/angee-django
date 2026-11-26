@@ -136,7 +136,9 @@ measurement: CPU seconds on an 18-core Apple M-series machine with CPython 3.14.
 taken at the load each run states. `test_preview_time` and `test_pass_time` (under
 `ANGEE_TIMED_TESTS=1`) state their bounds as measured there at a load near 13 (2 s
 a preview, 1 s a pass) and scale them by a fixed reference workload measured in
-the same process, so a busy machine slows the case and the bound alike.
+the same process, so a busy machine slows the case and the bound alike; the
+costliest admitted preview written into a saved row as a patch keeps a
+preview's 2 s (`test_patched_preview_time`).
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|
@@ -178,15 +180,22 @@ bidirectional override and no encoded-word opener, so a mail library stores
 exactly the string it was given. A sender never compiles rendered output as a
 template again, since a value may spell `{{ … }}`.
 
-`row.preview(kit=None)` renders the row's `sample`: a template whole, a layout
-around a fixed body, subject and preheader, a block or part alone. It returns
-the rendered message, or none, and warnings (`TemplateWarningCode`): a long
-subject, an empty or long preheader, a declared value nothing reads, a declared
-`unsubscribe_url` the body does not show, an empty plain-text body, HTML near
-Gmail's clipping size, or a render error, one for each refusal, naming the
-column it belongs to (`field`, none for a refusal of the row as a whole). The
-console's `message_template_preview` read returns it to administrators
-(`preview` permission), in the kit it names or the default one.
+`row.preview(kit=None, patch=None)` renders the row's `sample`: a template
+whole, a layout around a fixed body, subject and preheader, a block or part
+alone. It returns the rendered message, or none, and warnings
+(`TemplateWarningCode`): a long subject, an empty or long preheader, a declared
+value nothing reads, a declared `unsubscribe_url` the body does not show, an
+empty plain-text body, HTML near Gmail's clipping size, or a render error, one
+for each refusal, naming the column it belongs to (`field`, none for a refusal
+of the row as a whole). A `patch` of edited columns previews the row as it
+would save. It asks `write` as well as `preview`, both before anything is
+copied or walked, so a shipped default, which only a resource load writes,
+takes no patch. Its copy of the row is validated as the save would validate it
+(`full_clean()`), refused for whatever the save would refuse, and never saved.
+One walk serves it: the one that validation ran, or the row's own when the
+patch changed only the name, the description or the sample. The console's
+`message_template_preview` read returns it to administrators (`preview`
+permission), in the kit it names or the default one.
 
 ## Shipped defaults, overrides and reset
 
@@ -333,10 +342,17 @@ runs. `can_keep_override` rides the list's statement; `can_override` decides the
 reader's `create` on the override for each row, so it is a read for one record's
 page.
 
-`message_template_preview(template, brand_kit)` returns a row's preview, in the
-named kit or the default one, to a caller who may preview it. It refuses as the
-verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
-reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
+`message_template_preview(template, brand_kit, patch)` returns a row's preview,
+in the named kit or the default one, to a caller who may preview it. `patch` is
+the resource's own `message_templates_set_input`, the input the update takes,
+decoded as the update decodes it (an enum member name such as `MARKDOWN`
+included): the open form's unsaved edits, previewed as Save would write them,
+for a caller who may also write the row. It refuses as the verbs do: a
+signed-out caller gets the session's GraphQL error, and a caller who reads the
+row but may not preview it, or write it with a patch, a `PERMISSION_DENIED`
+GraphQL error. What Save would refuse comes back in band: `rendered` is null
+and each refusal is a `RENDER_ERROR` warning in the update's words, its `field`
+the column the update reports it under, null for one of its `formErrors`.
 Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
 (`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
 says), which a page sets as `dir` on the subject, preheader and plain text it

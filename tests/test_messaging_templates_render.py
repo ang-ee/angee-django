@@ -2763,6 +2763,54 @@ def test_preview_time(plain: Any, kit: Any) -> None:
     assert max(spent.values()) < bound, (spent, bound)
 
 
+PATCHED_COLUMNS = ("source", "text_source", "subject", "variables", "sample")
+"""The columns that make ``review`` the costliest admitted preview, written into another saved row as a patch."""
+
+
+def _patched_cases() -> tuple[dict[str, Any], Any, dict[str, Any]]:
+    """The preview cases, a saved template of one line, and the patch writing ``review``'s columns into it."""
+
+    cases = _preview_cases()
+    edited = _mail("Hello.", key="tests.edited", format="html", text_source="Hello.")
+    return cases, edited, {name: getattr(cases["review"], name) for name in PATCHED_COLUMNS}
+
+
+def test_a_patched_preview_walks_once(plain: Any, kit: Any, work: dict[str, list[Any]]) -> None:
+    """A patch that changes what renders is walked once, by ``clean()``, and rendered from that walk; one that
+    changes only the sample is walked once, as the saved row is. Either checks each row it reaches once and does
+    the work of the saved row's preview."""
+
+    del plain
+    cases, edited, patch = _patched_cases()
+    for row, patched in ((edited, patch), (cases["review"], {"sample": cases["review"].sample})):
+        for seen in work.values():
+            seen.clear()
+        with system_context(reason="tests.messaging_templates.render.work"):
+            preview = row.preview(kit=kit, patch=patched)
+        assert preview.rendered is not None, preview.warnings
+        assert (sum(work["checked"]), work["trees"], _charges(work["passes"])) == PREVIEW_WORK["review"], row.key
+
+
+@TIMED
+def test_patched_preview_time(plain: Any, kit: Any) -> None:
+    """The costliest admitted preview written into a saved row as a patch, validated as its save would be and
+    rendered from that one walk, takes under two seconds of CPU."""
+
+    del plain
+    cases, edited, patch = _patched_cases()
+    spent: dict[str, float] = {}
+    for name, row, patched in (("saved", cases["review"], None), ("patched", edited, patch)):
+        started = time.process_time()
+        with system_context(reason="tests.messaging_templates.render.timed"):
+            preview = row.preview(kit=kit, patch=patched)
+        spent[name] = round(time.process_time() - started, 3)
+        assert preview.rendered is not None, preview.warnings
+    print(f"patched preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
+    bound = _scaled(2.0)
+    print(f"patched preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
+    assert spent["patched"] < bound, (spent, bound)
+
+
 # ---------- preview, its warnings and its read ----------
 
 
@@ -2802,6 +2850,22 @@ def test_a_layout_previews_around_a_fixed_body_and_a_block_alone(plain: Any, kit
     assert "A template writes its message here." in layout.rendered.plain_text
     assert block.rendered is not None and block.rendered.html == "<b>Tuner</b>"
     assert block.warnings == []
+
+
+def test_a_patch_renders_on_a_copy_and_writes_only_the_columns_an_administrator_edits(plain: Any, kit: Any) -> None:
+    """A patch renders on a copy of the row, which keeps its own values, and holds edited columns alone: the row's
+    identity, its flag and its hashes are refused before anything is copied or walked."""
+
+    del plain
+    row = _mail("Hello.")
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = row.preview(kit=kit, patch={"source": "Edited."})
+    assert preview.rendered is not None and "Edited." in preview.rendered.plain_text
+    assert (row.source, row.content_hash) == ("Hello.", MessageTemplate._base_manager.get(pk=row.pk).content_hash)
+    for column in ("kind", "key", "is_baseline", "content_hash"):
+        with system_context(reason="tests.messaging_templates.render.preview"), pytest.raises(
+                ValueError, match=f"never {column}"):
+            row.preview(kit=kit, patch={"source": "Edited.", column: "x"})
 
 
 def test_deleting_an_included_block_or_part_is_refused_while_its_key_would_stop_resolving(plain: Any) -> None:

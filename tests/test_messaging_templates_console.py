@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
@@ -18,6 +20,7 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.backends import backend
+from rebac.models import PermissionAuditEvent
 from rebac.schema.ast import PermNil
 from rebac.testing import install_schema
 
@@ -30,6 +33,7 @@ from angee.messaging_templates.models import (
     MessageTemplateKind,
     MessageTemplateQuerySet,
 )
+from angee.messaging_templates.schema import MessageTemplateWriteBackend
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TextDirection
 from angee.provenance.context import changeset_model
@@ -38,7 +42,7 @@ from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
 from tests.test_messaging_templates_render import TIMED, _recording
 
-_LAYOUT = {
+_LAYOUT: dict[str, Any] = {
     "source": "<div>{% block content %}{% endblock %}</div>",
     "text_source": "{% block content %}{% endblock %}",
 }
@@ -196,30 +200,38 @@ def test_each_verb_is_projected_as_what_it_then_admits(db: None) -> None:
         "message_templates"]) == ["base", "letter"]
 
 
+@contextmanager
+def _narrowed(name: str) -> Iterator[None]:
+    """A deployment whose message templates' permission ``name`` admits nobody, for the block's duration."""
+
+    active = backend()
+    original = active.schema()
+    narrowed = deepcopy(original)
+    narrowed.definitions = [
+        replace(definition, permissions=tuple(
+            replace(permission, expression=PermNil(), raw_text="nil") if permission.name == name else permission
+            for permission in definition.permissions
+        )) if definition.resource_type == "messaging_templates/message_template" else definition
+        for definition in narrowed.definitions
+    ]
+    install_schema(narrowed, backend=active)
+    try:
+        yield
+    finally:
+        install_schema(original, backend=active)
+
+
 def test_a_deployment_that_narrows_create_but_keeps_preview_is_not_offered_override(db: None) -> None:
     """A deployment whose ``create`` admits nobody: the reader still previews, and Override is projected and refused."""
 
     del db
     admin = create_platform_admin("messaging-templates-console-narrowed")
     shipped = _row("layout", "plain", baseline=True, **_LAYOUT)
-    active = backend()
-    original = active.schema()
-    narrowed = deepcopy(original)
-    narrowed.definitions = [
-        replace(definition, permissions=tuple(
-            replace(permission, expression=PermNil(), raw_text="nil") if permission.name == "create" else permission
-            for permission in definition.permissions
-        )) if definition.resource_type == "messaging_templates/message_template" else definition
-        for definition in narrowed.definitions
-    ]
     document = "{ message_templates { permissions can_override } }"
-    install_schema(narrowed, backend=active)
-    try:
+    with _narrowed("create"):
         listed = result_data(execute_schema(_schema(), document, user=admin))
         assert listed["message_templates"] == [{"permissions": ["preview"], "can_override": False}]
         assert _admitted(admin, _OVERRIDE, shipped) is False
-    finally:
-        install_schema(original, backend=active)
 
 
 _KEEPABLE = "{ message_templates { id overrides_default can_keep_override } }"
@@ -452,6 +464,182 @@ def test_a_preview_says_the_direction_of_the_mails_own_text(library: dict[str, A
             answers = [execute_schema(schema, document, variables, user=user) for document in (_DIRECTED, _UNDIRECTED)]
             refusals = [[(error.extensions["code"], error.message) for error in answer.errors] for answer in answers]
             assert refusals[0] == refusals[1] and [code for code, _ in refusals[0]] == ["PERMISSION_DENIED"], refusals
+
+
+# ---------- what a preview of a patch says ----------
+
+
+_PATCHED = """
+query($id: ID!, $patch: message_templates_set_input) {
+  message_template_preview(template: $id, patch: $patch) {
+    rendered { subject plain_text } warnings { code detail field }
+  }
+}
+"""
+_EDIT = {"subject": "Edited {{ brand.name }}"}
+
+
+def _patch_rows() -> dict[str, Any]:
+    """A shipped default, the deployment's override of it, and a row of the deployment's own."""
+
+    return {
+        "shipped default": _row("template", "tests.welcome", baseline=True),
+        "override": _row("template", "tests.welcome"),
+        "own row": _row("template", "tests.own"),
+    }
+
+
+@pytest.mark.parametrize(("caller", "state", "patch", "answer"), [
+    pytest.param("administrator", "override", None, "renders", id="administrator-override"),
+    pytest.param("administrator", "override", _EDIT, "renders", id="administrator-override-patched"),
+    pytest.param("administrator", "own row", None, "renders", id="administrator-own"),
+    pytest.param("administrator", "own row", _EDIT, "renders", id="administrator-own-patched"),
+    pytest.param("administrator", "own row", {}, "renders", id="administrator-own-empty-patch"),
+    pytest.param("administrator", "shipped default", None, "renders", id="administrator-shipped"),
+    pytest.param("administrator", "shipped default", _EDIT, "denied", id="administrator-shipped-patched"),
+    pytest.param("administrator", "shipped default", {}, "denied", id="administrator-shipped-empty-patch"),
+    pytest.param("preview only", "own row", None, "renders", id="preview-only-own"),
+    pytest.param("preview only", "own row", _EDIT, "denied", id="preview-only-own-patched"),
+    pytest.param("preview only", "own row", {}, "denied", id="preview-only-own-empty-patch"),
+    pytest.param("member", "own row", None, "denied", id="member-own"),
+    pytest.param("member", "own row", {"source": ("{{ x }}" * 7_143)[:50_000]}, "denied", id="member-own-patched"),
+    pytest.param("signed out", "own row", None, "signed out", id="signed-out-own"),
+    pytest.param("signed out", "own row", _EDIT, "signed out", id="signed-out-own-patched"),
+])
+def test_who_may_preview_a_patch(
+    library: dict[str, Any], monkeypatch: pytest.MonkeyPatch, caller: str, state: str, patch: dict[str, Any] | None,
+    answer: str,
+) -> None:
+    """``preview`` admits the read, and a patch, empty or not, also asks ``write``: so a shipped default, which only a
+    load writes, and a role granted ``preview`` alone render the saved row only. Both are decided before any row is
+    cleaned or walked."""
+
+    del library
+    rows = _patch_rows()
+    users = {"administrator": create_platform_admin("messaging-templates-console-patcher"),
+             "preview only": create_platform_admin("messaging-templates-console-viewer"),
+             "member": create_user("messaging-templates-console-unpatched"), "signed out": AnonymousUser()}
+    checked: list[str] = []
+    cleaned: list[Any] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    _recording(monkeypatch, MessageTemplate, "full_clean", lambda row, *args, **kwargs: cleaned.append(row.pk))
+    narrowed = _narrowed("write") if caller == "preview only" else nullcontext()
+    with narrowed:
+        result = execute_schema(_schema(), _PATCHED, {"id": public_id_of(rows[state]), "patch": patch},
+                                user=users[caller])
+    if answer == "renders":
+        rendered = result_data(result)["message_template_preview"]["rendered"]
+        assert rendered["subject"] == ("Edited Angee" if patch == _EDIT else "Hello"), rendered
+        assert cleaned == ([] if patch is None else [rows[state].pk])
+        return
+    (error,) = result.errors or [None]
+    assert error is not None and error.extensions["code"] == "PERMISSION_DENIED", result
+    assert ("Authentication required." in error.message) is (answer == "signed out"), error.message
+    assert (checked, cleaned) == ([], [])
+
+
+_REFUSED_PATCHES = {
+    "walk": {"source": "{% if %}"},
+    "fields": {"variables": [], "sample": [1]},
+    "name": {"name": "n" * 201},
+    "constraint": {"format": "html"},
+    "layout and constraint": {"format": "html", "layout": ""},
+}
+"""Patches a save refuses: the walk, two columns that are not objects (one message for both), a column's own
+validator, a check constraint, and the layout with a constraint at once."""
+
+
+@pytest.mark.parametrize("name", list(_REFUSED_PATCHES))
+def test_a_patch_is_refused_as_its_save_is(library: dict[str, Any], name: str) -> None:
+    """The preview of a patch the update refuses renders nothing and says why in the update's words: one warning for
+    each refusal of the row as a whole (``formErrors``) and for each of a column's (``validationErrors``), naming
+    the column."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-refused")
+    row = _row("template", "tests.refused")
+    patch = _REFUSED_PATCHES[name]
+    with transaction.atomic():
+        updated = execute_schema(_schema(), _UPDATE, {"id": public_id_of(row), "set": patch}, user=admin)
+        transaction.set_rollback(True)
+    (error,) = updated.errors or [None]
+    assert error is not None and error.extensions["code"] == "VALIDATION", updated
+    refused = {(None, message) for message in error.extensions["formErrors"]} | {
+        (field, message) for field, messages in error.extensions["validationErrors"].items() for message in messages}
+    preview = result_data(execute_schema(_schema(), _PATCHED, {"id": public_id_of(row), "patch": patch}, user=admin))
+    warnings = preview["message_template_preview"]["warnings"]
+    assert preview["message_template_preview"]["rendered"] is None
+    assert {warning["code"] for warning in warnings} == {"RENDER_ERROR"}
+    assert len(warnings) == len(refused)
+    assert {(warning["field"], warning["detail"]) for warning in warnings} == refused
+    assert {warning["detail"] for warning in warnings} == {*error.extensions["formErrors"], *(
+        message for messages in error.extensions["validationErrors"].values() for message in messages)}
+
+
+def test_a_patch_is_decoded_as_the_update_decodes_its_input(library: dict[str, Any]) -> None:
+    """The console posts a format by its member name, as the record reads it: the preview takes ``MARKDOWN`` as the
+    update does. The resource's backend hands the model the stored value, and refuses a name no column owns."""
+
+    del library
+    backend = MessageTemplateWriteBackend(MessageTemplate)
+    assert backend.patch_values({"format": "MARKDOWN", "name": "Decoded"}) == {"format": "markdown", "name": "Decoded"}
+    with pytest.raises(ValueError, match="not tags"):
+        backend.patch_values({"source": "Hello.", "tags": []})
+    admin = create_platform_admin("messaging-templates-console-decoder")
+    row = _row("template", "tests.decoded")
+    patch = {"format": "MARKDOWN", "source": "Hello again."}
+    preview = result_data(execute_schema(_schema(), _PATCHED, {"id": public_id_of(row), "patch": patch}, user=admin))
+    assert "Hello again." in preview["message_template_preview"]["rendered"]["plain_text"], preview
+    with transaction.atomic():
+        updated = execute_schema(_schema(), _UPDATE, {"id": public_id_of(row), "set": patch}, user=admin)
+        transaction.set_rollback(True)
+    assert result_data(updated)["update_message_templates_by_pk"]["source"] == "Hello again."
+
+
+def test_a_patched_preview_writes_nothing(library: dict[str, Any], django_capture_on_commit_callbacks: Any) -> None:
+    """A patch renders as it would save, and nothing is written: no save, no content hash, no history, no
+    permission audit row, whatever commits; the saved preview writes none either."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-unwritten")
+    row = _row("template", "tests.unwritten")
+    schema = _schema()
+    variables = {"id": public_id_of(row)}
+
+    def stored() -> tuple[Any, ...]:
+        """The row as stored, its history, the permission audit and the changesets, read with no bypass of its own."""
+
+        saved = MessageTemplate._base_manager.get(pk=row.pk)
+        history = cast(Any, MessageTemplate).history.filter(id=row.pk).count()
+        return (saved.source, saved.content_hash, saved.updated_at, history, PermissionAuditEvent.objects.count(),
+                changeset_model()._base_manager.count())
+
+    execute_schema(schema, _PATCHED, {**variables, "patch": {"source": "Hello, edited."}}, user=admin)
+    before = stored()
+    for patch in (None, {"source": "Hello, edited."}):
+        with django_capture_on_commit_callbacks(execute=True):
+            preview = result_data(execute_schema(schema, _PATCHED, {**variables, "patch": patch}, user=admin))
+        text = preview["message_template_preview"]["rendered"]["plain_text"]
+        assert ("Hello, edited." in text) is (patch is not None) and ("Hello." in text) is (patch is None), text
+        assert stored() == before, patch
+
+
+def test_a_preview_reads_a_fixed_number_of_statements_with_a_patch_or_without(library: dict[str, Any]) -> None:
+    """The saved preview, and a patch that changes what renders, validated as its save would be and rendered from
+    the walk that validation ran, each read their measured statements, none repeated beyond the measured count."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-measurer")
+    schema = _schema()
+    row = _row("template", "tests.measured", source=_include("parts/signature"))
+    variables = {"id": public_id_of(row)}
+    saved = _measured(schema, _PATCHED, {**variables, "patch": None}, admin)
+    patched = _measured(schema, _PATCHED, {**variables, "patch": {"source": _include("parts/signature") + "\n\nMore."}},
+                        admin)
+    assert saved.data["message_template_preview"]["rendered"] is not None
+    assert "More." in patched.data["message_template_preview"]["rendered"]["plain_text"]
+    saved.assert_ceiling(statements=31, repeated=21)
+    patched.assert_ceiling(statements=115, repeated=55)
 
 
 # ---------- creating the deployment's own row ----------

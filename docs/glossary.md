@@ -541,6 +541,12 @@ whether its reader may start or keep an override (`can_override`,
 `can_keep_override`), as the verbs decide. See
 [shipped defaults, overrides and reset](../src/angee/messaging_templates/README.md#shipped-defaults-overrides-and-reset).
 
+**Preview (message templates)** — a row rendered with its sample, with what a
+sender should know about it. A preview with a **patch** renders the open form's
+unsaved edits as Save would write them: it needs `write` as well as `preview`,
+refuses what Save would refuse, in Save's words and under its fields, and saves
+nothing. See [rendering](../src/angee/messaging_templates/README.md#rendering).
+
 **Backlinks (message templates)** — the rows, in any language, naming a message
 template's kind and key: a template its layout, any row a block or part it
 includes. It is the Links rule's **Backlinks**, incoming references
