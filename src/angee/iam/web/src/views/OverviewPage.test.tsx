@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -138,8 +139,10 @@ function overviewData(): unknown {
 }
 
 function renderPage(children: ReactNode): ReturnType<typeof render> {
+  // The router a page renders under: a grant dialog guards route moves while it holds work.
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   return render(
-    <AppRuntimeProvider
+    <RouterContextProvider router={router}><AppRuntimeProvider
       runtime={{
         icons: baseIcons,
         widgets: defaultWidgets,
@@ -149,6 +152,6 @@ function renderPage(children: ReactNode): ReturnType<typeof render> {
       <ToastProvider>
         <ModalsHost><InAppLinkProvider navigate={mocks.navigate}>{children}</InAppLinkProvider></ModalsHost>
       </ToastProvider>
-    </AppRuntimeProvider>,
+    </AppRuntimeProvider></RouterContextProvider>,
   );
 }

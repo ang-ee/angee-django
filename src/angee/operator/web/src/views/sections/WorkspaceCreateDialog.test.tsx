@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { AppRuntimeProvider, ToastProvider, createRouteHref, defaultWidgets } from "@angee/ui";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
+import { AppRuntimeProvider, ModalsHost, ToastProvider, createRouteHref, defaultWidgets } from "@angee/ui";
+import { useState, type ReactElement, type ReactNode } from "react";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { WorkspaceCreateDialog } from "./WorkspaceCreateDialog";
@@ -283,12 +285,18 @@ describe("WorkspaceCreateDialog", () => {
   });
 });
 
+/** The app's providers the dialog renders under: the router and `ModalsHost` it asks through, and the toasts. */
+function AppProviders({ children }: { children?: ReactNode }): ReactElement {
+  const [router] = useState(() => createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) }));
+  return <RouterContextProvider router={router}><ModalsHost><ToastProvider>{children}</ToastProvider></ModalsHost></RouterContextProvider>;
+}
+
 function renderDialog(): ReturnType<typeof render> {
   return render(
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets, routeHref: createRouteHref([{ name: "operator.workspaces.detail", path: "/operator/workspaces/$name" }]) }}>
       <WorkspaceCreateDialog open onOpenChange={vi.fn()} />
     </AppRuntimeProvider>,
-    { wrapper: ToastProvider },
+    { wrapper: AppProviders },
   );
 }
 

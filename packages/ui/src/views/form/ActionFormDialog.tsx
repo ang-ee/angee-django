@@ -52,7 +52,9 @@ type ArgValues = Record<string, unknown>;
  *
  * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
  * and stays open; it closes only on `ok=true`, toasting the success `message`.
- * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner.
+ * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner. While
+ * the submit runs it cannot be dismissed, and dismissing typed values asks first
+ * (`DialogForm`'s `pending` and `dirty`).
  * @kind surface
  */
 export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
@@ -167,11 +169,13 @@ function ActionArgsDialog({
     <ActionFormProvider {...form}>
     <DialogForm
       open={open}
-      onOpenChange={(next) => { if (!submitting) onOpenChange(next); }}
+      onOpenChange={onOpenChange}
+      pending={submitting}
+      dirty={form.formState.isDirty}
       title={action.label}
       size={definition?.size}
-      footer={<>
-        <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={submitting}>
+      footer={(dismiss) => <>
+        <Button type="button" variant="ghost" size="sm" onClick={dismiss} disabled={submitting}>
           {t("dialog.cancel")}
         </Button>
         {submitButton}

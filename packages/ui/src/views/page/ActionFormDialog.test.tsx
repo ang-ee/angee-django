@@ -1106,6 +1106,39 @@ describe("ActionFormDialog", () => {
     );
   });
 
+  test("while its submit runs, Escape and Close are refused, and the answer then shows and closes it", async () => {
+    let answer!: (outcome: { ok: boolean; message: string }) => void;
+    const submit = vi.fn(() => new Promise<{ ok: boolean; message: string }>((resolve) => { answer = resolve; }));
+    renderDialog(registerReviewAction(submit));
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await act(async () => { answer({ ok: true, message: "Review registered." }); });
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+    // The accepted close is the dialog's own: it asks nothing, though a value was picked.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("Cancel with typed values asks first, and Stay keeps them", async () => {
+    renderDialog(registerReviewAction(vi.fn()));
+    await screen.findByText("DOC-1");
+    fireEvent.change(screen.getByRole("textbox", { name: "Amount" }), { target: { value: "500" } });
+    // The form publishes its dirty state a render after the value, as the person's next event finds it.
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect((screen.getByRole("textbox", { name: "Amount" }) as HTMLInputElement).value).toBe("500");
+  });
+
   test("an explicit relation-list edit wins over the context prefill", async () => {
     const submit = vi.fn().mockResolvedValue({ ok: true, message: "Done." });
     renderDialog(registerReviewAction(submit));

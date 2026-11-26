@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppRuntimeProvider, ToastProvider, defaultWidgets } from "@angee/ui";
+import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets } from "@angee/ui";
 
 import { FakeAcpAgent } from "../acp-test-agent";
 import { createAcpTestProviders, type AcpProviderOptions } from "../acp-test-providers";
@@ -22,9 +23,11 @@ async function mount(version: 1 | 2, ask = true, providerOptions: AcpProviderOpt
   const providers = createAcpTestProviders(agent, version, providerOptions);
   fixtures.push(() => agent.close(), providers.clearClients);
   transport.open.mockImplementation(agent.open);
-  render(<providers.Provider><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  // The app's router and ModalsHost: the reason dialog guards route moves and asks before discarding typed values.
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<RouterContextProvider router={router}><providers.Provider><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
     <AgentChat agentId="agt-1" view={view} />
-  </AppRuntimeProvider></ToastProvider></providers.Provider>);
+  </AppRuntimeProvider></ToastProvider></ModalsHost></providers.Provider></RouterContextProvider>);
   const input = await screen.findByPlaceholderText("Message the agent…");
   fireEvent.change(input, { target: { value: "Use the tool" } });
   await waitFor(() => expect(screen.getByRole<HTMLButtonElement>("button", { name: "Send" }).disabled).toBe(false));

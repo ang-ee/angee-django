@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from "@testing-library/react";
+import { RouterContextProvider, createMemoryHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 
-import type { ReactElement } from "react";
-import { ToastProvider } from "../../feedback";
+import { useState, type ReactElement, type ReactNode } from "react";
+import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type WidgetMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import { lazyWidget } from "../../widgets/lazy-widget";
@@ -24,7 +25,16 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false } } },
 });
 
-const render = (ui: ReactElement) => testingRender(ui, { wrapper: ToastProvider });
+/** The app's providers a dialog renders under: the router (its route guard), `ModalsHost` (its question) and the toasts. */
+function AppProviders({ children }: { children?: ReactNode }): ReactElement {
+  const [router] = useState(() => createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) }));
+  return <RouterContextProvider router={router}><ModalsHost><ToastProvider>{children}</ToastProvider></ModalsHost></RouterContextProvider>;
+}
+
+const render = (ui: ReactElement) => testingRender(ui, { wrapper: AppProviders });
+const DISCARD = "Unsaved changes - leave without saving?";
+/** Let the form publish what a keystroke changed (its dirty state lands a render after the value), as the next event a person makes finds it. */
+const settle = () => act(async () => { await Promise.resolve(); });
 
 const ok = { status: "ok", data: undefined } as const;
 const parseRawValues = (values: Readonly<Record<string, unknown>>) => values;
@@ -54,6 +64,7 @@ describe("MutationDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     expect(await screen.findByText("Try again")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Leave" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     fireEvent.click(trigger);
@@ -61,7 +72,7 @@ describe("MutationDialog", () => {
     expect(screen.queryByText("Try again")).toBeNull();
   });
 
-  test("a dismissed trigger session ignores its pending submission", async () => {
+  test("Escape, Close and Cancel while a submission is pending keep the dialog open, and its answer then shows", async () => {
     let resolve!: (value: FormSubmitResult<string>) => void;
     const onSubmitted = vi.fn();
     const submit = vi.fn(() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; }));
@@ -69,7 +80,7 @@ describe("MutationDialog", () => {
       <MutationDialog
         trigger={<button type="button">Open request</button>}
         title="Request"
-        fields={[]}
+        fields={[{ name: "note", label: "Note" }]}
         submitLabel="Send"
         parseValues={parseRawValues}
         onSubmit={submit}
@@ -77,18 +88,63 @@ describe("MutationDialog", () => {
       />
     </AppRuntimeProvider>);
 
-    const trigger = screen.getByRole("button", { name: "Open request" });
-    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("button", { name: "Open request" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Note" }), { target: { value: "Ship it" } });
+    await waitFor(() => expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    fireEvent.click(trigger);
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    resolve({ status: "ok", data: "old result" });
-    await Promise.resolve();
-    expect(onSubmitted).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => { await new Promise((done) => setTimeout(done, 0)); });
     expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await act(async () => { resolve({ status: "ok", data: "sent", message: "Request sent." }); });
+    expect(await screen.findByText("Request sent.")).toBeTruthy();
+    expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("sent", { note: "Ship it" });
+    // The accepted close is the dialog's own: it asks nothing, though the values were typed.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("dismissing typed values asks first; Stay keeps them, and an untouched dialog closes at once", async () => {
+    const close = vi.fn();
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={close} title="Connect" fields={[{ name: "name", label: "Name" }]}
+        submitLabel="Connect" parseValues={parseRawValues} onSubmit={vi.fn()} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(close).toHaveBeenCalledExactlyOnceWith(false);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    close.mockClear();
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Long message" } });
+    await settle();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(close).not.toHaveBeenCalled();
+    expect((screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Long message");
+  });
+
+  test("an accepted submission whose dialog went away while it ran still toasts its message; only onSubmitted is skipped", async () => {
+    let resolve!: (value: FormSubmitResult<string>) => void;
+    const onSubmitted = vi.fn();
+    function Host(): ReactElement {
+      const [shown, setShown] = useState(true);
+      return <>
+        <button type="button" onClick={() => setShown(false)}>Leave the pane</button>
+        {shown ? <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[]} submitLabel="Send" parseValues={parseRawValues}
+          onSubmit={() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; })} onSubmitted={onSubmitted} /> : null}
+      </>;
+    }
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><Host /></AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    fireEvent.click(screen.getByRole("button", { name: "Leave the pane", hidden: true }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => { resolve({ status: "ok", data: "msg_1", message: "Message queued for delivery." }); });
+    expect(await screen.findByText("Message queued for delivery.")).toBeTruthy();
+    expect(onSubmitted).not.toHaveBeenCalled();
   });
 
   test("allows an optional-only dialog to submit its initial omitted value", async () => {
@@ -325,7 +381,7 @@ describe("MutationDialog", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
-  test("a dismissed session ignores pending validation before firing the mutation", async () => {
+  test("a dismissal while validation is pending is refused, and the submission goes on once it passes", async () => {
     let finish!: (value: null) => void;
     const submit = vi.fn().mockResolvedValue(ok);
     const validate = vi.fn(() => new Promise<null>((resolve) => { finish = resolve; }));
@@ -338,10 +394,36 @@ describe("MutationDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(validate).toHaveBeenCalledOnce());
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    finish(null);
-    await Promise.resolve();
-    expect(submit).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await act(async () => { finish(null); });
+    await waitFor(() => expect(submit).toHaveBeenCalledOnce());
+  });
+
+  test("a route move while values are typed asks first; while a submission is pending it asks too", async () => {
+    let resolve!: (value: FormSubmitResult<string>) => void;
+    const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/inbox"] }) });
+    testingRender(<RouterContextProvider router={router}><ModalsHost><ToastProvider>
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+        <MutationDialog open onOpenChange={vi.fn()} title="Send" fields={[{ name: "text", label: "Message" }]} submitLabel="Send"
+          parseValues={parseRawValues} onSubmit={() => new Promise<FormSubmitResult<string>>((done) => { resolve = done; })} />
+      </AppRuntimeProvider>
+    </ToastProvider></ModalsHost></RouterContextProvider>);
+    const moveAway = () => act(() => { void router.history.push("/elsewhere"); });
+    // At rest, a move asks nothing.
+    moveAway();
+    await waitFor(() => expect(router.history.location.pathname).toBe("/elsewhere"));
+    act(() => { void router.history.push("/inbox"); });
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Hello" } });
+    await settle();
+    moveAway();
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router.history.location.pathname).toBe("/inbox");
+    await waitFor(() => expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    moveAway();
+    expect(await screen.findByRole("alertdialog", { name: DISCARD })).toBeTruthy();
   });
 
   test("resolves dependent descriptor options from current values without replacing an unknown value", async () => {

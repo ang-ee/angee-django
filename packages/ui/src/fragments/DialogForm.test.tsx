@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import { PaneRow, PaneRows } from "../communication/pane-list";
+import { ModalsHost } from "../feedback";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { RadioGroupItem, RadioGroupRoot } from "../ui/radio-group";
@@ -393,5 +394,63 @@ describe("where the primary pointer is coarse", () => {
     } finally {
       window.matchMedia = matchMedia;
     }
+  });
+});
+
+describe("a dismissal", () => {
+  /** A dialog whose open state its owner holds, with `pending` and `dirty` as given and a Cancel through `dismiss`. */
+  function OwnedDialog({ pending = false, dirty = false }: { pending?: boolean; dirty?: boolean }) {
+    const [open, setOpen] = useState(true);
+    return <DialogForm open={open} onOpenChange={setOpen} title="Edit" pending={pending} dirty={dirty}
+      footer={(dismiss) => <button type="button" onClick={dismiss}>Cancel</button>}>
+      <input aria-label="Name" />
+    </DialogForm>;
+  }
+  const renderOwned = (props: { pending?: boolean; dirty?: boolean }) => render(<ModalsHost><OwnedDialog {...props} /></ModalsHost>);
+  const question = "Unsaved changes - leave without saving?";
+
+  test.each(["Escape", "Close", "Cancel"] as const)("by %s is refused while a submission is pending", async (by) => {
+    renderOwned({ pending: true });
+    const dialog = await screen.findByRole("dialog", { name: "Edit" });
+    if (by === "Escape") fireEvent.keyDown(dialog, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: by }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.getByRole("dialog", { name: "Edit" })).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test.each(["Escape", "Cancel"] as const)("by %s of a dirty form asks first: Stay keeps it open, Leave closes it", async (by) => {
+    renderOwned({ dirty: true });
+    const dismiss = async () => {
+      const dialog = await screen.findByRole("dialog", { name: "Edit" });
+      if (by === "Escape") fireEvent.keyDown(dialog, { key: "Escape" });
+      else fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      return screen.findByRole("alertdialog", { name: question });
+    };
+    await dismiss();
+    fireEvent.click(screen.getByRole("button", { name: "Stay" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.getByRole("dialog", { name: "Edit" })).toBeTruthy();
+    await dismiss();
+    fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit" })).toBeNull());
+  });
+
+  test("of a clean form closes at once, asking nothing", async () => {
+    renderOwned({});
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit" })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  test("guard: a close the owner makes itself through `open` is no dismissal: a dirty form closes without asking", async () => {
+    const owned = (open: boolean) => <ModalsHost><DialogForm open={open} onOpenChange={() => undefined} title="Edit" dirty>
+      <input aria-label="Name" />
+    </DialogForm></ModalsHost>;
+    const view = render(owned(true));
+    await screen.findByRole("dialog", { name: "Edit" });
+    view.rerender(owned(false));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit" })).toBeNull());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

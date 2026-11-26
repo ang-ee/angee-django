@@ -8,7 +8,9 @@ import {
 } from "../ui/dialog";
 import { FormRoot } from "../ui/form";
 import { FormActions, FormGrid } from "../ui/form-layout";
+import { useLatestRef } from "../lib/use-latest-ref";
 import { useMediaQuery } from "../lib/use-media-query";
+import { useUnsavedChangesQuestion } from "../views/form/use-unsaved-changes-navigation-guard";
 
 export interface DialogFormProps {
   open: boolean;
@@ -16,12 +18,21 @@ export interface DialogFormProps {
   title: React.ReactNode;
   description?: React.ReactNode;
   children: React.ReactNode;
-  footer?: React.ReactNode;
+  /** The form's buttons. As a function it gets `dismiss`, the dialog's own dismissal (what
+   *  Escape does), for a Cancel that follows `pending` and `dirty`. */
+  footer?: React.ReactNode | ((dismiss: () => void) => React.ReactNode);
   onSubmit?: FormEventHandler<HTMLFormElement>;
   size?: DialogSize;
   placement?: DialogPlacement;
   /** Native trigger paired with this dialog for focus restoration. */
   trigger?: React.ReactElement;
+  /** A submission runs: every dismissal (Escape, the backdrop, Close, `dismiss`) is refused
+   *  until it settles, so its answer shows in the dialog. */
+  pending?: boolean;
+  /** The form holds typed content: a dismissal asks first, with the shared unsaved-changes
+   *  question, and closes on Leave. A close the owner makes itself through `open` (the
+   *  accepted close after a submit) is no dismissal and does not ask. */
+  dirty?: boolean;
 }
 
 /** Matches a field as {@link firstField} defines one, an editing host apart. */
@@ -86,7 +97,8 @@ function firstField(body: HTMLElement | null): HTMLElement | null {
  * header's Close. Opened by touch on its `trigger`, the dialog focuses itself, as Base UI does
  * for touch, so no on-screen keyboard rises over it. Where the primary pointer is coarse it
  * does the same: that is the platform's answer to a question Base UI cannot ask for a dialog
- * opened through its `open` prop, how it was opened.
+ * opened through its `open` prop, how it was opened. While `pending` it refuses to be
+ * dismissed, and while `dirty` a dismissal asks first, through the app's `ModalsHost`.
  * @kind fragment
  */
 export function DialogForm({
@@ -100,7 +112,25 @@ export function DialogForm({
   size = "sm",
   placement = "prompt",
   trigger,
+  pending = false,
+  dirty = false,
 }: DialogFormProps): React.ReactElement {
+  const askDiscard = React.useRef<(() => Promise<boolean>) | null>(null);
+  const latest = useLatestRef({ onOpenChange, pending, dirty });
+  const asking = React.useRef(false);
+  const dismiss = React.useCallback(() => {
+    // One question at a time: Escape or a press outside reaching this dialog while it asks is not another dismissal.
+    if (latest.current.pending || asking.current) return;
+    const ask = latest.current.dirty ? askDiscard.current : null;
+    if (!ask) {
+      latest.current.onOpenChange(false);
+      return;
+    }
+    asking.current = true;
+    void ask().then((leave) => {
+      if (leave) latest.current.onOpenChange(false);
+    }).finally(() => { asking.current = false; });
+  }, [latest]);
   const popupRef = React.useRef<HTMLDivElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const coarsePointer = useMediaQuery("(pointer: coarse)");
@@ -119,7 +149,8 @@ export function DialogForm({
     }
   };
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={(next) => { if (next) onOpenChange(true); else dismiss(); }}>
+      {open && dirty ? <DiscardQuestion askRef={askDiscard} /> : null}
       {trigger ? <Dialog.Trigger render={trigger} /> : null}
       <Dialog.Portal>
         <Dialog.Backdrop />
@@ -162,7 +193,7 @@ export function DialogForm({
             </Dialog.Body>
             {footer ? (
               <Dialog.Footer>
-                <FormActions>{footer}</FormActions>
+                <FormActions>{typeof footer === "function" ? footer(dismiss) : footer}</FormActions>
               </Dialog.Footer>
             ) : null}
           </FormRoot>
@@ -170,4 +201,10 @@ export function DialogForm({
       </Dialog.Portal>
     </Dialog.Root>
   );
+}
+
+/** Mounted while a dismissal would ask, so only a dialog holding typed content needs the question's `ModalsHost`. */
+function DiscardQuestion({ askRef }: { askRef: React.MutableRefObject<(() => Promise<boolean>) | null> }): null {
+  askRef.current = useUnsavedChangesQuestion();
+  return null;
 }

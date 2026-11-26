@@ -1501,6 +1501,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   error reporting. Clear settled failures through
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
+  [`DialogForm`](../../packages/ui/src/fragments/DialogForm.tsx) owns that rule
+  for every form dialog: it refuses dismissal while `pending` and asks before
+  discarding while `dirty`; a dialog never guards its own `onOpenChange`.
 - A keyed write (one the server replays by its idempotency key) takes its key
   from [`useIntentKeys`](../../packages/ui/src/lib/intent-key.ts): one key per
   write intent for the page's lifetime, released by the write's answer and kept
