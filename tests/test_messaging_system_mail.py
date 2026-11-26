@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import email.policy
 import logging
 import logging.config
 from collections.abc import Iterator
 from contextlib import contextmanager
 from email import message_from_bytes
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -19,7 +21,7 @@ from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.core.mail.backends.base import BaseEmailBackend
 from django.db import transaction
 from django.test import override_settings
-from django.utils.log import AdminEmailHandler
+from django.utils.log import AdminEmailHandler, configure_logging
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
@@ -490,23 +492,65 @@ def test_error_mail_goes_through_the_transport_never_the_system_channel(system_m
     assert len(_recorded(system_mailer)) == 1
 
 
+@pytest.fixture
+def host_logging(settings: Any) -> Iterator[Any]:
+    """State a host's ``LOGGING`` and build it as ``django.setup()`` does; restore the logger tree after."""
+
+    loggers = [logging.getLogger(), *(item for item in logging.root.manager.loggerDict.values()
+                                      if isinstance(item, logging.Logger))]
+    before = {id(logger): (logger, logger.handlers[:], logger.level, logger.propagate, logger.disabled)
+              for logger in loggers}
+    contributed = copy.deepcopy(settings.LOGGING)
+
+    def state(block: dict[str, Any]) -> None:
+        settings.LOGGING = block
+        configure_logging(settings.LOGGING_CONFIG, block)
+
+    yield SimpleNamespace(state=state, contributed=contributed)
+    for item in list(logging.root.manager.loggerDict.values()):
+        if isinstance(item, logging.Logger) and id(item) not in before:
+            item.handlers, item.propagate, item.disabled = [], True, False
+            item.setLevel(logging.NOTSET)
+    for logger, handlers, level, propagate, disabled in before.values():
+        logger.handlers, logger.propagate, logger.disabled = handlers, propagate, disabled
+        logger.setLevel(level)
+
+
+def _with_app_handler(block: dict[str, Any], **handler: str) -> dict[str, Any]:
+    """``block`` with one more ``AdminEmailHandler``, on the ``myapp`` logger."""
+
+    block = copy.deepcopy(block)
+    block["handlers"]["ops"] = {"class": "django.utils.log.AdminEmailHandler", "level": "ERROR", **handler}
+    block.setdefault("loggers", {})["myapp"] = {"handlers": ["ops"], "level": "ERROR"}
+    return block
+
+
+_BARE = {"version": 1, "disable_existing_loggers": False}
+
+
 @pytest.mark.parametrize(
-    ("default", "handler", "warned"),
+    ("default", "block", "warned"),
     [
-        pytest.param(SYSTEM, {}, True, id="no-using"),
-        pytest.param(SYSTEM, {"using": "default"}, True, id="using-default"),
-        pytest.param(SYSTEM, {"using": "transport"}, False, id="using-transport"),
-        pytest.param(LOCMEM, {}, False, id="default-is-not-the-system-mailer"),
+        pytest.param(SYSTEM, lambda contributed: _BARE, ["django"], id="django-own-handler-kept"),
+        pytest.param(SYSTEM, lambda contributed: _with_app_handler(contributed), ["myapp"], id="no-using"),
+        pytest.param(SYSTEM, lambda contributed: _with_app_handler(contributed, using="default"), ["myapp"],
+                     id="using-default"),
+        pytest.param(SYSTEM, lambda contributed: _with_app_handler(contributed, using="transport"), [],
+                     id="using-transport"),
+        pytest.param(LOCMEM, lambda contributed: _BARE, [], id="default-is-not-the-system-mailer"),
     ],
 )
-def test_a_logging_handler_that_would_record_error_mail_is_reported(
-    settings: Any, default: dict[str, str], handler: dict[str, str], warned: bool,
+def test_a_configured_logger_that_would_record_error_mail_is_reported(
+    settings: Any, host_logging: Any, default: dict[str, str], block: Any, warned: list[str],
 ) -> None:
+    """Django applies its own logging first, so a host block that leaves the django logger keeps its handler."""
+
     settings.MAILERS = {"default": default, "transport": LOCMEM}
-    settings.LOGGING = {"version": 1, "handlers": {
-        "ops": {"class": "django.utils.log.AdminEmailHandler", "level": "ERROR", **handler},
-    }}
-    assert ("messaging.W001" in {message.id for message in run_checks(tags=[Tags.mail])}) is warned
+    host_logging.state(block(host_logging.contributed))
+    reported = [message for message in run_checks(tags=[Tags.mail]) if message.id == "messaging.W001"]
+    assert [[name for name in ("django", "myapp") if f"'{name}'" in message.msg] for message in reported] == (
+        [warned] if warned else []
+    )
 
 
 def test_messagings_own_logging_is_not_reported(settings: Any) -> None:

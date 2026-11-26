@@ -294,10 +294,13 @@ the database the error may be about. Messaging contributes `LOGGING` as Django's
 `DEFAULT_LOGGING` with one change, the `mail_admins` handler naming
 `using: transport` (with no transport, Django drops the report). It is contributed
 raw, so the settings loader keeps the `django.server` formatter's `{server_time}`
-as text. A host that states its own `LOGGING` keeps it; `messaging.W001` reports
-an `AdminEmailHandler` in it that names no `using`, which would send through the
-system mailer. A host's own block keeps Django's loggers and names the transport
-on the handler that reports errors:
+as text. A host that states its own `LOGGING` keeps it, and Django applies its
+`DEFAULT_LOGGING` first and the host's block over it: a block that does not name
+the `django` logger keeps Django's own `mail_admins` there, which sends through
+the system mailer. `messaging.W001` reports an `AdminEmailHandler` on any
+configured logger that names no `using`, or the default. A host's own block
+keeps Django's loggers and names the transport on the handler that reports
+errors:
 
 ```yaml
 LOGGING:raw: true

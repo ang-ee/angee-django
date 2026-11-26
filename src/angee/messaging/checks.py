@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from functools import partial
 
 from django.apps import AppConfig
-from django.conf import settings
 from django.core import checks
 from django.core.checks.mail import NON_PRODUCTION_EMAIL_BACKENDS
 from django.core.mail import mailers
 from django.core.mail.handler import DEFAULT_MAILER_ALIAS, DEFAULT_MAILER_BACKEND
+from django.utils.log import AdminEmailHandler
 
 from angee.base.checks import check_sealed_permissions
 from angee.messaging.constants import SYSTEM_MAILER_BACKEND, TRANSPORT_MAILER_ALIAS
@@ -77,33 +78,36 @@ def check_transport_mailer(
     )]
 
 
-_ADMIN_EMAIL_HANDLER = "django.utils.log.AdminEmailHandler"
-
-
 def check_error_mail(app_configs: Sequence[AppConfig] | None = None, **kwargs: object) -> list[checks.CheckMessage]:
-    """``messaging.W001``: a configured error-mail handler sends through the system mailer.
+    """``messaging.W001``: a configured logger's error-mail handler sends through the system mailer.
 
     Where messaging's system mailer is Django's default mailer, an ``AdminEmailHandler``
-    in ``LOGGING`` that names no ``using`` (or the default) records each error report in
-    the database the error may be about. Messaging's own ``LOGGING`` names the
-    transport; a host that states its own names it too.
+    that names no ``using`` (or the default) records each error report in the database
+    the error may be about. Django applies its ``DEFAULT_LOGGING`` first and the host's
+    ``LOGGING`` over it, so a host block that leaves the ``django`` logger alone keeps
+    Django's own handler there. The check reads the loggers ``django.setup()`` built:
+    the root logger and every named one. Messaging's own ``LOGGING`` names the transport.
     """
 
     del app_configs, kwargs
     default = mailers.settings.get(DEFAULT_MAILER_ALIAS) or {}
     if default.get("BACKEND") != SYSTEM_MAILER_BACKEND:
         return []
-    handlers = (getattr(settings, "LOGGING", None) or {}).get("handlers", {})
-    recorded = sorted(
-        name for name, handler in handlers.items()
-        if _ADMIN_EMAIL_HANDLER in (handler.get("class"), handler.get("()"))
-        and handler.get("using") in (None, "", DEFAULT_MAILER_ALIAS)
-    )
+    loggers = [logging.getLogger(), *(
+        logger for logger in list(logging.root.manager.loggerDict.values()) if isinstance(logger, logging.Logger)
+    )]
+    # django-stubs omits the handler's ``using``, which Django keeps from its constructor argument.
+    recorded = sorted({
+        logger.name for logger in loggers for handler in logger.handlers
+        if isinstance(handler, AdminEmailHandler)
+        and handler.using in (None, "", DEFAULT_MAILER_ALIAS)  # type: ignore[attr-defined]
+    })
     if not recorded:
         return []
     return [checks.Warning(
-        f"LOGGING's {', '.join(recorded)} handler sends error mail through Django's default mailer, messaging's "
-        "system mailer, which records it in the database the error may be about.",
-        hint='Name "using: transport" on it (messaging\'s README, Mailers).',
+        f"An AdminEmailHandler on the {', '.join(repr(name) for name in recorded)} logger sends error mail through "
+        "Django's default mailer, messaging's system mailer, which records it in the database the error may be about.",
+        hint='Name "using: transport" on it; a host LOGGING restates the django logger with it (messaging\'s '
+             "README, Mailers).",
         id="messaging.W001",
     )]

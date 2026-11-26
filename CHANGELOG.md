@@ -24,8 +24,8 @@ live in code docstrings.
     email Django sends raises `SystemChannelMissing` at the sender (a password
     reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
     channel backend enums gain `SYSTEM`.
-    A host that authors `LOGGING` names `using: transport` on its
-    `AdminEmailHandler` (messaging's README gives the block). Tests that observed
+    A host that authors `LOGGING` restates the `django` logger with a
+    `mail_admins` naming `using: transport` (messaging's README gives the block). Tests that observed
     delivery through `MAILERS={"default": ...}` override `transport`. With
     messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
     say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
@@ -55,8 +55,10 @@ live in code docstrings.
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
     contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
-    with `mail_admins` sending through `transport`. `messaging.W001` reports a
-    host's `AdminEmailHandler` that would send through the system mailer.
+    with `mail_admins` sending through `transport`. `messaging.W001` reports an
+    `AdminEmailHandler` on any configured logger that would send through the
+    system mailer, Django's own `mail_admins` included, which a host `LOGGING`
+    that does not name the `django` logger keeps.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
     default mailer; delivery is configured exactly when it is stated. System mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
