@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import email.policy
+import traceback
 from collections.abc import Callable
 from contextlib import nullcontext
 from email import message_from_bytes
@@ -39,7 +40,7 @@ from angee.jobs.enqueue import celery_app
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
-from angee.messaging.testing.models import Handle, Message, Part, Recipient
+from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
@@ -612,15 +613,15 @@ SECRET = "https://app.example.test/sign-in/SECRET-marker"
 
 
 def _leaks(error: BaseException) -> list[tuple[str, str, str]]:
-    """Each variable a Django exception report would show holding the marker, outside the test's own frames: the
-    send's, the render's and messaging's system write alike."""
+    """Each variable a Django exception report would show holding the marker in any case (an address is stored in
+    lower case), outside the test's own frames: the send's, the render's and messaging's system write alike."""
 
     reporter = ExceptionReporter(None, type(error), error, error.__traceback__)
     return [
         (frame["filename"], frame["function"], name)
         for frame in reporter.get_traceback_frames()
         if "/tests/" not in frame["filename"]
-        for name, value in frame["vars"] if "SECRET-marker" in repr(value)
+        for name, value in frame["vars"] if "secret-marker" in repr(value).lower()
     ]
 
 
@@ -667,13 +668,18 @@ def test_a_report_of_the_link_checks_refusal_shows_no_part_of_the_link(settings:
 
 @pytest.mark.parametrize("entry", ["send_as_system", "send_test"])
 def test_an_exception_inside_compose_reports_no_recipient_address(
-    mailing: None, plain: Any, settings: Any, entry: str,
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch, entry: str,
 ) -> None:
-    """The address a send goes to is a local of the send's frames: a report shows it in none of them."""
+    """The address a send goes to is a local of the send's frames: a report shows it in none of them. The write
+    itself refuses (its sender lookup), so every frame of the send, the shared step's among them, is on the
+    traceback."""
 
-    del mailing, plain
-    _install()
-    settings.MAILERS = {}
+    del system_channel
+
+    def refuse(self: Any) -> Any:
+        raise ValidationError("The sender lookup refused.")
+
+    monkeypatch.setattr(Channel, "outbound_sender", refuse)
     address = "SECRET-marker@example.test"
     with pytest.raises(ValidationError) as raised:
         if entry == "send_as_system":
@@ -683,6 +689,7 @@ def test_an_exception_inside_compose_reports_no_recipient_address(
         with system_context(reason="tests.messaging_templates.send.address"):
             tester.save(update_fields=["email"])
         MessageTemplate.objects.send_test(_sampled(), actor=tester)
+    assert "_render_and_record" in [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
     assert _leaks(raised.value) == []
 
 
