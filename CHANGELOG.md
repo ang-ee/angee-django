@@ -21,12 +21,26 @@ live in code docstrings.
   Nothing is written before the last refusal, and the token is held by no
   on-commit callback: the hard-coded English body, `SIGN_IN_LINK_SUBJECT` and the
   send after commit (`SignInLink.send`) are removed, and `SignInLinkManager.issue`
-  returns the link alone. The addon now requires `angee-messaging`,
+  returns the link alone; it sends and saves in one atomic block of its own, and
+  asks the send to show the link (`must_print=["link"]`), so a template override
+  that drops the link from either body, or shows it only under a condition false
+  for the person, is refused in band (`link_not_shown`, "…edit or delete the
+  template's override."), nothing written, the earlier link still current, and a
+  warning names the row. The action answers "Sign-in link queued for the
+  account's email." (it said "sent"): its mail's delivery is the recorded
+  message's to show on the system channel. Whether an account's address can
+  receive its link is messaging's `Message.objects.clean_system_recipient`, no
+  longer Django's `validate_email`: an administrator sees the account's own
+  refusal for an address outside ASCII before the @ (as before) and now also for
+  one messaging refuses that Django admits (a quoted local part with a space),
+  which used to be offered and refused at the send in messaging's words. Every
+  entry holding the token hides its locals from an error report (bare
+  `sensitive_variables`). The addon now requires `angee-messaging`,
   `angee-messaging-templates` and `angee-parties`, so a host that enables it
   enables them and what they require, the brand kit among it. A link is offered
-  where `ANGEE_PUBLIC_ORIGIN` is set and system mail is configured
-  (`SystemChannelBackend.system_mail_configured()`, messaging's System mail), no
-  longer wherever a default mailer exists;
+  where base's `configured_public_origin()` gives an origin and
+  `Channel.objects.system_mail_configured()` holds (messaging's System mail), no
+  longer wherever a default mailer exists, and its refusal names no setting;
   a system channel missing or paused, or the template missing, is refused in band
   with nothing written (`SYSTEM_CHANNEL_MISSING`, `OUTBOUND_EMAIL_CHANNEL_MISSING`,
   `template_missing`). `sent_at` means recorded and queued: a link whose delivery
