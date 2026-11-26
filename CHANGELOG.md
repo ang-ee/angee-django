@@ -10,6 +10,12 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/app`: The app's rule for retrying a failed read is exported as
+  `retryAppQuery` (three retries, for a failure a retry can fix; a refusal is
+  not retried). The workshop's shared runtime fixture passes it to its query
+  client, so a story about a refused read shows its error at once, where the
+  data library's default retried the refusal three times. The fixture's
+  other query defaults are still the data library's.
 - `@angee/ui`: **Changed API.** A record pane can name a field as the form
   does. `RecordPanelContext` gains `fieldLabel(name)` beside `focusField`, the
   label the form's save banner names a refused field by. `RecordIssues` gains

@@ -228,6 +228,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "retryAppQuery",
+    "source": "packages/app/src/create-app.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "safeRedirectPath",
     "source": "packages/app/src/auth/safe-redirect.ts",
     "kind": null,
