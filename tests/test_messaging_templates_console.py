@@ -39,7 +39,7 @@ from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
 from tests.test_messaging_templates_render import TIMED, _recording
 
-_LAYOUT = {
+_LAYOUT: dict[str, Any] = {
     "source": "<div>{% block content %}{% endblock %}</div>",
     "text_source": "{% block content %}{% endblock %}",
 }
@@ -563,6 +563,75 @@ def test_a_new_template_sits_in_a_layout_whichever_row_seeds_it(library: dict[st
             row.full_clean()
     (error,) = execute_schema(_schema(), _UPDATE, {"id": created["id"], "set": {"layout": ""}}, user=admin).errors
     assert (error.extensions["code"], list(error.extensions["validationErrors"])) == ("VALIDATION", ["layout"])
+
+
+def _stored_past_save(row: Any, **columns: str) -> None:
+    """Write ``columns`` into ``row``'s stored row in SQL, as rows stored before every save wrote newlines hold them."""
+
+    quote = connection.ops.quote_name
+    assignments = ", ".join(f"{quote(column)} = %s" for column in columns)
+    table = quote(MessageTemplate._meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute(f"UPDATE {table} SET {assignments} WHERE id = %s", [*columns.values(), row.pk])
+
+
+_RENDERED = """
+query($id: ID!) { message_template_preview(template: $id) { rendered { subject preheader html plain_text } } }
+"""
+
+
+def test_a_row_seeded_from_text_stored_with_carriage_returns_stores_newlines(library: dict[str, Any]) -> None:
+    """A key's row stored with carriage returns, before every save wrote newlines, seeds a new language: the new row
+    stores newlines, has the content hash of the same text typed with newlines, and previews as that text does."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-paster")
+    pasted = {"subject": "Hi\r\nthere", "preheader": "pre\rheader", "source": "Hello,\r\nfriend."}
+    typed: dict[str, Any] = {column: text.replace("\r\n", "\n").replace("\r", "\n") for column, text in pasted.items()}
+    _stored_past_save(_template("tests.pasted", "Hello."), **pasted)
+    twin = _row("template", "tests.typed", "de", **typed)
+    created = result_data(_insert(admin, "template", "tests.pasted", "de", name="Neu"))["insert_message_templates_one"]
+    (german,) = [row for row in _rows("template", "tests.pasted") if row.language == "de"]
+    assert {column: getattr(german, column) for column in pasted} == typed
+    assert german.content_hash == german.compute_content_hash() == twin.content_hash
+    previews = [
+        result_data(execute_schema(_schema(), _RENDERED, {"id": row_id}, user=admin))["message_template_preview"]
+        for row_id in (created["id"], public_id_of(twin))
+    ]
+    assert previews[0]["rendered"] is not None and previews[0] == previews[1]
+    assert previews[0]["rendered"]["subject"] == "Hi there"
+
+
+def test_an_insert_seeded_from_a_row_past_the_include_depth_reads_no_further(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new language of a key whose row includes a chain past the include depth is refused in the tree's words, after
+    as many queries for a chain of five as for one of 900; a member is refused create before any of it is read."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-chainer")
+    member = create_user("messaging-templates-console-unchained")
+    for index in range(900):
+        _row("part", f"chain{index}", source="x" if index == 899 else _include(f"parts/chain{index + 1}"))
+    queries = {}
+    for length in (5, 900):
+        _row("part", f"deep{length}", source=_include(f"parts/chain{900 - length}"))
+        with CaptureQueriesContext(connection) as captured:
+            (error,) = _insert(admin, "part", f"deep{length}", "de").errors
+        assert (error.extensions["code"], error.extensions["formErrors"]) == (
+            "VALIDATION", [f"parts/chain{902 - length}: includes nest over 3 deep"]), error.extensions
+        queries[length] = len(captured)
+    assert queries == DEEP_INSERT_QUERIES, queries
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    (error,) = _insert(member, "part", "deep900", "de").errors
+    assert (error.extensions["code"], checked) == ("PERMISSION_DENIED", [])
+    assert [row.language for row in _rows("part", "deep900")] == ["en"]
+
+
+DEEP_INSERT_QUERIES = {5: 156, 900: 156}
+"""An administrator's insert of a new language seeded from a row including a chain past the include depth: the same
+for any chain, since the gather reads no level past the depth."""
 
 
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:

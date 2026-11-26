@@ -2631,8 +2631,8 @@ SAVING_WALK_QUERIES = 22
 
 def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(plain: Any, kit: Any) -> None:
     """A chain of 900 includes cost a query or more a level: the gather now stops at the depth a tree reaches, in the
-    tree's own words, so the saving walk, a member's console insert and the render-side judge each make queries bounded
-    by INCLUDE_DEPTH_LIMIT, whatever the chain's length."""
+    tree's own words, so the saving walk and the render-side judge each make queries bounded by INCLUDE_DEPTH_LIMIT,
+    whatever the chain's length. The console insert's walk of a chain is the console module's."""
 
     del plain
     for index in range(900):
@@ -2651,20 +2651,12 @@ def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(pl
         refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
     assert refusals == ["parts/chain2: includes nest over 3 deep"]
     counts["judge"] = len(q)
-    schema = addon_schema(messaging_templates_schema.schemas, "console")
-    inserted = {"kind": "part", "key": "inserted", "language": "en", "name": "n", "format": "markdown",
-                "source": '{% include "parts/chain0" only %}'}
-    member = create_user("messaging-templates-chain")
-    with CaptureQueriesContext(connection) as q:
-        result = execute_schema(schema, _INSERT, {"object": inserted}, user=member)
-    assert [(error.extensions or {}).get("code") for error in result.errors or ()] == ["VALIDATION"], result.errors
-    counts["member insert"] = len(q)
     assert counts == CHAIN_QUERIES, counts
 
 
-CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3, "member insert": 88}
+CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3}
 """The queries each walk of a chain makes; before the gather stopped at the tree's depth, a 900 chain cost 1,018 as
-system work, 499 on the render-side judge and 5,572 on a member's insert."""
+system work and 499 on the render-side judge."""
 
 
 def test_an_include_inside_a_condition_keeps_the_condition(plain: Any, kit: Any) -> None:
@@ -3199,18 +3191,16 @@ def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
 
 
 def test_the_console_stores_a_carriage_return_as_a_newline(plain: Any, kit: Any) -> None:
-    """The console validates a throwaway instance and saves another, so clean()'s newlines were lost: every writer now
-    stores a carriage return as a newline, the content hash describes what is stored, and the row renders."""
+    """A writer that saves an instance clean() never saw lost clean()'s newlines: every writer now stores a carriage
+    return as a newline, a save past clean() and a console update alike, the content hash describes what is stored,
+    and the row renders. The console insert, which seeds its text, is the console module's."""
 
     del plain
     schema = addon_schema(messaging_templates_schema.schemas, "console")
     admin = create_platform_admin("messaging-templates-crlf")
     written = {"source": "<p>a</p>\r\n<p>b</p>", "text_source": "a\r\nb", "subject": "Hi\r\nthere",
                "preheader": "pre\rheader"}
-    inserted = {"kind": "template", "key": "tests.crlf", "language": "en", "name": "n", "format": "html",
-                "layout": "plain", **written}
-    result = execute_schema(schema, _INSERT, {"object": inserted}, user=admin)
-    assert result.errors is None, result.errors
+    _row("template", "tests.crlf", format="html", layout="plain", **written)
     with system_context(reason="tests.messaging_templates.render.crlf"):
         row = MessageTemplate.objects.get(key="tests.crlf")
         assert not any("\r" in getattr(row, column) for column in written), [getattr(row, c) for c in written]
