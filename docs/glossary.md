@@ -531,8 +531,14 @@ Channel child, so posts use the same channel-scoped message identity and access.
 
 **Message template** — one row of outgoing mail's text for one kind, key and
 language (`messaging_templates.MessageTemplate`). A sender renders the row a
-recipient reads; the addon sends nothing. See
+recipient reads; messaging delivers what is sent. See
 [the message templates README](../src/angee/messaging_templates/README.md).
+
+**Send a message template as system work** — render an effective message
+template for one address as named system work and record it on messaging's
+system channel (`MessageTemplateManager.send_as_system`); the row's language is
+the mail's, and the caller's own gate authorised the send. See
+[sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
 
 **Layout / template / block / part** — a message template's four kinds, written
 once. A **template** is the mail itself, with its subject, preheader and the

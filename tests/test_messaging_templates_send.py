@@ -1,0 +1,385 @@
+"""A message template sent: as named system work (``send_as_system``), recorded on messaging's system channel."""
+
+from __future__ import annotations
+
+import ast
+import email.policy
+import importlib.util
+from email import message_from_bytes
+from email.message import EmailMessage
+from pathlib import Path
+from typing import Any
+
+import pytest
+from django.apps import apps
+from django.core import mail
+from django.core.exceptions import ValidationError
+from django.db import connection
+from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
+from rebac import actor_context, current_actor, system_context
+from rebac.models import PermissionAuditEvent
+
+from angee.brandkit.testing.models import BrandKit
+from angee.jobs.enqueue import celery_app
+from angee.messaging.constants import DELIVER_MESSAGE_TASK
+from angee.messaging.managers import ChannelManager
+from angee.messaging.tasks import deliver_message
+from angee.messaging.testing.models import Handle, Message, Part, Recipient
+from angee.messaging_templates.testing.models import MessageTemplate
+from angee.messaging_templates.walker import TemplateWalker
+from tests.conftest import create_user
+from tests.test_messaging_compose import _refused
+from tests.test_messaging_system_mail import LOCMEM, SENDER, _install
+from tests.test_messaging_templates_render import ANGEE, _mail, _recording, _render, _row
+from tests.test_messaging_templates_render import kit as kit
+from tests.test_messaging_templates_render import plain as plain
+
+ADDRESS = "reader@example.test"
+REASON = "tests.messaging_templates.send"
+GREETING = {"name": "The recipient's name.", "title": "What the mail is about."}
+"""The variables of :func:`_greeting`, a template reading a name in its body and a title in its subject."""
+
+
+def _greeting(**values: Any) -> Any:
+    return _mail("Hello {{ name }}.", GREETING, subject="{{ title }} from {{ brand.name }}", **values)
+
+
+@pytest.fixture
+def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The delivery hand-offs published, recorded and never made."""
+
+    tasks: list[str] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: tasks.append(name))
+    return tasks
+
+
+@pytest.fixture
+def mailing(plain: Any, settings: Any, sent: list[str]) -> None:
+    """A transport mailer and a valid default sender, a minimal layout and the default kit; no system channel yet."""
+
+    del plain, sent
+    settings.MAILERS = {"transport": LOCMEM}
+    settings.DEFAULT_FROM_EMAIL = SENDER
+
+
+@pytest.fixture
+def system_channel(mailing: None) -> Any:
+    """The installed system channel, beside :func:`mailing`."""
+
+    del mailing
+    return _install()
+
+
+def _send(row: Any, values: dict[str, Any], **arguments: Any) -> Any:
+    return MessageTemplate.objects.send_as_system(row, **{"reason": REASON, "to": ADDRESS, "values": values,
+                                                          **arguments})
+
+
+def _stored(message: Any) -> tuple[str, str, str]:
+    """The subject, plain text and HTML the message's stored parts carry, as its backend reads them to send."""
+
+    with system_context(reason="tests.messaging_templates.send.read"):
+        row: Any = Message._base_manager.select_related("channel").get(pk=message.pk)
+        written = row.channel.backend.email_message(row)
+    (html,) = [alternative.content for alternative in written.alternatives if alternative.mimetype == "text/html"]
+    return written.subject, written.body, html
+
+
+def _delivered(message: Any) -> EmailMessage:
+    """Deliver ``message`` through the in-memory transport as the worker does, and return what it sent, parsed."""
+
+    assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+    return message_from_bytes(mail.outbox[-1].message().as_bytes(), policy=email.policy.default)
+
+
+def _walks(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Record every walk, so a test can say nothing rendered."""
+
+    walked: list[Any] = []
+    _recording(monkeypatch, TemplateWalker, "walk", lambda walker, row, rows: walked.append(row))
+    return walked
+
+
+def _audits() -> list[tuple[str, str]]:
+    return list(PermissionAuditEvent.objects.order_by("pk").values_list("kind", "reason"))
+
+
+# ---------- what one call records and sends ----------
+
+
+def test_each_call_records_one_queued_message_holding_the_render_and_hands_it_off_once(
+    system_channel: Any, kit: Any, sent: list[str], django_capture_on_commit_callbacks: Any,
+) -> None:
+    row = _greeting()
+    values = {"name": "Ana", "title": "Welcome"}
+    rendered = _render(row, values, kit)
+    messages = []
+    for calls in (1, 2):
+        with django_capture_on_commit_callbacks(execute=True):
+            messages.append(_send(row, values))
+        assert sent == [DELIVER_MESSAGE_TASK] * calls
+    first, second = messages
+    assert first.pk != second.pk and first.external_id != second.external_id
+    assert first.actor() is None
+    with system_context(reason="tests.messaging_templates.send.read"):
+        stored = Message._base_manager.get(pk=first.pk)
+        recipients = list(Recipient._base_manager.filter(message=stored).values_list("role", "handle__value"))
+    assert (stored.channel_id, stored.status, stored.direction, stored.message_type) == (
+        system_channel.pk, "queued", "outbound", "email",
+    )
+    assert recipients == [("to", ADDRESS)]
+    assert _stored(first) == (rendered.subject, rendered.plain_text.strip(), rendered.html)  # compose trims text
+    assert rendered.subject == "Welcome from Acme"
+
+
+def test_on_the_wire_it_is_from_the_system_sender_to_the_address_its_text_first_and_its_html_utf8(
+    system_channel: Any, kit: Any,
+) -> None:
+    del system_channel
+    row = _mail("¿Qué tal, {{ name }}?", {"name": "The recipient's name."})
+    rendered = _render(row, {"name": "Zoë"}, kit)
+    wire = _delivered(_send(row, {"name": "Zoë"}))
+    assert (str(wire["From"]), str(wire["To"])) == (SENDER, ADDRESS)
+    assert wire.get_content_type() == "multipart/alternative"
+    text, html = wire.iter_parts()
+    assert (text.get_content_type(), html.get_content_type()) == ("text/plain", "text/html")
+    assert html.get_content_charset() == "utf-8"
+    # MIME ends each part with a line break; compose stores the text trimmed.
+    assert (text.get_content(), html.get_content()) == (rendered.plain_text, rendered.html + "\n")
+
+
+@pytest.mark.parametrize(
+    ("title", "subject"),
+    [
+        pytest.param("=?utf-8?q?=E2=80=AE?=moc.evil", "= ?utf-8?q?=E2=80=AE?=moc.evil", id="encoded-override"),
+        pytest.param("=?utf-8?q?=E2=80=AE b", "= ?utf-8?q?=E2=80=AE b", id="unterminated"),
+        pytest.param("Hi =?utf-8?q?a=0D=0AX-Injected:_1?=", "Hi = ?utf-8?q?a=0D=0AX-Injected:_1?=", id="encoded-crlf"),
+        pytest.param("2+2=?", "2+2=?", id="kept"),
+    ],
+)
+def test_the_wire_subject_is_exactly_the_rendered_one_on_one_line(
+    system_channel: Any, kit: Any, title: str, subject: str,
+) -> None:
+    """A value spelled as an encoded word reaches the wire as written: no override, no line break, no header."""
+
+    del system_channel
+    row = _greeting()
+    rendered = _render(row, {"name": "Ana", "title": title}, kit)
+    message = _send(row, {"name": "Ana", "title": title})
+    wire = _delivered(message)
+    assert str(wire["Subject"]) == _stored(message)[0] == rendered.subject == f"{subject} from Acme"
+    assert "‮" not in str(wire["Subject"]) and "X-Injected" not in wire
+
+
+def test_rendered_output_is_never_compiled_again(system_channel: Any, kit: Any) -> None:
+    del system_channel, kit
+    wire = _delivered(_send(_greeting(), {"name": "{{ brand.name }}", "title": "{% if 1 %}x{% endif %}"}))
+    text, html = (part.get_content() for part in wire.iter_parts())
+    assert "Hello {{ brand.name }}." in text and "Hello {{ brand.name }}." in html
+    assert str(wire["Subject"]) == "{% if 1 %}x{% endif %} from Acme"
+
+
+# ---------- what is refused, before anything is written ----------
+
+
+def test_a_layout_block_or_overridden_default_is_refused_before_anything_renders_or_is_elevated(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del system_channel
+    shipped = _greeting(key="tests.shipped", is_baseline=True)
+    _greeting(key="tests.shipped")
+    with system_context(reason="tests.messaging_templates.send.load"):
+        refused = {
+            "not_a_template": [MessageTemplate.objects.get(kind="layout"), _row("block", "card"), _row("part", "end")],
+            "not_effective": [MessageTemplate._base_manager.get(pk=shipped.pk)],
+        }
+    walked, audits = _walks(monkeypatch), _audits()
+    for code, rows in refused.items():
+        for row in rows:
+            with _refused(ValidationError) as refusal:
+                _send(row, {"name": "Ana", "title": "Welcome"})
+            assert refusal.value.code == code, row.kind
+    assert (walked, _audits()) == ([], audits)
+
+
+def test_a_render_refusal_reads_no_system_channel_and_leaves_the_bypass_entry_alone(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entering the system context writes its audit row at once; it stays when the render then refuses."""
+
+    del system_channel
+    looked_up: list[Any] = []
+    _recording(monkeypatch, ChannelManager, "system_channel", lambda manager: looked_up.append(manager))
+    row, audits = _greeting(), _audits()
+    with _refused(ValidationError) as refusal:
+        _send(row, {"title": "Welcome"})
+    ((code, message),) = [(item.code, item.message) for item in refusal.value.error_list]
+    assert code == "invalid_values" and message.startswith("name ")
+    assert looked_up == []
+    assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, REASON)]
+
+
+def _paused(channel: Any) -> None:
+    with system_context(reason="tests.messaging_templates.send.pause"):
+        channel.pause()
+
+
+@pytest.mark.parametrize(
+    ("state", "to", "key", "code"),
+    [
+        pytest.param(None, "not an address", "to", "invalid", id="address"),
+        pytest.param(None, "Two <a@example.test>, b@example.test", "to", "invalid", id="two-addresses"),
+        pytest.param("unconfigured", ADDRESS, "channel", "OUTBOUND_EMAIL_NOT_CONFIGURED", id="unconfigured"),
+        pytest.param("paused", ADDRESS, "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="paused"),
+        pytest.param("missing", ADDRESS, "channel", "SYSTEM_CHANNEL_MISSING", id="missing"),
+    ],
+)
+def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_nothing_written(
+    mailing: None, settings: Any, sent: list[str], state: str | None, to: str, key: str, code: str,
+) -> None:
+    del mailing
+    if state != "missing":
+        channel = _install()
+        if state == "paused":
+            _paused(channel)
+    if state == "unconfigured":
+        settings.MAILERS = {}
+    row = _greeting()
+    with _refused(ValidationError, key=key, code=code):
+        _send(row, {"name": "Ana", "title": "Welcome"}, to=to)
+    assert sent == []
+
+
+def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
+    del system_channel
+    row = _greeting()
+    for reason in ("", "   "):
+        with CaptureQueriesContext(connection) as queries, pytest.raises(ValueError, match="named reason"):
+            _send(row, {"name": "Ana", "title": "Welcome"}, reason=reason)
+        assert queries.captured_queries == []
+
+
+# ---------- under which context it renders and records ----------
+
+
+def test_with_no_actor_at_all_it_renders_every_row_and_records_the_message_with_no_creator(
+    system_channel: Any,
+) -> None:
+    del system_channel
+    with system_context(reason="tests.messaging_templates.send.load"):
+        row = MessageTemplate.system_queryset().effective("template", _greeting().key, language="en")
+    assert current_actor() is None
+    message = _send(row, {"name": "Ana", "title": "Welcome"})
+    assert _stored(message)[0] == "Welcome from Acme"
+    with system_context(reason="tests.messaging_templates.send.read"):
+        assert Message._base_manager.get(pk=message.pk).created_by_id is None
+
+
+def test_a_signed_in_caller_is_the_creator_of_what_it_causes_and_reads_none_of_it(system_channel: Any) -> None:
+    """The bypass is the render's alone: the message is recorded in the caller's context, which reads nothing."""
+
+    del system_channel
+    member = create_user("messaging-templates-send-cause")
+    row = _loaded(member)
+    with actor_context(member):
+        message = _send(row, {"name": "Ana", "title": "Welcome"}, to="new-reader@example.test")
+    with system_context(reason="tests.messaging_templates.send.read"):
+        stored: Any = Message._base_manager.select_related("thread").get(pk=message.pk)
+        parts = list(Part._base_manager.filter(message=stored))
+        recipients = list(Recipient._base_manager.filter(message=stored))
+        handle = Handle._base_manager.get(value="new-reader@example.test")
+    assert (stored.created_by_id, stored.thread.created_by_id, handle.created_by_id) == (member.pk, member.pk, None)
+    targets: list[Any] = [stored, stored.thread, *parts, *recipients, handle]
+    for target in targets:
+        assert not target.with_actor(member).has_access("read"), target
+
+
+def _loaded(reader: Any) -> Any:
+    """The greeting template as ``reader`` loads it: through its own scope, which redacts the sample."""
+
+    key = _greeting().key
+    return MessageTemplate.objects.with_actor(reader).get(kind="template", key=key)
+
+
+def test_a_row_any_reader_loaded_sends_what_the_system_loaded_row_sends(system_channel: Any) -> None:
+    del system_channel
+    member = create_user("messaging-templates-send-loader")
+    by_member = _loaded(member)
+    assert by_member.sample is None
+    with system_context(reason="tests.messaging_templates.send.load"):
+        by_system = MessageTemplate.system_queryset().get(pk=by_member.pk)
+    values = {"name": "Ana", "title": "Welcome"}
+    assert _stored(_send(by_member, values)) == _stored(_send(by_system, values))
+
+
+def test_a_named_kit_is_the_mails_brand(system_channel: Any) -> None:
+    del system_channel
+    with system_context(reason="tests.messaging_templates.send.kit"):
+        other = BrandKit.objects.create(**{**ANGEE, "name": "Other", "is_default": False})
+    assert _stored(_send(_greeting(), {"name": "Ana", "title": "Welcome"}, kit=other))[0] == "Welcome from Other"
+
+
+def test_it_renders_in_the_rows_language_and_the_projects_time_zone(system_channel: Any) -> None:
+    del system_channel
+    _row("part", "close", language="es", source="Hasta pronto.")
+    row = _mail(
+        'Hola, {{ name }}.\n\nA las {{ when|date:"H:i" }}.\n\n{% include "parts/close" only %}',
+        {"name": "El nombre.", "when": "Cuándo."}, language="es",
+    )
+    with override_settings(TIME_ZONE="Pacific/Auckland"):
+        subject, text, html = _stored(_send(row, {"name": "Ana", "when": "2026-11-24T23:30:00+00:00"}))
+    assert '<html lang="es" dir="ltr">' in html
+    assert text == "Hola, Ana.\n\nA las 12:30.\n\nHasta pronto."
+
+
+STATEMENTS = 169
+"""Statements one send to a known address executes after a warm one: the measured count is the ceiling."""
+
+
+def test_a_send_to_a_known_address_executes_a_fixed_number_of_statements(system_channel: Any) -> None:
+    del system_channel
+    row = _greeting()
+    addresses = ("first@example.test", "second@example.test")
+    for address in addresses:
+        _send(row, {"name": "Ana", "title": "Welcome"}, to=address)
+    counts = []
+    for address in addresses:
+        with CaptureQueriesContext(connection) as queries:
+            _send(row, {"name": "Ana", "title": "Welcome"}, to=address)
+        counts.append(len(queries))
+    assert counts[0] == counts[1] <= STATEMENTS, counts
+
+
+# ---------- server code only ----------
+
+
+def _names(source: str) -> set[str]:
+    return {
+        node.attr if isinstance(node, ast.Attribute) else node.id
+        for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Attribute | ast.Name)
+    }
+
+
+def _schema_sources() -> dict[str, str]:
+    """Every installed app's ``schema`` module and every module of the GraphQL addon, by name, as source."""
+
+    found: dict[str, str] = {}
+    for app_config in apps.get_app_configs():
+        try:
+            spec = importlib.util.find_spec(f"{app_config.name}.schema")
+        except ModuleNotFoundError:
+            spec = None
+        if spec is not None and spec.origin:
+            found[spec.name] = Path(spec.origin).read_text(encoding="utf-8")
+    graphql = Path(apps.get_app_config("graphql").path)
+    found.update({str(path): path.read_text(encoding="utf-8") for path in sorted(graphql.rglob("*.py"))})
+    return found
+
+
+def test_no_graphql_schema_reaches_the_system_send() -> None:
+    """It checks no permission of its own, so no resolver may call it."""
+
+    scanned = _schema_sources()
+    assert "angee.messaging_templates.schema" in scanned
+    assert [name for name, source in scanned.items() if "send_as_system" in _names(source)] == []

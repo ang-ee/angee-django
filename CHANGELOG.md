@@ -10,6 +10,36 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging_templates`: **A message template is sent as system work.**
+  - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
+    kit=None)` renders one effective template (the caller picks it for its
+    recipient with `effective("template", key, person=...)`) with the caller's
+    values inside `system_context(reason=reason)`, and records it on messaging's
+    system channel through `Message.objects.compose_as_system`, queued: one
+    message per call, returned unbound. It is for mail the framework writes on no
+    person's request: the caller's own gate authorised the send, the verb checks
+    no permission and decides nothing about the values or who may be mailed, and
+    no GraphQL field reaches it. A blank `reason` is a `ValueError`; every other
+    refusal comes before any row is written: `MessageTemplate.send_refusal()`
+    (a layout, block or part, `not_a_template`; a shipped default its override
+    replaces, `not_effective`), then the render's codes, then compose's (an
+    address, subject or body under its argument, system mail not configured, the
+    system channel missing or not connected). Entering the system context writes
+    its permission audit row at once, even when the render then refuses.
+  - **Changed.** A row fact read on a row the list did not annotate
+    (`is_effective`, `is_overridden`, `has_updated_default`,
+    `overrides_default`) is a structural read through the base manager and writes
+    no permission audit row. `render`'s documented codes include
+    `values_too_large`, which it already raised.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-messaging`;
+    messaging still never imports message templates. **Upgrade:** a host that
+    lists `angee.messaging_templates` without `angee.messaging` now also enables
+    messaging and what messaging requires (timeline, integrate, storage, tags,
+    jobs, web and their own requirements), since the composer turns on a
+    component's required addons, and so migrates, synchronizes the permission
+    schema and loads the install tier for them. With messaging comes its system
+    mailer as Django's default mailer (messaging's entry): a host that authored
+    its own `MAILERS["default"]` renames it before it starts.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),

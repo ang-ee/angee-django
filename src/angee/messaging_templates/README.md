@@ -6,7 +6,10 @@ renderer that turns a row and its values into a subject, a preheader, an HTML bo
 and a plain-text body. The [models module](models.py), the
 [rendering module](rendering.py), the [engine](engine.py) and the
 [walker](walker.py) own the contracts below; their docstrings carry the exact API.
-This addon sends nothing: a sender renders a row and hands the result on.
+A sender renders a row and hands the result on. For mail the framework writes on
+no person's request, `MessageTemplate.objects.send_as_system` renders a template
+as named system work and records it on messaging's system channel, which
+delivers it ([Sending as system work](#sending-as-system-work)).
 
 ## The rows
 
@@ -164,14 +167,17 @@ rows and the brand kit through the caller's scope, the default kit when `kit` is
 carries its code in `error_list`, so a sender tells them apart:
 `invalid_values` (a value missing, misshapen, a lone surrogate, a number no
 float holds where `floatformat` or `pluralize` reads it, a moment the local zone
-cannot hold, a bare date printed with a time), `message_template_refused` (the
+cannot hold, a bare date printed with a time), `values_too_large` (the values
+over 50,000 characters of JSON), `message_template_refused` (the
 walk), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
 any other failure, which is logged with its traceback first. Every string value,
 and the subject and preheader, drop the control characters and the bidirectional
 overrides and isolates (`UNPRINTED`). A sender picks the row with
-`effective("template", key, person=recipient)`, renders it as the system actor,
-and sends the HTML part as `charset=utf-8`, the one character set a row
+`effective("template", key, person=recipient)` and renders it in its own scope:
+a user's request under that user, named system work inside its own
+`system_context`, as `send_as_system` does. It
+sends the HTML part as `charset=utf-8`, the one character set a row
 declares. The subject the renderer returns is a plain string a sender passes to
 its mail library as it is: it holds no line break, no control character, no
 bidirectional override and no encoded-word opener, so a mail library stores
@@ -186,6 +192,45 @@ subject, an empty or long preheader, a declared value nothing reads, a declared
 Gmail's clipping size, or the render error. The console's `message_template_preview`
 read returns it to administrators (`preview` permission), in the kit it names or
 the default one.
+
+## Sending as system work
+
+`MessageTemplate.objects.send_as_system(row, *, reason, to, values, kit=None)`
+sends mail the framework writes on no person's request: one effective template,
+one address, the values. The caller picks the row for its recipient with
+`effective("template", key, person=recipient)`, through
+`MessageTemplate.system_queryset()` when it has no actor, and its own gate
+authorised the send. The verb checks no permission and decides nothing about the
+values or about who may be mailed, so it is server code only: no GraphQL field
+reaches it. In order:
+
+1. a blank `reason` is a `ValueError`, before anything is read;
+2. the row's side, `MessageTemplate.send_refusal()`: a layout, block or part is
+   refused (`not_a_template`), and so is a shipped default its override replaces
+   (`not_effective`);
+3. the render, inside `system_context(reason=reason)`, so it reads every row and
+   the default kit whoever calls, in the row's language and the active time
+   zone. Entering it writes one permission audit row at once, which stays when
+   the render then refuses with one of the codes above;
+4. messaging's `Message.objects.compose_as_system`, under the same reason and in
+   the caller's context and transaction: the rendered subject, plain text and
+   HTML, to `to`, from the deployment's `DEFAULT_FROM_EMAIL`, on the system
+   channel, queued. It refuses, under its argument, an address, subject or body it
+   cannot send (`to`, `subject`, `text`), system mail that is not configured
+   (`OUTBOUND_EMAIL_NOT_CONFIGURED` or an invalid sender, under `channel`), and a
+   system channel that is missing (`SYSTEM_CHANNEL_MISSING`) or not connected
+   (`OUTBOUND_EMAIL_CHANNEL_MISSING`).
+
+Nothing is written before a refusal. Each call records one message with its own
+Message-ID and hands it to delivery once, when the outermost transaction
+commits; the message is returned unbound. The causing actor, if any, is its
+`created_by`, which grants nothing, and administrators alone read the system
+channel's threads and messages (messaging's permission schema seals the channel).
+
+This addon requires messaging, so a host that installs it also enables messaging
+and what messaging requires, with messaging's mail settings: Django's default
+mailer is messaging's system mailer, and a host's own `MAILERS["default"]` takes
+another name.
 
 ## Shipped defaults, overrides and reset
 

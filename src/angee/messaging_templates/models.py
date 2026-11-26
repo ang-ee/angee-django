@@ -36,6 +36,10 @@ spelled as parties stores one (:class:`~angee.parties.fields.LanguageCodeField`)
 **Access.** Every signed-in actor reads rows; platform administrators create,
 write and delete rows that are not baselines, read every row's sample and preview
 every row, and nobody but a resource load writes a baseline (``permissions.zed``).
+
+**Sending.** :meth:`MessageTemplateManager.send_as_system` renders an effective
+template as named system work and records it on messaging's system channel, for
+mail the framework sends on no person's request; messaging delivers it.
 """
 
 from __future__ import annotations
@@ -82,6 +86,7 @@ from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, Angee
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
+    from angee.messaging.models import Message
     from angee.parties.models import Person
 
 logger = logging.getLogger(__name__)
@@ -155,6 +160,8 @@ UNRESOLVED_DELETE_MESSAGE = (
 ONE_AT_A_TIME_MESSAGE = "Message templates are written one at a time, so each save derives its content hash."
 NO_BRAND_KIT_MESSAGE = "No brand kit is the default, and a message renders in a brand kit's name and colours."
 SHIPPED_DEFAULT_MESSAGE = "A shipped default has this kind, key and language: override it instead."
+NOT_A_TEMPLATE_MESSAGE = "Only a template is sent: a layout, block or part reaches a mail inside a template."
+NOT_EFFECTIVE_MESSAGE = "This shipped default is overridden: the override is what renders, so send it instead."
 
 LAYOUT_PREVIEW = PreviewFrame(
     subject="A message in this layout",
@@ -601,8 +608,47 @@ _MessageTemplateManagerBase = AngeeHistoryManager.from_queryset(MessageTemplateQ
 
 
 class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManagerBase[TemplateT]):
-    """Owns the writes that start a row or an override: the deployment's own row, overriding a shipped default and
-    keeping an override over it."""
+    """Owns the writes that start a row or an override (the deployment's own row, overriding a shipped default and
+    keeping an override over it) and the sends of a template (:meth:`send_as_system`)."""
+
+    def send_as_system(
+        self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
+    ) -> Message:
+        """Render ``row`` with ``values`` as named system work and record it on the system channel, queued.
+
+        For mail the framework sends on no person's request. The caller picks
+        ``row`` for its recipient through the library's lookup,
+        :meth:`MessageTemplateQuerySet.effective` by kind, key and person (work
+        with no actor reads through ``MessageTemplate.system_queryset()``),
+        names one address and gives the values; its own gate authorised the
+        send. The verb checks no permission and decides nothing about the values
+        or about who may be mailed, so it is server code only: no GraphQL field
+        reaches it.
+
+        In order: a blank ``reason`` is a ``ValueError``, before anything is read;
+        :meth:`MessageTemplate.send_refusal`; the render
+        (:meth:`MessageTemplate.render`) inside ``system_context(reason=reason)``,
+        which reads every row and the default kit, and whose entry writes its
+        permission audit row at once, even when the render then refuses; and
+        :meth:`~angee.messaging.managers.MessageManager.compose_as_system` under
+        the same reason, in the caller's context and transaction, with the
+        rendered subject, plain text and HTML. That refuses, under its argument,
+        an address, subject or body it cannot send, system mail not configured,
+        and a system channel missing or not connected. Every refusal is raised
+        before any row is written, each ``ValidationError`` item with its code.
+        Each call records one message and hands it to delivery once, when the
+        outermost transaction commits; it is returned unbound.
+        """
+
+        if not reason.strip():
+            raise ValueError("System mail requires a named reason.")
+        if (refusal := row.send_refusal()) is not None:
+            raise refusal
+        with system_context(reason=reason):
+            rendered = row.render(values, kit=kit)
+        return cast("Message", apps.get_model("messaging", "Message").objects.compose_as_system(
+            reason=reason, to=[to], subject=rendered.subject, text=rendered.plain_text, html=rendered.html,
+        ))
 
     def override(self, baseline: TemplateT) -> TemplateT:
         """Return the deployment's override of ``baseline``, created from it when there is none.
@@ -973,12 +1019,32 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             return ValidationError(NO_BASELINE_MESSAGE, code="no_baseline")
         return None
 
+    def send_refusal(self) -> ValidationError | None:
+        """What refuses sending this row (:meth:`MessageTemplateManager.send_as_system`): the row's side of a send.
+
+        ``not_a_template`` unless its kind is a mail
+        (:attr:`MessageTemplateKindHandler.carries_message_fields`), since a
+        layout, block or part reaches a mail inside a template; else
+        ``not_effective`` unless it is what renders for its kind, key and
+        language (:attr:`is_effective`, an overridden shipped default is not);
+        ``None`` when nothing does. It decides no permission: whoever sends
+        decides that. It reads ``kind`` and at most one structural statement, none
+        when the row carries the list's ``_is_effective`` annotation.
+        """
+
+        if not self.handler.carries_message_fields:
+            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code="not_a_template")
+        if not self.is_effective:
+            return ValidationError(NOT_EFFECTIVE_MESSAGE, code="not_effective")
+        return None
+
     def _row_fact(self, name: str) -> bool:
-        """Read one row fact: the annotation ``with_row_facts`` set, else one query for this fact alone."""
+        """Read one row fact: the annotation ``with_row_facts`` set, else one structural query for this fact alone,
+        through the base manager, which writes no permission audit row: it answers a fact, never a row."""
 
         if (annotated := self.__dict__.get(f"_{name}")) is not None:
             return bool(annotated)
-        rows = type(self).system_queryset()
+        rows = type(self)._base_manager.all()
         fact = MessageTemplateQuerySet.row_fact_expressions[name](rows)
         return bool(rows.filter(pk=self.pk).annotate(fact=fact).values_list("fact", flat=True).first())
 
@@ -1130,10 +1196,12 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         :meth:`~angee.messaging_templates.walker.TemplateWalk.render`. Every required
         value is present and not null, dates are ``date``, aware ``datetime`` or
         ISO 8601, and money is a ``Decimal`` printed through ``floatformat``. Reads
-        rows and the kit through the acting reader's scope: a sender renders as the
-        system actor. Raises ``ValidationError`` alone, each item with its code
-        (``invalid_values``, ``message_template_refused``, ``render_budget``,
-        ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
+        rows and the kit through the ambient scope: a user's request renders under
+        that user, and named system work inside its own ``system_context``
+        (:meth:`MessageTemplateManager.send_as_system`). Raises ``ValidationError``
+        alone, each item with its code (``invalid_values``, ``values_too_large``,
+        ``message_template_refused``, ``render_budget``, ``subject_too_long``,
+        ``no_brand_kit``, ``render_failed``) in ``error_list``
         (:func:`~angee.messaging_templates.walker.refusals_only`).
         """
 
