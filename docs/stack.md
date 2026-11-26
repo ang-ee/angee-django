@@ -287,7 +287,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | i18next | Runtime translation, plural defaults and interpolation | `@angee/ui` owns the shared native initializer and provider-less defaults; `@angee/app` owns the composed active instance and provider; addons contribute namespace-relative bundles |
 | date-fns + @date-fns/tz | Date and relative-time formatting; calendar-bucket arithmetic in a named timezone | Date and timestamp widgets; `@angee/storybook` resource snapshots bucket date groups as the server does |
 | @number-flow/react | Animated numeric text, Intl formatting and reduced-motion-aware transitions | `MetricTile` provides the typed numeric path, binds shared motion tokens and keeps animation opt-in |
-| use-debounce | Debounced React values and callbacks | Search and filter inputs |
+| use-debounce | Debounced React values and callbacks | Search and filter inputs; the pause before a preview reads a record form's unsaved edits |
 | Tailwind 4 | Token styling engine | Semantic token set |
 | tailwind-merge | Safe class merging | `cn()` helper |
 | lucide-react | Icons | Name-referenced icon registry |
