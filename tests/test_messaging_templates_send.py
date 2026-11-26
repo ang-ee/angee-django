@@ -583,6 +583,31 @@ def test_the_deployments_own_public_origin_is_linked_in_both_bodies_and_no_other
     assert f'href="{escape(link)}"' in html and f"Open the decision ({link})" in text
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("http://intranet:8080%23token=SECRET-marker", id="an-encoded-hash"),
+        pytest.param("http://intranet:8080%2Ftoken=SECRET-marker", id="an-encoded-slash"),
+        pytest.param("http://intranet:8080%3Ftoken=SECRET-marker", id="an-encoded-question-mark"),
+        pytest.param("http://intranet;token=SECRET-marker", id="a-semicolon"),
+        pytest.param("http://intranet token=SECRET-marker", id="a-space"),
+    ],
+)
+def test_a_refused_link_names_no_part_of_it_past_its_host(plain: Any, settings: Any, value: str) -> None:
+    """A refusal's words reach an action's answer, the preview and logs: one naming a host never runs into the rest
+    of the link, whatever spelling hides its separator."""
+
+    del plain
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    with pytest.raises(ValidationError) as checked:
+        MessageTemplate.objects.clean_link(value)
+    with system_context(reason="tests.messaging_templates.send.echo"), pytest.raises(ValidationError) as rendered:
+        _decision(key="tests.decision_echo").render({"link": value})
+    for refusal in (checked.value, rendered.value):
+        assert [item.code for item in refusal.error_list] == ["value_not_linkable"]
+        assert all("SECRET-marker" not in item.message for item in refusal.error_list), refusal.messages
+
+
 SECRET = "https://app.example.test/sign-in/SECRET-marker"
 
 

@@ -80,6 +80,11 @@ LINK_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9
 No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty. The
 deployment's own public origin is linkable besides, whatever its host (:func:`_own_origin_authority`)."""
 
+_NAMED_AUTHORITY = re.compile(r"\[[0-9a-f:.]*\](?::\d{1,5})?|[a-z0-9.-]+(?::\d{1,5})?", re.I)
+"""An authority a refusal may name: a host, an IPv6 address in brackets, with an optional port. Anything else may hold
+the rest of the link (a percent-encoded separator, a ``;`` or a space after the host), so a refusal does not repeat
+it."""
+
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
 
@@ -337,7 +342,9 @@ def _link(value: Any) -> tuple[str, str | None]:
         if not LINK_HOST.fullmatch(authority):
             own = _own_origin_authority(scheme, authority)
             if own is None:
-                return "", f"the mail cannot link to {authority}"
+                if _NAMED_AUTHORITY.fullmatch(authority):
+                    return "", f"the mail cannot link to {authority}"
+                return "", "its host is not one a mail can link to"
             link = f"{link.partition(':')[0]}://{own}{rest[2 + len(authority):]}"
     return link, None
 
