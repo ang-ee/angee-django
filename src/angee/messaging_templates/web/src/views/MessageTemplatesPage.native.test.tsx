@@ -847,7 +847,8 @@ test("the sample values ride the edits, and edits Save would keep that the sampl
   pasteInto(await screen.findByRole("textbox", { name: word("field.sample") }), JSON.stringify(edit.patch.sample));
   fireEvent.click(screen.getByRole("tab", { name: word("tab.preview") }));
   // Today the record form's unsaved-changes guard asks before a routed record tab changes the page's search, though
-  // the form stays; leaving keeps the edits (`allowSearchChanges` in `useUnsavedChangesNavigationGuard`).
+  // the form stays; leaving keeps the edits. This step goes once the record form counts only a new path, or a search
+  // key other than the record's tab, as leaving.
   fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
   expect(await screen.findByRole("button", { name: ui("form.discard") })).toBeTruthy();
 
