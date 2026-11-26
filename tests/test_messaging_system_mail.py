@@ -2,20 +2,32 @@
 
 from __future__ import annotations
 
+import email.policy
+import logging
+import logging.config
 from collections.abc import Iterator
 from contextlib import contextmanager
+from email import message_from_bytes
 from typing import Any
 
 import pytest
+from anymail.message import AnymailMessage
+from django.core import mail
 from django.core.exceptions import ValidationError
+from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
+from django.core.mail.backends.base import BaseEmailBackend
+from django.db import transaction
 from django.test import override_settings
+from django.utils.log import AdminEmailHandler
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
-from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
-from angee.messaging.constants import SYSTEM_CHANNEL_BACKEND
-from angee.messaging.email import SystemChannelBackend
+from angee.jobs.enqueue import celery_app
+from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
+from angee.messaging.constants import DELIVER_MESSAGE_TASK, SYSTEM_CHANNEL_BACKEND, SYSTEM_MAILER_BACKEND
+from angee.messaging.email import SystemChannelBackend, SystemMailer
 from angee.messaging.managers import _OUTGOING_ACTOR
+from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
@@ -25,6 +37,7 @@ from tests.messaging_campaign import make_user
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
 LOCMEM = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
+SYSTEM = {"BACKEND": SYSTEM_MAILER_BACKEND}
 SENDER = "Angee <noreply@example.test>"
 
 
@@ -230,3 +243,232 @@ def test_each_call_is_a_new_message_and_no_channel_can_be_named(system_channel: 
     assert first.pk != second.pk and first.external_id != second.external_id
     with pytest.raises(TypeError):
         Message.objects.compose_as_system(channel=system_channel, **values)  # type: ignore[call-arg]
+
+
+@pytest.fixture
+def system_mailer(system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Django's default mailer is the system mailer; the test mailer is the transport; nothing reaches a broker."""
+
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    return system_channel
+
+
+def _recorded(channel: Any) -> list[Any]:
+    with system_context(reason="tests.messaging.system_mail.recorded"):
+        return list(Message._base_manager.filter(channel=channel).order_by("pk"))
+
+
+def _deliver(message: Any) -> Any:
+    """Deliver ``message`` as the worker does; return what the transport sent."""
+
+    outcome = deliver_message(message._meta.label_lower, message.pk, message.external_id)
+    assert outcome["delivered"], outcome
+    return mail.outbox[-1]
+
+
+def test_a_django_email_is_recorded_on_the_system_channel_and_sent_once_through_the_transport(
+    system_mailer: Any,
+) -> None:
+    assert send_mail("Welcome", "Hello there.", None, ["Reader <reader@example.test>"]) == 1
+    assert mail.outbox == []
+    (message,) = _recorded(system_mailer)
+    with system_context(reason="tests.messaging.system_mail.read"):
+        assert (message.status, message.message_type, message.created_by_id) == ("queued", "email", None)
+        assert (message.sender.value, message.title()) == ("noreply@example.test", "Welcome")
+        assert list(message.recipients.values_list("handle__value", "role")) == [("reader@example.test", "to")]
+        assert list(Part._base_manager.filter(message=message, role="body").values_list("type", flat=True)) == [
+            "text/plain",
+        ]
+    sent = _deliver(message)
+    wire = sent.message()
+    assert sent.sent_using == "transport"
+    assert (wire["From"], wire["To"], wire["Subject"]) == (SENDER, "Reader <reader@example.test>", "Welcome")
+    assert wire["Message-ID"] == f"<{message.external_id}>"
+    # Delivering did not hand the email back to the system mailer.
+    assert len(_recorded(system_mailer)) == 1
+
+
+@pytest.mark.parametrize(
+    ("build", "plain", "html"),
+    [
+        pytest.param(lambda: _alternatives("Text.", "<p>Html.</p>"), "Text.", "<p>Html.</p>", id="text-and-html"),
+        pytest.param(lambda: _html_body("<p>Html.</p>"), "", "<p>Html.</p>", id="html-body"),
+        pytest.param(lambda: _alternatives("", b"<p>Html.</p>"), "", "<p>Html.</p>", id="html-alternative-only"),
+    ],
+)
+def test_the_bodies_a_django_email_carries_are_the_parts_on_the_wire(
+    system_mailer: Any, build: Any, plain: str, html: str,
+) -> None:
+    assert build().send() == 1
+    (message,) = _recorded(system_mailer)
+    wire = message_from_bytes(_deliver(message).message().as_bytes(), policy=email.policy.default)
+    bodies = {part.get_content_type(): part.get_content().strip() for part in wire.walk() if not part.is_multipart()}
+    assert bodies == {key: value for key, value in (("text/plain", plain), ("text/html", html)) if value}
+
+
+def _alternatives(text: str, html: Any) -> EmailMultiAlternatives:
+    email_ = EmailMultiAlternatives("Bodies", text, None, ["reader@example.test"])
+    email_.attach_alternative(html, "text/html")
+    return email_
+
+
+def _html_body(html: str) -> EmailMessage:
+    email_ = EmailMessage("Bodies", html, None, ["reader@example.test"])
+    email_.content_subtype = "html"
+    return email_
+
+
+def _with(**changes: Any) -> Any:
+    def build() -> EmailMultiAlternatives:
+        email_ = EmailMultiAlternatives("Refused", "Body.", None, ["reader@example.test"])
+        for name, value in changes.items():
+            if name == "alternatives":
+                for content, mimetype in value:
+                    email_.attach_alternative(content, mimetype)
+            elif name == "attach":
+                email_.attach("invoice.txt", b"total", "text/plain")
+            else:
+                setattr(email_, name, value)
+        return email_
+    return build
+
+
+@pytest.mark.parametrize(
+    ("build", "refused", "key"),
+    [
+        pytest.param(_with(attach=True), ValueError, None, id="attachment"),
+        pytest.param(_with(reply_to=["other@example.test"]), ValueError, None, id="reply-to"),
+        pytest.param(_with(extra_headers={"Reply-To": "other@example.test"}), ValueError, None, id="reply-to-header"),
+        pytest.param(_with(extra_headers={"X-Foo": "bar"}), ValueError, None, id="other-header"),
+        pytest.param(_with(alternatives=[("BEGIN:VCALENDAR", "text/calendar")]), ValueError, None, id="calendar"),
+        pytest.param(_with(alternatives=[("<p>a</p>", "text/html"), ("<p>b</p>", "text/html")]), ValueError, None,
+                     id="two-html"),
+        pytest.param(_with(content_subtype="html", alternatives=[("<p>b</p>", "text/html")]), ValueError, None,
+                     id="html-body-and-alternative"),
+        pytest.param(lambda: AnymailMessage("Refused", "Body.", None, ["reader@example.test"]), ValueError, None,
+                     id="anymail-message"),
+        pytest.param(_with(to=["not an address"]), ValidationError, "to", id="invalid-address"),
+        pytest.param(_with(body=""), ValidationError, "text", id="empty-body"),
+        pytest.param(_with(subject="One\nTwo"), ValidationError, "subject", id="two-line-subject"),
+    ],
+)
+def test_what_a_django_email_cannot_carry_is_refused_and_nothing_is_recorded(
+    system_mailer: Any, build: Any, refused: type[Exception], key: str | None,
+) -> None:
+    rows = _rows()
+    with pytest.raises(refused) as error:
+        SystemMailer().send_messages([build()])
+    if key is not None:
+        assert key in error.value.error_dict
+    assert _rows() == rows
+
+
+def test_a_callers_message_id_date_and_sender_are_not_kept(system_mailer: Any) -> None:
+    for _ in range(2):
+        EmailMessage(
+            "Repeat", "Body.", "Other <other@example.test>", ["reader@example.test"],
+            headers={"message-id": "<same@example.test>", "Date": "Mon, 01 Jan 2001 00:00:00 +0000"},
+        ).send()
+    first, second = _recorded(system_mailer)
+    assert len({first.external_id, second.external_id, "same@example.test"}) == 3
+    wire = _deliver(first).message()
+    assert (wire["Message-ID"], wire["From"]) == (f"<{first.external_id}>", SENDER)
+    assert wire["Date"] != "Mon, 01 Jan 2001 00:00:00 +0000"
+
+
+def test_an_email_with_no_recipient_is_skipped(system_mailer: Any) -> None:
+    rows = _rows()
+    assert SystemMailer().send_messages([EmailMessage("Nobody", "Body.")]) == 0
+    assert _rows() == rows
+
+
+def test_a_batch_is_recorded_whole_or_not_at_all(system_mailer: Any) -> None:
+    rows = _rows()
+    batch = [EmailMessage("One", "Body.", None, ["one@example.test"]), _with(extra_headers={"X-Foo": "bar"})()]
+    with pytest.raises(ValueError):
+        SystemMailer().send_messages(batch)
+    assert _rows() == rows
+    assert SystemMailer(fail_silently=True).send_messages(batch) == 0
+    assert _rows() == rows
+
+
+def test_mail_sent_in_a_transaction_that_rolls_back_is_never_sent(
+    system_mailer: Any, django_capture_on_commit_callbacks: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[str] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: sent.append(name))
+    rows = _rows()
+    with django_capture_on_commit_callbacks(execute=True), pytest.raises(RuntimeError), transaction.atomic():
+        send_mail("Rolled back", "Body.", None, ["reader@example.test"])
+        raise RuntimeError("the caller rolls back")
+    assert (_rows(), sent) == (rows, [])
+    with django_capture_on_commit_callbacks(execute=True):
+        send_mail("Committed", "Body.", None, ["reader@example.test"])
+    assert sent == [DELIVER_MESSAGE_TASK]
+
+
+def test_with_no_transport_django_mail_is_refused_and_nothing_is_recorded(system_mailer: Any, settings: Any) -> None:
+    settings.MAILERS = {"default": SYSTEM}
+    rows = _rows()
+    with pytest.raises(OutboundEmailNotConfigured):
+        send_mail("No transport", "Body.", None, ["reader@example.test"])
+    assert _rows() == rows
+
+
+def test_with_no_system_channel_django_mail_is_refused_with_its_code(db: None, settings: Any) -> None:
+    del db
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    settings.DEFAULT_FROM_EMAIL = SENDER
+    rows = _rows()
+    with pytest.raises(SystemChannelMissing) as missing:
+        send_mail("No channel", "Body.", None, ["reader@example.test"])
+    assert missing.value.error_dict["channel"][0].code == "SYSTEM_CHANNEL_MISSING"
+    assert _rows() == rows
+
+
+class _HandsBack(SystemMailer):
+    """A transport that is the system mailer under another name."""
+
+
+class _Delegates(BaseEmailBackend):
+    """A transport that hands every email to Django's default mailer."""
+
+    def send_messages(self, email_messages: Any) -> int:
+        return mail.mailers.default.send_messages(email_messages)
+
+
+@pytest.mark.parametrize("transport", [_HandsBack, _Delegates], ids=["subclass", "delegating-wrapper"])
+def test_a_transport_that_hands_delivery_back_fails_that_delivery_and_records_nothing_again(
+    system_mailer: Any, settings: Any, transport: type,
+) -> None:
+    send_mail("Loop", "Body.", None, ["reader@example.test"])
+    (message,) = _recorded(system_mailer)
+    settings.MAILERS = {"default": SYSTEM, "transport": {"BACKEND": f"{__name__}.{transport.__name__}"}}
+    outcome = deliver_message(message._meta.label_lower, message.pk, message.external_id)
+    assert not outcome["delivered"]
+    with system_context(reason="tests.messaging.system_mail.loop"):
+        message.refresh_from_db()
+        assert message.status == "failed"
+        assert "hands delivery back" in str(message.metadata.get("local", {}).get("delivery_error", ""))
+    assert len(_recorded(system_mailer)) == 1
+    # The mark ends with the delivery: the next email is recorded.
+    send_mail("After", "Body.", None, ["reader@example.test"])
+    assert len(_recorded(system_mailer)) == 2
+
+
+def test_error_mail_goes_through_the_transport_never_the_system_channel(system_mailer: Any, settings: Any) -> None:
+    """Messaging's contributed LOGGING, as dictConfig builds it, sends an error report through the transport."""
+
+    settings.ADMINS = ["ops@example.test"]
+    settings.DEBUG = False
+    logging.config.dictConfig(settings.LOGGING)
+    (handler,) = [item for item in logging.getLogger("django").handlers if isinstance(item, AdminEmailHandler)]
+    record = logging.LogRecord("django.request", logging.ERROR, __file__, 1, "Boom", None, None)
+    handler.handle(record)
+    (sent,) = mail.outbox
+    assert (sent.sent_using, sent.to) == ("transport", ["ops@example.test"])
+    assert _recorded(system_mailer) == []
+    # Django's own handler sends through the default mailer, which records the report on the system channel.
+    AdminEmailHandler().emit(record)
+    assert len(_recorded(system_mailer)) == 1
