@@ -37,6 +37,7 @@ from angee.base.serialization import canonical_json_sha256
 from angee.base.signals import changes_muted, mute_changes, send_bulk_update
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference, readable_records
 from angee.workflows.definition import (
@@ -655,7 +656,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                     or any(getattr(run, key) != value for key, value in identity.items())
                     or run.input != run.version.definition.validate_input(payload)
                 ):
-                    raise ValidationError("request_key already identifies a different request.")
+                    raise CreationKeyConflict("request_key already identifies a different request.")
                 return run.with_actor(actor)
 
             if request_key is not None and (existing := self.filter(request_key=request_key).first()) is not None:

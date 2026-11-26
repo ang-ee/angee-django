@@ -1,8 +1,13 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, ToastProvider } from "@angee/ui";
+import type { ReactElement, ReactNode } from "react";
+
+/** Under an app runtime, as a page is: it holds the chatter box's idempotency key. */
+const AppRuntime = ({ children }: { children?: ReactNode }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>;
+const render = (ui: ReactElement, options?: RenderOptions) => testingRender(ui, { wrapper: AppRuntime, ...options });
 
 import type { RecordMessageRow, RecordThreadPayload } from "./documents";
 import type { RecordThreadConversationChrome } from "./RecordThreadConversation";
@@ -10,9 +15,12 @@ import type { RecordThreadConversationChrome } from "./RecordThreadConversation"
 const mocks = vi.hoisted(() => ({
   threadData: undefined as unknown,
   threadError: null as unknown,
+  threadRefetch: vi.fn(),
   recipientData: { colleagues: [] as unknown[] } as unknown,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   failOps: new Set<string>(),
+  /** Result data a mutation answers with, by operation; `{}` when none is queued. */
+  answers: {} as Record<string, unknown[]>,
   useAuthoredQuery: vi.fn(),
   upload: vi.fn(),
   uploadTasks: [] as Array<{ id: string; name: string; status: "uploading" | "failed" | "done" }>,
@@ -32,19 +40,26 @@ vi.mock("@angee/ui", async (importOriginal) => {
   };
 });
 
-vi.mock("@angee/refine", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@angee/refine")>()),
-  useAuthoredQuery: mocks.useAuthoredQuery,
-  useAuthoredMutation: (document: unknown) => {
-    const op = operationName(document);
-    const mutate = vi.fn(async (vars: Record<string, unknown>) => {
-      mocks.mutateCalls.push({ op, vars });
-      if (mocks.failOps.has(op)) throw new Error("Network down");
-      return {};
-    });
-    return [mutate, { fetching: false }];
-  },
-}));
+vi.mock("@angee/refine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@angee/refine")>();
+  return {
+    ...actual,
+    useAuthoredQuery: mocks.useAuthoredQuery,
+    useAuthoredMutation: (document: unknown, options?: { errorFrom?: (data: unknown, vars: unknown) => unknown }) => {
+      const op = operationName(document);
+      const mutate = vi.fn(async (vars: Record<string, unknown>) => {
+        mocks.mutateCalls.push({ op, vars });
+        if (mocks.failOps.has(op)) throw new Error("Network down");
+        const data = mocks.answers[op]?.shift() ?? {};
+        // The hook's own envelope check, as the caller declared it.
+        const refusal = actual.errorFromAuthoredEnvelope(options?.errorFrom?.(data, vars) as never);
+        if (refusal) throw refusal;
+        return data;
+      });
+      return [mutate, { fetching: false }];
+    },
+  };
+});
 
 vi.mock("@angee/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/storage")>()),
@@ -147,14 +162,16 @@ beforeEach(() => {
   mocks.onUploaded = null;
   mocks.mutateCalls = [];
   mocks.failOps = new Set();
+  mocks.answers = {};
   mocks.recipientData = { colleagues: [] };
   mocks.threadData = threadPayload([message()]);
   mocks.threadError = null;
+  mocks.threadRefetch.mockReset();
   mocks.useAuthoredQuery.mockReset();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
-      return { data: mocks.threadData, fetching: false, error: mocks.threadError, refetch: vi.fn() };
+      return { data: mocks.threadData, fetching: false, error: mocks.threadError, refetch: mocks.threadRefetch };
     }
     if (op === "MessagingRecipientUsers") {
       return { data: mocks.recipientData, fetching: false, error: null, refetch: vi.fn() };
@@ -534,7 +551,7 @@ describe("RecordThreadConversation", () => {
     expect(screen.queryByLabelText("Message")).toBeNull();
   });
 
-  test("announces a post failure through an alert banner", async () => {
+  test("announces a post whose answer was lost through an alert banner: it may have been posted, and sending again posts it once", async () => {
     mocks.failOps = new Set(["MessagingPostRecordMessage"]);
     render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
 
@@ -542,13 +559,38 @@ describe("RecordThreadConversation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Network down");
+    expect(alert.textContent).toContain("No answer came back, so the message may have been posted. Sending again from this page posts it once.");
     const first = mocks.mutateCalls.find((call) => call.op === "MessagingPostRecordMessage");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("alert");
     const posts = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage");
     expect(posts).toHaveLength(2);
     expect(posts[1]?.vars.idempotencyKey).toBe(first?.vars.idempotencyKey);
+  });
+
+  test("the box is one draft: a refused post, edited and sent again, carries the same key; an earlier version already posted starts a new draft", async () => {
+    mocks.answers = { MessagingPostRecordMessage: [
+      { post_record_message: { error: "The thread is closed.", error_code: "BAD_MESSAGE" } },
+      { post_record_message: { error: "Already posted.", error_code: "CREATION_KEY_CONFLICT" } },
+      { post_record_message: { error: "You may not post here.", error_code: "PERMISSION_DENIED" } },
+    ] };
+    render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
+    const send = async (message: string) => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(message));
+    };
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello" } });
+    await send("The thread is closed.");
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello, edited" } });
+    expect(mocks.threadRefetch).not.toHaveBeenCalled();
+    await send("An earlier version of this message was already posted.");
+    // The earlier version is shown: the thread is read again.
+    expect(mocks.threadRefetch).toHaveBeenCalled();
+    await send("You may not post here.");
+    const keys = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage").map((call) => call.vars.idempotencyKey);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[1]);
   });
 
   test("only a moderator's comment carries the remove control", () => {

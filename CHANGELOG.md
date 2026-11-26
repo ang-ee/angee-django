@@ -47,6 +47,201 @@ live in code docstrings.
   the inputs every test reads, so a pin change alone started no SQLite shard,
   although the pin exists for the SQLite library that suite needs.
 
+- **Message templates render, on Django's template engine.**
+  - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
+    `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
+    Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
+    whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
+    `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
+    anything else fails to compile. A template names its layout in its `layout`
+    column and never writes `extends` or `block`; blocks and parts are included
+    by name with `{% include "…" with … only %}`. A Markdown row goes through
+    markdown-it first, with raw HTML off, its template code kept whole. Each pass
+    runs in the row's language, with `dir` from Django's
+    `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
+    include renders, 200,000 characters of loop output, 500,000 characters of
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
+  - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
+    walks a row and every row it reaches and refuses what may not render safely:
+    oversized sources and lines, literals holding `<`, `>` or `"`, costly or
+    unsafe filter use, template code the Markdown pass would not keep whole, HTML
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    every save, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, counts each level from its rows'
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
+    on a save resolves a level's include targets in one query. A Markdown row's
+    link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
+  - **Preview.** `MessageTemplate.preview(*, kit=None, patch=None)` renders a
+    row's `sample` (a layout around a fixed body, a block or part alone) and
+    returns a `TemplatePreview` with `TemplateWarning`s: the subject or preheader
+    length, unused variables, a missing stop link, an empty plain-text body, the
+    size, or a render error, one for each refusal, naming its column
+    (`TemplateWarning.field`). With a `patch` of edited columns it previews the row
+    as that patch would save: `write` is asked as well as `preview`, and what the
+    save's gates ask of the columns it edits (`write__<field>` included), before
+    anything is copied or walked; the copy is validated as the save validates it,
+    refused for what the save refuses (`save_refused`, apart from the render's
+    `render_error`), and never saved. The console's
+    `message_template_preview(template, brand_kit, patch)` read returns it to
+    callers holding the new `preview` permission (platform admins;
+    `messaging_templates/message_template` revision 2); `patch` is the resource's
+    `message_templates_set_input`, decoded as the update decodes it
+    (`MessageTemplateWriteBackend.patch_values`), and a warning's `field` is the
+    column the update reports a refusal under.
+  - **Shipped rows.** The addon's install tier ships the `base` layout, the
+    `header`, `footer`, `button`, `quote` and `record_card` blocks and the
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
+  - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
+    install tier (`resources load`), and regenerate the console schema and its
+    codegen. No migration: no column changed. Existing rows are walked when they
+    render, and when their source, forms, variables or layout are next edited.
+- `@angee/ui`, `@angee/metadata`: **Changed API.** A list header shows a sort
+  only for the key its rows visibly follow, the first of the order's keys that
+  its groups do not share. A declared or default order's later keys only break
+  ties, and each of them that has a column showed as sorted: a list grouped by
+  kind and ordered by kind, key and language showed "Language, ascending" over
+  rows not in language order, and the first press on that header sorted it
+  descending. That header now shows "not sorted", and its first press sorts it
+  in its first direction as a fresh single-key order, decided from the
+  table's state when pressed. A key a group's records share shows no sort:
+  the field grouped by its whole value (a `Date` by day included) and a
+  grouped relation's members, which the new `GroupAxis.shares` in
+  `@angee/metadata` answers; each list's table carries its group axes as
+  `meta.groupAxes`. A grouping column's press is the table's toggle, as
+  before: it turns the groups of a list grouped in the browser, and on a
+  server-grouped list it leaves the groups in place and asks for their records
+  in that column's order alone. The table's sorting still holds the whole
+  order: every read asks for each key and a list sorted in the browser keeps
+  its tie-breakers. A tie-breaker press drops the grouping key with the rest,
+  so groups made in the browser lose its order (the table orders them by the
+  pressed column's value on each group).
+  `ariaSortForColumn` is removed from
+  `@angee/ui/views/resource-view-list-body`; a custom header renders its cells
+  with `ListHeaderCell` from the same entry, which sets `aria-sort` (on a table
+  of your own, set `meta.groupAxes` for it). `@angee/ui` augments TanStack's
+  `TableMeta` with the optional `groupAxes`: a program that passes `meta` to a
+  table of its own declares its keys by augmenting `TableMeta` too.
+- `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
+  as its value, are honoured by every relation control a descriptor field
+  renders through. The dialogs' own relation control passed the picker
+  neither the opt-out nor a known option, so a dialog still offered Edit and
+  read a record it had been given. An action's relation argument
+  (`ActionRelationArg`) can declare the opt-out; it still holds a bare id, so
+  its record is read for its label. A registered widget's `field` now carries
+  `relationEdit` (declared on `FieldPresentation`) from a form, a dialog and a
+  line's cell, and the party picker and the calendar picker pass it on.
+  `relationSelectedOption` returns `undefined` when the row's label path reads
+  `undefined`, so a relation value such as `{ id }` is read for its label
+  instead of showing its raw id; a member held as `null` or blank still labels
+  the option by its id. A form spec cannot declare the opt-out.
+- `@angee/ui`, `@angee/refine`, `@angee/app`: **Changed API.** A write from a
+  dialog or a composer is safe to retry. `useIdempotencyKeys()` (beside
+  `createClientKey`) keeps one idempotency key per draft, named by its scope,
+  for the app runtime: minted at the draft's first attempt and kept, whatever
+  an error says, until a confirmed answer ends it; the server replays the same
+  content, and answers `CREATION_KEY_CONFLICT` for other content under the
+  spent key, after which the draft's next send starts a new draft and the
+  caller only says what happened. A draft with an attempt lost or on its way is
+  never given up. Forgotten on a change of signed-in person, never persisted
+  (a retry writes once from this page only). The record form's create (its ref
+  is gone), chatter's post, knowledge's note and vault clone, the project from
+  a template, the dashboards' create and duplicate (which minted a new key per
+  attempt, so a retried lost answer made two) and the workflow start sit on it;
+  `MutationDialog` and actions take `idempotencyScope`, and a keyed dialog's
+  submission takes its key as a required `string`. One draft scope belongs to
+  one surface at a time (`useIdempotencyDraftOwner`, failing in development
+  when two hold one), and a create form names its draft under the form or
+  relation dialog hosting it (`useDraftScope`), so a create opened from another
+  form never shares its key.
+  `errorFromAuthoredEnvelope` throws an `AuthoredEnvelopeError` with the
+  envelope's `code`, and a bounded transport error keeps `response.errors` only
+  when the server answered with a GraphQL errors list. `DialogForm` takes `pending` (no dismissal while a submission runs) and
+  `dirty` (a dismissal asks first, with the shared unsaved-changes question),
+  and it asks before a route move while it holds either (saying it is still
+  sending while it is), with `holdsWork` saying no once an accepted submit
+  moves on; Close and Cancel stay focusable and say why while it sends.
+  `ActionFormDialog` drops its own guard for it, and every `MutationDialog` and
+  typed-args action dialog behaves so. An answer that lands after a dialog went
+  away is still reported (`useLateAnswerReport`, reading refine's
+  `failedWriteOutcome`, exported for any surface whose answer can land after
+  it is gone). `MessageActions` shows on a coarse pointer. The
+  unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`;
+  every surface the unsaved-changes guard protects (a `DialogForm` given
+  `dirty` as it opens, so both form dialogs; `FormView`; a page guarding its
+  own edits) renders under the app's router and `ModalsHost`, and without the
+  router throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
+  test or a story provides both through the shared providers below;
+  `createUiTestProviders` and `ShellPageTestProviders` render
+  one app shell (`AppShellTestProviders`, from the runner-free
+  `@angee/ui/testing/shell`), which provides `ModalsHost`;
+  `ShellPageTestProviders` renders under a memory router unless one is already
+  above, and `createUiTestProviders` takes `router`; a keyed dialog's
+  submission drops any assertion of its key.
+- `angee.workflows`: a manual start that reuses a request key for a different
+  request raises `CreationKeyConflict`, as the other keyed creates do, rather
+  than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
+  so a client holding the spent key starts a new request. A trigger admission
+  still records the refusal on its event.
 - `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
   JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
   `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
@@ -634,10 +829,11 @@ live in code docstrings.
   the mail itself, before its first link. While the body or anything in the
   mail has keyboard focus, a ring fixed to the frame's edges stays as the
   arrow, page, space and end keys scroll the mail, and stays beside a link's
-  own ring, also in a mail that removes its links' outline: 2px of the theme's
-  `--border-focus` outside, made opaque, and 2px of white or black inside,
-  whichever contrasts with it, so one edge holds 3:1 on a white mail and on a
-  near-black one (on a mid-grey mail neither edge may reach it). A click on
+  own ring, also in a mail that removes its links' outline. The ring has three
+  tones, 2px each: the theme's `--border-focus` outside, then a black line,
+  then a white one, so one of them holds contrast on any mail, whatever it
+  paints and whatever the theme's color is (at least 4.6:1 on any grey). A
+  click on
   the mail's text or on a link shows no ring until the next key press; a
   click into a field of the mail shows it, as the field shows its own. The
   ring is the root's own
@@ -658,10 +854,9 @@ live in code docstrings.
   name. The ring's color is read from the page when the document is
   assembled: a theme, brand or light/dark switch reloads an open mail, which
   returns to its top and shows no ring until the next Tab; an ordinary render
-  keeps it. A browser without CSS relative color syntax draws the theme's
-  color as it is, then a black and a white line inside it; one without
-  `:has()` (before Chrome 105, Safari 15.4, Firefox 121) draws no ring, as
-  before this change.
+  keeps it. A browser without `:has()` (before Chrome 105, Safari 15.4,
+  Firefox 121) draws no ring, as before this change; the ring needs nothing
+  newer.
   `@angee/ui/lib/use-motion-tokens` is removed and
   `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
   beside `useRootTokens`, the one reader of the root's resolved tokens, which
@@ -743,8 +938,8 @@ live in code docstrings.
   takes focus and also carries the line naming the refused fields, which it
   showed only without a form-level reason; with field reasons only, the first
   shown field takes focus, as before. `applyFormErrors` decides which, for a
-  surface that passes it `focus` and a `fieldSummary` (today the record form;
-  the two dialogs pass neither yet and are unchanged). Its `focus` option,
+  surface that passes it `focus` and a `fieldSummary` (the record form,
+  `MutationDialog` and the typed-args action dialog). Its `focus` option,
   added in this release as `true`, is now a function, the surface's way of
   focusing its banner, given by the new `useRefusalBannerFocus`, exported with
   `formErrorsFromForm`; the record form exposes the banner's props as
@@ -804,6 +999,22 @@ live in code docstrings.
     (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
     because the workshop's toolbar is the host's appearance there; a story about the
     source passes `hostAppearanceSource`.
+
+- `@angee/ui`: **Changed behaviour.** A customised theme's link, and each tone's text
+  (`--brand-soft-text`, `--accent-soft-text` and the four status texts), read at 4.5:1
+  on their own fills and on every surface of their scheme (canvas, sheets, popover and
+  inset), in light and dark, wherever any colour can; where the surfaces pull opposite
+  ways and none can, the text is the colour that comes nearest. The link was worked out
+  against plain white and the dark ink and fell under that on a kit's sheets, most in
+  dark. Texts move toward the ink in hundredths, as the mail palette's do. A surface left
+  at its default counts as the theme's definition states it, else as its defaults derive
+  it, with a 1% margin; `ThemeOptionsDefinition.resolve(value, base?)` receives the
+  definition's own token layers from `resolveThemeOptions`. A text is worked out only
+  when its own input changes, so changing only surfaces keeps the theme's own link and
+  tone texts. A customisation may therefore show a darker link and tone text in light
+  and a lighter one in dark; a theme's own colours are unchanged. The theme runtime
+  feeds the theme catalogue's fingerprint, so each device drops its first-paint cache
+  once, on its first visit after the upgrade.
 
 - `@angee/ui`: The Links pane says it is empty when it is. A related group
   with neither rows nor a verb is left out, and the pane showed its empty
@@ -1219,19 +1430,21 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
-    `sample` holds preview values. The addon renders nothing and ships no rows.
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
+    `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -1243,11 +1456,43 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
+  - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
+    adds **Message templates** to Settings for whoever holds
+    `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
+    library grouped by kind, each row opening in its registered form, the
+    presets `messaging_templates.default-updated` and
+    `messaging_templates.effective`, New over the four insertable fields,
+    Override and Keep override where the record's `can_override` and
+    `can_keep_override` admit the reader, Delete, a notice saying what the row
+    is, a Preview pane in the framework's sandboxed message frame with a brand
+    kit select, showing the saved row or, while the form holds unsaved edits,
+    those edits as Save would write them (what Save would refuse, titled so),
+    and a Backlinks group in the record's Links tab for whoever may preview
+    message templates.
+    `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
+    stack's JS dependencies, which links the new fragment, then regenerate the
+    web codegen.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
@@ -1384,19 +1629,41 @@ live in code docstrings.
     drafts. Every signed-in actor reads kits; platform admins create, edit and
     delete them (`brandkit/brand_kit`).
   - **Font stacks** are a field, `FontStackField`, that checks every write
-    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
-    family names of letters, digits, spaces and hyphens, bare or single-quoted,
-    closed by an unquoted generic family. A bare family with a word that starts
-    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
-    refused. Double quotes are stored as single quotes.
+    reaching the database: a value written by `save`, `bulk_create` or
+    `update()`, of any type, is checked, and an expression (`F()`, `Value()`, a
+    function, and `bulk_update`, which writes through `Case`) is refused with a
+    `FieldError`, since the database computes its result past the check. It
+    admits family names of letters, digits, spaces and hyphens, bare or
+    single-quoted, closed by an unquoted generic family. A bare family with a
+    word that starts with a digit, a lone hyphen or a hyphen and a digit, or a
+    CSS-wide keyword is refused. Double quotes are stored as single quotes.
   - **Logos** are images storage's `FileManager.ingest_image` put on its image
     drive; `BrandKit.clean` refuses any other file when a logo changes. The
     console reads the logos and writes neither.
   - **Exactly one default kit.** Once any kit exists, writes through `save()` and
     `clean()` keep one: the first kit saved becomes the default, saving another
     kit as the default takes the flag from the previous one, and the default can
-    be neither unticked nor deleted, on any delete path. A conditional unique
-    constraint refuses a second default written past the save.
+    be neither unticked nor deleted, on any delete path. Changes of default made
+    at once take turns: every kit is locked, in key order
+    (`BrandKitManager.lock_default`), before any kit row by a save that can move
+    the default, every console write and changeset revert of a kit, every delete,
+    and a resource load that writes kits (once, before its first row), so the
+    second change waits and then takes the default from the first. A save that
+    marks a stored kit not the default rereads its flag under the kit's row lock,
+    so an edit cleaned before its kit became the default is refused, as `clean()`
+    refuses it, instead of leaving no default. A changeset revert restores the
+    kit that was the default before the changeset ahead of every other kit, so
+    reverting a change of default does not meet that refusal, unless the previous
+    default points at a row the same changeset deleted (a purged file it showed as
+    a logo or dark logo): the revert restores that row first, and another kit can
+    then go ahead of the previous default and be refused. Two writers take kit
+    rows without the lock: a file purge that clears the logo or dark logo of two
+    or more kits, which can deadlock with a change of default (one of the two
+    fails with a database error); and the
+    second of two first kits created at once into an empty table, which fails on
+    the conditional unique constraint with a database error (provisioning loads
+    the first kit, so a person does not reach it). The same constraint refuses a
+    second default written past the save.
     `BrandKit.objects.default()` returns it, or `None` before any kit exists,
     after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail

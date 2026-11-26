@@ -149,6 +149,13 @@ export interface FieldPresentation {
   /** Native autocomplete intent, including current-password and new-password for secret inputs. */
   autoComplete?: string;
   /**
+   * `null` declines the relation picker's inline edit of the selected record, which is
+   * otherwise offered whenever the related resource has editable fields: for a field where
+   * editing the related record is out of place (a channel chosen in a send dialog). A
+   * registered widget that renders a relation picker passes it on as the picker's `edit`.
+   */
+  relationEdit?: null;
+  /**
    * For a money widget: the path to the FK owning the row's currency — a sibling
    * field (`"currency"`) or a one-hop related path (`"order.currency"`).
    */

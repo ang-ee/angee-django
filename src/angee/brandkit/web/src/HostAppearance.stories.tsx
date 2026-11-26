@@ -14,10 +14,11 @@ import {
 } from "./views/brand-kits.test-support";
 
 /**
- * The production `createApp`, frame and hold included, as a host composes it. Two things differ
- * from a host page: the workshop has no head bootstrap script and no boot cache, so every story load
- * is a device's first visit. The page renders under the workshop's own stock tokens while the kit is
- * read, then the root takes the kit's, and controls cross-fade for `--dur-base` (their
+ * The production `createApp`, frame and hold included, as a host composes it. One thing differs
+ * from a host page: the workshop has no head bootstrap script. The app still writes the boot cache
+ * (`angee:appearance:3`) as a host's does, but nothing reads it back before the app mounts, so every
+ * story load is a device's first visit. The page renders under the workshop's own stock tokens while
+ * the kit is read, then the root takes the kit's, and controls cross-fade for `--dur-base` (their
  * `transition-colors`). A host's first visit paints the build's appearance first in the same way; its
  * next visits paint the cached kit before the app mounts and show no change.
  */

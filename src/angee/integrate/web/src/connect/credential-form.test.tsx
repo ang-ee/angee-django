@@ -156,7 +156,7 @@ describe("credentialCreateForm", () => {
     const action = mocks.actions.find(({ id }) => id === "replace-secret")!;
     const material = "first line\nsecond line\nthird line\n";
     const record = { id: "credential-1", replacement_fields: [name] };
-    render(<Provider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
+    render(<Provider router><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><ToastProvider>
       <ActionFormDialog action={action} context={{ record, selectedIds: [] }} open onOpenChange={vi.fn()} />
     </ToastProvider></AppRuntimeProvider></Provider>);
     const input = screen.getByRole<HTMLTextAreaElement>("textbox");

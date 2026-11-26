@@ -6,7 +6,7 @@ import {
   ActionFormProvider, Alert, Button, Chip, DescriptorFieldList, Dialog, ErrorBanner, GraphEditor,
   JsonValueSchema, LoadingPanel, MetaGrid, PaneToolbar, PrimaryPanePublisher, RailPanel, applyFormErrors, createKeyedEntry,
   deserializeFormSpec, errorMessage, formSubmitError, savedFormSubmitResult, useActionForm, useAppRuntime, useConfirm, useWatch, useFormState, useChatter, useChatterContent, useFormHistory,
-  useRuntimeViewAs, useUnsavedChangesNavigationGuard,
+  pathnameChanges, useRuntimeViewAs, useUnsavedChangesNavigationGuard,
   type FormSpecFieldDescriptor, type GraphEditorLayout, type GraphEditorLink, type GraphEditorSelection, type GraphViewPosition,
   type UseActionFormResult, type ValidationErrors,
 } from "@angee/ui";
@@ -141,7 +141,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
   const readOnly = !writable || Boolean(preview.viewAs || preview.pending);
   const disabled = readOnly || !active || action.submitting || publishing.fetching || loadingLatest;
   const isDirtyNow = React.useCallback(() => form.formState.isDirty, [form]);
-  useUnsavedChangesNavigationGuard({ isDirty: form.formState.isDirty, isDirtyNow, readOnly, allowSearchChanges: true });
+  useUnsavedChangesNavigationGuard({ isDirty: form.formState.isDirty, isDirtyNow, readOnly, leaves: pathnameChanges });
   const history = useFormHistory(form, { readOnly: disabled });
   const topology = useWatch({ control: form.control, compute: (values: StudioValues) => JSON.stringify(values.entries.map(({ clientId, key, value }) => ({
     clientId, key, step: value.step, label: value.label, next: value.next,

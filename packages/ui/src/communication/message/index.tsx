@@ -487,19 +487,18 @@ function framedRingColor(color: string): string {
  * `::after`, which no mail CSS on `body` or its pseudo-elements reaches. The rule sits in an
  * unnamed cascade layer, whose important declarations outrank every unlayered one of the
  * mail, and starts from `all: initial`, so nothing the mail sets on the pseudo-element stays.
- * The outer edge is `color` made opaque; the inner edge the white or black that contrasts
- * with it (white below OKLCH lightness 0.59), so one edge holds 3:1 on a white mail and on a
- * near-black one. Before it, a black and a white line hold where relative color syntax is
- * missing and both relative declarations are dropped.
+ * The ring has three tones, 2px each: `color` outside, then a black line, then a white one.
+ * Whatever the mail paints behind it and whatever `color` is, the black or the white line
+ * holds contrast against it (at least 4.6:1 on any grey), so the ring needs nothing of the
+ * theme's color but to show it.
  */
 function focusRingStyle(color: string): string {
   return "body:focus-visible{outline:none!important}"
     + "@layer{html:is(:focus-visible,:has(:focus-visible))::after{all:initial!important;content:\"\"!important;"
     + "position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;"
     + "z-index:2147483647!important;pointer-events:none!important;"
-    + `border:2px solid ${color}!important;border-color:oklch(from ${color} l c h / 1)!important;`
-    + "box-shadow:inset 0 0 0 2px #000,inset 0 0 0 4px #fff!important;"
-    + `box-shadow:inset 0 0 0 2px oklch(from ${color} clamp(0,(0.59 - l)*1000,1) 0 0 / 1)!important}}`;
+    + `border:2px solid ${color}!important;`
+    + "box-shadow:inset 0 0 0 2px #000,inset 0 0 0 4px #fff!important}}";
 }
 
 /** A same-origin path, an http(s) URL, an image data URL or a blob URL; anything else is dropped. */
@@ -835,7 +834,8 @@ export interface MessageActionsProps extends Omit<HTMLAttributes<HTMLDivElement>
 }
 
 /** A presentational action row under a message (copy, reply, edit, …). Reveals on
- *  hover/focus of the enclosing `group` message and aligns per `align`. Transport-
+ *  hover/focus of the enclosing `group` message, and always shows where the primary
+ *  pointer is coarse (touch), which never hovers; aligns per `align`. Transport-
  *  agnostic: the consumer composes plain buttons or a binding's action controls inside
  *  it.
  * @kind fragment
@@ -844,7 +844,7 @@ export function MessageActions({ align = "start", className, children, ...props 
   return (
     <div
       className={cn(
-        "mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        "mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100",
         align === "end" ? "justify-end" : "justify-start",
         className,
       )}

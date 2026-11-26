@@ -1,6 +1,5 @@
-import { resourceLifecycle, isClientRowModel, rowPublicId, type DataResourceMetadata, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
+import { resourceLifecycle, isClientRowModel, rowPublicId, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import type {
-  GroupingState,
   Row as TableRowModel,
   RowSelectionState,
   SortingState,
@@ -96,15 +95,6 @@ export function initialResourceSorting(
   if (declared === undefined) return undefined;
   const query = queryForColumns(Object.keys(declared).map((field) => ({ field })), modelMetadata);
   return query.sortFrom(declared).map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
-}
-
-export function groupingStateFromResourceGroups<TRow extends object>(
-  groupStack: readonly ResourceViewGroup[],
-  metadata?: ModelMetadata | null,
-  columns: readonly ColumnDescriptor<TRow>[] = [],
-  query?: ResourceQuery,
-): GroupingState {
-  return tableGroupAxes(groupStack, metadata, columns, query).map((axis) => axis.id);
 }
 
 export const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
