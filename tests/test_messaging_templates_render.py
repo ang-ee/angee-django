@@ -2445,14 +2445,13 @@ def test_a_level_s_variables_are_counted_before_they_are_read(
     """400 parts each declaring one 40,000-character description, or one 40,000-character path, were admitted, and
     every walk of a template including them loaded 16 million characters of variables: an author's row can no longer
     declare either, and a level whose stored variables would carry the walk past WALK_VARIABLES_LIMIT is refused
-    before they are read, on the render-side judge and a member's insert."""
+    before they are read, on the render-side judge. The console insert's walk of such a level is the console
+    module's."""
 
     del plain
     read = _text_read(monkeypatch)
     shapes = {"described": {"a": "d" * 40_000}, "named": {"a" * 40_000: "x"}}
     codes = {"described": "variable_description_too_long", "named": "variable_path_too_long"}
-    schema = addon_schema(messaging_templates_schema.schemas, "console")
-    member = create_user("messaging-templates-declared")
     counts: dict[str, int] = {}
     for shape, variables in shapes.items():
         with pytest.raises(ValidationError) as refused, system_context(reason="tests.messaging_templates.render"):
@@ -2468,18 +2467,10 @@ def test_a_level_s_variables_are_counted_before_they_are_read(
         assert walk.refusals == [f"tests.{shape}: the rows it reaches declare over 100000 characters of variables"]
         assert list(walk.rows) == [f"tests.{shape}"] and read == [], read
         counts[f"{shape} judge"] = len(q)
-        inserted = {"kind": "part", "key": shape, "language": "en", "name": "n", "format": "html", "source": source,
-                    "text_source": "x"}
-        with CaptureQueriesContext(connection) as q:
-            result = execute_schema(schema, _INSERT, {"object": inserted}, user=member)
-        assert [((error.extensions or {}).get("code"), "over 100000 characters of variables" in error.message)
-                for error in result.errors or ()] == [("VALIDATION", True)], result.errors
-        assert read == [], read
-        counts[f"{shape} member insert"] = len(q)
     assert counts == DECLARED_QUERIES, counts
 
 
-DECLARED_QUERIES = {"described judge": 1, "described member insert": 76, "named judge": 1, "named member insert": 79}
+DECLARED_QUERIES = {"described judge": 1, "named judge": 1}
 """The queries of those walks: the level's query, which no longer reads its rows' variables, and nothing after it."""
 
 

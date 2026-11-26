@@ -665,6 +665,57 @@ WIDE_INSERT_QUERIES = 132
 counted from its sizes and refused, and no text read follows."""
 
 
+def test_an_insert_seeded_from_a_row_past_the_variables_limit_reads_none_of_them(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new language of a key whose row includes 400 parts stored past clean() with a 40,000-character description
+    each is refused at the level's count, before any of the level's variables are read; a member is refused create
+    before any of it is read."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-overdeclarer")
+    member = create_user("messaging-templates-console-undeclared")
+    for index in range(400):
+        _row("part", f"described{index}", source="x", variables={"a": "d" * 40_000})
+    described = "\n".join("".join(_include(f"parts/described{index}") for index in range(line, line + 25))
+                          for line in range(0, 400, 25))
+    _row("part", "described", format="html", source=described, text_source="x")
+    read = _text_read(monkeypatch)
+    with CaptureQueriesContext(connection) as captured:
+        (error,) = _insert(admin, "part", "described", "de").errors
+    assert (error.extensions["code"], error.extensions["formErrors"], read) == (
+        "VALIDATION", ["parts/described: the rows it reaches declare over 100000 characters of variables"], [],
+    ), error.extensions
+    assert len(captured) == DECLARED_INSERT_QUERIES, len(captured)
+    (error,) = _insert(member, "part", "described", "de").errors
+    assert (error.extensions["code"], read) == ("PERMISSION_DENIED", [])
+    assert [row.language for row in _rows("part", "described")] == ["en"]
+
+
+DECLARED_INSERT_QUERIES = 130
+"""An administrator's insert of a new language seeded from a row whose level declares past the variables limit: the
+level is counted from its sizes and refused, and none of its variables is read."""
+
+
+def test_the_console_refuses_a_declared_path_or_description_over_its_length(db: None) -> None:
+    """An administrator's update declaring a path over 200 characters or a description over 1,000 is refused under
+    ``variables`` in the declaration's own words, and nothing is written."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-declarer")
+    part = _row("part", "declared", variables={"name": "The person's name."})
+    for variables, message in (
+        ({"a" * 201: "x"}, f"{'a' * 40}… is over 200 characters: name the value in fewer."),
+        ({"name": "d" * 1_001}, "Describe name in at most 1000 characters."),
+    ):
+        written = {"id": public_id_of(part), "set": {"variables": variables}}
+        (error,) = execute_schema(_schema(), _UPDATE, written, user=admin).errors
+        assert (error.extensions["code"], error.extensions["validationErrors"]) == (
+            "VALIDATION", {"variables": [message]}), error.extensions
+    with system_context(reason="tests.messaging_templates.console.read"):
+        assert MessageTemplate.objects.get(pk=part.pk).variables == {"name": "The person's name."}
+
+
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
     del library
     admin = create_platform_admin("messaging-templates-console-shadower")
