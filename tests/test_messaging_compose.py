@@ -1016,7 +1016,7 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
 
 
-def test_an_answer_goes_once_to_each_address_a_reply_to_names_as_the_header_spells_it(desk: Any) -> None:
+def test_an_answer_goes_once_to_each_new_address_a_reply_to_names_as_the_header_first_spells_it(desk: Any) -> None:
     """Two spellings of one address in a Reply-To are one recipient, addressed as the header first spells it."""
 
     relayed = _receive(
