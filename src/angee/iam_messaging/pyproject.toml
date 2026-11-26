@@ -17,4 +17,4 @@ install = [
 ]
 
 [tool.angee.platform]
-category = "Foundation"
+category = "Integration"
