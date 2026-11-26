@@ -75,7 +75,7 @@ function mount(props: Partial<Parameters<typeof ComposerStory>[0]> & { surface: 
     onFixture={(made) => { fixture = made; }} queryClient={queryClient} />;
   const view = render(story(props));
   return {
-    calls, onSent,
+    calls, onSent, queryClient,
     /** The same story with other props: another conversation, say. */
     rerender: (next: Partial<typeof props>) => view.rerender(story({ ...props, ...next })),
     sends: () => calls.filter((call) => call.field === "compose_message").map((call) => call.args),
@@ -353,6 +353,12 @@ function dangerToasts(): string[] {
     .map((toast) => document.getElementById(toast.getAttribute("aria-labelledby") ?? "")?.textContent ?? "");
 }
 
+/** Reply renders nothing until the gate answers: its read over the window's channels was asked, and every read settled. */
+async function gateAnswered({ calls, queryClient }: ReturnType<typeof mount>): Promise<void> {
+  await waitFor(() => expect(calls.some((call) => call.field === "channels" && JSON.stringify(call.args.where).includes("_in"))).toBe(true));
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+}
+
 /** The box has its answer, and told it: its note and any toast are set together with the end of sending. */
 async function answered(box: HTMLElement): Promise<void> {
   await waitFor(() => expect(box.getAttribute("aria-busy")).toBeNull());
@@ -421,9 +427,9 @@ test("a reply sent from an anchored conversation returns to the latest and gives
 });
 
 test("Reply is offered on the emails of a channel the seat may send on, and nowhere else", async () => {
-  mount({ surface: "transcript", seat: "ana", conversation: "sales" });
+  const reader = mount({ surface: "transcript", seat: "ana", conversation: "sales" });
   expect(await row("A quote, please.")).toBeTruthy();
-  await waitFor(() => expect(transcriptList()).toBeTruthy());
+  await gateAnswered(reader);
   expect(replyButtons()).toEqual([]);
   cleanup();
   mount({ surface: "transcript", seat: "dana", conversation: "sales" });
@@ -605,10 +611,10 @@ test("each message written here and going out shows its delivery; synced and rec
 });
 
 test("a reader who may send nowhere sees neither New message nor Reply", async () => {
-  const { calls } = mount({ surface: "transcript", seat: "ben", withNewMessage: true });
+  const view = mount({ surface: "transcript", seat: "ben", withNewMessage: true });
   await row("Please add me.");
-  await waitFor(() => expect(calls.some((call) => call.field === "message_recipient_limit")).toBe(true));
-  await waitFor(() => expect(calls.some((call) => call.field === "channels" && JSON.stringify(call.args.where).includes("_in"))).toBe(true));
+  await waitFor(() => expect(view.calls.some((call) => call.field === "message_recipient_limit")).toBe(true));
+  await gateAnswered(view);
   expect(screen.queryByRole("button", { name: word("compose.newMessage") })).toBeNull();
   expect(replyButtons()).toEqual([]);
 });
