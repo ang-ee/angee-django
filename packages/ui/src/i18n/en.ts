@@ -150,6 +150,7 @@ export const enUiMessages: Record<string, string> = {
   "access.unavailableSubject": "This recipient type has no selectable resource.",
   "search.clear": "Clear search",
   "search.placeholder": "Search…",
+  "toast.region": "Notifications",
   "toast.dismiss": "Dismiss notification",
   "toast.cancel": "Cancel",
   "modal.confirm": "Confirm",

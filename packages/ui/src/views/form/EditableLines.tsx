@@ -91,7 +91,7 @@ export interface EditableLinesProps {
 /** Authored presentation of one line field, keyed by its name. */
 export interface EditableLineField extends Pick<
   FieldDescriptor,
-  "name" | "currencyField" | "description" | "options" | "statusDisplay" | "widget"
+  "name" | "currencyField" | "description" | "options" | "relationEdit" | "statusDisplay" | "widget"
 > {
   /** Column header and the cells' accessible name. */
   label?: string;
@@ -272,6 +272,7 @@ export function EditableLines({
                   filters={relationFilters?.(field.name, parentRow ?? null)}
                   selectedOption={relationSelectedOption(controller.value, relation.labelField)}
                   fieldName={slot}
+                  edit={authored?.relationEdit}
                   aria-label={header}
                 />
               ) : (

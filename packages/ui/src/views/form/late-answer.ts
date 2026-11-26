@@ -9,11 +9,17 @@ import type { FormSubmitResult } from "./validation-errors";
 export type LateAnswer = FormSubmitResult<unknown> | { thrown: unknown };
 
 /**
- * Report a submit's answer that arrived after its form went away (unmounted, or closed and
- * opened anew), so nobody believes a write went out, or did not, unaware: an accepted result
- * toasts its message; a refused one, its reasons; a failure, its reason, and for a lost
- * answer that it may not have been sent. A request the connection boundary refused before
- * sending is that boundary's to report.
+ * Report a submit's answer that arrived after its surface went away (unmounted, or closed and
+ * opened anew), so nobody believes a write went out, or did not, unaware. Call the returned
+ * function with the answer (the result the submit returned, or `{ thrown }` with what it threw)
+ * and `fallback`, the surface's own sentence for a failed write, which titles the toast. An
+ * accepted result toasts its message, when it has one; a refused one, its reasons; a thrown
+ * failure, its reason, and for a lost answer that it may not have been sent. A request the
+ * connection boundary refused before sending is that boundary's to report, so it toasts
+ * nothing. Report only an answer whose surface is gone: a surface still shown tells its own.
+ * Both form dialogs report through it.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useLateAnswerReport(): (answer: LateAnswer, fallback: string) => void {
   const toast = useToast();

@@ -228,6 +228,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "retryAppQuery",
+    "source": "packages/app/src/create-app.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "safeRedirectPath",
     "source": "packages/app/src/auth/safe-redirect.ts",
     "kind": null,
@@ -4100,6 +4109,15 @@
     "name": "STATUS_TONES",
     "source": "packages/ui/src/widgets/status-tones.ts",
     "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "SURFACE_RENDERS_FAILURE",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Transport infrastructure: the one quiet-call value form surfaces hand their callers.",
     "status": "stable",
     "storyId": null
   },
@@ -8426,6 +8444,15 @@
     "package": "@angee/ui",
     "name": "useInAppNavigator",
     "source": "packages/ui/src/lib/in-app-link.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useLateAnswerReport",
+    "source": "packages/ui/src/views/form/late-answer.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",

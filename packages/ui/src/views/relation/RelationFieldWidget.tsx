@@ -33,6 +33,12 @@ export interface RelationFieldWidgetProps {
   create?: RelationCreateConfig | null;
   /** The field it edits, which names its create form's draft (`RelationPicker`'s `fieldName`). */
   fieldName?: string;
+  /**
+   * Pass null to decline inline edit of the selected record. By default it is offered
+   * whenever the related resource has editable fields; the server is the authorization
+   * boundary for the edit itself.
+   */
+  edit?: null;
   searchFields?: readonly string[];
   /** Related-row field rendered as secondary picker-option text. */
   optionDescriptionField?: string;
@@ -84,6 +90,7 @@ function EditableRelationFieldWidget(
   where,
   create,
   fieldName,
+  edit,
   searchFields,
   optionDescriptionField,
   optionStatusField,
@@ -144,7 +151,7 @@ function EditableRelationFieldWidget(
       // per-relation edit capability). The server is the authorization boundary: a denied
       // patch surfaces in the dialog's own error banner.
       edit={
-        forms.fields.length > 0
+        edit !== null && forms.fields.length > 0
           ? { resource: relation.resource, fields: forms.fields }
           : undefined
       }

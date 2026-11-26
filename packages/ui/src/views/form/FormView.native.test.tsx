@@ -2524,3 +2524,33 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
   }
   expect(unrelatedTitle).toBe("Before");
 });
+
+test.each([
+  { where: "a field of the sheet", title: false },
+  { where: "the form's title", title: true },
+])("a record form's relation offers inline edit of its selected record, and `relationEdit: null` declines it, on $where", async ({ title }) => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const rows: Record<string, Row> = {
+    "note-1": { id: "note-1", title: "Child", parent: { id: "note-2", title: "Parent note" } },
+    "note-2": { id: "note-2", title: "Parent note" },
+  };
+  const form = (relationEdit?: null) => <Provider resources={[resource]}
+    dataProvider={{ getOne: async ({ id }) => ({ data: rows[String(id)] ?? {} }),
+      getList: async () => ({ data: [rows["note-2"]!], total: 1 }) }}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <FormView resource="notes.Note" id="note-1" fields={[
+        ...(title ? [] : [{ name: "title", label: "Title", title: true }]),
+        { name: "parent", label: "Parent", kind: "relation", widget: "many2one", ...(title ? { title: true } : {}), ...(relationEdit === null ? { relationEdit } : {}) },
+      ]} />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>;
+
+  const view = render(form());
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(await screen.findByRole("button", { name: "Edit record" })).toBeTruthy();
+  view.unmount();
+
+  render(form(null));
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
+});

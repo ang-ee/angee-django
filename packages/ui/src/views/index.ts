@@ -128,6 +128,7 @@ export {
   type UseActionFormResult,
 } from "./form/use-action-form";
 export { ActionFormProvider } from "./form/ActionFormProvider";
+export { useLateAnswerReport, type LateAnswer } from "./form/late-answer";
 export {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
@@ -135,6 +136,7 @@ export {
   formSubmitError,
   formSubmitOutcome,
   savedFormSubmitResult,
+  SURFACE_RENDERS_FAILURE,
   applyFormErrors,
   formErrorsFromForm,
   useRefusalBannerFocus,

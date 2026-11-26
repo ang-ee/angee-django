@@ -70,7 +70,10 @@ live provider revalidates interested reads on each WebSocket connection because
 the change stream has no replay cursor. Model interests name the actual change
 owners of selected relations. A caller's own write cancels a matching pending
 first read before refetching; otherwise native Query could join its older
-snapshot and lose the write. The cancellation and what replaces it (the refetch,
+snapshot and lose the write. It also cancels a matching refetch no enabled
+observer watches (its last observer left, or every observer is disabled), which
+native invalidation would let commit and mark fresh. The cancellation and what
+replaces it (the refetch,
 or a result `useSetAuthoredQueryData` accepts; it cancels nothing when it accepts
 nothing) happen in one synchronous call, so no render sees the read idle with no
 data in between: Query rejects the cancelled request and reverts the read

@@ -106,9 +106,10 @@ pending write and typed values.
 - Every `MutationDialog` and every typed-args `ActionFormDialog` (a record or
   row action with `args`) now behaves so, and neither asks after an accepted
   submit whose `onSubmitted` or `onSucceeded` navigates. An answer that lands
-  after the dialog went away is still reported (`useLateAnswerReport`): an
-  accepted one toasts its message, a refused one its reasons, a lost one that
-  it may not have been sent. A `trigger`-owned `MutationDialog` given no
+  after the dialog went away is still reported (`useLateAnswerReport`, now
+  exported with its `LateAnswer` type, for any surface whose answer can land
+  after it is gone): an accepted one toasts its message, a refused one its
+  reasons, a lost one that it may not have been sent. A `trigger`-owned `MutationDialog` given no
   trigger while open stays open until it closes.
 - The unsaved-changes guard's question says a submission is still sending when
   one runs (`pendingNow`), and the guard says at mount when it renders outside
