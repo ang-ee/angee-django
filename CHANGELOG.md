@@ -80,12 +80,12 @@ live in code docstrings.
     reloads before the edit stops at settings load. Django itself refuses legacy
     `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
     `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
-    rows and runs `rebac sync` for schema revision 32. Without that load, every
+    rows and runs `rebac sync` for schema revision 34. Without that load, every
     email Django sends raises `SystemChannelMissing` at the sender (a password
     reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
     channel backend enums gain `SYSTEM`.
-    A host that authors `LOGGING` names `using: transport` on its
-    `AdminEmailHandler` (messaging's README gives the block). Tests that observed
+    A host that authors `LOGGING` restates the `django` logger with a
+    `mail_admins` naming `using: transport` (messaging's README gives the block). Tests that observed
     delivery through `MAILERS={"default": ...}` override `transport`. With
     messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
     say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
@@ -115,8 +115,10 @@ live in code docstrings.
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
     contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
-    with `mail_admins` sending through `transport`. `messaging.W001` reports a
-    host's `AdminEmailHandler` that would send through the system mailer.
+    with `mail_admins` sending through `transport`. `messaging.W001` reports an
+    `AdminEmailHandler` on any configured logger that would send through the
+    system mailer, Django's own `mail_admins` included, which a host `LOGGING`
+    that does not name the `django` logger keeps.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
     default mailer; delivery is configured exactly when it is stated. System mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
@@ -126,8 +128,10 @@ live in code docstrings.
     carry (`cannot_carry`, under its role) are refused, so such a mail is never
     recorded as sent. A
     transport that hands a delivery back to the system mailer fails that delivery
-    instead of recording it again. Administrators alone read, send on, write,
-    annotate and delete the system channel (schema revision 32): no channel,
+    instead of recording it again. Administrators alone read, write, annotate
+    and delete the system channel (schema revision 34), and nobody sends on it
+    as a person, administrators included: `compose` and answering refuse it, as
+    the framework writes it as named system work (`compose_as_system`). No channel,
     integration, team, project or ownership grant reaches it. No verb shares its
     threads or grants on its messages: nobody shares a system thread or writes a
     system message, administrators included, and none of messaging's own arms

@@ -646,8 +646,12 @@ data through REBAC, never a queryset bypass.
   [sealed-permission check](../../src/angee/base/checks.py)
   (`check_sealed_permissions`), which refuses a fragment that changes one:
   messaging's [`check_messaging_seals`](../../src/angee/messaging/checks.py)
-  (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and
-  the permissions that subtract the system channel's seal (its `SEALED` map).
+  (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and,
+  in its `SEALED` map, the permissions kept closed to fragments because each
+  applies the system channel's seal or `& read`, which an appended arm would
+  escape. The thread's `write` is the known open one, and a thread's
+  `read_granted` is not sealed on system threads: widening it reaches system mail
+  too ([messaging's README](../../src/angee/messaging/README.md#system-mail)).
   Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
   (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
   can restore file inheritance.
@@ -992,6 +996,13 @@ data through REBAC, never a queryset bypass.
     hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
+- **System mail is named system work.** This is a second deliberate exception
+  to the actor-scope rule above: a verb whose own permission decided the send
+  may be a person's button, and it records through
+  [`MessageManager.compose_as_system`](../../src/angee/messaging/managers.py),
+  which consults no send right and records the causing actor in the changeset
+  ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
+  Its callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as

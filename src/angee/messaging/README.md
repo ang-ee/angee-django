@@ -294,10 +294,13 @@ the database the error may be about. Messaging contributes `LOGGING` as Django's
 `DEFAULT_LOGGING` with one change, the `mail_admins` handler naming
 `using: transport` (with no transport, Django drops the report). It is contributed
 raw, so the settings loader keeps the `django.server` formatter's `{server_time}`
-as text. A host that states its own `LOGGING` keeps it; `messaging.W001` reports
-an `AdminEmailHandler` in it that names no `using`, which would send through the
-system mailer. A host's own block keeps Django's loggers and names the transport
-on the handler that reports errors:
+as text. A host that states its own `LOGGING` keeps it, and Django applies its
+`DEFAULT_LOGGING` first and the host's block over it: a block that does not name
+the `django` logger keeps Django's own `mail_admins` there, which sends through
+the system mailer. `messaging.W001` reports an `AdminEmailHandler` on any
+configured logger that names no `using`, or the default. A host's own block
+keeps Django's loggers and names the transport on the handler that reports
+errors:
 
 ```yaml
 LOGGING:raw: true
@@ -376,14 +379,16 @@ under its role), so a mail that could never leave is never recorded as sent. A b
 `fail_silently`, it logs a refusal and reports none sent.
 
 The system channel holds system mail, live sign-in links among it,
-so administrators alone read it, send on it, write, annotate or delete it
-(messaging's `permissions.zed`, the channel's system seal; `messaging.E003`
-refuses a fragment arm on any of those permissions). Every other way a channel
-is read is closed on it:
+so administrators alone read it, write, annotate or delete it, and nobody sends
+on it as a person, administrators included: the framework writes it as named
+system work (`MessageManager.compose_as_system`). These are messaging's
+`permissions.zed`, the channel's system seal; `messaging.E003` refuses a
+fragment arm on any of those permissions. Every other way a channel is read is
+closed on it:
 
 | Path | On the system channel |
 |---|---|
-| administrators | read, send, write, annotate, delete |
+| administrators | read, write, annotate, delete; never send (`reply`) |
 | a channel `reader`, `replier` or `annotator` grant | grants nothing |
 | an integration `reader` on its parent integration | lists the integration row, which holds no mail |
 | a spaces team bound to the channel | grants nothing |
@@ -409,8 +414,10 @@ it, and the composer appends the fragments' `write` arms after the seal.
 
 The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
-source. `compose` decides `reply` on the channel, which administrators alone
-hold there, so an administrator's
-`compose(channel=Channel.objects.system_channel())` is admitted and every other
-person's is refused. Its readers find it among channels as "System mail", its threads in the inbox
-and its messages in timelines.
+source. `compose` and `Message.require_reply` decide `reply` on the channel,
+which nobody holds there, so `compose(channel=Channel.objects.system_channel())`
+and an answer to a system message are refused for every person, administrators
+included, with no branch of their own: the channels offered to send from are
+exactly the channels a send admits. Its readers, administrators alone, find it
+among channels as "System mail", its threads in the inbox and its messages in
+timelines.

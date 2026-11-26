@@ -104,7 +104,7 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import carries_address, header_text
+from angee.messaging.email import header_text, require_carried
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -3245,9 +3245,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     ) -> MessageT:
         """Write one email on the system channel as named system work, queued for delivery; return the row unbound.
 
-        System mail: mail the framework sends on no person's behalf (each email Django sends,
-        through the system mailer): the caller's gate authorized it, and no grant
-        is consulted. It runs in the caller's context and transaction, through
+        The system channel's one writer, as nobody sends on that channel as a person.
+        System mail is named system work (each email Django sends, through the system
+        mailer, among it): the caller's own gate authorized it, so a caller whose own
+        permission decided the send may be a person's button, and no grant is consulted
+        here. Each caller is named, with that permission, in
+        ``tests/test_messaging_system_mail_callers.py``. The causing actor is recorded
+        in the caller's changeset. It runs in the caller's context and transaction, through
         the writer :meth:`compose` uses: the rows record the causing actor as
         ``created_by`` (empty with none), which grants nothing on them, and join
         the caller's changeset; a handle it creates, the system sender's or a
@@ -3258,7 +3262,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``ValueError``); compose's checks of the arguments (more recipients than
         ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
         ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
-        carry (``carries_address``), under its role with code ``cannot_carry``,
+        carry (``require_carried``), under its role with code ``cannot_carry``,
         so a mail that could never leave is never recorded as sent; system mail not configured,
         from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
         ``channel``), none of which writes a permission audit row; then, after
@@ -3275,11 +3279,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
         for addressee in outgoing.recipients:
-            if not carries_address(addressee.address):
-                raise ValidationError({addressee.role: ValidationError(
-                    "%(address)s cannot be delivered: this mail transport cannot carry an address whose part before "
-                    "the @ is outside ASCII.", code="cannot_carry", params={"address": addressee.address},
-                )})
+            require_carried(addressee.address, key=addressee.role)
         channel_model = apps.get_model("messaging", "Channel")
         system_backend = cast("type[AnymailEmailChannelBackend]",
                               channel_model.backend_class.field.resolve_class(SYSTEM_CHANNEL_BACKEND))

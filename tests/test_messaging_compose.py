@@ -461,8 +461,8 @@ def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_
         with system_context(reason="tests.messaging.compose.utf8_local"):
             message.refresh_from_db()
             assert message.local_metadata["delivery_error"] == (
-                "jörg@example.test cannot be delivered: this mail transport cannot carry an address whose part "
-                "before the @ is outside ASCII. Send to another address of this contact."
+                "This mail transport cannot carry jörg@example.test: its part before the @ is outside ASCII. "
+                "Send to another address of this contact."
             )
     assert not mail.outbox
 
