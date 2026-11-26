@@ -240,6 +240,7 @@ def _paused(channel: Any) -> None:
         pytest.param(None, "not an address", "to", "invalid", id="address"),
         pytest.param(None, "Two <a@example.test>, b@example.test", "to", "invalid", id="two-addresses"),
         pytest.param("unconfigured", ADDRESS, "channel", "OUTBOUND_EMAIL_NOT_CONFIGURED", id="unconfigured"),
+        pytest.param("uncarried sender", ADDRESS, "channel", "cannot_carry", id="sender-the-transport-cannot-carry"),
         pytest.param("paused", ADDRESS, "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="paused"),
         pytest.param("missing", ADDRESS, "channel", "SYSTEM_CHANNEL_MISSING", id="missing"),
     ],
@@ -257,6 +258,8 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
             _paused(channel)
     if state == "unconfigured":
         settings.MAILERS = {}
+    if state == "uncarried sender":
+        settings.DEFAULT_FROM_EMAIL = "Angee <nöreply@example.test>"
     row = _greeting()
     with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError, key=key, code=code):
         _send(row, {"name": "Ana", "title": "Welcome"}, to=to)

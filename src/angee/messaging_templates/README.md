@@ -277,7 +277,10 @@ kept in the thread's history; the message, whose preview is the first 280
 characters of its text; its title, text and HTML parts, which point to
 content-addressed text fragments that carry a search vector and that nothing
 deletes, so they outlive the message; and one `to` recipient on the address's
-handle. Whoever reads the system channel reads all of it: administrators alone,
+handle. A handle it creates, the recipient's or the system sender's, has no
+creator, and its history is a changeset of its own under messaging's non-user
+attribution (`messaging/system:outgoing`) that names no user. Whoever reads the
+system channel reads all of it: administrators alone,
 under messaging's seal on the channel. A value that is a credential, such as a
 sign-in link, is readable by them until it expires, and deleting the message does
 not remove its fragments.

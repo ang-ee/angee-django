@@ -706,7 +706,10 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         is the first 280 characters of the text; its title, text and HTML parts,
         which point to content-addressed text fragments that carry a search vector
         and that nothing deletes, so they outlive the message; one ``to``
-        recipient on the address's handle. A value that is a credential, such as a
+        recipient on the address's handle. A handle it creates, the recipient's
+        or the system sender's, has no creator, and its history is a changeset of
+        its own under messaging's non-user attribution (``messaging/system:outgoing``)
+        that names no user. A value that is a credential, such as a
         sign-in link, is readable by the system channel's readers until it
         expires, and deleting the message does not remove its fragments.
         """
