@@ -1473,6 +1473,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         walk = TemplateWalker().walk(self, type(self).objects)
         return walk.render(values, kit=self._brand_kit(kit), must_print=must_print)
 
+    @sensitive_variables()
     def preview(self, *, kit: BrandKit | None = None, patch: Mapping[str, Any] | None = None) -> TemplatePreview:
         """Render this row with its ``sample``, or as ``patch`` would save it, and say what a sender should know.
 
@@ -1496,7 +1497,10 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         copy's validation), ``render_error`` when the row, as saved or as the
         patch would save it, does not render with its sample. Only a
         ``ValidationError`` leaves any of them
-        (:func:`~angee.messaging_templates.walker.refusals_only`).
+        (:func:`~angee.messaging_templates.walker.refusals_only`). Every local of
+        this frame and of each it calls (:meth:`_patched` among them) is Django's
+        ``sensitive_variables``: a report of a failure that propagates shows no
+        sample or patch.
         """
 
         self.require_access("preview")

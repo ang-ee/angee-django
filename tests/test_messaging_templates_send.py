@@ -752,6 +752,30 @@ def test_an_exception_inside_compose_reports_no_recipient_address(
     assert _leaks(raised.value) == []
 
 
+@pytest.mark.parametrize("failure", ["an unknown column", "the save check raising"])
+def test_a_failure_out_of_a_preview_of_unsaved_edits_reports_no_sample_or_patch(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch, failure: str,
+) -> None:
+    """A failure that propagates out of the preview, a caller's column outside the edited ones or an unexpected
+    exception from the save's check, with the marker in the saved sample and in the patch: no frame shows it."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-preview-reporter")
+    row = _decision(key="tests.decision_reported", sample={"link": "https://app.example.test/x?SECRET-marker=saved"})
+    patch: dict[str, Any] = {"sample": {"link": "https://app.example.test/x?token=SECRET-marker"}}
+    if failure == "an unknown column":
+        patch["key"] = "elsewhere"
+    else:
+        def raising(self: Any, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("The save check failed.")
+
+        monkeypatch.setattr(MessageTemplate, "full_clean", raising)
+    with actor_context(tester), pytest.raises((ValueError, RuntimeError)) as raised:
+        row.preview(patch=patch)
+    assert "preview" in [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
+    assert _leaks(raised.value) == []
+
+
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
     del system_channel
     row = _greeting()
