@@ -183,9 +183,10 @@ around a fixed body, subject and preheader, a block or part alone. It returns
 the rendered message, or none, and warnings (`TemplateWarningCode`): a long
 subject, an empty or long preheader, a declared value nothing reads, a declared
 `unsubscribe_url` the body does not show, an empty plain-text body, HTML near
-Gmail's clipping size, or the render error. The console's `message_template_preview`
-read returns it to administrators (`preview` permission), in the kit it names or
-the default one.
+Gmail's clipping size, or a render error, one for each refusal, naming the
+column it belongs to (`field`, none for a refusal of the row as a whole). The
+console's `message_template_preview` read returns it to administrators
+(`preview` permission), in the kit it names or the default one.
 
 ## Shipped defaults, overrides and reset
 

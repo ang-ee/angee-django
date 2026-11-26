@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
@@ -1148,8 +1148,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         always may); ``PermissionDenied`` otherwise. A template renders whole, a
         layout around its handler's fixed body, subject and preheader, and a block
         or part alone, its sample as its arguments. ``rendered`` is ``None`` when
-        the walk, the render or its warnings refused, and the one warning is then
-        ``render_error``; only a ``ValidationError`` leaves any of them
+        the walk, the render or its warnings refused, and each distinct refusal is
+        then one ``render_error`` warning naming its column (``field``; ``None`` for
+        one of the row as a whole); only a ``ValidationError`` leaves any of them
         (:func:`~angee.messaging_templates.walker.refusals_only`).
         """
 
@@ -1159,9 +1160,14 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             rendered = walk.render(self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
             warnings = walk.preview_warnings(rendered, self.sample)
         except ValidationError as error:
-            return TemplatePreview(
-                rendered=None, warnings=[TemplateWarning(TemplateWarningCode.RENDER_ERROR, " ".join(error.messages))],
+            refusals: Iterable[tuple[str, list[str]]] = (
+                error.message_dict.items() if hasattr(error, "error_dict") else [(NON_FIELD_ERRORS, error.messages)]
             )
+            distinct = dict.fromkeys((name, message) for name, messages in refusals for message in messages)
+            return TemplatePreview(rendered=None, warnings=[
+                TemplateWarning(TemplateWarningCode.RENDER_ERROR, message, None if name == NON_FIELD_ERRORS else name)
+                for name, message in distinct
+            ])
         return TemplatePreview(rendered=rendered, warnings=warnings)
 
     @staticmethod

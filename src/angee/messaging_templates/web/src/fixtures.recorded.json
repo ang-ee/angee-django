@@ -280,7 +280,8 @@
       "warnings": [
        {
         "code": "PREHEADER",
-        "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead."
+        "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+        "field": null
        }
       ]
      }
@@ -3391,7 +3392,18 @@
    "warnings": [
     {
      "code": "RENDER_ERROR",
-     "detail": "invoice.due is required and missing or null. invoice.total is required and missing or null. invoice.url is required and missing or null."
+     "detail": "invoice.due is required and missing or null.",
+     "field": null
+    },
+    {
+     "code": "RENDER_ERROR",
+     "detail": "invoice.total is required and missing or null.",
+     "field": null
+    },
+    {
+     "code": "RENDER_ERROR",
+     "detail": "invoice.url is required and missing or null.",
+     "field": null
     }
    ]
   },
@@ -3407,11 +3419,13 @@
    "warnings": [
     {
      "code": "PREHEADER",
-     "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead."
+     "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+     "field": null
     },
     {
      "code": "UNUSED_VARIABLE",
-     "detail": "Nothing reads support_url."
+     "detail": "Nothing reads support_url.",
+     "field": null
     }
    ]
   },

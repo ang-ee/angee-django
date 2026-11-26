@@ -315,6 +315,9 @@ class TemplateWarning:
 
     code: TemplateWarningCode
     detail: str
+    field: str | None = None
+    """The column a refusal names, as the row's edited columns are named; ``None`` for a warning, or a refusal of
+    the row as a whole."""
 
 
 @dataclass

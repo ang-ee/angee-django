@@ -1811,7 +1811,8 @@ def test_the_markdown_pass_reads_internals_markdown_it_still_has() -> None:
 
 def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any) -> None:
     """Django review 2 (a3, a2, q7, q10): values the walk admits that Django's filters would raise on are refused,
-    naming the path; a bare date printed with a time takes an aware datetime; preview reports the refusal."""
+    naming the path; a bare date printed with a time takes an aware datetime; preview reports each refusal as its
+    own warning."""
 
     del plain
     numbers = _mail("[{{ n|pluralize }}][{{ n|floatformat:2 }}][{{ n|yesno }}][{{ n }}]", {"n": "x"}, key="tests.n")
@@ -1840,11 +1841,12 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
                 except ValidationError:
                     pass
     with system_context(reason="tests.messaging_templates.render.preview"):
-        timed.sample = {**moments, "d": "2026-11-24"}
+        timed.sample = {**moments, "d": "2026-11-24", "e": "2026-11-24"}
         preview = timed.preview(kit=kit)
-    assert preview.rendered is None and [warning.code for warning in preview.warnings] == [
-        TemplateWarningCode.RENDER_ERROR]
-    assert "d is printed with a time" in preview.warnings[0].detail
+    assert preview.rendered is None and [(warning.code, warning.field) for warning in preview.warnings] == [
+        (TemplateWarningCode.RENDER_ERROR, None)] * 2
+    assert [warning.detail.split(" (")[0] for warning in preview.warnings] == [
+        "d is printed with a time", "e is printed with a time"]
 
 
 def _failing(raised: type[BaseException]) -> Any:

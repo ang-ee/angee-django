@@ -261,7 +261,8 @@ live in code docstrings.
     (a layout around a fixed body, a block or part alone) and returns a
     `TemplatePreview` with `TemplateWarning`s: the subject or preheader length,
     unused variables, a missing stop link, an empty plain-text body, the size, or
-    the render error. The console's `message_template_preview(template,
+    a render error, one for each refusal, naming its column
+    (`TemplateWarning.field`). The console's `message_template_preview(template,
     brand_kit)` read returns it to callers holding the new `preview` permission
     (platform admins; `messaging_templates/message_template` revision 2).
   - **Shipped rows.** The addon's install tier ships the `base` layout, the
