@@ -377,6 +377,40 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(answer.sender_id, stored.pk)
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
 
+    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    def test_requests_are_one_requester_when_their_addresses_are_one_account(self):
+        """A letter case is one account and so one requester; a domain spelling iam keeps as two accounts is two
+        requesters, so the task names the request to ask instead of awaiting an account the answer never wakes."""
+
+        channel = self.channel()
+        cases = (
+            ("letter-case", "Requester@Example.test", "requester@example.test", ""),
+            ("domain-spelling", "requester@xn--bcher-kva.example", "requester@bücher.example", "choose the request"),
+        )
+        for name, reply_to, claimed, refusal in cases:
+            with self.subTest(name):
+                request = email(
+                    channel, f"{name}@example.test", sender="relay@example.test",
+                    headers=(("Reply-To", f"Requester <{reply_to}>"),),
+                )
+                need = self.Need._base_manager.get(source_message=request)
+                with system_context(reason="tests.intake.review.one_requester"):
+                    self.Need.objects.create(task=need.task, claimed_email=claimed, body="Another request")
+                accounts = self.User._base_manager.count()
+                if refusal:
+                    with self.assertRaisesMessage(ValidationError, refusal):
+                        self.clarify(need)
+                    self.assertEqual(self.User._base_manager.count(), accounts)
+                else:
+                    task = self.clarify(need)
+                    self.assertEqual(self.User._base_manager.count(), accounts + 1)
+                    self.assertEqual(task.snoozed_awaiting_id, self.User._base_manager.get(email=claimed).pk)
+
+    def test_an_emailed_requesters_address_is_their_sender_as_its_handle_stores_it(self):
+        request = email(self.channel(), "spelled@example.test", sender="Requester@Example.test")
+        need = self.Need._base_manager.get(source_message=request)
+        self.assertEqual(need.requester_address(), "Requester@Example.test")
+
     def test_a_requester_reachable_neither_way_is_refused_and_gets_no_account(self):
         need = self.need(email="", party=self.party(self.reader))
         before = self.task(need).revision
