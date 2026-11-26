@@ -66,6 +66,13 @@ live in code docstrings.
     ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
     answers it by email; before, the answer was refused for want of a sender.
     Like every email it is a retained record: a moderator no longer trashes it.
+  - **Changed.** A record's chatter thread is never folded with a mailbox thread.
+    The copy of a chatter mail (or of an answer to one) that reaches a
+    colleague's own connected mailbox still folds as a message, but the
+    colleague's thread stays theirs: it was merged into the chatter, dropped out
+    of their inbox, and took their later mail on that conversation onto the
+    record. Threads already folded this way are left as they are; a person
+    keeps them separate through the source-copy decision.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
