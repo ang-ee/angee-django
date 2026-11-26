@@ -27,6 +27,7 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.models import PermissionAuditEvent
+from rebac.roles import revoke as revoke_role
 
 from angee.brandkit.testing.models import BrandKit
 from angee.jobs.enqueue import celery_app
@@ -526,10 +527,12 @@ def test_a_non_administrator_learns_nothing_and_causes_no_render_read_or_audit_r
     walked = _walks(monkeypatch)
     for actor in (member, replier):
         for row in rows:
-            audits = _audits()
-            with _refused(PermissionDenied):
-                MessageTemplate.objects.send_test(row, actor=actor)
-            assert _audits() == audits, row.kind
+            for key in (None, f"refused-{row.pk}"):
+                audits = _audits()
+                with _refused(PermissionDenied):
+                    MessageTemplate.objects.send_test(row, actor=actor, idempotency_key=key)
+                assert _audits() == audits, (row.kind, key)
+                assert key is None or _claim(key, actor) is None, (row.kind, key)
     assert (walked, looked_up) == ([], [])
 
 
@@ -585,6 +588,11 @@ def test_a_keyed_test_send_replays_its_one_message_and_another_request_under_the
     assert Message._base_manager.count() == messages
     theirs = MessageTemplate.objects.send_test(row, actor=colleague, idempotency_key="retry-1")
     assert theirs.pk != first.pk
+    # The gate comes before the claim: a former administrator's retry of the very same press is refused.
+    with system_context(reason="tests.messaging_templates.send.demote"):
+        revoke_role(actor=tester, role="angee/role:admin")
+    with _refused(PermissionDenied):
+        MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="retry-1")
 
 
 def test_a_test_send_to_an_address_the_transport_cannot_carry_is_refused_and_its_claim_rolled_back(
