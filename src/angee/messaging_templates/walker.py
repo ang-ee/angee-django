@@ -98,10 +98,13 @@ FORM_OPENERS_PER_LINE = 60
 WALK_SOURCE_LIMIT = 150_000
 WALK_VARIABLES_LIMIT = 100_000
 """The most characters the ``variables`` of the rows a walk reaches hold together, as JSON: counted from the
-database's text of each level before the level is read (``jsonb`` on PostgreSQL writes keys in its own order and a
-character where ``json.dumps`` may write an escape) and again by ``len(json.dumps(...))`` as each row is checked, the
-root among them. A bound, not an exact count. An author's row declares at most about 60,400: 50 paths of
-:data:`~angee.messaging_templates.rendering.MAX_VARIABLE_PATH_LENGTH` characters, each described in
+database's text of each level before the level is read, and again in characters (``json.dumps`` with
+``ensure_ascii=False``) as each row is checked, the root among them. A bound, not an exact count: on PostgreSQL the
+``jsonb`` text agrees with the recount in length, its keys in its own order. On SQLite the level's count reads Django's
+stored text, which writes each non-ASCII character as a six-character escape (an astral one as twelve), so there the
+rows a walk includes declare at most about 16,600 non-ASCII characters together (8,300 astral), while a row's own walk
+counts characters. An author's row declares at most about 60,400 characters: 50 paths of
+:data:`~angee.messaging_templates.rendering.MAX_VARIABLE_PATH_LENGTH`, each described in
 :data:`~angee.messaging_templates.rendering.MAX_VARIABLE_DESCRIPTION_LENGTH`; so no row fills it alone."""
 WALK_READ_LIMIT = 600_000
 WALK_SPAN_READ_LIMIT = 4_000
@@ -1346,7 +1349,7 @@ class TemplateWalker:
             for name in level:
                 row = walk.rows[name]
                 characters += len(row.source) + len(row.text_source)
-                declaring += len(json.dumps(row.variables, default=str))
+                declaring += len(json.dumps(row.variables, default=str, ensure_ascii=False))
                 if characters > WALK_SOURCE_LIMIT:
                     walk.refusals.append(_too_much_source(walk.root_name))
                     return checks

@@ -1242,7 +1242,7 @@ class _Rows:
         found = {name: self.rows[name] for name in names if name in self.rows}
         for row in found.values():
             row.text_length = len(row.source) + len(row.text_source)
-            row.variables_length = len(json.dumps(row.variables))
+            row.variables_length = len(json.dumps(row.variables, ensure_ascii=False))
         return found
 
     def with_text(self, rows: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -2365,7 +2365,7 @@ def _text_read(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
     def recorded(rows: Any, named: Any) -> Any:
         found = with_text(rows, named)
         read.append((sum(len(row.source) + len(row.text_source) for row in found.values()),
-                     sum(len(json.dumps(row.variables)) for row in found.values())))
+                     sum(len(json.dumps(row.variables, ensure_ascii=False)) for row in found.values())))
         return found
 
     monkeypatch.setattr(MessageTemplateQuerySet, "with_text", recorded)
@@ -2431,12 +2431,13 @@ def test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unre
     assert read == [], read
 
 
-def _declaring(characters: int) -> dict[str, str]:
-    """Fifty ASCII paths whose JSON holds exactly ``characters`` characters, each within an author's limits."""
+def _declaring(characters: int, letter: str = "d") -> dict[str, str]:
+    """Fifty paths described in ``letter`` whose JSON holds exactly ``characters`` characters, within an author's
+    limits."""
 
     described = characters - 2 - 50 * 9 - 49 * 2  # braces, '"v00": ""' a path, ', ' between them
     share, rest = divmod(described, 50)
-    return {f"v{index:02}": "d" * (share + (index < rest)) for index in range(50)}
+    return {f"v{index:02}": letter * (share + (index < rest)) for index in range(50)}
 
 
 def test_a_level_s_variables_are_counted_before_they_are_read(
@@ -2477,34 +2478,68 @@ DECLARED_QUERIES = {"described judge": 1, "named judge": 1}
 def test_a_walk_at_the_variables_cap_renders_and_one_character_more_is_refused_unread(
     plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The database's text of ASCII variables is as long as json.dumps writes it, on PostgreSQL and SQLite alike (jsonb
-    reorders keys but keeps the separators), so a tree declaring exactly WALK_VARIABLES_LIMIT characters renders, its
-    level read whole, and one character more is refused before the level is read."""
+    """The walk counts a declaration in characters: a tree declaring exactly WALK_VARIABLES_LIMIT renders, its level
+    read whole, and one character more is refused before the level is read. On PostgreSQL the jsonb text is as long as
+    json.dumps writes it unescaped, so the descriptions are Cyrillic there; SQLite holds Django's escapes, so they are
+    ASCII there, and a Cyrillic one counts six a character (the SQLite line of WALK_VARIABLES_LIMIT)."""
 
     del plain
+    letter = "\u0436" if connection.vendor == "postgresql" else "d"
     read = _text_read(monkeypatch)
     template = _mail("\n\n".join(f'{{% include "parts/declared{index}" only %}}' for index in range(2)),
                      key="tests.declared")
     held = len(json.dumps(template.variables)) + len(json.dumps({}))  # the template and its layout
-    rows = [_row("part", "declared0", source="x", variables=_declaring(50_000)),
-            _row("part", "declared1", source="x", variables=_declaring(100_000 - held - 50_000))]
+    rows = [_row("part", "declared0", source="x", variables=_declaring(50_000, letter)),
+            _row("part", "declared1", source="x", variables=_declaring(100_000 - held - 50_000, letter))]
     assert max(len(path) for row in rows for path in row.variables) <= 200
     assert max(len(text) for row in rows for text in row.variables.values()) < 1_000
     with system_context(reason="tests.messaging_templates.render.declared"):
         for row in rows:
             row.full_clean()
         sized: Any = MessageTemplate.objects.named_rows(["parts/declared1"], language="en")["parts/declared1"]
-        assert sized.variables_length == len(json.dumps(rows[1].variables)), sized.variables_length
+        assert sized.variables_length == len(json.dumps(rows[1].variables, ensure_ascii=False)), sized.variables_length
         assert TemplateWalker().judge(template, MessageTemplate.objects).refusals == []
     assert [declared for _, declared in read] == [100_000 - len(json.dumps(template.variables))], read
     assert _render(template, {}, kit).plain_text
     read.clear()
     with system_context(reason="tests.messaging_templates.render.declared"):
-        rows[1].variables["v00"] += "d"
+        rows[1].variables["v00"] += letter
         rows[1].save()
         refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
     assert refusals == ["tests.declared: the rows it reaches declare over 100000 characters of variables"], refusals
     assert read == [], read
+    if connection.vendor == "sqlite":
+        escaped = _row("part", "escaped", source="x", variables={"a": "\u0436" * 10})
+        with system_context(reason="tests.messaging_templates.render.declared"):
+            stored: Any = MessageTemplate.objects.named_rows(["parts/escaped"], language="en")["parts/escaped"]
+        # Ten escapes of six characters, and '{"a": ""}'.
+        assert stored.variables_length == len(json.dumps(escaped.variables)) == 69
+
+
+@pytest.mark.parametrize("letter", ["\u0436", "\u4e2d", "\U00020000"], ids=["cyrillic", "cjk", "astral"])
+def test_a_declaration_in_any_script_is_counted_in_characters(plain: Any, kit: Any, letter: str) -> None:
+    """A part declaring 20 paths, each described in 1,000 Cyrillic, CJK or astral characters (20,220 characters, within
+    an author's limits), was counted in JSON escapes, six a character or twelve, so its own full_clean() refused it and
+    it could not be previewed: a row's walk now counts characters. Included by a template, it renders on PostgreSQL,
+    whose jsonb text counts characters too; on SQLite the level's count reads Django's escaped text, 120,220 or
+    240,220, and refuses it, the documented SQLite limit."""
+
+    del plain
+    part = _unsaved("part", "script", source="Said.", variables={f"v{index:02}": letter * 1_000 for index in range(20)})
+    assert len(json.dumps(part.variables, ensure_ascii=False)) == 20_220
+    with system_context(reason="tests.messaging_templates.render.script"):
+        part.full_clean()
+        part.save()
+        assert part.preview(kit=kit).rendered is not None
+    template = _mail('{% include "parts/script" only %}', key="tests.script")
+    with system_context(reason="tests.messaging_templates.render.script"):
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    if connection.vendor == "postgresql":
+        assert refusals == [], refusals
+        assert "Said." in _render(template, {}, kit).plain_text
+    else:
+        assert refusals == ["tests.script: the rows it reaches declare over 100000 characters of variables"], refusals
+        assert len(json.dumps(part.variables)) in (120_220, 240_220)
 
 
 def test_an_author_s_paths_and_descriptions_are_held_to_their_lengths_and_a_stored_row_still_renders(
