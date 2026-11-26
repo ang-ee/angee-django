@@ -23,9 +23,13 @@ live in code docstrings.
   without: it is logged once, and the client gets `INTERNAL` and the generic
   message unless its code is an expected one, where its message and exception
   value used to reach the client and only Strawberry's record logged it.
-  `GraphQLConfig`'s own `ignore_logger("strawberry.execution")` is deleted: the
-  schema writes nothing there, and Sentry's Strawberry integration module, which
-  GraphQL's autoconfig imports to disable it, ignores that logger on import.
+  graphql-core's own field errors, such as a non-null field resolved to `None`, are
+  not that case: graphql-core wraps the `TypeError` it raises, so the client got
+  `INTERNAL` and the generic message before and still does, and only their second
+  record, which quoted the request, is gone. `GraphQLConfig`'s own
+  `ignore_logger("strawberry.execution")` is deleted: the schema writes nothing
+  there, and Sentry's Strawberry integration module, which GraphQL's autoconfig
+  imports to disable it, ignores that logger on import.
   **Upgrade:** nothing, unless a log pipeline read `strawberry.execution` for
   GraphQL failures; it reads `angee.graphql.schema`.
 

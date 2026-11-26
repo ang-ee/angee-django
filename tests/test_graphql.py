@@ -925,10 +925,51 @@ def test_unexpected_graphql_errors_log_once_without_exception_or_request_values(
     assert __file__ in diagnostic
     assert "in raise_provider_failure" in diagnostic
     assert ("raise GraphQLError(secret" if located else "raise RuntimeError(secret)") in diagnostic
-    formatted = logging.Formatter().format(record)
-    for value in (secret, inline, variable):
-        for text in (diagnostic, str(record.msg), repr(record.args), formatted, caplog.text):
-            assert value not in text
+    _assert_record_omits(record, caplog, secret, inline, variable)
+
+
+def test_non_null_violations_log_once_without_request_values(caplog: pytest.LogCaptureFixture) -> None:
+    """graphql-core's own field error is sanitized and logged once, like a resolver's.
+
+    A resolver returning ``None`` for a non-null field fails in graphql-core, which
+    raises a ``TypeError`` and wraps it with the field's path; the client gets
+    ``INTERNAL`` and the record quotes nothing from the request.
+    """
+
+    inline, variable = "inline-token-canary", "variable-note-canary"
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        def redeem(self, token: str, note: str) -> bool:
+            return cast(bool, None)
+
+    schema = GraphQLSchemas([addon(public={"query": [HelloQuery], "mutation": [Mutation]})]).build("public")
+
+    result = schema.execute_sync(
+        f'mutation Redeem($note: String!) {{ redeem(token: "{inline}", note: $note) }}',
+        variable_values={"note": variable},
+    )
+
+    assert result.data is None
+    assert result.errors is not None
+    assert result.errors[0].message == "An unexpected error occurred."
+    assert result.errors[0].extensions == {"code": "INTERNAL"}
+    assert result.errors[0].original_error is None
+    [record] = caplog.records
+    assert (record.name, record.levelno, record.exc_info) == ("angee.graphql.schema", logging.ERROR, None)
+    diagnostic = record.getMessage()
+    assert "(TypeError) at path ['redeem']" in diagnostic
+    assert "in complete_value" in diagnostic
+    _assert_record_omits(record, caplog, inline, variable)
+
+
+def _assert_record_omits(record: logging.LogRecord, caplog: pytest.LogCaptureFixture, *values: str) -> None:
+    """No rendering of the record, nor the captured log text, carries any of ``values``."""
+
+    texts = (record.getMessage(), str(record.msg), repr(record.args), logging.Formatter().format(record), caplog.text)
+    for value in values:
+        assert not [text for text in texts if value in text], value
 
 
 def test_graphql_identity_exports_public_node() -> None:
