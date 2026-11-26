@@ -7,7 +7,8 @@ contributed by the `UserSignInLinks` donor, extends `User.account_actions` and
 **Send sign-in link** (`issue_sign_in_link` in `account_actions`) exactly where
 the action sends one. A host without this addon offers no sign-in link. The
 link's mail is a message template this addon ships, sent as messaging's system
-mail, so the addon requires messaging and the message templates.
+mail in the recipient's languages, so the addon requires messaging, the message
+templates and parties, whose person holds those languages.
 
 ## Issuing a link
 
@@ -73,9 +74,10 @@ system mail configured (`SystemChannelBackend.system_mail_configured()`: a
 transport mailer, `MAILERS["transport"]`, and a `DEFAULT_FROM_EMAIL` messaging's
 sender rule accepts). Otherwise no link is offered and the action refuses. What
 settings cannot tell is refused in band, with nothing written: the system
-channel's row missing or paused (`SYSTEM_CHANNEL_MISSING`,
-`OUTBOUND_EMAIL_CHANNEL_MISSING`, under `channel`) and the template missing
-(`template_missing`); both mean provision's resource load has not run.
+channel's row missing (`SYSTEM_CHANNEL_MISSING`, under `channel`) or the template
+missing (`template_missing`), which mean provision's resource load has not run,
+and the system channel paused by an administrator
+(`OUTBOUND_EMAIL_CHANNEL_MISSING`, under `channel`).
 
 `sent_at` means recorded and queued, not delivered, and the new link is current
 from then on. Two consequences follow:
