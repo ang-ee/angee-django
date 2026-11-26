@@ -5,6 +5,7 @@ import logging
 import re
 import secrets
 from collections.abc import Iterator
+from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
 from smtplib import SMTPRecipientsRefused, SMTPServerDisconnected
@@ -330,6 +331,7 @@ def test_issue_requires_the_permission_and_an_actor_or_the_system(
         system_context(reason="test.iam_messaging.sign_in_link.system"),
     ):
         User._base_manager.get(pk=target.pk).issue_sign_in_link()
+    # System work: no causing actor, so neither the link nor its mail records one.
     assert SignInLink._base_manager.get(user=target).created_by_id is None
     [message] = _mails(target)
     assert message.created_by_id is None
@@ -876,6 +878,26 @@ def test_a_first_name_that_spells_markup_stays_text(deliverable, iam_admin, sent
     written = _written(target)
     assert _hrefs(_html(written)) == [SignInLink.url_for(token)]
     assert f"Hi {name}," in written.body
+
+
+@pytest.mark.parametrize("ambient", [
+    pytest.param(False, id="an-actor-pinned-with-no-ambient-actor"),
+    pytest.param(True, id="an-actor-pinned-under-another-administrators-context"),
+])
+def test_a_link_and_its_mail_record_the_one_actor_the_issue_was_given(
+    deliverable, iam_admin, django_capture_on_commit_callbacks, ambient,
+):
+    """The link's issuer is the account's pinned actor; its mail is caused by the same one, whatever is ambient."""
+
+    target = _person("guest-caused")
+    other = create_platform_admin("other-admin", password=None)
+    with django_capture_on_commit_callbacks(execute=True), actor_context(other) if ambient else nullcontext():
+        target.with_actor(iam_admin).issue_sign_in_link()
+    [message] = _mails(target)
+    with system_context(reason=READ):
+        thread_creator = Message._base_manager.select_related("thread").get(pk=message.pk).thread.created_by_id
+    assert SignInLink._base_manager.get(user=target).created_by_id == iam_admin.pk
+    assert (message.created_by_id, thread_creator) == (iam_admin.pk, iam_admin.pk)
 
 
 def test_the_link_does_not_pass_through_djangos_default_mailer(deliverable, iam_admin, sent):

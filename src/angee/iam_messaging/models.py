@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+from contextlib import nullcontext
 from datetime import timedelta
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -25,7 +26,7 @@ from django.utils import timezone
 from django.utils.crypto import constant_time_compare, salted_hmac
 from django.views.decorators.debug import sensitive_variables
 from django_compose.models import Composable
-from rebac import SubjectRef, system_context
+from rebac import SubjectRef, actor_context, system_context
 
 from angee.base.managers import AngeeManager
 from angee.base.models.audit import AuditMixin
@@ -148,9 +149,10 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         the row saved, its ``sent_at`` stamped: recorded and queued, which makes
         it the account's current link at once. The token is ``<user public
         id>.<secret>``; the row keeps the secret's keyed digest and the account
-        digest (:meth:`SignInLink.token_digest`, :meth:`SignInLink.account_digest`),
-        and ``created_by`` is ``actor``. Nothing here logs the token or holds it
-        past the send.
+        digest (:meth:`SignInLink.token_digest`, :meth:`SignInLink.account_digest`).
+        The send runs as ``actor``, so the link and its mail record one causing
+        actor as ``created_by``; with none, both take the ambient one, empty for
+        system work. Nothing here logs the token or holds it past the send.
         """
 
         now = timezone.now()
@@ -179,7 +181,8 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
             "expires_at": link.expires_at,
             "person": {"first_name": user.first_name},
         }
-        templates.send_as_system(template, reason=reason, to=user.email, values=values)
+        with actor_context(actor) if actor is not None else nullcontext():
+            templates.send_as_system(template, reason=reason, to=user.email, values=values)
         link.sent_at = timezone.now()
         with system_context(reason="iam_messaging.sign_in_link.issue"):
             if actor is not None:
