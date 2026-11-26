@@ -2372,7 +2372,8 @@ def _text_read(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 def test_a_level_is_counted_before_its_text_is_read(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A row including 600 parts of 48,999 characters made one query load 602 rows, 29.4 million characters, before
     the source cap was tested: a level's rows now come with their text_length alone, and a level past
-    WALK_SOURCE_LIMIT is refused before any of its text is read, on the render-side judge and a member's insert."""
+    WALK_SOURCE_LIMIT is refused before any of its text is read, on the render-side judge. The console insert's walk
+    of such a level is the console module's."""
 
     del plain
     read = _text_read(monkeypatch)
@@ -2387,20 +2388,10 @@ def test_a_level_is_counted_before_its_text_is_read(plain: Any, monkeypatch: pyt
     assert walk.refusals == ["tests.wide: the rows it reaches hold over 150000 characters of source"], walk.refusals
     assert list(walk.rows) == ["tests.wide"] and read == [], read
     counts["judge"] = len(q)
-    schema = addon_schema(messaging_templates_schema.schemas, "console")
-    inserted = {"kind": "part", "key": "wide", "language": "en", "name": "n", "format": "html", "source": wide,
-                "text_source": "x"}
-    member = create_user("messaging-templates-wide")
-    with CaptureQueriesContext(connection) as q:
-        result = execute_schema(schema, _INSERT, {"object": inserted}, user=member)
-    assert [((error.extensions or {}).get("code"), "over 150000 characters of source" in error.message)
-            for error in result.errors or ()] == [("VALIDATION", True)], result.errors
-    assert read == [], read
-    counts["member insert"] = len(q)
     assert counts == WIDE_QUERIES, counts
 
 
-WIDE_QUERIES = {"judge": 1, "member insert": 77}
+WIDE_QUERIES = {"judge": 1}
 """The queries of the wide level's walks: as many as before, which loaded every row's text in the first."""
 
 

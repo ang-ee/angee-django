@@ -37,7 +37,7 @@ from angee.provenance.context import changeset_model
 from tests.conftest import create_platform_admin, create_user
 from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
-from tests.test_messaging_templates_render import TIMED, _recording
+from tests.test_messaging_templates_render import TIMED, _recording, _text_read
 
 _LAYOUT: dict[str, Any] = {
     "source": "<div>{% block content %}{% endblock %}</div>",
@@ -629,9 +629,40 @@ def test_an_insert_seeded_from_a_row_past_the_include_depth_reads_no_further(
     assert [row.language for row in _rows("part", "deep900")] == ["en"]
 
 
-DEEP_INSERT_QUERIES = {5: 156, 900: 156}
+DEEP_INSERT_QUERIES = {5: 168, 900: 168}
 """An administrator's insert of a new language seeded from a row including a chain past the include depth: the same
-for any chain, since the gather reads no level past the depth."""
+for any chain, since the gather reads no level past the depth. 156 before a level's text was read after its sizes: that
+read, through the reader's scope, adds four statements to each of the three levels."""
+
+
+def test_an_insert_seeded_from_a_row_past_the_source_limit_reads_none_of_its_text(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new language of a key whose row includes 600 parts of 48,999 characters is refused at the level's count,
+    before any of the level's text is read; a member is refused create before any of it is read."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-widener")
+    member = create_user("messaging-templates-console-unwidened")
+    for index in range(600):
+        _row("part", f"wide{index}", source="\n".join(["a" * 999] * 49))
+    wide = "\n".join("".join(_include(f"parts/wide{index}") for index in range(line, line + 25))
+                     for line in range(0, 600, 25))
+    _row("part", "wide", format="html", source=wide, text_source="x")
+    read = _text_read(monkeypatch)
+    with CaptureQueriesContext(connection) as captured:
+        (error,) = _insert(admin, "part", "wide", "de").errors
+    assert (error.extensions["code"], error.extensions["formErrors"], read) == (
+        "VALIDATION", ["parts/wide: the rows it reaches hold over 150000 characters of source"], []), error.extensions
+    assert len(captured) == WIDE_INSERT_QUERIES, len(captured)
+    (error,) = _insert(member, "part", "wide", "de").errors
+    assert (error.extensions["code"], read) == ("PERMISSION_DENIED", [])
+    assert [row.language for row in _rows("part", "wide")] == ["en"]
+
+
+WIDE_INSERT_QUERIES = 132
+"""An administrator's insert of a new language seeded from a row whose level is past the source limit: the level is
+counted from its sizes and refused, and no text read follows."""
 
 
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:
