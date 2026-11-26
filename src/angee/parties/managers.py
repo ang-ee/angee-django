@@ -2364,9 +2364,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         pair: indexed normalized twins contribute distinct candidate parties (the
         first at ``1.0``, which decides the handle's party, competing parties at ``0.3`` for
         review); otherwise an email whose non-generic domain matches a tracked
-        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``,
-        both domains read in the one spelling ``Handle.normalize_email_domain``
-        gives, so a punycode and a Unicode spelling match;
+        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``:
+        the handle's domain is its spelling key's (``Handle.spelling_key_of``,
+        from its own value), and an organization is found when its domain, stored
+        as typed, is that spelling, its punycode, or the address's own spelling,
+        ASCII letter case aside, and the one rule
+        (``Handle.normalize_email_domain``) reads it as the same domain. Another
+        spelling the rule joins is not found (an organization typed
+        ``straße.example`` for an address typed ``strasse.example``, NFD for NFC,
+        full-width letters for ASCII), since organizations store no domain key;
         otherwise no-op. Both branches stay inside the partition of the handle's
         creator: handles that user created and parties that user owns. Public
         mailbox-provider domains never imply organization membership. Returns the
@@ -2407,13 +2413,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 strongest = link
         if strongest is not None:
             return strongest
-        if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
-            domain = handle_model.normalize_email_domain(handle.normalized_value.rsplit("@", 1)[1])
+        if key := handle_model.spelling_key_of(handle.platform, handle.value):
+            domain = key.rpartition("@")[2]
             organization_model = apps.get_model("parties", "Organization")
             org = None
             if domain and domain not in GENERIC_EMAIL_DOMAINS:
-                # An organization's domain is stored as typed, in either spelling: read both, compare by the one rule.
-                spelled = Q(domain__iexact=domain)
+                # An organization's domain is stored as typed: read the rule's spelling, its punycode and the address's
+                # own spelling, then compare by the one rule.
+                spelled = Q(domain__iexact=domain) | Q(domain__iexact=handle.value.strip().rpartition("@")[2])
                 if not domain.isascii():
                     try:
                         spelled |= Q(domain__iexact=punycode(domain))

@@ -362,10 +362,17 @@ looked up; that key still picks the handle an alias lands on at two sites open
 for a ruling, a directory adoption's through-handle and a new claimant's first
 email (`PartyManager.claimant_as_system`). On other platforms, a spelling is a
 handle, as before. That is
-one rule, `Handle.normalize_email_domain`, for whoever compares a domain: the
-organization-domain suggestion (`PartyManager.suggest_for`) reads the handle's
-domain and `Organization.domain`, which is stored as typed, through it on both
-sides, so either spelling of either suggests the organization. A handle stores
+one rule, `Handle.normalize_email_domain`, for whoever compares a domain. The
+organization-domain suggestion (`PartyManager.suggest_for`) reads it on both
+sides, but `Organization.domain` is stored as typed, so it first finds
+organizations whose domain is the handle's in the rule's spelling, its punycode,
+or the address's own spelling, ASCII letter case aside: from `ada@bücher.example`
+or `ada@xn--bcher-kva.example` it finds `bücher.example` and
+`xn--bcher-kva.example`, and from `ada@straße.example` it finds `straße.example`
+and `strasse.example`. It does not find an organization typed in another
+spelling the rule joins (`straße.example` from `ada@strasse.example`, an NFD or
+full-width spelling from the plain one), since organizations store no domain
+key. A handle stores
 the keys its rule gave when it was last saved (`spelling_key`,
 `normalized_value`) and, beside them, the version the rule had then
 (`normalized_version`; 0 for a row stored before the rule had one). The
