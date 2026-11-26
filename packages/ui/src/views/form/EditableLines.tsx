@@ -224,6 +224,7 @@ export function EditableLines({
       name: field.name, label: header, widget, options: authored?.options ?? enumOptions(field),
       ...(currencyField ? { currencyField } : {}),
       ...(statusDisplay ? { statusDisplay } : {}),
+      ...(authored?.relationEdit === null ? { relationEdit: null } : {}),
     };
     const hasErrors = rowErrors?.some((error) => rowMessages(error, field.name).length > 0);
     return {

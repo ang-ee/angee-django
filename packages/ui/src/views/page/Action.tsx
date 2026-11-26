@@ -102,8 +102,11 @@ export interface ActionScalarArg extends ActionArgBase {
   fromContext?: (context: ActionFormContext) => unknown;
 }
 
-/** A single relation-picker arg naming the target resource its options list. */
-export interface ActionRelationArg extends ActionArgBase {
+/**
+ * A single relation-picker arg naming the target resource its options list. It may decline
+ * the picker's inline edit of the selected record with the descriptor's own `relationEdit: null`.
+ */
+export interface ActionRelationArg extends ActionArgBase, Pick<FieldDescriptor, "relationEdit"> {
   argKind: "relation";
   /** Seed the saved relation from the invoking record when the dialog opens. */
   fromContext?: (context: ActionFormContext) => unknown;

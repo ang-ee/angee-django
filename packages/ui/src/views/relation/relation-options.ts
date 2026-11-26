@@ -410,7 +410,11 @@ export function useRelationOptions(
  * option for a single already-loaded related record (the parent read's folded
  * `{ id, <labelField> }` object), reusing the shared labeling rule so the
  * trigger shows the label with no extra round-trip. Returns `undefined` when the
- * value carries no readable row (for example an inaccessible bare id).
+ * value carries no readable row (for example an inaccessible bare id), and when
+ * the row's label path reads `undefined` (the member is absent, or a relation on a
+ * dotted path is missing or null): such a row is not a loaded record, and a picker
+ * given no option reads the record for its label. A member held as `null` or blank
+ * labels the option by its id.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -424,7 +428,7 @@ export function relationSelectedOption(
   }
   const row = value as Row;
   const id = rowPublicId(row);
-  if (!id) return undefined;
+  if (!id || rowValueAtPath(row, labelField) === undefined) return undefined;
   return { value: id, label: relationOptionLabel(row, labelField, id), ...relationOptionColor(row, colorField) };
 }
 

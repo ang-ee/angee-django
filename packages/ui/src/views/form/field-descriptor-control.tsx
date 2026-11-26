@@ -162,6 +162,7 @@ function FieldDescriptorControlInstance({
     ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
     ...(field.currencyField ? { currencyField: field.currencyField } : {}),
     ...(field.statusDisplay ? { statusDisplay: field.statusDisplay } : {}),
+    ...(field.relationEdit === null ? { relationEdit: null } : {}),
   };
   return (
     <Component
