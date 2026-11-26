@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import zoneinfo
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from decimal import Decimal
 from email.message import EmailMessage
@@ -70,6 +70,7 @@ from angee.messaging_templates.html_checks import (
     check_html,
     compiled_expression,
 )
+from angee.messaging_templates.models import MessageTemplateQuerySet
 from angee.messaging_templates.rendering import MarkdownFormatHandler
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
@@ -1237,7 +1238,13 @@ class _Rows:
 
     def named_rows(self, names: Iterable[str], *, language: str) -> dict[str, Any]:
         del language
-        return {name: self.rows[name] for name in names if name in self.rows}
+        found = {name: self.rows[name] for name in names if name in self.rows}
+        for row in found.values():
+            row.text_length = len(row.source) + len(row.text_source)
+        return found
+
+    def with_text(self, rows: Mapping[str, Any]) -> Mapping[str, Any]:
+        return rows
 
     def resolving_names(self, names: Iterable[str]) -> frozenset[str]:
         return frozenset(name for name in names if name in self.rows)
@@ -2347,6 +2354,89 @@ def test_walk_stops_expanding_at_its_node_bound(plain: Any) -> None:
         assert any("over 1000 nodes" in message for message in _refusals(template))
 
 
+def _text_read(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Record the characters each ``with_text`` call reads: what a walk loads of its levels' text."""
+
+    read: list[int] = []
+    with_text = MessageTemplateQuerySet.with_text
+
+    def recorded(rows: Any, named: Any) -> Any:
+        found = with_text(rows, named)
+        read.append(sum(len(row.source) + len(row.text_source) for row in found.values()))
+        return found
+
+    monkeypatch.setattr(MessageTemplateQuerySet, "with_text", recorded)
+    return read
+
+
+def test_a_level_is_counted_before_its_text_is_read(plain: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row including 600 parts of 48,999 characters made one query load 602 rows, 29.4 million characters, before
+    the source cap was tested: a level's rows now come with their text_length alone, and a level past
+    WALK_SOURCE_LIMIT is refused before any of its text is read, on the render-side judge and a member's insert."""
+
+    del plain
+    read = _text_read(monkeypatch)
+    for index in range(600):
+        _row("part", f"wide{index}", source="\n".join(["a" * 999] * 49))
+    wide = "\n".join("".join(f'{{% include "parts/wide{index}" only %}}' for index in range(line, line + 25))
+                     for line in range(0, 600, 25))
+    template = _unsaved(format="html", source=wide, text_source="x", key="tests.wide")
+    counts: dict[str, int] = {}
+    with system_context(reason="tests.messaging_templates.render.wide"), CaptureQueriesContext(connection) as q:
+        walk = TemplateWalker().judge(template, MessageTemplate.objects)
+    assert walk.refusals == ["tests.wide: the rows it reaches hold over 150000 characters of source"], walk.refusals
+    assert list(walk.rows) == ["tests.wide"] and read == [], read
+    counts["judge"] = len(q)
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    inserted = {"kind": "part", "key": "wide", "language": "en", "name": "n", "format": "html", "source": wide,
+                "text_source": "x"}
+    member = create_user("messaging-templates-wide")
+    with CaptureQueriesContext(connection) as q:
+        result = execute_schema(schema, _INSERT, {"object": inserted}, user=member)
+    assert [((error.extensions or {}).get("code"), "over 150000 characters of source" in error.message)
+            for error in result.errors or ()] == [("VALIDATION", True)], result.errors
+    assert read == [], read
+    counts["member insert"] = len(q)
+    assert counts == WIDE_QUERIES, counts
+
+
+WIDE_QUERIES = {"judge": 1, "member insert": 77}
+"""The queries of the wide level's walks: as many as before, which loaded every row's text in the first."""
+
+
+def _filled(characters: int) -> str:
+    """Text of exactly ``characters`` characters, in lines of 999 ending in an accented and an astral character."""
+
+    lines, rest = divmod(characters, 1_000)
+    return ("x" * 997 + "\u00e9\U0001f600\n") * lines + "x" * rest
+
+
+def test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unread(
+    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cap counts characters as len() does, astral ones included, on PostgreSQL and SQLite alike: a tree holding
+    exactly WALK_SOURCE_LIMIT renders, its level read whole, and one character more is refused before it is read."""
+
+    read = _text_read(monkeypatch)
+    template = _mail("\n\n".join(f'{{% include "parts/full{index}" only %}}' for index in range(3)), key="tests.full")
+    held = len(template.source) + len(template.text_source) + len(plain.source) + len(plain.text_source)
+    rows = [_row("part", f"full{index}", source=_filled(49_999)) for index in range(2)]
+    rows.append(_row("part", "full2", source=_filled(150_000 - held - 2 * 49_999)))
+    with system_context(reason="tests.messaging_templates.render.full"):
+        sized: Any = MessageTemplate.objects.named_rows(["parts/full2"], language="en")["parts/full2"]
+        assert sized.text_length == len(rows[2].source) and "\U0001f600" in rows[2].source
+        assert TemplateWalker().judge(template, MessageTemplate.objects).refusals == []
+    assert read == [150_000 - len(template.source) - len(template.text_source)], read
+    assert "\U0001f600" in _render(template, {}, kit).plain_text
+    read.clear()
+    with system_context(reason="tests.messaging_templates.render.full"):
+        rows[2].source += "x"
+        rows[2].save()
+        refusals = TemplateWalker().judge(template, MessageTemplate.objects).refusals
+    assert refusals == ["tests.full: the rows it reaches hold over 150000 characters of source"], refusals
+    assert read == [], read
+
+
 def test_walk_character_cap(plain: Any) -> None:
     """q4: the rows one walk reaches hold at most 150,000 characters, each counted before it is parsed."""
 
@@ -2572,22 +2662,23 @@ CHECKED_FOR_THE_READ_CAP = 4
 
 
 WALKED_PARTS = {
-    "quotes": ("\n\n".join(["> > > a"] * 50), 325),
-    "single": ("\n\n".join(["> a"] * 150), 195),
-    "fivedeep": ("\n\n".join(["> > > > > a"] * 200), 57),
+    "quotes": ("\n\n".join(["> > > a"] * 50), 309),
+    "single": ("\n\n".join(["> a"] * 150), 190),
+    "fivedeep": ("\n\n".join(["> > > > > a"] * 200), 56),
     "thousand": ("\n\n".join(["> a"] * 1_000), 29),
 }
-"""Templates including many Markdown parts of quotes, each quote an element carrying two brand outputs: 325 parts of
-three-deep quotes and 195 of single ones, each admitted alone; 57 of five-deep quotes and 29 of a thousand, written
+"""Templates including many Markdown parts of quotes, each quote an element carrying two brand outputs: 309 parts of
+three-deep quotes and 190 of single ones, each admitted alone; 56 of five-deep quotes and 29 of a thousand, written
 past their check. A walk over them cost 2.4 to 3.9 s of CPU before the tree's caps refused it; it now stops as soon as
-the rows it has checked pass one."""
+the rows it has checked pass one. Each is the most whose level fits WALK_SOURCE_LIMIT, since a level past it is refused
+before any of its rows is checked, so these hold the tree's caps to the walk."""
 
 
 def test_a_walk_over_parts_each_admitted_alone_stops_at_the_trees_caps(
     plain: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A part of 50 three-deep quotes passes clean() alone; a template including 325 of them is refused after the
-    template, its layout and one part are checked, at the tree's caps, never after all 325."""
+    """A part of 50 three-deep quotes passes clean() alone; a template including 309 of them is refused after the
+    template, its layout and one part are checked, at the tree's caps, never after all 309."""
 
     del plain
     source, count = WALKED_PARTS["quotes"]
@@ -2625,8 +2716,9 @@ def test_a_saving_walk_resolves_a_level_in_one_query(plain: Any) -> None:
     assert len(queries) == SAVING_WALK_QUERIES, len(queries)
 
 
-SAVING_WALK_QUERIES = 22
-"""The queries of that saving walk: 520 before a level resolved in one query."""
+SAVING_WALK_QUERIES = 24
+"""The queries of that saving walk: 520 before a level resolved in one query, and 22 before a level's text was read
+after its sizes, one query a level more."""
 
 
 def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(plain: Any, kit: Any) -> None:
@@ -2654,9 +2746,10 @@ def test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it(pl
     assert counts == CHAIN_QUERIES, counts
 
 
-CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3}
+CHAIN_QUERIES = {"saving 5": 27, "saving 900": 27, "judge": 6}
 """The queries each walk of a chain makes; before the gather stopped at the tree's depth, a 900 chain cost 1,018 as
-system work and 499 on the render-side judge."""
+system work and 499 on the render-side judge. Reading a level's text after its sizes adds one query to each of the
+three levels a walk reads (24, 24 and 3 before)."""
 
 
 def test_an_include_inside_a_condition_keeps_the_condition(plain: Any, kit: Any) -> None:
@@ -2801,9 +2894,9 @@ PREVIEW_WORK: dict[str, tuple[int, list[tuple[str, int, int, int]], list[tuple[i
     "refused": (100_012, [], []),
     # Refused at the root's own check: its form holds over 2,000 spans, so no part is reached and nothing walked.
     "headings": (49_076, [], []),
-    "quotes": (12_577, [], []),
-    "single": (8_067, [], []),
-    "fivedeep": (4_968, [], []),
+    "quotes": (11_985, [], []),
+    "single": (7_882, [], []),
+    "fivedeep": (4_930, [], []),
     "thousand": (6_304, [], []),
     "combined": (19_515, [], []),
     # The costliest admitted Markdown: the review case's work exactly, its parts opening on one [ each.

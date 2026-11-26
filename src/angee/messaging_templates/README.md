@@ -142,15 +142,16 @@ the same process, so a busy machine slows the case and the bound alike.
 |---|---|---|
 | One row, before anything parses it | `SOURCE_LIMIT` (50,000 characters a column), `LINE_LIMIT`, `OPENERS_PER_LINE`, no opener that opens no template code, `NESTING_LIMIT`, `MARKDOWN_BRACKETS_PER_LINE`, `MARKDOWN_LABEL_SCAN_LIMIT` (50,000 characters of label scans, from the block pass alone); then `CONDITION_OPERATOR_LIMIT`, `FILTERS_PER_EXPRESSION`, `LITERAL_LIMIT` | `headings`, `rules`, `images`: refused before the Markdown pass; the construct table below |
 | One form, straight after the Markdown pass | `FORM_SPAN_LIMIT` (2,000 spans), `TEXT_LIMIT` characters of text, `FORM_OPENERS_PER_LINE` | `headings`, `rules`, refused before the HTML checks read them |
-| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source); each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; no row fetched past `INCLUDE_DEPTH_LIMIT` includes below its tree's root; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; a chain of 900 includes: 24 queries on the saving walk, 3 on the render-side judge (`test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it`); `test_a_saving_walk_resolves_a_level_in_one_query` (22 queries) |
+| The walk, as it gathers rows | `WALK_SOURCE_LIMIT` (150,000 characters of source), each level counted from its rows' `text_length` (the database's `Length`, in characters) before their text is read, `description` and `sample` never read; each checked row's nodes, outputs and text against the tree's caps; what its rows' checks read, `WALK_READ_LIMIT` (600,000 characters of forms) and `WALK_SPAN_READ_LIMIT` (4,000 spans), comments included; no row fetched past `INCLUDE_DEPTH_LIMIT` includes below its tree's root; a saving walk's include targets resolved in one query a level | `quotes`, `single`, `fivedeep`, `thousand`: refused after one to three row checks; `combined`: refused at the read caps after four; a chain of 900 includes: 27 queries on the saving walk, 6 on the render-side judge (`test_a_chain_past_the_include_depth_is_refused_before_the_gather_reads_it`); a level of 600 parts of 48,999 characters: refused with none of its text read, in one query (`test_a_level_is_counted_before_its_text_is_read`); a tree of exactly 150,000 characters, astral ones among them, renders (`test_a_walk_at_the_source_cap_renders_and_one_character_more_is_refused_unread`); `test_a_saving_walk_resolves_a_level_in_one_query` (24 queries: a level is two, its sizes and rows, then its text) |
 | Each tree a pass renders | `NODE_LIMIT`, `OUTPUT_LIMIT`, `TEXT_LIMIT`, `LOOP_DEPTH_LIMIT`, `INCLUDE_DEPTH_LIMIT` | `review` |
 | Each pass | `RenderBudget`: 500 loop or include renders, 200,000 characters of loop output, 500,000 of filter input; a tenth for the subject and preheader | `q11b-combined`, `review`'s render, `review-subject` |
 | The values | `prepare()` costs a constant per declared path per value; `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` | `dated` |
 | The call stack | the caps above keep the deepest admitted row (16 nested tags in each of four rows, three includes, two loops, a ten-operator condition) 254 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
 
-The Markdown pass and the row checks scan per opener in these constructs, and nowhere else. Each row's worst cost
-is measured on one row of 49 lines of 999 characters, the most the source caps admit, at load 49 to 52 on the machine
-class above, beside the review case's heaviest row (its commented emphasis runs, 0.28 s):
+The Markdown pass and the row checks scan per opener in the inline constructs below, and nowhere else; the block
+rules scan each line once, and the HTML rules are off. Each row's worst cost is measured on one row of 49 lines of 999
+characters, the most the source caps admit, at load 49 to 52 on the machine class above (the last two rows at load 27),
+beside the review case's heaviest row (its commented emphasis runs, 0.28 s):
 
 | Construct | What scans per opener | Cap | Worst row |
 |---|---|---|---|
@@ -162,6 +163,8 @@ class above, beside the review case's heaviest row (its commented emphasis runs,
 | `&` (entities), `\` (escapes) | a bounded pattern; one character | the source caps | 0.20 s; 0.18 s |
 | `*`, `_` (emphasis runs) | markdown-it's `balance_pairs`, its openers bounded by run | the source caps | 0.28 s (the review row); `***` runs 0.23 s |
 | link reference definitions | none: the rule is off | — | — |
+| block rules: fences, indented code, block quotes, rules, lists, ATX and setext headings, paragraphs | each line once a block, linearly; its inline content then as above | the source caps; markdown-it's `maxNesting` (20) for nested lists and quotes | 0.005 s at most (49 list items; a fence opening on every line: 0.004 s), against 0.21 s for the `review` row, at load 27 |
+| HTML blocks and inline HTML | none: with `html` off both rules return at once, so a `<` is text or an autolink (above) | — | `<b>x</b>` runs: 0.05 s at load 27 |
 
 The costliest admitted template found is `onebracket`: the review case's loop beside three commented parts of
 emphasis runs, each opening on one `![`. It previews at 1.09 to 1.10 times the review case measured back to back
