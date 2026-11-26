@@ -9,7 +9,17 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from rebac import PermissionDenied, actor_context, system_context
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.models import active_relationship_model
 from rebac.testing import assert_decisions
 
 from angee.base.build import extension_source_map
@@ -203,3 +213,60 @@ def test_system_threads_show_in_administrators_inbox_lists_and_nobody_elses(seal
         for name, actor in (("admin", seats.admin), ("member", seats.member), ("replier", replier_elsewhere))
     }
     assert listed == {"admin": True, "member": False, "replier": False}
+
+
+def test_an_administrators_share_of_system_mail_is_refused_and_the_member_reads_nothing(
+    sealed: SimpleNamespace,
+) -> None:
+    """Nobody shares a system thread or grants on a system message, administrators included."""
+
+    seats = sealed.seats
+    _channel, thread, message, part = sealed.rows["system"]
+    with pytest.raises(PermissionDenied):
+        thread.with_actor(seats.admin).grant_reader(user=seats.member)
+    with pytest.raises(PermissionDenied):
+        message.with_actor(seats.admin).grant_record_access("reader", seats.member)
+    member = to_subject_ref(seats.member)
+    assert not active_relationship_model().objects.filter(
+        subject_type=member.subject_type, subject_id=member.subject_id,
+    ).exists()
+    assert_decisions(checks=[
+        (seats.member, action, target, False)
+        for target, action in ((thread, "read"), (message, "read"), (message, "read_inbox"), (part, "read"))
+    ])
+
+
+def test_a_system_threads_own_grants_and_the_identity_rule_hold_nothing_on_it(sealed: SimpleNamespace) -> None:
+    """Tuples no verb writes on a system thread or message: the thread's admit nothing; a message's write admits nobody.
+
+    A message's own ``reader`` and ``editor`` tuples and the identity rule still read it: its reads are
+    not subtracted, because the inbox's planned reads cannot afford it.
+    """
+
+    seats = sealed.seats
+    _channel, thread, message, part = sealed.rows["system"]
+    holders = {name: create_user(f"seal-{name}") for name in ("thread_reader", "thread_editor", "message_reader",
+                                                                 "message_editor")}
+    identity = SubjectRef(ObjectRef("provenance/seed", "seal-identity"))
+    for target, relation, holder in (
+        (thread, "reader", holders["thread_reader"]), (thread, "editor", holders["thread_editor"]),
+        (message, "reader", holders["message_reader"]), (message, "editor", holders["message_editor"]),
+    ):
+        grant(target, relation, holder)
+    with system_context(reason="tests.messaging.seal.identity"):
+        write_relationships([RelationshipTuple(
+            ObjectRef("provenance/role", "messaging_identity_source"), "member", identity,
+        )])
+    thread_seats = (holders["thread_reader"], holders["thread_editor"], identity)
+    message_holders = (holders["message_reader"], holders["message_editor"], identity)
+    assert_decisions(checks=[
+        *((seat, action, thread, False) for seat in thread_seats
+          for action in ("read", "read_inbox", "write", "annotate", "share", "delete")),
+        *((seat, action, message, False) for seat in (*thread_seats, *message_holders, seats.admin)
+          for action in ("write",)),
+        (seats.admin, "share", thread, False),
+        (seats.admin, "read", thread, True), (seats.admin, "delete", message, True),
+        # The residual on a message's own arms.
+        *((seat, "read", message, True) for seat in message_holders),
+        *((seat, "read", part, True) for seat in message_holders),
+    ])

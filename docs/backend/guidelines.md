@@ -647,8 +647,7 @@ data through REBAC, never a queryset bypass.
   (`check_sealed_permissions`), which refuses a fragment that changes one:
   messaging's [`check_messaging_seals`](../../src/angee/messaging/checks.py)
   (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and
-  the channel's `read`, `reply`, `write`, `annotate` and `delete`, which
-  subtract the system channel's seal.
+  the permissions that subtract the system channel's seal (its `SEALED` map).
   Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
   (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
   can restore file inheritance.

@@ -20,7 +20,7 @@ live in code docstrings.
     reloads before the edit stops at settings load. Django itself refuses legacy
     `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
     `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
-    rows and runs `rebac sync` for schema revision 30. Without that load, every
+    rows and runs `rebac sync` for schema revision 31. Without that load, every
     email Django sends raises `SystemChannelMissing` at the sender (a password
     reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
     channel backend enums gain `SYSTEM`.
@@ -63,10 +63,16 @@ live in code docstrings.
     not kept, and attachments, `reply_to` and extra headers are refused. A
     transport that hands a delivery back to the system mailer fails that delivery
     instead of recording it again. Administrators alone read, send on, write,
-    annotate and delete the system channel (schema revision 30): no channel,
-    integration, team, project or ownership grant reaches it, and `messaging.E003`
-    refuses a fragment arm on the channel's `read`, `reply`, `write`, `annotate`
-    or `delete`. Its threads show in administrators' inbox lists. A channel whose
+    annotate and delete the system channel (schema revision 31): no channel,
+    integration, team, project or ownership grant reaches it, and a system
+    thread's reads keep only the administrator arm whatever its own grants,
+    bindings or fragments give. Nobody shares a system thread or grants on a system
+    message, administrators included (the thread's `share` and the message's
+    `write` admit nobody); a message's own `reader` and `editor` tuples and the
+    identity rule still read it. `messaging.E003` refuses a fragment arm on the
+    channel's `read`, `reply`, `write`, `annotate` or `delete`, the thread's
+    `share`, `delete` or `annotate`, or the message's `write`, `delete` or
+    `annotate`. Its threads show in administrators' inbox lists. A channel whose
     backend is system-only (the system channel) is never selected to send from
     (`ChannelQuerySet.outbound_email`), and enabling a `message_ingested` trigger
     on it is refused under `channel` (`system_only`) before any grant. A channel's

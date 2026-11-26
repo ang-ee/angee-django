@@ -26,17 +26,26 @@ reaches one of the two reads and not the other: the inbox would drop a grant
 generic reads keep, or keep one they refuse.
 """
 
-SEALED = {"messaging/channel": ("read", "reply", "write", "annotate", "delete")}
-"""The channel permissions that subtract the system channel's seal, which fragments never extend.
+SEALED = {
+    "messaging/channel": ("read", "reply", "write", "annotate", "delete"),
+    "messaging/thread": ("share", "delete", "annotate"),
+    "messaging/message": ("write", "delete", "annotate"),
+}
+"""The permissions that subtract the system channel's seal, which fragments never extend.
 
-Each admits administrators alone on the system channel (backend ``system``), so
-an arm unioned into one would reach that channel's mail past the seal. Fragments
-widen ``integrate/integration#read`` and ``#write`` instead, which the seal
-subtracts.
+On the system channel (backend ``system``) and its threads each admits
+administrators alone, and a system message's ``write`` admits nobody, so an arm
+unioned into one would reach system mail past the seal. Fragments widen
+``integrate/integration#read`` and ``#write`` and the thread's ``read_granted``
+instead, which the thread's sealed reads subtract. The thread's ``write``, which
+fragments extend, subtracts the seal from its own arms only.
 """
 
-check_messaging_seals = partial(check_sealed_permissions, "messaging", {**DERIVED_READS, **SEALED}, "messaging.E003")
-"""``messaging.E003``: the derived thread and message reads, and the channel permissions the system seal guards."""
+check_messaging_seals = partial(check_sealed_permissions, "messaging", {
+    resource_type: (*DERIVED_READS.get(resource_type, ()), *SEALED.get(resource_type, ()))
+    for resource_type in sorted({*DERIVED_READS, *SEALED})
+}, "messaging.E003")
+"""``messaging.E003``: the derived thread and message reads, and the permissions the system channel's seal guards."""
 
 
 def check_transport_mailer(

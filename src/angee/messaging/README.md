@@ -392,11 +392,16 @@ A system message is trashed only through the shared trash verb, which decides
 `delete` on it: administrators alone. A record's moderation never takes one off
 (`Message.trash_error`): it sits in the system channel's own thread.
 
-A grant on one system thread or message (thread `reader`, message `reader`, a
-spaces group or project bound to the thread) is not sealed: each needs an
-administrator's own act, because system threads are ownerless and channel
-`write` is sealed, and sealing thread reads would touch the inbox's hottest
-statement.
+A system thread's reads keep only the administrator arm too, whatever its own
+grants, a bound group or project, or another addon's fragment give, and its
+`write`, `annotate`, `share` and `delete` subtract the seal from its own arms.
+Nobody shares a system thread or grants on a system message, administrators
+included: the thread's `share` and the message's `write` admit nobody. A
+message's own `reader` and `editor` tuples, which no verb then writes, and the
+identity rule still read it; the inbox's planned reads cannot afford that
+subtraction. A thread's `write` arms that other addons contribute (a bound
+spaces group's posters, a bound project's writers) still reach a system thread's
+`write`, never its reads.
 
 The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
