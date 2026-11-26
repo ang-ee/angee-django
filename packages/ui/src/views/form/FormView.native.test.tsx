@@ -1858,7 +1858,8 @@ test("nested server errors and root failures share the native form store", async
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
-  expect(f.surface().saveErrors).toEqual(["Cannot save", "lines.0.title: Invalid line"]);
+  // The form-level reason, the line naming the refused field the form shows, then the reason no field shows.
+  expect(f.surface().saveErrors).toEqual(["Cannot save", "form.fixHighlightedFieldsNamed", "lines.0.title: Invalid line"]);
   expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
