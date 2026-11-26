@@ -146,9 +146,11 @@ function DashboardCatalogue({ store, registry }: {
             submitLabel={t("common.create")}
             submittingLabel={t("common.creating")}
             parseValues={(values: MutationDialogValues) => ({ name: mutationDialogValueCodecs.requiredString(values.name, "name") })}
-            mutation={({ name }, options) => catalogue.createPersonal({
+            // The create dialog is one draft: every attempt until a dashboard is created carries its key.
+            idempotencyScope="dashboards.create-personal"
+            mutation={({ name }, options, idempotencyKey) => catalogue.createPersonal({
               name,
-              idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-${Date.now()}`,
+              idempotencyKey: mutationDialogValueCodecs.requiredString(idempotencyKey, "idempotencyKey"),
             }, options)}
             onSubmitted={(result: DashboardSaveResult) => {
               void navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
