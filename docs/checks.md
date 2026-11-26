@@ -549,11 +549,15 @@ pushes to `main`. A pull request's merge gate is the static tier, the SQLite tes
 its changed paths reach, the PostgreSQL contracts they reach with the examples
 profile's planner gate, the packages and the composed stack with its smoke. A
 pull request's run tests its merge commit, the tree `main` gets, so a push to
-`main` runs only the static tier and the whole PostgreSQL lane; merge while `main`
-has not moved since the pull request's run started, or run it again. Both events
+`main` runs the static tier and what a pull request runs in part: the whole SQLite
+suite, which also catches what a pull request's selection missed, and the whole
+PostgreSQL lane. The packages and the composed stack hold while `main` has not moved
+since the pull request's run started; merge only then, or run it again. Both events
 also run CI's `guards` job: gitleaks over the whole history, and no tracked
-`.work/` path. A new push to a pull request cancels the run it supersedes; every
-push to `main` runs to completion. Every job runs where the reusable workflow's
+`.work/` path. A new push to a pull request cancels the run it supersedes, and a new
+push to `main` cancels `main`'s run still in progress, whose tree the new one
+contains; pull requests and `main` never cancel each other's runs. Every job runs
+where the reusable workflow's
 `runs-on` input says: CI passes the `CI_RUNS_ON` repository or organization
 variable, a JSON `runs-on` value such as `["self-hosted", "angee-local"]`, and
 GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork always
