@@ -155,24 +155,27 @@ setup sends no frame's local variables (`include_local_variables=False`), so its
 reports never hold it. With `DEBUG` off, Django's error reports, an HTML admin
 error mail (an `AdminEmailHandler` with `include_html`) included, show none
 either. Under `DEBUG`, Django filters nothing, and its debug page shows every
-local. Each entry of this addon that holds the token or the link hides
-all its locals with a bare `@sensitive_variables()` (`SignInLinkManager.issue`
-and `redeem`, `SignInLinkBackend.authenticate`, the `redeem_sign_in_link`
-mutation); Django's filter cleanses every frame below a mark the same way, the
-helpers they call (`SignInLink.url_for`, the token's parts and digests) among
-them; and the template's send and messaging's write and delivery mark their
+local. Each entry of this addon below GraphQL that holds the token or the link
+hides all its locals with a bare `@sensitive_variables()`
+(`SignInLinkManager.issue` and `redeem`, `SignInLinkBackend.authenticate`);
+Django's filter cleanses every frame below a mark the same way, the helpers
+they call (`SignInLink.url_for`, the token's parts and digests) among them;
+and the template's send and messaging's write and delivery mark their
 own. So, with `DEBUG` off, a failure before the render, in its refusal, inside
 the write, in delivery or in a redemption shows the token in no frame. An
 unexpected failure inside either GraphQL mutation reaches no Django report:
 Angee's schema logs its class, its path and its frames as text (file, line and
 source line, with no locals and no exception value), then detaches the exception,
 so Strawberry's own error line, which follows, carries no traceback either, and
-no log record holds one a report could be built from. That line quotes the
-request's document where the error points, so a token passed as a variable, as
-this addon's page passes it, is logged nowhere, but one written into the
-document itself is logged there. Django never filters an
-exception's own message: nothing this addon raises carries the link or the
-address, but a database's or a transport's error text is its own. Django's
+no log record holds one a report could be built from. That detaching, not a
+mark, is what protects the token on the mutations' path: a traceback from there
+would show it in GraphQL's own frames above the resolver, which no mark
+reaches. Strawberry's line quotes the request's document where the error
+points, so a token passed as a variable, as this addon's page passes it, is
+logged nowhere, but one written into the document itself is logged there.
+Django never filters an exception's own message: nothing this addon raises
+carries the link or the address, but a database's or a transport's error text
+is its own. Django's
 plain-text error report shows no local variables. The mail is stored on the
 system channel, where the link lives until it signs in, expires or is retired:
 

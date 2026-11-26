@@ -7,7 +7,6 @@ from typing import Any, cast
 import strawberry
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
-from django.views.decorators.debug import sensitive_variables
 from rebac import system_context
 from strawberry_django.utils.requests import get_request
 
@@ -26,7 +25,6 @@ class SignInLinkMutation:
     """The session sign-in a link opens."""
 
     @strawberry.mutation
-    @sensitive_variables()
     def redeem_sign_in_link(self, info: strawberry.Info, token: str) -> LoginPayload:
         """Sign in with a single-use sign-in link and bind the person to the session.
 
