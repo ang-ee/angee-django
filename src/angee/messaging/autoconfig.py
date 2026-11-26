@@ -7,7 +7,6 @@ import json
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
-from django.conf import DEPRECATED_EMAIL_SETTINGS
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail.handler import DEFAULT_MAILER_ALIAS, DEFAULT_MAILER_BACKEND
 from django.utils.log import DEFAULT_LOGGING
@@ -23,19 +22,14 @@ from angee.messaging.constants import (
 def _error_mail_logging() -> dict[str, Any]:
     """Django's ``DEFAULT_LOGGING``, with error mail sent through the transport mailer.
 
-    Two changes. ``mail_admins`` names ``using="transport"``, so an error report
-    never reaches the system mailer, which writes to the database the error may
-    be about; with no transport mailer Django drops the report. And the
-    ``django.server`` handler loses its formatter, whose ``{server_time}`` the
-    settings loader would expand as a reference: Django's development server logs
-    its request lines without the time. Every logger keeps Django's own
-    configuration, so configuring them resets none.
+    One change: ``mail_admins`` names ``using="transport"``, so an error report never
+    reaches the system mailer, which writes to the database the error may be about;
+    with no transport mailer Django drops the report. Every logger, handler and
+    formatter keeps Django's own configuration, so configuring them resets none.
     """
 
     logging = copy.deepcopy(DEFAULT_LOGGING)
     logging["handlers"]["mail_admins"]["using"] = TRANSPORT_MAILER_ALIAS
-    del logging["formatters"]
-    del logging["handlers"]["django.server"]["formatter"]
     return logging
 
 
@@ -52,7 +46,6 @@ _Settings = TypedDict(
         "ANGEE_MESSAGING_PROTECTED_LOCAL_KEYS": list[str],
         "ANGEE_MESSAGING_MAX_RECIPIENTS": int,
         "ANGEE_MESSAGING_MAX_ATTACHMENTS": int,
-        "LOGGING": dict[str, Any],
     },
 )
 
@@ -66,7 +59,7 @@ SETTINGS: _Settings = {
     "ANGEE_GRAPHQL_RELATED_COUNTS:append": ["angee.messaging.schema.related_counts"],
     # Channel backends a ``messaging.Channel`` row may select. ``manual`` is the
     # neutral null-object (no source; ``ImplClassField`` requires a non-empty
-    # registry); ``system`` is the system channel's, offered to nobody. Source addons
+    # registry); ``system`` is the system channel's, which is system-only. Source addons
     # add their own with a yamlconf dotted key, e.g.
     # ``"ANGEE_CHANNEL_BACKEND_CLASSES.imap"`` from ``messaging_integrate_imap``.
     "ANGEE_CHANNEL_BACKEND_CLASSES": {
@@ -91,15 +84,8 @@ SETTINGS: _Settings = {
     # Providers bound a message's attachments by total size, not count, so this
     # bounds the transaction: at both bounds a call stays near 2,000 statements.
     "ANGEE_MESSAGING_MAX_ATTACHMENTS": 20,
-    # A plain default, so a host that authors LOGGING keeps its own (README, "Mailers").
-    "LOGGING": _error_mail_logging(),
 }
 
-_LEGACY = (
-    "The legacy email settings {names} are set. Django refuses them beside MAILERS, which angee.messaging "
-    "configures. Move them into MAILERS.transport OPTIONS where the deployment states its settings (host, "
-    "port, username, password, use_tls...), and remove them."
-)
 _OWN_DEFAULT = (
     "MAILERS[\"default\"] is this deployment's own mailer ({backend}). With angee.messaging installed, Django's "
     "default mailer is messaging's system mailer: it records every email on the system channel, and messaging "
@@ -118,16 +104,19 @@ _LOOP = (
 def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     """Make the system mailer Django's default mailer, refusing an authored mailer setting that collides with it.
 
-    Messaging owns ``MAILERS["default"]``: a deployment that states its own, a
-    ``transport`` that is the system mailer, or a legacy ``EMAIL_*`` setting
-    (which Django refuses beside ``MAILERS``) is refused at settings load with
-    the exact edit to make. Otherwise the default is contributed when the
-    deployment states none, and the mail-provider values are derived from the
-    host environment.
+    Messaging owns ``MAILERS["default"]``: a deployment that states its own, or a
+    ``transport`` that is the system mailer, is refused at settings load with the
+    exact edit to make. Otherwise the default is contributed when the deployment
+    states none, and the mail-provider values are derived from the host
+    environment. Django itself refuses legacy ``EMAIL_*`` settings beside ``MAILERS``.
+
+    ``LOGGING`` is contributed only when nothing states one: Django's default, with
+    error mail through the transport (:func:`_error_mail_logging`), marked raw so the
+    settings loader keeps the ``django.server`` formatter's ``{server_time}`` as text.
+    A host that states its own keeps it (``messaging.W001`` reports one whose error
+    mail would reach the system mailer).
     """
 
-    if authored := sorted(DEPRECATED_EMAIL_SETTINGS.intersection(namespace)):
-        raise ImproperlyConfigured(_LEGACY.format(names=", ".join(authored)))
     mailers = namespace.get("MAILERS") or {}
     default, transport = mailers.get(DEFAULT_MAILER_ALIAS), mailers.get(TRANSPORT_MAILER_ALIAS)
     if default is not None and (backend := default.get("BACKEND", DEFAULT_MAILER_BACKEND)) != SYSTEM_MAILER_BACKEND:
@@ -137,6 +126,9 @@ def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     contributed: dict[str, Any] = {}
     if default is None:
         contributed[f"MAILERS.{DEFAULT_MAILER_ALIAS}"] = {"BACKEND": SYSTEM_MAILER_BACKEND}
+    if "LOGGING" not in namespace:
+        contributed["LOGGING:raw"] = True
+        contributed["LOGGING"] = _error_mail_logging()
     if "ANYMAIL" in namespace:
         anymail = namespace["ANYMAIL"]
         contributed["ANYMAIL"] = json.loads(anymail) if isinstance(anymail, str) else anymail

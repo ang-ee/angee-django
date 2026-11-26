@@ -203,13 +203,13 @@ class MessageTriggerTests(TransactionTestCase):
             Trigger.objects.enable(trigger, actor=self.admin)
         self.assertFalse(Trigger.system_queryset().get(pk=trigger.pk).enabled)
 
-    def test_a_channel_not_offered_is_refused_as_a_source_before_any_grant(self):
+    def test_a_system_only_channel_is_refused_as_a_source_before_any_grant(self):
         """An administrator reads the system channel, yet cannot make it a trigger's source."""
         system = self.make_channel("system-source", backend_class="system")
         trigger = self.trigger(channel=system, enabled=False)
         with self.assertRaises(ValidationError) as refused:
             Trigger.objects.enable(trigger, actor=self.admin)
-        self.assertEqual(refused.exception.error_dict["channel"][0].code, "not_offered")
+        self.assertEqual(refused.exception.error_dict["channel"][0].code, "system_only")
         trigger = Trigger.system_queryset().get(pk=trigger.pk)
         self.assertFalse(trigger.enabled)
         self.assertEqual(trigger.granted_relationships(actor=self.admin), ())

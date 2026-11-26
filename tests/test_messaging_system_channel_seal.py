@@ -9,11 +9,22 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from rebac import PermissionDenied, actor_context, system_context
+from django.db import transaction
+from rebac import (
+    ObjectRef,
+    PermissionDenied,
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.models import active_relationship_model
 from rebac.testing import assert_decisions
 
 from angee.base.build import extension_source_map
-from angee.messaging.checks import check_derived_reads
+from angee.messaging.checks import check_messaging_seals
 from angee.messaging.testing.models import Channel, Message, Part, Person, Thread
 from angee.projects.testing.models import Project, ProjectBinding
 from angee.spaces.testing.models import Group, Membership
@@ -30,7 +41,7 @@ _SEALED_CHANNEL_PERMISSIONS = ("read", "reply", "write", "annotate", "delete")
 
 
 def test_the_installed_fragments_widen_the_integration_and_keep_the_seal() -> None:
-    assert check_derived_reads() == []
+    assert check_messaging_seals() == []
 
 
 @pytest.mark.parametrize("permission", _SEALED_CHANNEL_PERMISSIONS)
@@ -42,7 +53,7 @@ def test_check_refuses_fragment_arms_on_the_sealed_channel_permissions(tmp_path:
         f"definition messaging/channel {{\n    relation helper: auth/user\n    permission {permission} = helper\n}}\n",
         name="channel_contrib",
     )
-    assert check_derived_reads([messaging]) == []
+    assert check_messaging_seals([messaging]) == []
     sources = extension_source_map([messaging, contrib])
     runtime = tmp_path / "runtime"
     for relative, text in sources.items():
@@ -51,7 +62,7 @@ def test_check_refuses_fragment_arms_on_the_sealed_channel_permissions(tmp_path:
         output.write_text(text)
     _apply_emitted_schema_paths([messaging, contrib], runtime, sources=sources)
 
-    [error] = check_derived_reads([messaging, contrib])
+    [error] = check_messaging_seals([messaging, contrib])
     assert error.id == "messaging.E003"
     assert f"messaging/channel#{permission}" in error.msg
     assert "channel_contrib" in error.msg
@@ -164,17 +175,15 @@ def test_a_system_message_is_never_trashed_through_a_records_moderation(sealed: 
     assert not message.can_trash(moderate_access=True)
 
 
-def test_the_system_channel_is_offered_to_nobody_yet_an_administrator_may_compose_on_it(
+def test_nobody_sends_from_the_system_channel_by_choice_yet_an_administrator_may_compose_on_it(
     sealed: SimpleNamespace,
 ) -> None:
-    """Today's answer for a person's compose on the system channel, pending the framework coordinator's ruling.
+    """The system channel is system-only, so no seat is given it to send from; ``compose`` decides ``reply``.
 
-    No seat, administrators included, is offered the system channel to send from
-    (``ChannelQuerySet.outbound_email``, the console's sendable selection). Yet ``compose`` decides
-    ``reply`` alone, which administrators hold on it, so an administrator's
-    ``compose(channel=system_channel())`` is admitted. Whether a person's compose there is admitted
-    (an administrator's test send is one candidate) is pending; the line that would refuse it is
-    ``MessageManager.compose``'s channel gate also refusing a backend that is not offered.
+    No seat, administrators included, finds it on the sending selection
+    (``ChannelQuerySet.outbound_email``). ``compose`` decides ``reply`` on the channel,
+    which administrators alone hold there, so an administrator's
+    ``compose(channel=system_channel())`` is admitted and every other seat's is refused.
     """
 
     seats = sealed.seats
@@ -205,3 +214,91 @@ def test_system_threads_show_in_administrators_inbox_lists_and_nobody_elses(seal
         for name, actor in (("admin", seats.admin), ("member", seats.member), ("replier", replier_elsewhere))
     }
     assert listed == {"admin": True, "member": False, "replier": False}
+
+
+def test_an_administrators_share_of_system_mail_is_refused_and_the_member_reads_nothing(
+    sealed: SimpleNamespace,
+) -> None:
+    """Nobody shares a system thread or grants on a system message, administrators included."""
+
+    seats = sealed.seats
+    _channel, thread, message, part = sealed.rows["system"]
+    with pytest.raises(PermissionDenied):
+        thread.with_actor(seats.admin).grant_reader(user=seats.member)
+    with pytest.raises(PermissionDenied):
+        message.with_actor(seats.admin).grant_record_access("reader", seats.member)
+    member = to_subject_ref(seats.member)
+    assert not active_relationship_model().objects.filter(
+        subject_type=member.subject_type, subject_id=member.subject_id,
+    ).exists()
+    assert_decisions(checks=[
+        (seats.member, action, target, False)
+        for target, action in ((thread, "read"), (message, "read"), (message, "read_inbox"), (part, "read"))
+    ])
+
+
+def test_tuples_no_verb_writes_on_system_mail_read_it_but_never_write_or_share_it(sealed: SimpleNamespace) -> None:
+    """A tuple on a system thread or message, which no verb writes, and the identity rule: what each holds.
+
+    Their reads are not subtracted (the inbox's planned reads cannot afford it); nobody writes or
+    shares the thread or writes the message, administrators included, and only an administrator
+    deletes either.
+    """
+
+    seats = sealed.seats
+    _channel, thread, message, part = sealed.rows["system"]
+    holders = {name: create_user(f"seal-{name}") for name in ("thread_reader", "thread_editor", "message_reader",
+                                                                 "message_editor")}
+    identity = SubjectRef(ObjectRef("provenance/seed", "seal-identity"))
+    for target, relation, holder in (
+        (thread, "reader", holders["thread_reader"]), (thread, "editor", holders["thread_editor"]),
+        (message, "reader", holders["message_reader"]), (message, "editor", holders["message_editor"]),
+    ):
+        grant(target, relation, holder)
+    with system_context(reason="tests.messaging.seal.identity"):
+        write_relationships([RelationshipTuple(
+            ObjectRef("provenance/role", "messaging_identity_source"), "member", identity,
+        )])
+    seated = (*holders.values(), identity)
+    assert_decisions(checks=[
+        *((seat, "read", message, True) for seat in seated),
+        *((seat, "read", part, True) for seat in seated),
+        *((seat, action, thread, False) for seat in seated for action in ("write", "share", "delete")),
+        *((seat, action, message, False) for seat in seated for action in ("write", "delete")),
+        (seats.admin, "share", thread, False), (seats.admin, "write", message, False),
+        (seats.admin, "write", thread, False), (seats.admin, "delete", thread, True),
+        (seats.admin, "delete", message, True),
+    ])
+
+
+def test_nobody_writes_or_binds_a_system_thread_administrators_included(sealed: SimpleNamespace) -> None:
+    """Messaging's write arms on a system thread admit nobody, so a group or project binding of it is refused.
+
+    The control thread, on an ordinary channel, takes both bindings from the same administrator, so the
+    refusal is the seal's. Both bindings are tried on the bare host, which installs spaces and projects.
+    """
+
+    seats = sealed.seats
+    thread, control = sealed.rows["system"][1], sealed.rows["control"][1]
+    audience, project_reader = create_user("seal-audience"), create_user("seal-bound-project-reader")
+    with system_context(reason="tests.messaging.seal.audience"):
+        group = Group.objects.create(name="Seal audience", slug="seal-audience")
+        Membership.objects.create(group=group, party=Person.objects.for_user(audience), role="member",
+                                  is_confirmed=True)
+        project = Project.objects.create(title="Seal binding")
+    grant(project, "reader", project_reader)
+    assert_decisions(checks=[(seats.admin, "write", thread, False), (seats.admin, "write", control, True)])
+    with pytest.raises(PermissionDenied), transaction.atomic():
+        thread.with_actor(seats.admin).groups.add(group)
+    with actor_context(seats.admin), pytest.raises(PermissionDenied), transaction.atomic():
+        ProjectBinding.objects.bind(project=project, target=thread)
+    control.with_actor(seats.admin).groups.add(group)
+    with actor_context(seats.admin):
+        ProjectBinding.objects.bind(project=project, target=control)
+    with system_context(reason="tests.messaging.seal.bound"):
+        assert not Thread._base_manager.get(pk=thread.pk).groups.exists()
+        assert list(ProjectBinding.objects.filter(project=project).values_list("object_id", flat=True)) == [control.pk]
+    assert_decisions(checks=[
+        (seat, "read", target, target == control)
+        for seat in (audience, project_reader) for target in (thread, control)
+    ])

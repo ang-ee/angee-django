@@ -143,14 +143,12 @@ An enabled app may contribute `autoconfig.SETTINGS` and a derived
 operators such as `:append`. Keep contributions typed, deterministic and free
 of model imports. The compiler merges them in enabled dependency order.
 
-An addon's `settings(namespace)` may refuse an authored setting only when it
-collides with a setting the addon contributes or owns. It raises Django's
-`ImproperlyConfigured`, naming the exact edit, and every process stops at settings
-load; it never refuses on an environment or deployment fact it cannot own. Each
-refusal is tested, beside a host that makes the edit and starts. Messaging is the
-case: it owns Django's default mailer, so it refuses a deployment's own
-`MAILERS.default`, a transport that is its system mailer, and legacy `EMAIL_*`
-settings ([`angee.messaging.autoconfig`](../src/angee/messaging/autoconfig.py)).
+An addon's `settings(namespace)` may refuse an authored value only for a setting
+whose value its own runtime contract requires and which it documents as owned.
+It raises Django's `ImproperlyConfigured`, naming the exact edit, and every
+process stops at settings load; it never refuses on an environment or deployment
+fact it cannot own. Each refusal is tested, beside a host that makes the edit and
+starts. Messaging's [mailers](../src/angee/messaging/README.md#mailers) are the case.
 
 An addon contributes its own implementation registry entries and hooks. It does
 not replace project roots or generated-output identity. Each capability owns
@@ -232,8 +230,11 @@ histories, including history-only apps whose source addon has been removed.
 Read-only checks never author missing packages. A disabled migration mapping
 cannot receive authored migrations or a history reset.
 
-The native drop guard refuses autodetected removal of populated storage.
-Declare a reviewed data cutover when retiring data. Resources' retirement policy
+The native drop guard refuses removal of populated storage where `makemigrations`
+autodetects it and where `migrate`, and so `provision`, is about to apply it from the
+project's history. Declare a reviewed data cutover when retiring data: the migration
+that moves or retires the data writes its removal as `IntendedRemoveField` or
+`IntendedDeleteModel` from `django_compose.operations`. Resources' retirement policy
 may exempt only rows proved seeded by the retiring owner through its ledger;
 other rows remain protected. Database aliases and routing remain Django-owned.
 `check_migrations`, `retire_history` and `reset_migration_history` are explicit

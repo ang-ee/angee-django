@@ -259,11 +259,11 @@ MAILERS:
 ```
 
 Settings load refuses, naming the edit, a mailer setting that collides with the
-one messaging contributes: a deployment's own `MAILERS.default` (rename it to
-`MAILERS.transport`, or remove it when a transport is stated), a transport that
-is the system mailer, which would deliver nothing, and Django's legacy `EMAIL_*`
-settings (move them into `MAILERS.transport` `OPTIONS`), which Django refuses
-beside `MAILERS`. The host no longer consumes `EMAIL_URL` or `EMAIL_BACKEND`
+one messaging owns: a deployment's own `MAILERS.default` (rename it to
+`MAILERS.transport`, or remove it when a transport is stated), and a transport
+that is the system mailer, which would deliver nothing. Django itself refuses its
+legacy `EMAIL_*` settings beside `MAILERS`, which messaging always states: move
+them into `MAILERS.transport` `OPTIONS`. The host no longer consumes `EMAIL_URL` or `EMAIL_BACKEND`
 environment inputs; existing django-yamlconf overlays own secret values. One
 limit belongs to the settings loader: a `MAILERS` written as a Python literal in
 `settings.py` loses its raw marker once messaging contributes the default beside
@@ -278,7 +278,7 @@ it, so a `{...}` in one of its values is expanded as a settings reference;
 | its own `default` | refused: rename it to `transport` |
 | its own `default` and `transport` | refused: remove `default` |
 | `transport` as the system mailer | refused |
-| a legacy `EMAIL_*` setting | refused: move it into `MAILERS.transport` `OPTIONS` |
+| a legacy `EMAIL_*` setting | refused by Django: move it into `MAILERS.transport` `OPTIONS` |
 | `transport` as Django's locmem, console, file or dummy backend | starts; `check --deploy` reports `messaging.E004` |
 
 Delivering a recorded message marks its context, and the system mailer refuses
@@ -291,22 +291,38 @@ instruction.
 
 Error mail goes through the transport, never the system channel, which lives in
 the database the error may be about. Messaging contributes `LOGGING` as Django's
-`DEFAULT_LOGGING` with two changes: the `mail_admins` handler names
-`using: transport` (with no transport, Django drops the report), and the
-`django.server` handler has no formatter, because the settings loader would
-expand its `{server_time}` as a reference, so Django's development server logs
-its request lines without the time. A host that authors its own `LOGGING` keeps
-it, and with it Django's default `mail_admins`, which sends through the system
-mailer; it names the transport on the handler that reports errors:
+`DEFAULT_LOGGING` with one change, the `mail_admins` handler naming
+`using: transport` (with no transport, Django drops the report). It is contributed
+raw, so the settings loader keeps the `django.server` formatter's `{server_time}`
+as text. A host that states its own `LOGGING` keeps it; `messaging.W001` reports
+an `AdminEmailHandler` in it that names no `using`, which would send through the
+system mailer. A host's own block keeps Django's loggers and names the transport
+on the handler that reports errors:
 
 ```yaml
+LOGGING:raw: true
 LOGGING:
   version: 1
   disable_existing_loggers: false
   filters:
     require_debug_false:
       (): django.utils.log.RequireDebugFalse
+    require_debug_true:
+      (): django.utils.log.RequireDebugTrue
+  formatters:
+    django.server:
+      (): django.utils.log.ServerFormatter
+      format: "[{server_time}] {message}"
+      style: "{"
   handlers:
+    console:
+      level: INFO
+      filters: [require_debug_true]
+      class: logging.StreamHandler
+    django.server:
+      level: INFO
+      class: logging.StreamHandler
+      formatter: django.server
     mail_admins:
       level: ERROR
       filters: [require_debug_false]
@@ -314,8 +330,12 @@ LOGGING:
       using: transport
   loggers:
     django:
-      handlers: [mail_admins]
-      level: ERROR
+      handlers: [console, mail_admins]
+      level: INFO
+    django.server:
+      handlers: [django.server]
+      level: INFO
+      propagate: false
 ```
 
 ## System mail
@@ -327,7 +347,7 @@ no grant. `ChannelManager.system_channel()` is its one lookup, read as named
 system work; absent, it refuses with `SystemChannelMissing`
 (`SYSTEM_CHANNEL_MISSING`, under `channel`).
 
-[`MessageManager.compose_as_system`](managers.py) writes framework mail there:
+[`MessageManager.compose_as_system`](managers.py) writes system mail there:
 one queued email per call, through `compose`'s own writer, in the caller's
 transaction, from the deployment's `DEFAULT_FROM_EMAIL`
 (`AnymailEmailChannelBackend.default_sender`; the channel names no sender of its own).
@@ -347,12 +367,15 @@ before the `@` is outside ASCII is refused, as no transport here speaks SMTPUTF8
 
 The system mailer carries what a Django email can mean on the system channel:
 `to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.
-It drops `Message-ID` and `Date`, does not carry `from_email`, and refuses
-attachments, `reply_to`, any other header, any other body or alternative type,
-and an `AnymailMessage`. A batch is recorded whole or not at all; built with
+It drops `Message-ID` and `Date`, and does not carry `from_email`: system mail
+goes from the default sender, which replaces `SERVER_EMAIL` on a direct
+`mail_admins` too. It refuses attachments, `reply_to`, any other header, any
+other body or alternative type, an `AnymailMessage`, an empty body (which Django
+itself would send), and a recipient the transport cannot carry (`cannot_carry`,
+under its role), so a mail that could never leave is never recorded as sent. A batch is recorded whole or not at all; built with
 `fail_silently`, it logs a refusal and reports none sent.
 
-The system channel holds the framework's own mail, live sign-in links among it,
+The system channel holds system mail, live sign-in links among it,
 so administrators alone read it, send on it, write, annotate or delete it
 (messaging's `permissions.zed`, the channel's system seal; `messaging.E003`
 refuses a fragment arm on any of those permissions). Every other way a channel
@@ -366,22 +389,28 @@ is read is closed on it:
 | a spaces team bound to the channel | grants nothing |
 | a project bound to its integration | grants nothing |
 | its integration's owner, after an administrator transfers it | grants nothing |
-| a workflow trigger's principal | enabling a trigger on it is refused before any grant (`not_offered`) |
+| a workflow trigger's principal | enabling a trigger on it is refused before any grant (`system_only`) |
 
 A system message is trashed only through the shared trash verb, which decides
 `delete` on it: administrators alone. A record's moderation never takes one off
 (`Message.trash_error`): it sits in the system channel's own thread.
 
-A grant on one system thread or message (thread `reader`, message `reader`, a
-spaces group or project bound to the thread) is not sealed: each needs an
-administrator's own act, because system threads are ownerless and channel
-`write` is sealed, and sealing thread reads would touch the inbox's hottest
-statement.
+No verb shares a system thread or grants on a system message. Nobody shares a
+system thread or writes a system message, administrators included, and none of
+messaging's own arms writes a system thread, so the share verbs and a group or
+project binding of the thread are refused; administrators keep their deletes.
+What still reaches system mail without any verb: a `reader` or `editor` tuple
+written directly and the source-identity rule's principal, which read it, and
+another addon's arm on the thread's `read_granted`, `chatter_read` or `write`,
+which holds whenever a system thread carries what that arm keys on (a group, a
+project binding, a record's chatter edge), which only system code can give it.
+Their reads are not subtracted because the inbox's planned reads cannot afford
+it, and the composer appends the fragments' `write` arms after the seal.
 
-The system channel is not offered (`ChannelBackend.offered`): it is never
+The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
-source. `compose` itself decides `reply` alone, which administrators hold there,
-so an administrator's `compose(channel=Channel.objects.system_channel())` is
-admitted today; whether a person may compose on the system channel is pending.
-Its readers find it among channels as "System mail", its threads in the inbox
+source. `compose` decides `reply` on the channel, which administrators alone
+hold there, so an administrator's
+`compose(channel=Channel.objects.system_channel())` is admitted and every other
+person's is refused. Its readers find it among channels as "System mail", its threads in the inbox
 and its messages in timelines.

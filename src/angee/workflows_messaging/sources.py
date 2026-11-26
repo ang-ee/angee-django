@@ -36,23 +36,22 @@ class MessageIngested(TriggerSource):
     def check_access(cls, trigger: Any, actor: Any, record: Any = None) -> None:
         """Check the channel when enabling and recheck current scope on admission.
 
-        A channel the actor cannot read is refused as such; a readable one whose
-        backend is not offered (``ChannelBackend.offered``, the system channel's)
-        is refused under ``channel``, before any grant.
+        A channel the actor cannot read is refused as such; a readable system-only
+        one (``Channel.system_only``, the system channel) is refused under
+        ``channel``, before any grant.
         """
         channel_id = trigger.require_channel_id()
         if record is not None:
             if record.channel_id != channel_id:
                 raise PermissionDenied("The message no longer belongs to the trigger's channel.")
-        channel_model = apps.get_model("messaging", "Channel")
-        visible = channel_model.objects.with_actor(actor).with_action("read")
-        backend_class = visible.filter(pk=channel_id).values_list("backend_class", flat=True).first()
-        if backend_class is None:
+        visible = apps.get_model("messaging", "Channel").objects.with_actor(actor).with_action("read")
+        channel = visible.filter(pk=channel_id).first()
+        if channel is None:
             subject = "The enabling user" if record is None else "The workflow principal"
             raise PermissionDenied(f"{subject} cannot read the channel.")
-        if not channel_model.backend_class.field.resolve_class(backend_class).offered:
+        if channel.system_only:
             raise ValidationError({"channel": ValidationError(
-                "This channel is not offered as a trigger source.", code="not_offered",
+                "The system channel is never a trigger source.", code="system_only",
             )})
 
     @classmethod

@@ -183,6 +183,12 @@ class Channel(Bridge, inherits="integrate.Integration"):
 
         return self.get_backend_class_impl().source_kind
 
+    @property
+    def system_only(self) -> bool:
+        """Whether this channel's protocol serves the system channel alone (``ChannelBackend.system_only``)."""
+
+        return self.get_backend_class_impl().system_only
+
     def can_reconcile_delivery(self) -> bool:
         """Read the concrete capability's backend declaration without opening it."""
 

@@ -265,7 +265,7 @@ def test_outbound_email_names_why_its_selection_is_empty(db: None) -> None:
     assert off.value.code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
 
 
-def test_a_channel_whose_backend_is_not_offered_is_never_selected_to_send_from(db: None) -> None:
+def test_a_system_only_channel_is_never_selected_to_send_from(db: None) -> None:
     """The system channel delivers email, yet nobody chooses it: every outbound selection leaves it out."""
 
     del db

@@ -56,22 +56,38 @@ confirmed opening verb.
 
 ## Managed people
 
-Saved User records inherit IAM's account verbs as `iam.User#actions-menu`
+Saved User records inherit IAM's account actions as `iam.User#actions-menu`
 children: deactivate/reactivate (`set_user_active`), rename (`rename_user`,
 name fields only), give access (`issue_user_password`), reset access
-(`reset_user_password`), set a chosen password (`set_user_password`) and send a
-sign-in link (`issue_user_sign_in_link`, below). Set password confirms the new
-password locally; the other changing verbs take an explicit confirmation.
-Changing verbs take the revision the client read (the issue verbs excepted),
-check their own Zed permission on `auth/user`
-(`set_active`, `rename`, `issue_password`, `reset_password`,
-`issue_sign_in_link`, `set_password`; admin by default)
+(`reset_user_password`) and set a chosen password (`set_user_password`). Set
+password confirms the new password locally; the other changing actions take an
+explicit confirmation. The actions are an open set: `User.account_actions` names
+them, and an addon contributes its own by extending it and
+`User.account_action_blockers` through `super()`, running its action under
+`User.lock_for_account_action`. Whatever its hook returns, the action first
+meets IAM's person-kind and protected-account blockers
+(`account_action_refusals`), which no override of that hook drops.
+`account_action_blockers` is the one extension point: `account_action_error`,
+`account_action_annotations`, `lock_for_account_action` and `account_actions_for`
+are IAM's own, and a donor that overrode one would remove protection unreported.
+The addon adds its `iam.User#actions-menu` child
+(`AccountActionBar`, `offersAccountAction`), as
+[`iam_messaging`](../iam_messaging/README.md)'s Send sign-in link does. Its
+permission unions into `active_account_granted` or `nonstaff_account_granted`
+when the action acts only on active or non-staff accounts; IAM derives
+`active_account` and `nonstaff_account` from them and seals both
+(`angee.iam.E004`). At start-up IAM refuses a composed action offered twice or
+not declared on `auth/user` (`angee.iam.E005`). Changing actions take the revision the client read (the issue
+actions excepted), check their own Zed permission on `auth/user`
+(`set_active`, `rename`, `issue_password`, `reset_password`, `set_password`;
+admin by default)
 and refuse protected accounts: the actor's own, staff, superusers and effective
 members of `iam/protected:main#member`, except Set password's administrative
 admission described below. Issue and reset return the username with
 a one-time secret, shown only in the shared `useSecretReveal` prompt with a copy
 control; nothing reaches a record or query cache. Controls read the row's
-`account_actions` projection, which batches the verbs' own conditions.
+`account_actions` projection, which batches the actions' own conditions and lists
+each offered action by its Zed permission name.
 
 The generic update runs through `write` plus `write__<field>` gates: identity,
 credential and authority columns, a person's UI preferences and the account's
@@ -130,9 +146,9 @@ person's password across **all protected classes**: peer administrators, staff,
 superusers and holders of any elevated role, as well as ordinary accounts.
 The actor's own account still requires Change password with the current password,
 which keeps the requesting session; service and other non-person accounts remain
-refused. Issue password, Reset password and the other account verbs retain their
+refused. Issue password, Reset password and the other account actions retain their
 protected-account refusals. A successful set invalidates the target's existing
-session hashes and retires outstanding sign-in links. After commit, IAM logs one
+session hashes. After commit, IAM logs one
 `set_password` event with `actor_public_id` and `target_public_id`; it records no
 password, hash or validator message. Actorless system calls retain the full
 protected-account refusal; other non-user subjects cannot set passwords.
@@ -151,91 +167,34 @@ handling. Both confirm the new password locally; confirmation never reaches the 
 The new mutations return no password, and neither the form's record nor the
 database stores a plaintext password.
 
-## Sign-in links
+## Login throttling
 
-A person can sign in without a password through an emailed link that works once.
-`User.issue_sign_in_link()` is an account verb like `issue_password`: it locks
-the row, checks the `issue_sign_in_link` permission (admin by default, unioned
-into `active_account` and `nonstaff_account`) and refuses protected, inactive
-and service accounts and any account without a valid email. It also refuses a
-second link within `ANGEE_IAM_SIGN_IN_LINK_COOLDOWN` seconds (60 by default).
-It stores a `SignInLink` row with a keyed digest of the token, never the token
-itself, and a digest of the account facts the link is bound to. Once that row
-commits, the link goes to the account's `email` through Django's default mailer
-as plain text. The row then records `sent_at`, and `sign_in_link_sent` fires with
-the account and the row. The link leaves through Django's default mailer once
-the issuing transaction commits. Where that mailer records mail, the link is
-stored with it, and "accepted" means recorded. `created_by` records who issued it. System callers issue under `system_context`, which leaves
-`created_by` empty; an automatic invitation must follow an approval a person
-reviewed, never an unreviewed request. The console mutation is
-`issue_user_sign_in_link` (an `ActionResult`), offered through `account_actions`
-as `issue_sign_in_link`.
-
-Only the newest link the mailer accepted signs in. Issuing again retires the
-older ones once the new email is sent, and a failed send leaves the previous
-link working. A link expires after `ANGEE_IAM_SIGN_IN_LINK_TTL` seconds (three
-days by default). Like Django's password-reset tokens, it is bound to the
-account's email, password and last sign-in: a new address, a password set or
-changed, or any sign-in retires it. Saving the account inactive (`set_active`
-or an administrative update) retires it for good, so reactivation revives none. It never signs in a protected account.
-Rotating `SECRET_KEY` voids every outstanding link, because `salted_hmac`
-ignores `SECRET_KEY_FALLBACKS`. Whoever may change an account's email
-(`write__email`, administrators by default) can then send its links to the new
-address. Nothing notifies the previous address.
-
-Redemption is Django's `authenticate()` with the credentials of
-`angee.iam.auth.sign_in_credentials`, through `SignInLinkBackend`, so
-django-axes throttles links as it does passwords. Django masks the token before
-`user_login_failed` receivers see it. The token's account public id is not a
-secret: an unknown one refuses like a wrong secret. A request makes one sign-in
-attempt: `login` and `redeem_sign_in_link` share `angee.iam.auth.authenticate_once`,
-so a second attempt in the same HTTP request (aliased or batched fields) is
-refused with "Only one sign-in attempt is allowed per request." before
-`authenticate()` runs.
+Every credential authenticates through Django's `authenticate()`, as the
+request's one attempt (`angee.iam.auth.authenticate_once`): a second attempt in
+the same HTTP request (aliased or batched fields) is refused with "Only one
+sign-in attempt is allowed per request." before `authenticate()` runs.
 
 IAM owns the axes policy in its autoconfig. `AXES_COOLOFF_TIME` lifts a lockout
 after an hour, and nothing else does: a successful sign-in clears no failures,
 so a client cannot reset its count by signing in to an account it holds. Axes
 records each failure under the client's IP address and a username, which
-`AXES_USERNAME_CALLABLE` sets. For a link, the username is the account public id
-the token names; for an account that does not exist, it is the string the token
-carries. For a password, it is the sign-in name. IAM leaves axes locking out by
-IP address. A deployment that adds `username` to `AXES_LOCKOUT_PARAMETERS`
-throttles each account under those keys, separately for links and for
-passwords, and never under an empty username. `AXES_WHITELIST_CALLABLE` exempts
-a genuine link that is spent (used, expired, replaced or retired, or for an
-account that can no longer sign in): its holder had the real link and made no
-guess. The exemption covers only that attempt and only credentials naming the
-same account, and it ends with the attempt. A project that sets its own
-whitelist callable loses that exemption. The public mutation
-`redeem_sign_in_link(token)` signs the person in and returns them; every refusal
-is the same `ok: false`.
+`AXES_USERNAME_CALLABLE` sets: for a password, the sign-in name; for another
+credential, the account it names as `sign_in_account`, unmasked (the string it
+carries, for an account that does not exist). IAM leaves axes locking out by IP
+address. A deployment that adds `username` to `AXES_LOCKOUT_PARAMETERS`
+throttles each account under those keys, separately per credential, and never
+under an empty username. A credential backend that refuses a genuine but spent
+credential calls `mark_spent_credential`; `AXES_WHITELIST_CALLABLE`
+(`spent_credential`) exempts that attempt only, only for credentials naming the
+same account, and the mark ends with the attempt. A project that sets its own
+whitelist callable loses that exemption.
 
-Links open `ANGEE_PUBLIC_ORIGIN` + `/sign-in-link#token=...`. Base owns that
-setting and its rule (`angee.base.origins.public_origin`): only an `https`
-origin (`http` only under `DEBUG`) with a valid host and port and no wildcard,
-user info or path joins the CSRF trusted origins and builds links, and
-`angee.E051` reports any other set value. Links are also built only when
-`DEFAULT_FROM_EMAIL` is a valid address and `MAILERS["default"]` exists.
-Otherwise no link is offered and the verb refuses. The token rides the
-fragment, which no browser request, access log or referrer carries, and
-Angee's browser error reporting strips fragments from what it records. IAM's
-public `/sign-in-link` route renders the login page, with the link as its
-sign-in method. It clears the token from the address bar through the router
-and redeems it only when the person clicks, so a mail scanner that opens the
-link does not spend it. After sign-in it shows who is now signed in before
-continuing. The password form stays below it as the fallback.
-
-The token still leaves the server inside the email. The provider's message
-store, a database-backed mail queue and webmail link wrappers can keep it, and
-so does a click-tracking redirect. The browser's history, and any history sync,
-can record the visited URL, fragment included, before the page clears it. Click tracking is set per provider account
-or message stream, not per message, so send these emails through a stream with
-tracking off. Until the commit sends it, the token also lives in the on-commit
-callback (`partial(link.send, token)`). An error reporter that records frame
-locals would see it there. Angee's Sentry setup records none, and the functions
-holding the token are marked `sensitive_variables` for Django's own reports.
-One-time passwords remain the path for an account that cannot receive email.
+Every session records `angee.iam.auth.SESSION_BACKEND`, IAM's `ModelBackend`,
+whatever credential opened it: a credential's sign-in binds it, as OIDC login
+does, so a session outlives its credential's backend.
+Start-up refuses an `AUTHENTICATION_BACKENDS` entry that does not import, and a
+list without `SESSION_BACKEND` (`angee.iam.E006`): Django imports backends only
+when someone signs in.
 
 ## Presence
 

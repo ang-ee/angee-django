@@ -1,4 +1,4 @@
-"""Django's own mail is recorded on the system channel and sent once through the one transport mailer."""
+"""System mail is recorded on the system channel and sent once through the one transport mailer."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from anymail.message import AnymailMessage
 from django.core import mail
+from django.core.checks import Tags, run_checks
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.core.mail.backends.base import BaseEmailBackend
@@ -26,7 +27,6 @@ from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
 from angee.messaging.constants import DELIVER_MESSAGE_TASK, SYSTEM_CHANNEL_BACKEND, SYSTEM_MAILER_BACKEND
 from angee.messaging.email import SystemChannelBackend, SystemMailer
-from angee.messaging.managers import _OUTGOING_ACTOR
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
@@ -149,6 +149,7 @@ def test_a_blank_reason_is_refused(system_channel: Any) -> None:
         pytest.param({"text": "", "html": ""}, "text", "required", id="empty-body"),
         pytest.param({"subject": "One\nTwo"}, "subject", "invalid", id="two-line-subject"),
         pytest.param({"bcc": [f"r{index}@example.test" for index in range(51)]}, "bcc", "too_many", id="too-many"),
+        pytest.param({"cc": ["jörg@example.test"]}, "cc", "cannot_carry", id="uncarriable-cc"),
     ],
 )
 def test_compose_refusals_come_first_and_write_nothing(
@@ -218,10 +219,12 @@ def test_system_mail_records_the_causing_actor_and_lands_its_handles_with_no_cre
         "new-person@example.test", "New Person", None,
     )
     assert (sender.value, sender.created_by_id) == ("noreply@example.test", None)
-    # The caller's changeset holds the conversation under the causing user; the handles, landed under the
-    # non-user attribution, are recorded beside them under the same change reason and name no user.
+    # The caller's changeset holds the conversation under the causing user; the handles are recorded beside
+    # it under the same change reason, and their history names no user.
     assert thread_history == {("tests.system_mail.request", str(to_subject_ref(member)))}
-    assert handle_history == {("tests.system_mail.request", str(_OUTGOING_ACTOR))}
+    assert {reason for reason, _actor in handle_history} == {"tests.system_mail.request"}
+    user_type = to_subject_ref(member).subject_type
+    assert not any(actor.startswith(f"{user_type}:") for _reason, actor in handle_history), handle_history
     for handle in (recipient, sender):
         for action in ("read", "write", "delete"):
             assert not handle.with_actor(member).has_access(action), (handle.value, action)
@@ -377,6 +380,18 @@ def test_a_callers_message_id_date_and_sender_are_not_kept(system_mailer: Any) -
     assert wire["Date"] != "Mon, 01 Jan 2001 00:00:00 +0000"
 
 
+def test_a_django_email_to_an_address_the_transport_cannot_carry_is_refused_and_nothing_is_recorded(
+    system_mailer: Any,
+) -> None:
+    """Never recorded as sent: a sign-in link to such an address would replace the working one and arrive nowhere."""
+
+    rows = _rows()
+    with pytest.raises(ValidationError) as refused:
+        send_mail("Sign in", "Your link.", None, ["jörg@example.test"])
+    assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+    assert _rows() == rows
+
+
 def test_an_email_with_no_recipient_is_skipped(system_mailer: Any) -> None:
     rows = _rows()
     assert SystemMailer().send_messages([EmailMessage("Nobody", "Body.")]) == 0
@@ -462,6 +477,7 @@ def test_error_mail_goes_through_the_transport_never_the_system_channel(system_m
 
     settings.ADMINS = ["ops@example.test"]
     settings.DEBUG = False
+    assert settings.LOGGING["formatters"]["django.server"]["format"] == "[{server_time}] {message}"
     logging.config.dictConfig(settings.LOGGING)
     (handler,) = [item for item in logging.getLogger("django").handlers if isinstance(item, AdminEmailHandler)]
     record = logging.LogRecord("django.request", logging.ERROR, __file__, 1, "Boom", None, None)
@@ -472,3 +488,27 @@ def test_error_mail_goes_through_the_transport_never_the_system_channel(system_m
     # Django's own handler sends through the default mailer, which records the report on the system channel.
     AdminEmailHandler().emit(record)
     assert len(_recorded(system_mailer)) == 1
+
+
+@pytest.mark.parametrize(
+    ("default", "handler", "warned"),
+    [
+        pytest.param(SYSTEM, {}, True, id="no-using"),
+        pytest.param(SYSTEM, {"using": "default"}, True, id="using-default"),
+        pytest.param(SYSTEM, {"using": "transport"}, False, id="using-transport"),
+        pytest.param(LOCMEM, {}, False, id="default-is-not-the-system-mailer"),
+    ],
+)
+def test_a_logging_handler_that_would_record_error_mail_is_reported(
+    settings: Any, default: dict[str, str], handler: dict[str, str], warned: bool,
+) -> None:
+    settings.MAILERS = {"default": default, "transport": LOCMEM}
+    settings.LOGGING = {"version": 1, "handlers": {
+        "ops": {"class": "django.utils.log.AdminEmailHandler", "level": "ERROR", **handler},
+    }}
+    assert ("messaging.W001" in {message.id for message in run_checks(tags=[Tags.mail])}) is warned
+
+
+def test_messagings_own_logging_is_not_reported(settings: Any) -> None:
+    settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    assert "messaging.W001" not in {message.id for message in run_checks(tags=[Tags.mail])}

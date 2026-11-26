@@ -65,17 +65,29 @@ live in code docstrings.
     libraries are `django-anymail` and `requests`. Such a host migrates,
     synchronizes the permission schema and loads the install tier for messaging,
     whose mail settings then apply.
-- `angee.messaging`, `angee.workflows_messaging`, `angee.iam`: **Django's own mail is
-  recorded on a system channel and sent through one transport mailer.**
-  - **Upgrade first:** with messaging installed, start-up refuses a deployment that
-    states its own `MAILERS.default` until it is renamed `MAILERS.transport`
-    (keeping its `BACKEND` and `OPTIONS`; remove it instead when a transport is
-    stated), and refuses legacy `EMAIL_*` settings until they move into
-    `MAILERS.transport` `OPTIONS`; the refusal names the edit. Then provision: it
-    loads the system channel's rows and runs `rebac sync` for schema revision 30.
+- `angee.messaging`, `angee.workflows_messaging`, `angee.iam_messaging`: **System mail: each email
+  Django sends is recorded on a system channel and sent through one transport mailer.**
+  - **Upgrade first:** stop the serving processes and workers through the operator
+    before editing settings: with messaging installed, start-up refuses a
+    deployment that states its own `MAILERS.default` until it is renamed
+    `MAILERS.transport` (keeping its `BACKEND` and `OPTIONS`; remove it instead
+    when a transport is stated), and the refusal names the edit; a process that
+    reloads before the edit stops at settings load. Django itself refuses legacy
+    `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
+    `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
+    rows and runs `rebac sync` for schema revision 32. Without that load, every
+    email Django sends raises `SystemChannelMissing` at the sender (a password
+    reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
+    channel backend enums gain `SYSTEM`.
     A host that authors `LOGGING` names `using: transport` on its
     `AdminEmailHandler` (messaging's README gives the block). Tests that observed
-    delivery through `MAILERS={"default": ...}` override `transport`.
+    delivery through `MAILERS={"default": ...}` override `transport`. With
+    messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
+    say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
+    The emailed sign-in link (`angee.iam_messaging`) still asks the default
+    mailer, so a host with no transport offers a link whose send raises and
+    stamps nothing, and a recorded link whose delivery later fails is stamped as
+    sent.
   - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
     wherever messaging is installed, contributed by messaging's autoconfig. It
     records each email (a password reset, `sendtestemail`, a link an addon mails)
@@ -93,30 +105,42 @@ live in code docstrings.
     (`DEFAULT_FROM_EMAIL`) from settings alone, and
     `SystemChannelBackend.system_mail_configured()` answers whether system mail
     can be sent. `carries_address(address)` (`angee.messaging.email`) is the one
-    rule for what the transport can carry. `ChannelBackend.offered` declares
-    whether people choose a backend to send from or to watch. `messaging.E004`
+    rule for what the transport can carry. `ChannelBackend.system_only` (read
+    through `Channel.system_only`) declares a backend that serves the system
+    channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
-    contributes `LOGGING`: Django's `DEFAULT_LOGGING` with `mail_admins` sending
-    through `transport` and no formatter on the `django.server` handler.
+    contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
+    with `mail_admins` sending through `transport`. `messaging.W001` reports a
+    host's `AdminEmailHandler` that would send through the system mailer.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
-    default mailer; delivery is configured exactly when it is stated. Django mail
+    default mailer; delivery is configured exactly when it is stated. System mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
-    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` and `Message-ID` are
-    not kept, and attachments, `reply_to` and extra headers are refused. A
+    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` (`SERVER_EMAIL` on a
+    direct `mail_admins` too) and `Message-ID` are not kept, and attachments,
+    `reply_to`, extra headers, an empty body and a recipient the transport cannot
+    carry (`cannot_carry`, under its role) are refused, so such a mail is never
+    recorded as sent. A
     transport that hands a delivery back to the system mailer fails that delivery
     instead of recording it again. Administrators alone read, send on, write,
-    annotate and delete the system channel (schema revision 30): no channel,
-    integration, team, project or ownership grant reaches it, and `messaging.E003`
-    refuses a fragment arm on the channel's `read`, `reply`, `write`, `annotate`
-    or `delete`. Its threads show in administrators' inbox lists. A channel whose
-    backend is not offered (the system channel) is never selected to send from
+    annotate and delete the system channel (schema revision 32): no channel,
+    integration, team, project or ownership grant reaches it. No verb shares its
+    threads or grants on its messages: nobody shares a system thread or writes a
+    system message, administrators included, and none of messaging's own arms
+    writes a system thread, so a group or project binding of one is refused.
+    Without any verb, a `reader` or `editor` tuple written directly and the
+    source-identity rule's principal read system mail, and another addon's arm on
+    the thread's `read_granted`, `chatter_read` or `write` holds whenever a system
+    thread carries what it keys on (messaging's README). `messaging.E003` refuses a fragment arm on the
+    channel's `read`, `reply`, `write`, `annotate` or `delete`, the thread's
+    `share`, `delete` or `annotate`, or the message's `write`, `delete` or
+    `annotate`. Its threads show in administrators' inbox lists. A channel whose
+    backend is system-only (the system channel) is never selected to send from
     (`ChannelQuerySet.outbound_email`), and enabling a `message_ingested` trigger
-    on it is refused under `channel` (`not_offered`) before any grant. A channel's
+    on it is refused under `channel` (`system_only`) before any grant. A channel's
     default sender is checked by `MessageManager.clean_recipient`, the check every
     address messaging lands takes, and must be an address the transport carries,
     where it was Django's `validate_email`. Error mail goes through the transport,
-    never the system channel; Django's development server logs its request lines
-    without the time. The sign-in link's mail is recorded on the system channel
+    never the system channel. The sign-in link's mail is recorded on the system channel
     with the rest of Django's mail.
   - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
     reads `MAILERS["transport"]` itself.
@@ -266,6 +290,175 @@ live in code docstrings.
     administrators (schema revision 29); every framework and consumer writer of
     both runs as system work.
   - **Upgrade:** `rebac sync` (provision runs it). No migration.
+- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
+  single-use sign-in link leaves base IAM for its own addon, with everything
+  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
+  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
+  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
+  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
+  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
+  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
+  the document, now `IamMessagingRedeemSignInLink`. The permission
+  `auth/user#issue_sign_in_link` is the addon's own declaration
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
+  Platform administrators send links, and for now no other role can be given the
+  action: the permission merge lets other fragments add arms only to the
+  permissions a resource type's owner declares, so a consumer's
+  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
+  addon joins the template's `full` profile; a host without it, the `base`
+  profile included, offers and redeems no sign-in link. A link's session records
+  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
+  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
+  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
+  (`iam_messaging_signinlink`) and was in no release, so no migration template
+  ships.
+  - Every host that tracks main deletes the old rows, whether or not it keeps
+    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
+    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
+    before it runs `migrate` with what that writes, it deletes them on every
+    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
+    (`--database <alias>` for each other alias), the same statement on SQLite
+    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
+    and, with the addon, its initial migration. After migrating, the host
+    provisions, which syncs the permissions: IAM's schema at revision 32 and,
+    with the addon, its fragment at revision 2.
+  - Until the rows are gone, both commands refuse, on django-compose
+    0.1.0.dev14, which the framework requires since the composer upgrade below:
+    - `makemigrations`, on the databases of the environment that authors the
+      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
+      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
+      migration before native makemigrations." (0.1.0.dev13 said the same, its
+      last sentence "Declare a reviewed cutover migration before native
+      makemigrations.")
+    - `migrate`, and so `provision`, on a database that still holds links when a
+      migration authored where none were drops their table: "unsafe migration
+      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
+      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
+      To proceed, keep the storage, or move its data and declare the drop in
+      that migration of the project's history with
+      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
+      Nothing was applied, the addon's initial migration included. Delete the
+      rows on that database and run `migrate` (or `provision`) again; the links
+      cannot move, so declaring the drop loses them the same way. On a stack, a
+      refused `provision` holds Django stopped until the rows are deleted. Under
+      0.1.0.dev13 that `migrate` dropped the table without a word.
+  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
+    under this heading, so the framework release that brings either brings both.
+  - Such a host loses the links already sent (they stop working; send them
+    again), the record of who was sent a link, and every session a link opened
+    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
+    people sign in again).
+  - The stale `iam.signinlink` content type can be removed with
+    `manage.py remove_stale_contenttypes`, which also deletes that model's
+    `auth.Permission` rows; it lists what it deletes and asks first.
+  - Projects that author `AUTHENTICATION_BACKENDS` replace
+    `angee.iam.auth.SignInLinkBackend` with
+    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
+    raises, a password's included, as does every request that carries a
+    session a link opened before the upgrade; start-up reports
+    `angee.iam.E006`, which names the entry.
+  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
+  seal's own remedy, which a refused fragment's error carries; it no longer gives every
+  seal one hint that names a record's own read. Messaging's `messaging.E003` and
+  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
+  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
+  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
+  open set another addon extends: `User.account_actions()` names the actions
+  `account_actions` offers, in offer order, and it and
+  `User.account_action_blockers` (now a classmethod) are extended through
+  `super()`; a contributed action runs under `User.lock_for_account_action`, the
+  private `_lock_for_account_action` made public, and meets IAM's person-kind
+  and protected-account blockers before its own, whatever its hook returns:
+  `angee.iam.models.account_action_refusals` puts them first, and no override
+  drops them. `account_actions` is
+  typed by one enum of the composed actions, built when the schema is by the
+  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
+  `_permission_enum` made public beside `permissions_field`)
+  and named after its members (`Permissions_10_set_active_…`): its values are the
+  actions' Zed permission names (`issue_password`), where the fixed
+  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
+  leaves the console and public schemas, and the web's TypeScript type
+  `UserAccountAction` goes. `offersAccountAction` compares
+  names exactly, and `@angee/iam` exports `AccountActionBar` and
+  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
+  `useIssueSignInLinkAction` is no longer exported. The disclosures
+  `auth/user#active_account` and `#nonstaff_account` derive from the union points
+  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
+  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
+  a composed account action offered twice or not declared on `auth/user`
+  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
+  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
+  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
+  (`sign_in_account`) and marks a genuine but spent credential with
+  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
+  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
+  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
+  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
+  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
+  that compares `account_actions` values with the old enum's upper-case names
+  compares the permission names, and one typed by `UserAccountAction` reads the
+  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
+- Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
+  behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
+  which judged only what `makemigrations` autodetects, now also judges the plan
+  `migrate`, and so `provision`, is about to run, before any operation and also
+  under `--skip-checks`: a pending removal in the project's own history is refused
+  where it would destroy stored data, delete a table another model still owns, or
+  where the guard cannot prove that it would not. A migration declares a drop it
+  intends with `django_compose.operations.IntendedRemoveField` or
+  `IntendedDeleteModel`. The migration templates that drop data now declare it:
+  `joined_at` and `left_at` in messaging's `participants_to_recipients.py`,
+  `Folder.source_href` in parties' `addressbook_links.py`, and `recurrence` on the
+  task and its history in projects' `task_recurrence_due_rule.py`.
+  **Upgrade:**
+  - A host needs no action unless a pending migration drops data. Where one does,
+    `migrate` and `provision` stop before anything is migrated with `unsafe
+    migration drop:` (or `cannot prove migration drop safe:`), naming each
+    migration, operation, column or table and its row count, then the remedy;
+    `provision` stays `in_progress`. Review each named removal: keep the storage,
+    or move its data and write the removal as
+    `IntendedRemoveField(model_name=..., name=...)` or `IntendedDeleteModel(name=...)`
+    in that migration, then run `provision` again. A table another model still
+    owns is refused even when declared: keep it, or change that owner first.
+  - A copy of one of the three templates above that is not applied yet and was
+    taken before this change removes those columns undeclared, and is refused
+    while they hold data: copy the template again, keeping its dependencies. The
+    two copies differ only in the class that declares each drop, so their state
+    and operations are the same and a database that applied the earlier copy
+    needs nothing. A copy that subclasses the template's `Migration` inherits the
+    declarations. No framework code wrote messaging's `joined_at` or `left_at`, so
+    a copy of that template is refused only where something else did. A copy
+    already applied needs nothing; the guard judges only pending migrations.
+  - Before any database work, `provision` refuses an installed app's own `migrate`
+    command, which would run without the guard, and any unsilenced failure of the
+    `commands` system checks, such as `django_compose.E002` for an app's own
+    `makemigrations`: remove that command, or make it subclass django-compose's
+    command of the same name.
+- `@angee/ui`: **The keyboard focus ring is drawn.** `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) were plain classes inside
+  `@layer utilities`; Tailwind gives a variant to a registered utility only,
+  so `focus-visible:focus-ring`, `focus:focus-ring`, `focus-within:focus-ring`
+  and `data-[popup-open]:focus-ring` compiled to nothing, and no link, button,
+  input or other control that asks for a ring showed a focus indicator. Both
+  are declared with `@utility` now, as `selected` is. A visible change
+  everywhere the stylesheet is used: the 3px ring (`--ring`, `--ring-danger`
+  on an invalid control) appears on every control that asked for one. A test
+  compiles the workshop's stylesheet entry with Tailwind and holds a rule for
+  each variant the packages spell (`packages/storybook/scripts/styles.test.mjs`).
+  No other plain class of the framework or its products is composed through a
+  variant. Known, not changed: a ring is cut where its control touches the
+  edge of a container that clips (tabs in a tab list, the path buttons of a
+  breadcrumb, a pane's resize handle); a control with its own ring inside a
+  field that rings on focus within shows two; a tab panel and the code editor
+  take focus with no indicator; and the stock ring is the brand colour at 30
+  percent, about 1.5 to 1 against its surface. **Upgrade:** check your own
+  screens with the keyboard; a class of your own composed through a variant
+  needs `@utility` too.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
@@ -382,19 +575,23 @@ live in code docstrings.
   a sender the handle of its `from` row, logs how many `from` rows named someone
   other than their message's sender (each message's source keeps its `From`
   header) and deletes the `from` rows. A migration `makemigrations` writes without
-  the template deletes `Participant` and creates `Recipient`: the drop guard
-  refuses that where the participant table holds rows, but one generated on an
-  empty database drops the recipient rows when it is applied elsewhere, and those
-  rows are a projection of each message's stored envelope. Provision prunes the
+  the template deletes `Participant` and creates `Recipient`, which would drop the
+  recipient rows, a projection of each message's stored envelope: the drop guard
+  refuses it where the participant table holds rows, at `makemigrations` and, for
+  one generated on an empty database, at `migrate`. Provision prunes the
   retired REBAC type `messaging/participant`; grants written directly on its
   `editor` or `reader` relations, which no framework surface wrote, are not
   carried over. On a stack whose `operator-schema` job does not wait for
   `provision`, the first chained restart after this upgrade can fail `rebac.E009`
   on the retired `messaging/participant` type until provision's sync has run; run
-  the chain once more. Upgrade cutoff: the template ships through the 3.x releases
-  and is removed in 4.0, and `angee.base.querysets.MergeableQuerySet.survivor_id`
-  stays while retained migrations import it; a host upgrading from an earlier
-  release applies the template through a 3.x release first.
+  the chain once more. If a provision run stops before its sync (for example at
+  its migration check, when a newly enabled addon has no migrations yet), the same
+  check stops every management command, `makemigrations` included; author the
+  pending migrations with `--skip-checks` until provision has synced. Upgrade
+  cutoff: the template ships through the 3.x releases and is removed in 4.0, and
+  `angee.base.querysets.MergeableQuerySet.survivor_id` stays while retained
+  migrations import it; a host upgrading from an earlier release applies the
+  template through a 3.x release first.
 - `@angee/ui`: A record form's create no longer displays a field its save
   cannot write that holds an empty object. What a record form displays reads
   its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a

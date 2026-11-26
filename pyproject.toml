@@ -29,6 +29,7 @@ dependencies = [
     "angee-graphql==3.0.0",
     "angee-iam==3.0.0",
     "angee-iam-integrate-oidc==3.0.0",
+    "angee-iam-messaging==3.0.0",
     "angee-intake==3.0.0",
     "angee-integrate==3.0.0",
     "angee-integrate-github==3.0.0",
@@ -155,6 +156,7 @@ angee-extraction = {workspace = true}
 angee-graphql = {workspace = true}
 angee-iam = {workspace = true}
 angee-iam-integrate-oidc = {workspace = true}
+angee-iam-messaging = {workspace = true}
 angee-intake = {workspace = true}
 angee-integrate = {workspace = true}
 angee-integrate-github = {workspace = true}
@@ -344,6 +346,12 @@ name = "OAuth and its vendor presets do not import the login addon"
 type = "forbidden"
 source_modules = ["angee.integrate", "angee.integrate_google"]
 forbidden_modules = ["angee.iam_integrate_oidc"]
+
+[[tool.importlinter.contracts]]
+name = "IAM does not import its emailed sign-in"
+type = "forbidden"
+source_modules = ["angee.iam"]
+forbidden_modules = ["angee.iam_messaging"]
 
 [[tool.importlinter.contracts]]
 name = "Serving modules never import build owners"

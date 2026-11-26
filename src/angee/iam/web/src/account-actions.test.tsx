@@ -33,7 +33,7 @@ vi.mock("@angee/ui", async (original) => ({
 }));
 beforeEach(() => vi.clearAllMocks());
 
-const record = { id: "user-1", revision: 4, is_active: true, account_actions: ["SET_ACTIVE", "RENAME", "RESET_PASSWORD"] };
+const record = { id: "user-1", revision: 4, is_active: true, account_actions: ["set_active", "rename", "reset_password"] };
 const context = (row: Record<string, unknown> = record) => ({
   record: row, values: {}, refresh: vi.fn(), update: vi.fn(), prompt: mocks.prompt,
 });
@@ -73,11 +73,11 @@ describe("chosen passwords are write-only action inputs", () => {
       { record: null, selectedIds: [] })).toMatchObject({ ok: false, validationErrors: { current_password: ["Try again."] } });
   });
 
-  test("set-password confirms matching inputs and calls the projected verb with the observed revision", async () => {
+  test("set-password confirms matching inputs and calls the projected action with the observed revision", async () => {
     mocks.setPassword.mockResolvedValue({ ok: true, message: "Password set." });
     const { result } = renderHook(useSetPasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
-    expect(result.current.visibleWhen?.({ ...record, account_actions: ["SET_PASSWORD"] })).toBe(true);
+    expect(result.current.visibleWhen?.({ ...record, account_actions: ["set_password"] })).toBe(true);
     expect(result.current.visibleWhen?.({ id: "protected", account_actions: [] })).toBe(false);
     expect(result.current.danger).toBe(true);
     const args = result.current.args;
@@ -101,11 +101,13 @@ describe("chosen passwords are write-only action inputs", () => {
   });
 });
 
-describe("account verbs follow the row's server projection", () => {
-  test("a verb is offered only when the projection names it", () => {
+describe("account actions follow the row's server projection", () => {
+  test("an action is offered only when the projection names it", () => {
     expect(offersAccountAction(record, "rename")).toBe(true);
     expect(offersAccountAction(record, "issue_password")).toBe(false);
     expect(offersAccountAction({ id: "user-2" }, "rename")).toBe(false);
+    // The wire spells each action as its Zed permission; the old enum's upper-case names offer nothing.
+    expect(offersAccountAction({ id: "user-3", account_actions: ["RENAME"] }, "rename")).toBe(false);
     const { result } = renderHook(useSetActiveActions);
     const [deactivate, reactivate] = result.current;
     expect(deactivate?.visibleWhen?.(record)).toBe(true);
@@ -136,7 +138,7 @@ describe("account verbs follow the row's server projection", () => {
       { errorNotification: false },
     );
     expect(outcome).toEqual({ ok: true, message: "Account renamed." });
-    // The action form's quiet call options reach the verb, so a transport failure shows once.
+    // The action form's quiet call options reach the action, so a transport failure shows once.
     expect(mocks.rename).toHaveBeenCalledExactlyOnceWith("user-1", {
       first_name: "Ada", last_name: "Lovelace", confirmed: true, expected_revision: 4,
     }, { errorNotification: false });
@@ -167,7 +169,7 @@ describe("one-time sign-in reveal", () => {
     mocks.reveal.mockResolvedValue(undefined);
     const { result } = renderHook(useIssuePasswordAction);
     expect(result.current.visibleWhen?.(record)).toBe(false);
-    expect(result.current.visibleWhen?.({ ...record, account_actions: ["ISSUE_PASSWORD"] })).toBe(true);
+    expect(result.current.visibleWhen?.({ ...record, account_actions: ["issue_password"] })).toBe(true);
     await act(async () => { await result.current.run?.(context()); });
     expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1" });
     expect(mocks.reveal).toHaveBeenCalledWith(expect.objectContaining({ secrets: [

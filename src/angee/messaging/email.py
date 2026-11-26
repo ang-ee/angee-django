@@ -138,15 +138,17 @@ class AnymailEmailChannelBackend(ChannelBackend):
     def outbound_sender(self) -> tuple[str, str]:
         """Resolve and validate this channel's configured default envelope sender.
 
-        The channel's ``from_email`` config wins over ``DEFAULT_FROM_EMAIL``. An
-        unconfigured transport raises :class:`OutboundEmailNotConfigured`; an invalid
-        address is refused under ``channel`` (:func:`_valid_sender`).
+        The channel's ``from_email`` config wins; a channel that names none sends from
+        the deployment's sender (:meth:`default_sender`). An unconfigured transport
+        raises :class:`OutboundEmailNotConfigured`; an invalid address is refused
+        under ``channel`` (:func:`_valid_sender`).
         """
 
         if not self.outbound_email_configured():
             raise OutboundEmailNotConfigured
         config = self.bridge.config if isinstance(self.bridge.config, dict) else {}
-        return _valid_sender(str(config.get("from_email") or settings.DEFAULT_FROM_EMAIL))
+        from_email = config.get("from_email")
+        return _valid_sender(str(from_email)) if from_email else self.default_sender()
 
     def deliver(self, message: Any) -> DeliveryOutcome:
         """Render and send ``message`` when an email transport is configured."""
@@ -352,16 +354,16 @@ class AnymailEmailChannelBackend(ChannelBackend):
 
 
 class SystemChannelBackend(AnymailEmailChannelBackend):
-    """The system channel's backend: Django's own mail is recorded on it, and nobody chooses it.
+    """The system channel's backend: system mail is recorded on it, and nobody chooses it.
 
-    It delivers as every email channel does. It is not offered: no person sends
+    It delivers as every email channel does. It is system-only: no person sends
     from it or watches it, so it is never selected for outbound email and never a
     workflow trigger's source.
     """
 
     key = SYSTEM_CHANNEL_BACKEND
     label = "System mail"
-    offered = False
+    system_only = True
 
     @classmethod
     def system_mail_configured(cls) -> bool:
@@ -377,11 +379,6 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
         except ValidationError:
             return False
         return True
-
-    def outbound_sender(self) -> tuple[str, str]:
-        """The deployment's default sender (:meth:`default_sender`): the system channel names no address of its own."""
-
-        return self.default_sender()
 
 
 def carries_address(address: str) -> bool:
@@ -453,10 +450,12 @@ def _system_mail(email: EmailMessage) -> dict[str, Any]:
     become ``text`` and ``html``. ``Message-ID`` and ``Date`` are dropped
     (compose mints the one, delivery writes the other), ``from_email`` and
     ``encoding`` are not carried (system mail is sent from the system channel's
-    sender and stored as text). Attachments, ``reply_to``, any other header,
-    any other body or alternative type, and an ``AnymailMessage`` (whose
-    provider options mean nothing to a recorded message) are refused with
-    ``ValueError``.
+    sender, which replaces ``SERVER_EMAIL`` on a direct ``mail_admins`` too, and
+    stored as text). Attachments, ``reply_to``, any other header, any other body
+    or alternative type, and an ``AnymailMessage`` (whose provider options mean
+    nothing to a recorded message) are refused with ``ValueError``; an empty
+    body and a recipient the transport cannot carry are refused by
+    ``compose_as_system``.
     """
 
     if isinstance(email, AnymailMessage):

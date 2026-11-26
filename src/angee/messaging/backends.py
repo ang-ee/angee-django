@@ -49,7 +49,7 @@ class PairingActionError(ValueError):
 
 
 class OutboundEmailNotConfigured(DomainError, ValidationError):
-    """No channel backend, or not the requested one, offers configured outbound email delivery.
+    """No channel backend, or not the requested one, has outbound email delivery configured.
 
     A validation refusal keyed to ``channel``, so a sending form shows it beside its
     channel choice; the schema projects its code.
@@ -65,7 +65,7 @@ class OutboundEmailNotConfigured(DomainError, ValidationError):
 
 
 class OutboundEmailChannelMissing(DomainError, ValidationError):
-    """Outbound email is configured, but no selected channel is connected on a backend offering it."""
+    """Outbound email is configured, but no selected channel is connected on a backend it is configured for."""
 
     code = "OUTBOUND_EMAIL_CHANNEL_MISSING"
 
@@ -343,12 +343,12 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     """
 
     registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
-    offered: ClassVar[bool] = True
-    """Whether people choose a channel on this protocol to send from or to watch.
+    system_only: ClassVar[bool] = False
+    """Whether this protocol serves the system channel alone, so people never choose it to send from or to watch.
 
-    A channel whose backend is not offered (the system channel's) is never
-    selected for outbound email (``ChannelQuerySet.outbound_email``) and never
-    accepted as a workflow trigger's source.
+    A channel on a system-only backend is never selected for outbound email
+    (``ChannelQuerySet.outbound_email``) and never accepted as a workflow trigger's
+    source (``Channel.system_only``).
     """
     delivery_visibility_delay: ClassVar[timedelta] = timedelta()
     """Minimum age of a possibly accepted claim before reconciliation; feeds extend it."""
@@ -362,7 +362,7 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
 
     @classmethod
     def outbound_email_configured(cls) -> bool:
-        """Whether this backend currently offers configured outbound email delivery.
+        """Whether outbound email delivery is currently configured for this backend.
 
         Read without constructing a transport, so a channel selection can admit
         every backend that declares it.
@@ -373,8 +373,10 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     def outbound_sender(self) -> tuple[str, str]:
         """Return this channel's validated default ``(name, address)`` email sender.
 
-        A backend that offers no outbound email refuses with
-        :class:`OutboundEmailChannelMissing`.
+        A backend without outbound email refuses with
+        :class:`OutboundEmailChannelMissing`. Whatever a backend returns,
+        ``MessageManager.compose`` lands the address in the handle owner's stored form
+        and refuses, under ``channel``, one the handle owner cannot land.
         """
 
         raise OutboundEmailChannelMissing

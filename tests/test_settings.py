@@ -181,10 +181,27 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
-        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTHENTICATION_BACKENDS"][0] == "axes.backends.AxesStandaloneBackend"
     assert "rebac.W001" in settings["SILENCED_SYSTEM_CHECKS"]
+
+
+def test_only_a_host_with_emailed_sign_in_links_authenticates_them(tmp_path: Path) -> None:
+    """IAM alone has no link backend; the link addon appends its own after IAM's axes and ModelBackend."""
+
+    iam_only = _compose(tmp_path / "iam")
+    assert "angee.iam_messaging" not in iam_only["INSTALLED_APPS"]
+    assert not any("SignInLink" in backend for backend in iam_only["AUTHENTICATION_BACKENDS"])
+    assert not any(name.startswith("ANGEE_IAM_MESSAGING_") for name in iam_only)
+
+    linked: dict[str, Any] = {"INSTALLED_APPS": ("angee.iam_messaging",)}
+    _configure(linked, tmp_path / "linked")
+    backends = list(linked["AUTHENTICATION_BACKENDS"])
+    assert backends.index("axes.backends.AxesStandaloneBackend") < backends.index("angee.iam.auth.ModelBackend")
+    assert backends[-1] == "angee.iam_messaging.auth.SignInLinkBackend"
+    assert (linked["ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL"], linked["ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN"]) == (
+        259_200, 60,
+    )
 
 
 
@@ -253,7 +270,6 @@ def test_auth_user_model_comes_from_iam_autoconfig(
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
-        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTH_USER_MODEL"] == "iam.User"
 
@@ -435,7 +451,6 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment"}
     assert namespace["MAILERS"]["transport"] == {"BACKEND": "anymail.backends.mailgun.EmailBackend"}
     assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
-    assert "ANGEE_EMAIL_DELIVERY_CONFIGURED" not in namespace
 
 
 def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -600,7 +615,6 @@ def _mail_host(tmp_path: Path, authored: str, *, installed: tuple[str, ...] = ("
     (tmp_path / "settings.yaml").write_text(authored)
     namespace: dict[str, Any] = {"INSTALLED_APPS": installed}
     _configure(namespace, tmp_path)
-    assert "ANGEE_EMAIL_DELIVERY_CONFIGURED" not in namespace
     return namespace
 
 
@@ -609,16 +623,13 @@ def _mailers(*aliases: str) -> str:
 
 
 def test_a_host_stating_no_mailer_gets_the_system_mailer_and_error_mail_through_the_transport(tmp_path: Path) -> None:
-    from copy import deepcopy
-
-    from django.utils.log import DEFAULT_LOGGING
-
     namespace = _mail_host(tmp_path, "SECRET_KEY: mail-host\n")
     assert namespace["MAILERS"] == {"default": SYSTEM_MAILER}
-    expected = deepcopy(DEFAULT_LOGGING)
-    expected["handlers"]["mail_admins"]["using"] = "transport"
-    del expected["formatters"], expected["handlers"]["django.server"]["formatter"]
-    assert namespace["LOGGING"] == expected
+    logging = namespace["LOGGING"]
+    assert logging["handlers"]["mail_admins"]["using"] == "transport"
+    assert logging["loggers"]["django"]["handlers"] == ["console", "mail_admins"]
+    # Kept as text: the settings loader does not read Django's server-log formatter as a reference.
+    assert logging["formatters"]["django.server"]["format"] == "[{server_time}] {message}"
 
 
 @pytest.mark.parametrize("stated", ["transport", "default-and-transport"])
@@ -639,11 +650,6 @@ def test_a_stated_transport_reaches_the_settings_as_authored_beside_the_system_m
         pytest.param(
             "MAILERS:\n  transport:\n    BACKEND: angee.messaging.email.SystemMailer\n", _mailers("transport"),
             id="transport-that-records",
-        ),
-        pytest.param("EMAIL_HOST: smtp.example.test\nEMAIL_PORT: 587\n", _mailers("transport"), id="legacy"),
-        pytest.param(
-            _mailers("transport") + "EMAIL_HOST: smtp.example.test\n", _mailers("transport"),
-            id="legacy-beside-mailers",
         ),
     ],
 )

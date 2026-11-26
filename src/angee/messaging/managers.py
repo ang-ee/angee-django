@@ -101,9 +101,10 @@ from angee.messaging.constants import (
     MAX_DELIVERY_ATTEMPTS,
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
+    SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import SystemChannelBackend, header_text
+from angee.messaging.email import carries_address, header_text
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -119,6 +120,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
+    from angee.messaging.email import AnymailEmailChannelBackend
     from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
@@ -258,7 +260,7 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         return self.filter(backend_class=backend_class)
 
     def outbound_email(self, *, backend_class: str | None = None) -> Self:
-        """Connected channels whose declared backend currently offers configured outbound email.
+        """Connected channels people send from whose declared backend has outbound email configured.
 
         ``backend_class`` narrows the selection to one declared backend. This
         predicate remains lazy and chainable; ``require_outbound_email`` refuses
@@ -270,13 +272,13 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         )
 
     def _outbound_email_backends(self, backend_class: str | None) -> list[str]:
-        """Offered, configured email implementations in the channel's declared registry."""
+        """Configured email implementations people send from, in the channel's declared registry."""
 
         field = self.model.backend_class.field
         candidates = field.registered_keys() if backend_class is None else (backend_class,)
         return [
             key for key in candidates
-            if (backend := field.resolve_class(key)).offered and backend.outbound_email_configured()
+            if not (backend := field.resolve_class(key)).system_only and backend.outbound_email_configured()
         ]
 
     def require_outbound_email(self, *, backend_class: str | None = None) -> Self:
@@ -3243,7 +3245,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     ) -> MessageT:
         """Write one email on the system channel as named system work, queued for delivery; return the row unbound.
 
-        For mail the framework sends on no person's behalf (Django's own mail,
+        System mail: mail the framework sends on no person's behalf (each email Django sends,
         through the system mailer): the caller's gate authorized it, and no grant
         is consulted. It runs in the caller's context and transaction, through
         the writer :meth:`compose` uses: the rows record the causing actor as
@@ -3255,7 +3257,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         Refusals come before any write, in this order: a blank ``reason``
         (``ValueError``); compose's checks of the arguments (more recipients than
         ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
-        ``cc``, ``bcc``, ``subject`` or ``text``); system mail not configured,
+        ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
+        carry (``carries_address``), under its role with code ``cannot_carry``,
+        so a mail that could never leave is never recorded as sent; system mail not configured,
         from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
         ``channel``), none of which writes a permission audit row; then, after
         the lookup's own audit row, :class:`SystemChannelMissing` and a channel
@@ -3270,8 +3274,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             channel=None, parent=None, record=None, sender=None, to=to, cc=cc, bcc=bcc, subject=subject,
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
-        SystemChannelBackend.default_sender()
-        channel = apps.get_model("messaging", "Channel").objects.system_channel()
+        for addressee in outgoing.recipients:
+            if not carries_address(addressee.address):
+                raise ValidationError({addressee.role: ValidationError(
+                    "%(address)s cannot be delivered: this mail transport cannot carry an address whose part before "
+                    "the @ is outside ASCII.", code="cannot_carry", params={"address": addressee.address},
+                )})
+        channel_model = apps.get_model("messaging", "Channel")
+        system_backend = cast("type[AnymailEmailChannelBackend]",
+                              channel_model.backend_class.field.resolve_class(SYSTEM_CHANNEL_BACKEND))
+        system_backend.default_sender()
+        channel = channel_model.objects.system_channel()
         return self._write_outgoing(
             replace(outgoing, channel=channel), actor=None, fingerprint={}, idempotency_key=None, admit=None,
             reason=reason,
