@@ -149,6 +149,7 @@ def test_a_blank_reason_is_refused(system_channel: Any) -> None:
         pytest.param({"text": "", "html": ""}, "text", "required", id="empty-body"),
         pytest.param({"subject": "One\nTwo"}, "subject", "invalid", id="two-line-subject"),
         pytest.param({"bcc": [f"r{index}@example.test" for index in range(51)]}, "bcc", "too_many", id="too-many"),
+        pytest.param({"cc": ["jörg@example.test"]}, "cc", "cannot_carry", id="uncarriable-cc"),
     ],
 )
 def test_compose_refusals_come_first_and_write_nothing(
@@ -377,6 +378,18 @@ def test_a_callers_message_id_date_and_sender_are_not_kept(system_mailer: Any) -
     wire = _deliver(first).message()
     assert (wire["Message-ID"], wire["From"]) == (f"<{first.external_id}>", SENDER)
     assert wire["Date"] != "Mon, 01 Jan 2001 00:00:00 +0000"
+
+
+def test_a_django_email_to_an_address_the_transport_cannot_carry_is_refused_and_nothing_is_recorded(
+    system_mailer: Any,
+) -> None:
+    """Never recorded as sent: a sign-in link to such an address would replace the working one and arrive nowhere."""
+
+    rows = _rows()
+    with pytest.raises(ValidationError) as refused:
+        send_mail("Sign in", "Your link.", None, ["jörg@example.test"])
+    assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+    assert _rows() == rows
 
 
 def test_an_email_with_no_recipient_is_skipped(system_mailer: Any) -> None:
