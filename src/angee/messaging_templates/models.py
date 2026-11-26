@@ -662,11 +662,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     keeping an override over it) and the sends of a template (:meth:`send_as_system`, :meth:`send_test`)."""
 
     clean_link = staticmethod(clean_link)
-    """``clean_link(value, *, path="link") -> str``: the link a mail prints for ``value``, or the render's refusal of it
-    (:func:`~angee.messaging_templates.engine.clean_link`). A caller of :meth:`send_as_system` that sends many mails
-    with one link asks it once, before the first."""
+    """``clean_link(value, *, path="link") -> str``: the link a mail prints for ``value``, as a render prepares it, or
+    the render's refusal of it (:func:`~angee.messaging_templates.engine.clean_link`). A caller of
+    :meth:`send_as_system` that sends many mails with one link asks it once, before the first."""
 
-    @sensitive_variables("values")
+    @sensitive_variables()
     def send_as_system(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
         must_print: Iterable[str] = (),
@@ -737,11 +737,11 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         recorded, is messaging's (its README, "System mail"): a value that is a
         credential, such as a sign-in link, is readable by those readers until it
         expires, and deleting the message does not remove its fragments. So the
-        values and the rendered text are marked as Django's
-        ``sensitive_variables`` in the send's frames and the render's (down to
-        ``TemplateWalk.render``, whose mark covers every frame it calls): with
-        ``DEBUG`` off, when Django's filter works, an exception's report never
-        shows them.
+        send's frames hide every local, the values, the rendered text and the
+        address among them, and the render's frames the values (down to
+        ``TemplateWalk.render``, whose mark covers every frame it calls), as
+        Django's ``sensitive_variables``: with ``DEBUG`` off, when Django's filter
+        works, an exception's report never shows them.
         """
 
         # compose_as_system refuses a blank reason too, but only after the render, which this refusal precedes.
@@ -836,7 +836,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 require_changeset().record_created(message)
                 return message
 
-    @sensitive_variables("values", "rendered")
+    @sensitive_variables()
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
         subject_prefix: str = "", must_print: Iterable[str] = (),

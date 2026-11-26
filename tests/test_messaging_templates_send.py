@@ -654,6 +654,38 @@ def test_an_exception_inside_compose_reports_no_value_or_rendered_text_in_the_se
     assert _leaks(raised.value) == []
 
 
+def test_a_report_of_the_link_checks_refusal_shows_no_part_of_the_link(settings: Any) -> None:
+    """A caller that lets the check's refusal propagate: neither the check's frame nor the rule's below it shows the
+    link, and the refusal's own words name only its host."""
+
+    settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
+    with pytest.raises(ValidationError) as raised:
+        MessageTemplate.objects.clean_link("http://intranet/decisions?token=SECRET-marker")
+    assert _leaks(raised.value) == []
+    assert "SECRET-marker" not in str(raised.value)
+
+
+@pytest.mark.parametrize("entry", ["send_as_system", "send_test"])
+def test_an_exception_inside_compose_reports_no_recipient_address(
+    mailing: None, plain: Any, settings: Any, entry: str,
+) -> None:
+    """The address a send goes to is a local of the send's frames: a report shows it in none of them."""
+
+    del mailing, plain
+    _install()
+    settings.MAILERS = {}
+    address = "SECRET-marker@example.test"
+    with pytest.raises(ValidationError) as raised:
+        if entry == "send_as_system":
+            _send(_mail("Hello.", {}, key="tests.addressed"), {}, to=address)
+        tester = create_platform_admin("messaging-templates-addressed-tester")
+        tester.email = address
+        with system_context(reason="tests.messaging_templates.send.address"):
+            tester.save(update_fields=["email"])
+        MessageTemplate.objects.send_test(_sampled(), actor=tester)
+    assert _leaks(raised.value) == []
+
+
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
     del system_channel
     row = _greeting()

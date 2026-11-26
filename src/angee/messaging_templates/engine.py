@@ -48,6 +48,7 @@ from django.template.base import FilterExpression, Node, NodeList, Parser, Token
 from django.template.loader_tags import IncludeNode
 from django.template.loaders.base import Loader
 from django.utils.safestring import SafeData, SafeString
+from django.views.decorators.debug import sensitive_variables
 from markdown_it import MarkdownIt
 
 from angee.base.origins import PublicOriginUnavailable, configured_public_origin
@@ -380,14 +381,19 @@ def url(value: Any) -> str:
     return _link(value)[0]
 
 
+@sensitive_variables()
 def clean_link(value: Any, *, path: str = "link") -> str:
     """Return the link a mail prints for ``value`` through :func:`url`, or refuse it as a render refuses it.
 
     A blank value (nothing but white space) gives ``""`` and no refusal, as a
     render leaves an optional link empty. Any other value :func:`url` would empty
     is refused with a ``ValidationError`` of one item, code
-    :data:`VALUE_NOT_LINKABLE`, naming ``path`` and why: the words a render's refusal
-    uses for that value at that path. It reads no row, so a caller that mails
+    :data:`VALUE_NOT_LINKABLE`, naming ``path`` and why: for a value as a render
+    prepares it (:meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`
+    drops its control characters first), the link and the words a render gives
+    that value at that path. Every local of this frame and of the rule's
+    below it is Django's ``sensitive_variables``, so a report of a refusal that
+    propagates does not show the link. It reads no row, so a caller that mails
     many recipients asks it once before the first send.
     """
 

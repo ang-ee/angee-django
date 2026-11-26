@@ -275,10 +275,13 @@ output out of this mail or it is printed only through another filter
 row prints the item's field inside the loop, not every item's value in this
 mail, and an empty list passes; a caller that needs each item's value guards its
 own values. Both bodies are required because some clients show only the
-plain-text part. Before a run that mails one link to many recipients, a caller
-asks `MessageTemplate.objects.clean_link(value, path="link")`: the link a mail
-prints for the value, `""` for a blank one, or exactly the render's
-`value_not_linkable` refusal. The preview's "Nothing reads …" warning stays
+plain-text part. A body is searched for the value as text, so a short value
+passes where the same characters stand in other text: a caller makes a
+must-print value distinct (a link or a long code is; a two-digit number is not).
+Before a run that mails one link to many recipients, a caller asks
+`MessageTemplate.objects.clean_link(value, path="link")`: for a value as a
+render prepares it, the link a mail prints, `""` for a blank one, or exactly the
+render's `value_not_linkable` refusal. The preview's "Nothing reads …" warning stays
 a warning: it knows no caller's requirement. The row renders as the instance holds it: edits not yet saved are
 sent, and a row never saved is refused `not_effective`. `to` is one entry as
 messaging's `clean_recipient` reads it; pass a bare address, since a typed name
@@ -316,11 +319,12 @@ deletes, so they outlive the message. Who reads system mail, and how its
 handles are recorded, is messaging's ([System mail](../messaging/README.md#system-mail)):
 a value that is a credential, such as a sign-in link, is readable by those
 readers until it expires, and deleting the message does not remove its
-fragments. An exception's report hides the values and the rendered text in every
-frame of a send: Django's `sensitive_variables` marks them in `send_as_system`,
-its shared step `_render_and_record` and `MessageTemplate.render`, marks every
-variable of `TemplateWalk.render` and of each frame it calls, and messaging marks
-its system write below them ([System mail](../messaging/README.md#system-mail)).
+fragments. An exception's report hides the values, the rendered text and the
+address in every frame of a send, as Django's `sensitive_variables`: every local
+of `send_as_system` and its shared step `_render_and_record`, the values in
+`MessageTemplate.render`, every local of `TemplateWalk.render` and of
+`clean_link` and of each frame they call; messaging marks its system write below
+them ([System mail](../messaging/README.md#system-mail)).
 Django's filter hides them only with `DEBUG` off, and it never filters an
 exception's own message: a `value_not_linkable` refusal names the link's host.
 

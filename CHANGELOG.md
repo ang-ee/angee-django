@@ -29,8 +29,12 @@ live in code docstrings.
   a preview of such a sample shows the refusal as its `render_error`.
   `MessageTemplate.objects.clean_link(value, *, path="link") -> str` asks the same
   rule before a run: the link a mail prints, `""` for a blank value, or the
-  render's refusal in the same words. The walk records the paths each form
-  prints through `url` (`TemplateWalk.link_paths`). The rule admits the
+  render's refusal in the same words, for a value as a render prepares it. A
+  refusal names the link's host only when it is wholly a host and port, so no
+  part of a link past its host (a token behind an encoded separator) reaches an
+  answer, the preview or a log; `clean_link` and the send's two frames hide every
+  local from an exception's report, the recipient's address among them. The walk
+  records the paths each form prints through `url` (`TemplateWalk.link_paths`). The rule admits the
   deployment's own public origin, asked of base (`configured_public_origin`), with
   its port and whatever its host (a single label such as `localhost` under
   `DEBUG`, an address, an IPv6 address written in its brackets); other
