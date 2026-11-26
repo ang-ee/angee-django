@@ -1119,12 +1119,13 @@ describe("ActionFormDialog", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Register review" })).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();
     await act(async () => { answer({ ok: true, message: "Review registered." }); });
     expect(await screen.findByText("Review registered.")).toBeTruthy();
-    // The accepted close is the dialog's own: it asks nothing, though a value was picked.
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The accepted close is the dialog's own: it asks nothing, though a value was picked. (The
+    // dialog is named: the success toast it raises is a dialog too.)
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Register review" })).toBeNull());
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
