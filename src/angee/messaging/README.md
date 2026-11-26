@@ -75,9 +75,10 @@ still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
 one whose local part is outside ASCII is admitted but cannot be delivered, as
 no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
-naming the address. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
-addresses across `to`, `cc`
-and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
+naming the address. A message takes at most
+[`MessageManager.recipient_limit()`](managers.py) addresses across `to`, `cc`
+and `bcc` (`ANGEE_MESSAGING_MAX_RECIPIENTS`, 50) and
+`ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both settings
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
 under the argument that crosses the bound, before anything is read; an answer
 taking more addresses than that from its parent's `Reply-To` is refused under
@@ -93,6 +94,23 @@ threading headers, never by its subject, which groups inbound mail with inbound
 mail alone ([`ThreadManager.resolve`](managers.py)). An answer to a mail sent
 from a record's chatter lands on that chatter as an email, not a comment, so it
 is answered by email in turn.
+
+The console composes through the `compose_message` mutation, a verb over
+`compose` rather than a generic insert (its docstring in [`schema.py`](schema.py)
+says why). It answers `parent` or sends on `channel`, takes a required
+`idempotency_key` and `queued`, and returns an `ActionResult` whose `id` is the
+message, fresh or replayed. Readers of a message read back its `status`,
+`scheduled_at` and [`Message.delivery_attempts`](models.py); those who hold
+`send_held` also read why delivery last failed,
+[`Message.delivery_error`](models.py), as they read `delivery_actions`. Every
+reader reads `is_locally_written`, which tells a message written here, an
+internal note included, from one synced from its source
+([`Message.is_locally_written`](models.py)); delivery status belongs to an
+outgoing one. A channel's `permissions` answer `reply`; the channels filter
+`sendable` keeps the channels the reader may send a new email on, `reply` on a
+channel [`ChannelQuerySet.outbound_email_rule`](managers.py) admits, whose
+sender is checked only when a message is sent; and `message_recipient_limit`
+states the recipient bound.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from

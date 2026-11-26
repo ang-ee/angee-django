@@ -1171,6 +1171,26 @@ class Message(
         local = (self.metadata or {}).get("local")
         return dict(local) if isinstance(local, dict) else {}
 
+    @staticmethod
+    def local_metadata_annotation() -> dict[str, Any]:
+        """Annotate a list's rows with their local facts, which :meth:`local_fact` then reads.
+
+        The ``local`` object is read whole, as JSON, so every fact keeps its
+        stored type on SQLite as on PostgreSQL. Reading one key would not:
+        SQLite decodes a text that looks like JSON (``"0"``) as another value,
+        and renders ``false`` or ``null`` as text.
+        """
+
+        return {"_local_metadata": models.F("metadata__local")}
+
+    def local_fact(self, key: str) -> Any:
+        """The local fact ``key``, from the row's :meth:`local_metadata_annotation` when a list loaded it."""
+
+        local = self.__dict__.get("_local_metadata", models.DEFERRED)
+        if local is models.DEFERRED:
+            return self.local_metadata.get(key)
+        return local.get(key) if isinstance(local, dict) else None
+
     @property
     def is_locally_written(self) -> bool:
         """Local delivery states distinguish authored envelopes from synced own mail."""
@@ -1189,10 +1209,7 @@ class Message(
 
         if self.is_trashed and not self.delivery_needs_reconciliation:
             return True
-        conflict = self.__dict__.get("_delivery_conflict", models.DEFERRED)
-        if conflict is models.DEFERRED:
-            conflict = self.local_metadata.get("delivery_conflict")
-        return bool(conflict)
+        return bool(self.local_fact("delivery_conflict"))
 
     delivery_action_permission: ClassVar[str] = "send_held"
 
@@ -1205,6 +1222,26 @@ class Message(
             action for action in ("retry", "acknowledge")
             if self.delivery_resolution_error(retry=action == "retry") is None
         ]
+
+    def delivery_error(self, permissions: Collection[str]) -> str | None:
+        """Why delivery last failed, for a viewer holding :attr:`delivery_action_permission`; else ``None``.
+
+        Settlement records the refusal in words safe for operators
+        (``safe_integration_failure``), so it is read by those who may act on it,
+        as :meth:`delivery_actions` is. Acceptance clears it; an operator's retry
+        keeps it until the next settlement.
+        """
+
+        if self.delivery_action_permission not in permissions:
+            return None
+        error = self.local_fact("delivery_error")
+        return str(error) if error else None
+
+    @property
+    def delivery_attempts(self) -> int:
+        """The provider attempts settlement has counted, ``0`` before the first; an operator's retry resets it."""
+
+        return int(self.local_fact("delivery_attempts") or 0)
 
     def delivery_resolution_error(self, *, retry: bool) -> ValidationError | None:
         """The retained row's admission for an operator retry or acknowledgement.
@@ -1388,7 +1425,7 @@ class Message(
         which may be a relay; only a message with no ``Reply-To`` is answered at
         its sender (``parent``, ``reply_unaddressed`` when it has none, or one the
         handle owner's predicate does not take as an address). A
-        ``Reply-To`` naming more than ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses
+        ``Reply-To`` naming more than :meth:`MessageManager.recipient_limit` addresses
         is refused (``reply_to``, ``too_many``), as a typed list of as many is. Any other
         kind is answered by its transport's own sender: the envelope is empty.
         ``channel`` is the transport channel when the caller has read it
@@ -1406,7 +1443,7 @@ class Message(
             channel = cast(Channel, self.transport_channel(reason="messaging.reply_envelope"))
         sender = channel.outbound_sender()
         addresses = self.reply_addresses(actor=actor)
-        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("reply_to", tuple(addresses)),))
+        _require_at_most(MessageManager.recipient_limit(), "recipients", (("reply_to", tuple(addresses)),))
         if not addresses and any(value.strip() for value in self.source_header_values("reply-to", actor=actor)):
             raise ValidationError({"reply_to": ValidationError(
                 "The message's Reply-To names no address to answer.", code="reply_to_invalid",

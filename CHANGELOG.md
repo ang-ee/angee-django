@@ -114,6 +114,27 @@ live in code docstrings.
     folds them. Leaving for good removes the column and the constraint with a
     reviewed migration.
   - No `rebac sync` and no SDL change.
+- `angee.messaging`: **The console reads where one may send a new message, which
+  messages were written here, and the recipient bound.**
+  - **New.** The channels filter `sendable`
+    (`channels(where: {sendable: {_eq: true}})`): the channels the reader may send
+    a new email on, their `reply` on a channel that can send email now.
+    `ChannelQuerySet.outbound_email_rule` is that condition (connected, on a
+    backend whose outbound email is configured), which `outbound_email` filters by.
+    The channel's sender is checked when a message is sent, not by the filter: a
+    listed channel whose configured sender is not an address refuses the message
+    under `channel`.
+  - **New.** `MessageType.is_locally_written` (`Message.is_locally_written`):
+    whether the message was written here rather than synced from its source, a
+    function of its status alone. An internal note is written here and has no
+    delivery: a reader showing delivery status also requires an outgoing
+    `direction`.
+  - **New.** The console root `message_recipient_limit`, the most addresses
+    `compose_message` takes, read with `compose` and an answer's `Reply-To`
+    bound (`Message.reply_envelope`) from `MessageManager.recipient_limit()`,
+    the one reader of `ANGEE_MESSAGING_MAX_RECIPIENTS`.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
 - `angee.parties`: **Changed behaviour.** A person's merge of handles
   (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
   addresses only for a contact administrator, an effective member of
@@ -167,6 +188,19 @@ live in code docstrings.
   own handle (`HandleManager.upsert`), or, as admitted system work, rewrites the
   handle with `HandleManager.reidentify`; a seed gives a new address its own row.
   No migration and no `rebac sync`.
+- `angee.messaging`: **The console composes a message and reads back its
+  delivery.**
+  - **New.** The console mutation `compose_message`, a keyed verb over
+    `Message.objects.compose` that answers a message or sends a new email.
+  - **New.** `MessageType.delivery_attempts` (`Message.delivery_attempts`) and
+    `MessageType.delivery_error` (`Message.delivery_error(permissions)`, read
+    only with `send_held`): what delivery made of a message. `Message.local_fact`
+    and `Message.local_metadata_annotation` read a local fact on a row and in SQL.
+  - **New.** `ChannelType.permissions`, answering `reply`.
+  - **Changed.** On SQLite, `delivery_actions` no longer reads a delivery conflict
+    whose stored provider id looks like JSON (`"0"`, `"null"`) as no conflict.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
