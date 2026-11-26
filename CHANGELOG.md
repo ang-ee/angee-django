@@ -10,6 +10,10 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: The toast region is named in the app's language. `ToastProvider`
+  passed no label to the toast library's viewport, so the region was always
+  the library's English default, "Notifications"; it now reads the `ui`
+  namespace's new `toast.region` key.
 - `@angee/ui`: A failed request of a verb bound with `useRecordActionMutation`,
   or settled through `useActionResultMutation` or
   `useRecordChromeActionMutation`, is told once. These hooks toast a failed
