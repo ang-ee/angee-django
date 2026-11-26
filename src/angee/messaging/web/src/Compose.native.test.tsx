@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { SURFACE_RENDERS_FAILURE } from "@angee/ui";
 import { enUiMessages as UI } from "@angee/ui/i18n/en";
 import { createUiTestProviders } from "@angee/ui/testing";
 
@@ -21,20 +20,6 @@ vi.mock("@tanstack/react-virtual", () => ({
     scrollToIndex: () => {},
   }),
 }));
-
-// The call options each compose call is handed, recorded on the way through to the fragment's own hook.
-const composeOptions = vi.hoisted((): unknown[] => []);
-vi.mock("./compose", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./compose")>();
-  const { useCallback } = await import("react");
-  return {
-    ...original,
-    useComposeMessage: (): ReturnType<typeof original.useComposeMessage> => {
-      const compose = original.useComposeMessage();
-      return useCallback((variables, options) => { composeOptions.push(options); return compose(variables, options); }, [compose]);
-    },
-  };
-});
 
 const { createClient, clearClients } = createUiTestProviders();
 afterEach(() => { cleanup(); clearClients(); });
@@ -163,7 +148,6 @@ function bannerLines(node: HTMLElement): string[] {
 function namesField(label: string): string {
   return ui("form.fixHighlightedFieldsNamed").replace("{fields}", label);
 }
-
 
 test("Dana chooses among the channels the server lists as sendable, and Billing is refused at send under Channel", async () => {
   const { calls, sends } = mount({ surface: "new-message", seat: "dana" });
@@ -504,17 +488,25 @@ test("a replay refused for a revoked right says an earlier attempt may already h
   expect(await within(box).findByText(word("compose.replyMayAlreadyBeSent"))).toBeTruthy();
 });
 
-test("a reply's lost answer while the box is open is told by its note alone: no toast", async () => {
-  mount({ surface: "transcript", seat: "ana", lose: true });
+/** A data layer's notice recorder: the box tells its failures itself (`SURFACE_RENDERS_FAILURE`), so it opens none. */
+function noticeRecorder() {
+  return { open: vi.fn(), close: vi.fn() };
+}
+
+test("a reply's lost answer while the box is open is told by its note alone: no toast and no notice", async () => {
+  const notices = noticeRecorder();
+  mount({ surface: "transcript", seat: "ana", lose: true, notificationProvider: notices });
   const box = await openReply("Please add me.");
   submitReply(typeReply(box, "Thanks, adding you now."));
   await within(box).findByText(ui("form.answerLostResend"));
   await answered(box);
   expect(dangerToasts()).toEqual([]);
+  expect(notices.open).not.toHaveBeenCalled();
 });
 
-test("a reply denied while the box is open is toasted once, in the server's words", async () => {
-  mount({ surface: "transcript", seat: "ana", lose: true, revokeAfterSend: true });
+test("a reply denied while the box is open is toasted once, in the server's words, and the data layer opens no notice", async () => {
+  const notices = noticeRecorder();
+  mount({ surface: "transcript", seat: "ana", lose: true, revokeAfterSend: true, notificationProvider: notices });
   const box = await openReply("Please add me.");
   const input = typeReply(box, "Thanks, adding you now.");
   submitReply(input);
@@ -525,20 +517,7 @@ test("a reply denied while the box is open is toasted once, in the server's word
   const denied = recordedSend("anaRevoked", "Thanks, adding you now.").answer;
   if (!("error" in denied)) throw new Error("The revoked replay was recorded as an answer.");
   expect(dangerToasts()).toEqual([denied.error.message]);
-});
-
-test("the reply box hands its compose call SURFACE_RENDERS_FAILURE, so refine's generic notice stays off", async () => {
-  // This proves the intent, not the effect. In the app the box mounts under refine's notification provider, which would
-  // report a thrown failure a second time without these options; the story fixture mounts refine with no notification
-  // provider, so that second report cannot be seen here. A recording `notificationProvider` on `@angee/storybook`'s
-  // `RuntimeFixture` would let this test assert the effect instead.
-  mount({ surface: "transcript", seat: "ana" });
-  const box = await openReply("Please add me.");
-  composeOptions.length = 0;
-  submitReply(typeReply(box, "Thanks, adding you now."));
-  await waitFor(() => expect(composeOptions).toHaveLength(1));
-  expect(composeOptions[0]).toBe(SURFACE_RENDERS_FAILURE);
-  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  expect(notices.open).not.toHaveBeenCalled();
 });
 
 test("Reply on another email retargets the box and keeps its text; Cancel asks first and returns to the row", async () => {
