@@ -93,10 +93,6 @@ def check_account_actions(
     return errors
 
 
-MOVED_BACKENDS = {"angee.iam.auth.SignInLinkBackend": "angee.iam_messaging.auth.SignInLinkBackend"}
-"""Backend paths IAM no longer provides, each with the path that replaced it, for hosts that list the old one."""
-
-
 def check_authentication_backends(
     app_configs: Sequence[AppConfig] | None = None, **kwargs: object,
 ) -> list[checks.CheckMessage]:
@@ -115,10 +111,9 @@ def check_authentication_backends(
         try:
             import_string(path)
         except ImportError as error:
-            moved = MOVED_BACKENDS.get(path)
             errors.append(checks.Error(
                 f"AUTHENTICATION_BACKENDS lists {path!r}, which does not import ({error}).",
-                hint=f"Replace it with {moved!r}." if moved else "Remove it, or install the addon that provides it.",
+                hint="Remove it, or install the addon that provides it.",
                 id="angee.iam.E006",
             ))
     if SESSION_BACKEND not in backends:

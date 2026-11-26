@@ -76,7 +76,7 @@ live in code docstrings.
     `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
     raises, a password's included, as does every request that carries a
     session a link opened before the upgrade; start-up reports
-    `angee.iam.E006`, which names the entry and its replacement.
+    `angee.iam.E006`, which names the entry.
   - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
 - `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
   seal's own remedy, which a refused fragment's error carries; it no longer gives every

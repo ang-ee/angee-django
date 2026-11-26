@@ -187,7 +187,7 @@ def test_create_user_clears_insert_sudo_without_ambient_actor() -> None:
     pytest.param(
         ["angee.iam.auth.ModelBackend", "angee.iam.auth.SignInLinkBackend"],
         ["AUTHENTICATION_BACKENDS lists 'angee.iam.auth.SignInLinkBackend', which does not import"],
-        id="a-moved-path",
+        id="an-entry-that-does-not-import",
     ),
     pytest.param(["axes.backends.AxesStandaloneBackend"], ["does not list 'angee.iam.auth.ModelBackend'"],
                  id="no-session-backend"),
@@ -200,5 +200,3 @@ def test_start_up_names_a_backend_that_does_not_import_and_a_missing_session_bac
         errors = check_authentication_backends()
     assert [error.id for error in errors] == ["angee.iam.E006"] * len(messages)
     assert all(message in error.msg for message, error in zip(messages, errors, strict=True))
-    if "angee.iam.auth.SignInLinkBackend" in backends:
-        assert errors[0].hint == "Replace it with 'angee.iam_messaging.auth.SignInLinkBackend'."
