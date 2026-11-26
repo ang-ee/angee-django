@@ -34,7 +34,7 @@ from rebac.testing import install_schema
 from angee.base.build import extension_source_map
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
-from angee.iam.checks import check_account_disclosures
+from angee.iam.checks import check_account_actions, check_account_disclosures
 from angee.iam.models import PROTECTED_ACCOUNT_MESSAGE, UserAccountAction
 from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
 from angee.spaces.testing.models import Group, Membership
@@ -541,3 +541,25 @@ def test_no_donor_override_drops_iams_person_and_protection_blockers(db, monkeyp
         User.objects.with_actor(admin).get(pk=targets["staff"].pk).lock_for_account_action(
             "rename", expected_revision=None,
         )
+
+
+class _OffersRenameTwice:
+    @classmethod
+    def account_actions(cls) -> tuple[str, ...]:
+        return (*User.account_actions(), "rename")
+
+
+class _OffersAnUndeclaredAction:
+    @classmethod
+    def account_actions(cls) -> tuple[str, ...]:
+        return ("rename", "impersonate")
+
+
+def test_the_composed_account_actions_are_unique_and_declared_and_iam_registers_their_check_once() -> None:
+    assert check_account_actions() == []
+    assert sum(candidate is check_account_actions for candidate in registry.registered_checks) == 1
+    [twice] = check_account_actions(model=_OffersRenameTwice)
+    assert twice.id == "angee.iam.E005" and "offers rename more than once" in twice.msg
+    [undeclared] = check_account_actions(model=_OffersAnUndeclaredAction)
+    assert undeclared.id == "angee.iam.E005"
+    assert "offers impersonate, which the composed auth/user does not declare" in undeclared.msg

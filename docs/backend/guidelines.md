@@ -827,7 +827,9 @@ data through REBAC, never a queryset bypass.
   [`iam_messaging`](../../src/angee/iam_messaging/models.py) does for the
   emailed sign-in link, and unions its permission into
   `auth/user#active_account_granted` or `#nonstaff_account_granted`; IAM seals
-  the disclosures it derives from them (`angee.iam.E004`). These actions refuse a protected
+  the disclosures it derives from them (`angee.iam.E004`). Start-up refuses an
+  action offered twice or not declared on the composed `auth/user`
+  (`angee.iam.E005`). These actions refuse a protected
   account: staff, superusers, the actor's own and effective members of
   `iam/protected:main#member`, except Set password admits another person's protected
   account for a concrete platform-administrator user. Self

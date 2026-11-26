@@ -82,7 +82,9 @@ live in code docstrings.
   `useIssueSignInLinkAction` is no longer exported. The disclosures
   `auth/user#active_account` and `#nonstaff_account` derive from the union points
   `active_account_granted` and `nonstaff_account_granted`, which a fragment's
-  action extends; IAM seals the disclosures (`angee.iam.E004`). A credential
+  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
+  a composed account action offered twice or not declared on `auth/user`
+  (`angee.iam.E005`). A credential
   backend marks a genuine but spent credential with
   `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
   `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.

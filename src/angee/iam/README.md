@@ -72,7 +72,8 @@ meets IAM's person-kind and protected-account blockers
 permission unions into `active_account_granted` or `nonstaff_account_granted`
 when the action acts only on active or non-staff accounts; IAM derives
 `active_account` and `nonstaff_account` from them and seals both
-(`angee.iam.E004`). Changing actions take the revision the client read (the issue
+(`angee.iam.E004`). At start-up IAM refuses a composed action offered twice or
+not declared on `auth/user` (`angee.iam.E005`). Changing actions take the revision the client read (the issue
 actions excepted), check their own Zed permission on `auth/user`
 (`set_active`, `rename`, `issue_password`, `reset_password`, `set_password`;
 admin by default)
