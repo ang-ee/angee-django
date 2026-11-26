@@ -14,7 +14,8 @@ The documents are the page's own (``documents.ts``), read from its source. Publi
 are stable aliases, cursors and feed keys keep their order, and times are fixed, so an
 unchanged server records the same file.
 
-The test records it afresh and fails when the committed file differs. Re-record it,
+The test records it afresh and fails when the committed file differs; the recording and
+its check are the SQLite test host's, and the module skips on any other database. Re-record it,
 never edit it, with ``ANGEE_RECORD_FIXTURES=1`` (the command is in ``docs/checks.md``),
 whenever the console's schema, a document of the page or a server message changes.
 """
@@ -34,7 +35,7 @@ from typing import Any
 from unittest.mock import Mock
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from django_compose.components import enabled_apps
 from graphql import DocumentNode, FragmentDefinitionNode, FragmentSpreadNode, OperationDefinitionNode, print_ast, visit
@@ -73,6 +74,12 @@ CHANNELS: dict[str, dict[str, Any]] = {
     "archive": {"display_name": "Archive desk", "config": {"from_email": "Archive <archive@example.test>"}},
 }
 """The email channels beside Support (the compose tests' desk); Archive is disconnected. A feed stands beside them."""
+
+pytestmark = pytest.mark.skipif(
+    connection.vendor != "sqlite",
+    reason="compose.fixtures.recorded.json is the SQLite test host's recording (docs/checks.md); a PostgreSQL host "
+    "offers the similar and notSimilar filters on string fields and numbers some aliases otherwise.",
+)
 
 SENDER_REFUSAL = "Configure a valid sender address for this email channel."
 """What a sender reads when Billing's configured address is no address, word for word."""
