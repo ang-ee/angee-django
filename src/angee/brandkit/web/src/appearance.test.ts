@@ -173,11 +173,12 @@ describe("a kit's text on the stock theme reads at 4.5:1 wherever the console dr
     };
   }
 
-  test.each(cases)("$kit, $scheme: the link on each surface", ({ colors, scheme }) => {
+  test.each(cases)("$kit, $scheme: the link on each surface, moved from the brand no further than it must", ({ colors, scheme }) => {
     const token = derived(colors, scheme);
-    for (const surface of SURFACES) {
-      expect(contrast(token("--text-link"), token(surface)), surface).toBeGreaterThanOrEqual(4.5);
-    }
+    const ratios = SURFACES.map((surface) => contrast(token("--text-link"), token(surface)));
+    SURFACES.forEach((surface, index) => expect(ratios[index], surface).toBeGreaterThanOrEqual(4.5));
+    // A link that had to move lands within 5% of the bar where it reads worst, keeping what it can of the brand.
+    if (token("--text-link") !== token("--brand")) expect(Math.min(...ratios)).toBeLessThan(4.5 * 1.05);
   });
 
   test.each(cases)("$kit, $scheme: each tone's text the kit derives, on its own fills and on each surface", ({ colors, scheme }) => {
@@ -190,4 +191,34 @@ describe("a kit's text on the stock theme reads at 4.5:1 wherever the console dr
       }
     }
   });
+});
+
+/** `count` colours from a fixed seed (a Park–Miller sequence), the same on every run. */
+function seededColors(seed: number, count: number): string[] {
+  let state = seed;
+  const next = () => (state = (state * 16807) % 2147483647) % 256;
+  return Array.from({ length: count }, () => `#${[next(), next(), next()].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`);
+}
+
+// The stock theme states no surface of its own (they live in `tokens.css`); `@angee/ui` measures it there.
+describe("a brand alone on each shipped theme that states its surfaces reads at 4.5:1 on the ones it paints", () => {
+  test.each([angee, fyltr, ledger].flatMap((theme) => (["light", "dark"] as const).map((scheme) => ({ theme, scheme }))))(
+    "$theme.id, $scheme, over a seeded sample of brands",
+    ({ theme, scheme }) => {
+      const painted = theme.tokens[scheme];
+      for (const surface of SURFACES) expect(painted[surface], `${theme.id} states ${surface}`).toMatch(/^#[0-9a-f]{6}$/i);
+      const under: string[] = [];
+      for (const brand of seededColors(11, 400)) {
+        const value = { ...parseThemeCustomization(theme.options!.defaults), brand };
+        const tokens = resolveThemeOptions(theme, { version: theme.options!.version, value }).tokens[scheme];
+        for (const text of ["--text-link", "--brand-soft-text"] as const) {
+          for (const surface of SURFACES) {
+            const ratio = contrast(tokens[text]!, tokens[surface]!);
+            if (ratio < 4.5) under.push(`${brand} ${text} on ${surface}: ${ratio.toFixed(3)}`);
+          }
+        }
+      }
+      expect(under).toEqual([]);
+    },
+  );
 });

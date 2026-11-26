@@ -10,6 +10,8 @@ const SURFACES = [
   "--surface-canvas", "--surface-sheet", "--surface-sheet-2", "--surface-popover", "--surface-inset",
 ] as const satisfies readonly ThemeTokenName[];
 
+const SCHEMES = ["light", "dark"] as const;
+
 const TOKENS_CSS = readFileSync(fileURLToPath(new URL("../styles/tokens.css", import.meta.url)), "utf8");
 
 /** The stock palette's tokens in a scheme as `tokens.css` authors them, each `var()` followed to its value. */
@@ -19,9 +21,19 @@ function authored(scheme: "light" | "dark"): Record<string, string> {
     const body = TOKENS_CSS.slice(start, TOKENS_CSS.indexOf("\n}", start));
     return Object.fromEntries([...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name!, value!.trim()]));
   };
-  const declared = { ...block(":root"), ...(scheme === "dark" ? block('[data-color-scheme="dark"]') : {}) };
-  const follow = (value: string): string => (value.startsWith("var(") ? follow(declared[value.slice(4, -1)]!) : value);
+  const declared: Record<string, string> = { ...block(":root"), ...(scheme === "dark" ? block('[data-color-scheme="dark"]') : {}) };
+  const follow = (value: string): string => {
+    const reference = /^var\((--[\w-]+)\)$/.exec(value);
+    return reference ? follow(declared[reference[1]!] ?? `an undeclared ${reference[1]}`) : value;
+  };
   return Object.fromEntries(Object.entries(declared).map(([name, value]) => [name, follow(value)]));
+}
+
+/** A token's colour, which must be `#rrggbb` to be measured: a stylesheet restructured past this reader fails here. */
+function colorOf(tokens: Partial<Record<string, string>>, name: string): string {
+  const value = tokens[name];
+  expect(value, `${name} is ${value}, not a #rrggbb colour this test can measure`).toMatch(/^#[0-9a-f]{6}$/i);
+  return value!;
 }
 
 /** The WCAG 2 contrast ratio of two `#rrggbb` colours, worked out here rather than by the runtime under test. */
@@ -37,34 +49,60 @@ function contrast(left: string, right: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-describe("the stock palette's link reads at 4.5:1 on every surface", () => {
-  test.each(["light", "dark"] as const)("as tokens.css authors it, uncustomised: %s", (scheme) => {
+/** `count` colours from a fixed seed (a Park–Miller sequence), the same on every run. */
+function seededColors(seed: number, count: number): string[] {
+  let state = seed;
+  const next = () => (state = (state * 16807) % 2147483647) % 256;
+  return Array.from({ length: count }, () => `#${[next(), next(), next()].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`);
+}
+
+// The stock theme's customisation defaults, read from the palette tokens.css authors.
+const light = authored("light");
+const defaults = {
+  brand: colorOf(light, "--brand"), accent: colorOf(light, "--accent"), neutral: colorOf(light, "--n-500"),
+  canvas: colorOf(light, "--surface-canvas"), surface: colorOf(light, "--surface-sheet"), rail: colorOf(light, "--surface-rail"),
+  success: colorOf(light, "--success"), warning: colorOf(light, "--warning"), danger: colorOf(light, "--danger"), info: colorOf(light, "--info"),
+  font: "theme", radius: "theme", density: "theme", elevation: "theme", logo: "theme",
+} satisfies ThemeCustomization;
+const options = createThemeCustomizationOptions(defaults);
+
+describe("the stock palette's link reads at 4.5:1 on every surface tokens.css paints", () => {
+  test.each(SCHEMES)("uncustomised: %s", (scheme) => {
     const tokens = authored(scheme);
     for (const surface of SURFACES) {
-      expect(contrast(tokens["--text-link"]!, tokens[surface]!), surface).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(colorOf(tokens, "--text-link"), colorOf(tokens, surface)), surface).toBeGreaterThanOrEqual(4.5);
     }
   });
 
-  // A customisation that changes only the brand emits no surface, so its link and brand text are worked
-  // out against the surfaces its defaults derive; they must read on the ones tokens.css paints.
-  const light = authored("light");
-  const defaults = {
-    brand: light["--brand"]!, accent: light["--accent"]!, neutral: light["--n-500"]!, canvas: light["--surface-canvas"]!,
-    surface: light["--surface-sheet"]!, rail: light["--surface-rail"]!, success: light["--success"]!,
-    warning: light["--warning"]!, danger: light["--danger"]!, info: light["--info"]!,
-    font: "theme", radius: "theme", density: "theme", elevation: "theme", logo: "theme",
-  } satisfies ThemeCustomization;
-  const options = createThemeCustomizationOptions(defaults);
-  test.each(["#1d4ed8", "#3f7d20", "#fff59d"].flatMap((brand) => (["light", "dark"] as const).map((scheme) => ({ brand, scheme }))))(
-    "with only the brand changed, to $brand: $scheme",
-    ({ brand, scheme }) => {
+  // A brand alone emits no surface, and the stock theme states none in its definition, so its link and
+  // brand text are worked out against the surfaces its defaults derive; they must read on the real ones.
+  test.each(SCHEMES)("with the brand alone changed, over a seeded sample of brands: %s", (scheme) => {
+    const painted = authored(scheme);
+    const under: string[] = [];
+    for (const brand of seededColors(11, 400)) {
       const emitted = options.resolve({ ...defaults, brand })[scheme] ?? {};
       expect(SURFACES.filter((surface) => surface in emitted)).toEqual([]);
-      const tokens = { ...authored(scheme), ...emitted };
-      for (const surface of SURFACES) {
-        expect(contrast(tokens["--text-link"]!, tokens[surface]!), `link on ${surface}`).toBeGreaterThanOrEqual(4.5);
-        expect(contrast(tokens["--brand-soft-text"]!, tokens[surface]!), `brand text on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      for (const text of ["--text-link", "--brand-soft-text"] as const) {
+        for (const surface of SURFACES) {
+          const ratio = contrast(colorOf(emitted, text), colorOf(painted, surface));
+          if (ratio < 4.5) under.push(`${brand} ${text} on ${surface}: ${ratio.toFixed(3)}`);
+        }
       }
-    },
-  );
+    }
+    expect(under).toEqual([]);
+  });
+});
+
+describe("where the surfaces pull opposite ways and no colour reads on all of them", () => {
+  // A white canvas beside dark grey sheets: a link dark enough for the canvas is lost on the sheets.
+  const value = { ...defaults, brand: "#3355ff", canvas: "#ffffff", surface: "#3a3a3a" };
+
+  test("the link is the colour that reads best where it reads worst, at least 3:1 on every surface", () => {
+    const tokens = options.resolve(value).light ?? {};
+    const worst = (color: string) => Math.min(...SURFACES.map((surface) => contrast(color, colorOf(tokens, surface))));
+    expect(Math.max(worst("#11141a"), worst("#ffffff"))).toBeLessThan(4.5);
+    const link = colorOf(tokens, "--text-link");
+    expect(worst(link)).toBeGreaterThanOrEqual(Math.max(worst(value.brand), worst("#11141a"), worst("#ffffff")));
+    expect(worst(link)).toBeGreaterThanOrEqual(3);
+  });
 });

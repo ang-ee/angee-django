@@ -41,7 +41,11 @@ export interface ThemeOptionsDefinition<TOptions> {
    */
   acceptsHostAppearanceSource?: boolean;
   parse(value: unknown): TOptions;
-  resolve(value: TOptions): Partial<ThemeTokenLayers>;
+  /**
+   * The token layers `value` adds over the theme's own. `resolveThemeOptions` passes the definition's
+   * authored tokens as `base`, so a derivation can read the colours the theme itself paints.
+   */
+  resolve(value: TOptions, base?: ThemeTokenLayers): Partial<ThemeTokenLayers>;
 }
 export type ThemeCustomizationFont = "theme" | "system" | "inter" | "humanist" | "industrial" | "editorial" | "mono";
 export type ThemeCustomizationRadius = "theme" | "square" | "compact" | "standard" | "soft" | "round";

@@ -156,8 +156,11 @@ and logo treatment. The generator derives semantic tokens for light and dark
 together, including readable foregrounds, borders, interaction states and the
 complete solid/soft/surface status matrix. The link and each tone's text read at
 4.5:1 on their own fills and on every surface of their scheme (canvas, sheets,
-popover and inset), worked out after the surfaces; a surface an input leaves at
-its default counts as the defaults derive it. Appearance stores the inputs in the
+popover and inset) wherever any colour can, and come nearest it where none can. A
+surface an input leaves at its default counts as the theme's definition states it,
+else as the defaults derive it, with a 1% margin. A text is worked out only when its
+own input changes, so changing only surfaces keeps the theme's own link and tone
+texts. Appearance stores the inputs in the
 user's preference and rebuilds the token overrides whenever the generator
 changes.
 
