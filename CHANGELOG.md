@@ -40,6 +40,11 @@ live in code docstrings.
   open form dialog renders under the router and `ModalsHost` and says so when
   one is missing; `createUiTestProviders` provides `ModalsHost` and takes
   `router`.
+- `angee.workflows`: a manual start that reuses a request key for a different
+  request raises `CreationKeyConflict`, as the other keyed creates do, rather
+  than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
+  so a client holding the spent key starts a new request. A trigger admission
+  still records the refusal on its event.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
