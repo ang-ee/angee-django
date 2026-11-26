@@ -266,6 +266,16 @@ live in code docstrings.
   percent, about 1.5 to 1 against its surface. **Upgrade:** check your own
   screens with the keyboard; a class of your own composed through a variant
   needs `@utility` too.
+- `angee.base`: an implementation key, the value an `ImplClassField` holds,
+  pickles. Its choices enum is built at run time, so no module holds it by name
+  and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
+  query pickling failed for any filter on such a field, and so did a REBAC
+  permission whose compiled statement filters on one; so did any row loaded from
+  the database, which holds its key as that member. A key now pickles as its
+  registry setting, its key set and its value, and unpickles without reading
+  settings: as that very member in any process with the same key set; elsewhere
+  as a member that equals its key, which the field maps onto its own. Upgrade:
+  nothing.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
