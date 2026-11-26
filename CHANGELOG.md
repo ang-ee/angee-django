@@ -195,7 +195,8 @@ live in code docstrings.
   `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
   test or a story provides both through the shared providers below;
   `createUiTestProviders` and `ShellPageTestProviders` render
-  one app shell (`AppShellTestProviders`), which provides `ModalsHost`;
+  one app shell (`AppShellTestProviders`, from the runner-free
+  `@angee/ui/testing/shell`), which provides `ModalsHost`;
   `ShellPageTestProviders` renders under a memory router unless one is already
   above, and `createUiTestProviders` takes `router`; a keyed dialog's
   submission drops any assertion of its key.

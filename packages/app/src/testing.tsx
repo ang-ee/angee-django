@@ -14,7 +14,7 @@ import {
   useChatter,
   usePrimaryPaneContent,
 } from "@angee/ui";
-import { AppShellTestProviders, type AppShellTestProvidersProps } from "@angee/ui/testing";
+import { AppShellTestProviders, type AppShellTestProvidersProps } from "@angee/ui/testing/shell";
 import type { AppRuntime, ContainerAlteration, ContainerChild } from "@angee/ui/runtime";
 
 import {

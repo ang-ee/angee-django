@@ -39,7 +39,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 - Workflow and decision states: `angee.workflows.testing.drivers` (`load_workflow`, `start_run`, `run_until`, `decide`), never fabricated step runs ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 - PostgreSQL lock races: `submit` and `wait_for_lock` (`tests/lock_waits.py`), never a private polling loop.
 - Query budgets: Django `CaptureQueriesContext` at 1 and 25 rows; a document's statement ceiling through `measure_graphql_document`.
-- Frontend: `@angee/app/testing`, `@angee/ui/testing`, `@angee/refine/testing`, `@angee/metadata/testing`, `@angee/storybook/testing`, Testing Library. Browser: `@angee/e2e` only, Page Objects under `pages/`.
+- Frontend: `@angee/app/testing`, `@angee/ui/testing`, `@angee/ui/testing/shell`, `@angee/refine/testing`, `@angee/refine/testing/wire`, `@angee/metadata/testing`, `@angee/storybook/testing`, Testing Library; a story imports only the entries free of a test runner (`@angee/app/testing`, `@angee/ui/testing/shell`, `@angee/refine/testing/wire`, `@angee/metadata/testing`, `@angee/storybook/testing`). Browser: `@angee/e2e` only, Page Objects under `pages/`.
 
 ## Steps
 

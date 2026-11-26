@@ -2446,7 +2446,10 @@ resources, runtime and operation documents; the preview mounts the shared
 [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
 Transport fixtures use the GraphQL wire fake
 [`graphqlWireFetch`](../../packages/refine/src/testing-wire.ts)
-(`@angee/refine/testing/wire`, free of Vitest so stories bundle it): it answers
+(`@angee/refine/testing/wire`, free of Vitest so stories bundle it; the app
+shell's providers, `AppShellTestProviders` from `@angee/ui/testing/shell`, and
+`@angee/app/testing` are free of it too, while `@angee/ui/testing` and
+`@angee/refine/testing` hold spied fakes and stay with tests): it answers
 each root field of a request from the handler named for it, fails loudly on a
 field without a handler or a missing required variable, and reports each parsed
 request; a handler throws `GraphQLError` to answer an error. Stories and addon
