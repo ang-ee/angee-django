@@ -421,11 +421,13 @@ Save would write, sample values included, the pane renders those edits as Save
 would write them (`nextSave`, sent as `patch` once the edits have settled for a
 moment) and says so; with no such edits, after Discard or Save, it shows the saved
 row again at once. Edits Save would refuse are titled so, each refusal in Save's
-words, and one under a column takes the person to that field when chosen; edits
-Save would keep that the sample cannot render say that. The pane says it is busy
-until the preview on screen is the one for the edits now in the form. It shows a
-mail's subject, preheader and plain text in the direction the mail is rendered
-in. The HTML shows only in the
+words, and one under a column is titled by the form's label for that field and
+takes the person there when chosen; edits Save would keep that the sample cannot
+render say that. What the pane says of the render is announced politely as it
+changes, never as an alert: it is never the answer to a save. The pane says it is
+busy, and dims what it shows, until the preview on screen is the one for the kit
+and the edits now chosen. It shows a mail's subject, preheader and plain text in
+the direction the mail is rendered in. The HTML shows only in the
 framework's sandboxed message frame, which runs no script, has no same origin and
 loads remote images only when asked; the frame's own body styles sit under the
 mail, so a mail client may space and size it slightly differently. A message
