@@ -1791,6 +1791,8 @@ class Message(
         self.revision = row.revision
         return row
 
+    # A row's str is its preview, so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def deliver(self) -> bool:
         """Queue this outbound message through messaging's fenced delivery owner.
 

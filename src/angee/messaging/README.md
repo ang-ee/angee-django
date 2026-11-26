@@ -377,12 +377,20 @@ a send; both read nothing.
 
 An error report hides every local of every frame of the system write, from the
 system mailer and `compose_as_system` down to the ORM's and the SQL's, and of
-the shared writer `_write_outgoing` down for any mail (`sensitive_variables`);
-Django's filter applies only with `DEBUG` off, so a debug page shows them all.
-An ordinary `compose`'s report therefore shows hidden frames below the writer,
-while `compose`'s own frame is not marked. Frames above the system mailer are
-the caller's: Django's `send_mail` holds the message it was given, so a caller
-that mails a credential through Django's mail API marks its own frame.
+the shared writer `_write_outgoing` down for any mail (`sensitive_variables`).
+The delivery path is hidden the same way for any mail, as a message's string
+form is its preview: `Message.deliver` down, the worker's
+`run_message_delivery` down to the transport library's own frames, and the
+release task's `release_held_messages` down. Django's filter applies only with
+`DEBUG` off, so a debug page shows them all. An ordinary `compose`'s report
+therefore shows hidden frames below the writer, while `compose`'s own frame is
+not marked. Frames above the system mailer are the caller's: Django's
+`send_mail` holds the message it was given, so a caller that mails a credential
+through Django's mail API marks its own frame. The delivery path logs a
+message's id and an error's type, never the message, and the recorded
+`delivery_error` keeps a transport's own text private. Nobody retries or
+acknowledges a system mail whose delivery failed or is uncertain, as its sealed
+`write` refuses both; the release task sends a lost one again.
 
 The system mailer carries what a Django email can mean on the system channel:
 `to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.

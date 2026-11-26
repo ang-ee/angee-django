@@ -3994,6 +3994,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     self._recount_thread(thread)
             return results
 
+    # A row's str is its preview, so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def release_held_messages(self, *, now: datetime | None = None, limit: int = 200) -> int:
         """SQL-scoped skip-locked release, with a savepoint for every row."""
 
