@@ -1048,6 +1048,20 @@ describe("FormView", () => {
     expect(reminder.closest(".overflow-auto")?.className).toContain("max-h-[50%]");
   });
 
+  test("an editable field's wrapper draws its ring: a focused input, textarea or button directly inside drops its own ring layer and outline", async () => {
+    renderForm("note-1");
+    const reminder = await screen.findByLabelText("Reminder");
+    const wrapper = reminder.closest<HTMLElement>('[class~="-mx-2"][class~="focus-within:focus-ring"]');
+    expect(wrapper).toBeTruthy();
+    const names = wrapper!.className.split(/\s+/);
+    for (const control of ["[&>input:focus]", "[&>textarea:focus]", "[&>button:focus-visible]"]) {
+      // `shadow-none` clears the shadow layer only; the ring is its own layer of the composed box-shadow.
+      expect(names).toContain(`${control}:ring-0`);
+      expect(names).toContain(`${control}:outline-none`);
+      expect(names).not.toContain(`${control}:shadow-none`);
+    }
+  });
+
   test("a workspace record scrolls its sheet and panes together under its compact header", async () => {
     renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields} recordPresentation="workspace"
       recordTabs={[{ id: "editor", label: "Editor", render: () => <p data-testid="workspace-pane">Pane</p> }]} />);

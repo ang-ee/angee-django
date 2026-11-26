@@ -100,6 +100,22 @@ export const THEME_TOKEN_NAMES: readonly ThemeTokenName[];
  */
 export function defineTheme<TOptions>(definition: ThemeDefinition<TOptions>): ThemeDefinition<TOptions>;
 /**
+ * Whether a value is a list of shadows within the contract's bounds: per layer, an optional leading or
+ * trailing `inset`, two to four lengths (`0`, or a number in `px`, `rem` or `em`; the blur not negative)
+ * and an optional colour (a hex value, `transparent`, `currentcolor`, `rgb()`/`rgba()` of three numbers
+ * and an optional alpha, `rgb(from <hex> r g b / <alpha>)`, or
+ * `color-mix(in srgb|oklab|oklch, <hex> <percentage>, transparent)`; no form holds a `var()`). The contract's rule for an
+ * elevation, `--ring` and `--ring-danger`.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
+export function isShadowList(value: string): boolean;
+/**
+ * The elevation presets a customization can choose instead of its theme's own.
+ * @kind token
+ */
+export const THEME_ELEVATION_PRESETS: readonly Exclude<ThemeCustomizationElevation, "theme">[];
+/**
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
