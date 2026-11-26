@@ -996,6 +996,13 @@ data through REBAC, never a queryset bypass.
     hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
+- **System mail is named system work.** This is a second deliberate exception
+  to the actor-scope rule above: a verb whose own permission decided the send
+  may be a person's button, and it records through
+  [`MessageManager.compose_as_system`](../../src/angee/messaging/managers.py),
+  which consults no send right and records the causing actor in the changeset
+  ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
+  Its callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
