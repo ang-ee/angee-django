@@ -22,9 +22,10 @@ from anymail.message import AnymailMessage
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.mail import mailers
+from django.core.mail import EmailMessage, EmailMultiAlternatives, mailers
 from django.core.mail.backends.base import BaseEmailBackend
-from django.utils.encoding import punycode
+from django.db import DatabaseError, transaction
+from django.utils.encoding import force_str, punycode
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
@@ -395,6 +396,99 @@ def carries_address(address: str) -> bool:
 
     local, _at, _domain = address.rpartition("@")
     return local.isascii()
+
+
+class SystemMailer(BaseEmailBackend):
+    """Django's default mailer wherever messaging is installed: it records each email on the system channel.
+
+    Each email becomes one queued message through
+    :meth:`~angee.messaging.managers.MessageManager.compose_as_system`, in the
+    caller's transaction, so mail sent in a transaction that rolls back is never
+    sent; it sends nothing itself. Delivery runs later through ``MAILERS["transport"]``.
+    Called while a delivery is in progress it refuses, so no transport can hand a
+    delivery back to it. A batch is recorded whole or not at all; an email with
+    no recipient is skipped, as Django's mailers skip one. What an email may
+    carry is the closed list :func:`_system_mail` reads.
+    """
+
+    reason = "messaging.system_mailer"
+    """The named system work the recorded messages are written under."""
+
+    def __init__(self, *, fail_silently: bool = False, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.fail_silently = fail_silently
+
+    def send_messages(self, email_messages: Any) -> int:
+        """Record each email with a recipient as one queued system message; return how many were recorded."""
+
+        if _DELIVERING.get():
+            # Never silenced: a transport that hands delivery back would record each delivery again.
+            raise IntegrationError(
+                'MAILERS["transport"] hands delivery back to the system mailer; point it at the mailer that sends.',
+            )
+        messages = list(email_messages)
+        try:
+            recorded = [_system_mail(email) for email in messages if email.recipients()]
+            message_manager = apps.get_model("messaging", "Message").objects
+            with transaction.atomic():
+                for arguments in recorded:
+                    message_manager.compose_as_system(reason=self.reason, **arguments)
+        except (ValueError, ValidationError, DatabaseError) as error:
+            if not self.fail_silently:
+                raise
+            logger.warning("The system mailer recorded none of %d emails (%s).", len(messages), type(error).__name__)
+            return 0
+        return len(recorded)
+
+
+_DROPPED_HEADERS = frozenset({"date", "message-id"})
+"""Headers an email may carry that system mail drops: compose mints the Message-ID, and delivery dates the mail."""
+
+
+def _system_mail(email: EmailMessage) -> dict[str, Any]:
+    """Return ``email`` as :meth:`compose_as_system` arguments, reading nothing; refuse what it cannot carry.
+
+    The closed list: ``to``, ``cc``, ``bcc`` and ``subject`` are carried as
+    text; a plain or HTML body, and one HTML alternative beside a plain body,
+    become ``text`` and ``html``. ``Message-ID`` and ``Date`` are dropped
+    (compose mints the one, delivery writes the other), ``from_email`` and
+    ``encoding`` are not carried (system mail is sent from the system channel's
+    sender and stored as text). Attachments, ``reply_to``, any other header,
+    any other body or alternative type, and an ``AnymailMessage`` (whose
+    provider options mean nothing to a recorded message) are refused with
+    ``ValueError``.
+    """
+
+    if isinstance(email, AnymailMessage):
+        raise ValueError("System mail does not carry an AnymailMessage's provider options.")
+    if email.attachments:
+        raise ValueError("System mail carries no attachments.")
+    if email.reply_to:
+        raise ValueError("System mail carries no Reply-To.")
+    for name in email.extra_headers:
+        if name.lower() not in _DROPPED_HEADERS:
+            raise ValueError(f"System mail carries no {name} header.")
+    text, html = "", ""
+    body = force_str(email.body or "")
+    if email.content_subtype == "plain":
+        text = body
+    elif email.content_subtype == "html":
+        html = body
+    else:
+        raise ValueError(f"System mail carries no text/{email.content_subtype} body.")
+    alternatives = email.alternatives if isinstance(email, EmailMultiAlternatives) else []
+    for content, mimetype in alternatives:
+        if mimetype != "text/html" or html:
+            raise ValueError(f"System mail carries one text/html alternative beside a plain body, not {mimetype}.")
+        html = content.decode() if isinstance(content, bytes) else str(content)
+    return {
+        "to": [str(address) for address in email.to],
+        "cc": [str(address) for address in email.cc],
+        "bcc": [str(address) for address in email.bcc],
+        "subject": str(email.subject),
+        "text": text,
+        "html": html,
+    }
 
 
 def _mailbox(name: str, address: str) -> str:

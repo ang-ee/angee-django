@@ -65,6 +65,71 @@ live in code docstrings.
     libraries are `django-anymail` and `requests`. Such a host migrates,
     synchronizes the permission schema and loads the install tier for messaging,
     whose mail settings then apply.
+- `angee.messaging`, `angee.workflows_messaging`, `angee.iam`: **Django's own mail is
+  recorded on a system channel and sent through one transport mailer.**
+  - **Upgrade first:** with messaging installed, start-up refuses a deployment that
+    states its own `MAILERS.default` until it is renamed `MAILERS.transport`
+    (keeping its `BACKEND` and `OPTIONS`; remove it instead when a transport is
+    stated), and refuses legacy `EMAIL_*` settings until they move into
+    `MAILERS.transport` `OPTIONS`; the refusal names the edit. Then provision: it
+    loads the system channel's rows and runs `rebac sync` for schema revision 30.
+    A host that authors `LOGGING` names `using: transport` on its
+    `AdminEmailHandler` (messaging's README gives the block). Tests that observed
+    delivery through `MAILERS={"default": ...}` override `transport`.
+  - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
+    wherever messaging is installed, contributed by messaging's autoconfig. It
+    records each email (a password reset, `sendtestemail`, a link an addon mails)
+    as one queued message on the system channel through the new
+    `MessageManager.compose_as_system(*, reason, to, cc, bcc, subject, text, html)`,
+    in the caller's transaction, and sends nothing itself. Its rows record the
+    causing actor as `created_by`; the handles it lands have no creator, and their
+    history is a changeset of their own under messaging's non-user attribution
+    (`messaging/system:outgoing`), beside the caller's. The system channel is
+    messaging's install row `messaging.system_channel` (backend `system`,
+    `SystemChannelBackend`, vendor `messaging.email`), found through
+    `ChannelManager.system_channel()`, which refuses with `SystemChannelMissing`
+    (`SYSTEM_CHANNEL_MISSING`, under `channel`) when it is absent.
+    `AnymailEmailChannelBackend.default_sender()` is the deployment's sender
+    (`DEFAULT_FROM_EMAIL`) from settings alone, and
+    `SystemChannelBackend.system_mail_configured()` answers whether system mail
+    can be sent. `carries_address(address)` (`angee.messaging.email`) is the one
+    rule for what the transport can carry. `ChannelBackend.offered` declares
+    whether people choose a backend to send from or to watch. `messaging.E004`
+    (`check --deploy`) reports a development-only transport mailer. Messaging
+    contributes `LOGGING`: Django's `DEFAULT_LOGGING` with `mail_admins` sending
+    through `transport` and no formatter on the `django.server` handler.
+  - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
+    default mailer; delivery is configured exactly when it is stated. Django mail
+    is queued, so mail sent in a transaction that rolls back is never sent; it
+    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` and `Message-ID` are
+    not kept, and attachments, `reply_to` and extra headers are refused. A
+    transport that hands a delivery back to the system mailer fails that delivery
+    instead of recording it again. Administrators alone read, send on, write,
+    annotate and delete the system channel (schema revision 30): no channel,
+    integration, team, project or ownership grant reaches it, and `messaging.E003`
+    refuses a fragment arm on the channel's `read`, `reply`, `write`, `annotate`
+    or `delete`. Its threads show in administrators' inbox lists. A channel whose
+    backend is not offered (the system channel) is never selected to send from
+    (`ChannelQuerySet.outbound_email`), and enabling a `message_ingested` trigger
+    on it is refused under `channel` (`not_offered`) before any grant. A channel's
+    default sender is checked by `MessageManager.clean_recipient`, the check every
+    address messaging lands takes, and must be an address the transport carries,
+    where it was Django's `validate_email`. Error mail goes through the transport,
+    never the system channel; Django's development server logs its request lines
+    without the time. The sign-in link's mail is recorded on the system channel
+    with the rest of Django's mail.
+  - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
+    reads `MAILERS["transport"]` itself.
+- `angee.base`: an implementation key, the value an `ImplClassField` holds,
+  pickles. Its choices enum is built at run time, so no module holds it by name
+  and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
+  query pickling failed for any filter on such a field, and so did a REBAC
+  permission whose compiled statement filters on one; so did any row loaded from
+  the database, which holds its key as that member. A key now pickles as its
+  registry setting, its key set and its value, and unpickles without reading
+  settings: as that very member in any process with the same key set; elsewhere
+  as a member that equals its key, which the field maps onto its own. Upgrade:
+  nothing.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
@@ -120,7 +185,24 @@ live in code docstrings.
     record's chatter (the customer's answer to a mail sent from the record) is
     ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
     answers it by email; before, the answer was refused for want of a sender.
-    Like every email it is a retained record: a moderator no longer trashes it.
+    A stored message keeps the kind it was ingested with through every re-sync,
+    identical or edited, so replies received before the upgrade stay comments
+    and cannot be answered by email; new ones can. No data migration.
+    Anyone who has seen a chatter mail's Message-ID can answer onto the record,
+    so a message received on a record's chatter, email or comment, is one its
+    moderator may trash; mail sent from the record, system notes, and mail in a
+    mailbox conversation an earlier version merged into the record (a
+    colleague's own thread, still in the chatter's group) stay retained, that
+    last its owner's to remove, and that refusal is now a coded `ValidationError` (`retained`,
+    "Only comments and received messages can be removed.") where it was a bare
+    `ValueError`. Whether such mail should land on the record at all is open.
+  - **Changed.** A record's chatter thread is never folded with a mailbox thread.
+    The copy of a chatter mail (or of an answer to one) that reaches a
+    colleague's own connected mailbox still folds as a message, but the
+    colleague's thread stays theirs: it was merged into the chatter, dropped out
+    of their inbox, and took their later mail on that conversation onto the
+    record. Threads already folded this way are left as they are; a person
+    keeps them separate through the source-copy decision.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
@@ -134,7 +216,10 @@ live in code docstrings.
     default sender is invalid is refused; a keyed retry still returns its
     original. A reply to a message whose `Reply-To` names no address the handle
     owner accepts is refused (`reply_to`) rather than sent to the sender, which
-    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    may be a relay; the sender an answer falls back to is checked the same way,
+    so one stored with an address the handle owner does not take (a control or
+    an invisible character in it) is refused (`parent`, `reply_unaddressed`)
+    instead of being written and failing at delivery. Idempotency keys claimed through `compose_reply` (scope
     `messaging.reply:`) do not replay through `compose` (scope
     `messaging.compose:`): a posts workflow reply retried across the upgrade
     does not replay, and if its original was trashed or failed, which the

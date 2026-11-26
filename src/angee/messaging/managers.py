@@ -3529,12 +3529,16 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
     @staticmethod
     def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
-        """Return each recipient's ``(handle id, role)``, its addresses resolved in one read.
+        """Return each recipient's ``(handle id, role)`` in the order given, its addresses resolved in one read.
 
         Known handles resolve through the handle owner's batch lookup
         (``HandleManager.find_identities``); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
-        only a handle that has none and never renames a shared one.
+        only a handle that has none and never renames a shared one. Those writes
+        take the handles in one order, by their identity key, so two composes
+        naming the same addresses in different orders take their row locks in the
+        same order and do not deadlock each other; another writer that takes the
+        same handles in its own order still can.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3542,19 +3546,15 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         found = handle_model.objects.find_identities(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        rows: list[tuple[Any, str]] = []
-        for addressee in recipients:
-            handle_id = addressee.handle_id
-            if handle_id is None:
-                handle = found.get((email, addressee.address))
-                if handle is None or addressee.name:
-                    handle = found[(email, addressee.address)] = handle_model.objects.upsert(
-                        platform=email, value=addressee.address, display_name=addressee.name,
-                        fill_only=("display_name",), created_by_id=created_by_id,
-                    )
-                handle_id = handle.pk
-            rows.append((handle_id, addressee.role))
-        return rows
+        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+            if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
+                found[(email, addressee.address)] = handle_model.objects.upsert(
+                    platform=email, value=addressee.address, display_name=addressee.name,
+                    fill_only=("display_name",), created_by_id=created_by_id,
+                )
+        return [
+            (addressee.handle_id or found[(email, addressee.address)].pk, addressee.role) for addressee in recipients
+        ]
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
@@ -4300,7 +4300,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if not thread.member_threads().filter(pk=message.thread_id).exists():
                 raise ValueError("Message does not belong to this record thread.")
             if trash and (error := message.trash_error()):
-                raise ValueError(error)
+                raise ValidationError(error, code="retained")
             record = message.threaded_record()
             if record is None or not record.can_moderate():
                 raise PermissionDenied("Removing or restoring comments requires moderator access to the record.")
@@ -4446,7 +4446,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         a mail sent from the record's chatter), which stays an ``EMAIL`` and is
         answered by email; a message whose source names its conversation
         (``ParsedThread`` or ``explicit_thread``) is ``CHAT``, and everything else is
-        ``EMAIL``. The same act keeps its kind across
+        ``EMAIL``. The kind is decided once, when the message is first stored: a
+        re-sync, identical or edited, keeps it. The same act keeps its kind across
         backends. ``quote_edges`` runs the RFC-5322 quotation
         builder — email's shared-fragment graph — and defaults on; a non-email producer
         whose short shared text would otherwise mint spurious ``quote`` edges passes
@@ -4684,7 +4685,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             "platform": parsed.platform,
             "direction": parsed.direction,
             "status": self.model.MessageStatus.SYNCED,
-            # Record chatter and public posts share the native COMMENT kind.
+            # Public posts and record chatter are COMMENTs, except an email its own threading
+            # headers placed on a record's chatter; the kind is decided here once (a re-sync keeps it).
             "message_type": (
                 self.model.MessageKind.COMMENT
                 if thread is not None and (
@@ -4711,11 +4713,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             defaults["metadata"] = _bounded_message_metadata(
                 self.model.ingest_metadata(metadata, previous=message.metadata),
             )
+            # A stored message keeps the kind it was ingested with: a re-sync never reclassifies it.
+            defaults["message_type"] = message.message_type
             if message.is_locally_written:
                 # Provider echoes cannot change locally authored envelope identity.
                 defaults["direction"] = message.direction
                 defaults["sender_id"] = message.sender_id
-                defaults["message_type"] = message.message_type
                 defaults["status"] = message.status
                 for field in ("thread_id", "parent_id", "platform", "preview", "sent_at"):
                     defaults[field] = getattr(message, field)

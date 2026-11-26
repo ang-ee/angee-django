@@ -10,6 +10,7 @@ import pytest
 from anymail.message import AnymailMessage
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.checks import Tags, run_checks
 from django.core.exceptions import ValidationError
 from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
@@ -503,3 +504,19 @@ def test_a_reply_of_another_kind_keeps_its_client_token_and_writes_no_envelope(d
     with system_context(reason="tests.messaging.chat_reply.read"):
         assert not reply.recipients.exists()
         assert list(reply.parts.values_list("role", flat=True)) == ["body"]
+
+
+@pytest.mark.parametrize(
+    ("transport", "reported"),
+    [
+        pytest.param(LOCMEM, True, id="locmem"),
+        pytest.param({"BACKEND": "django.core.mail.backends.console.EmailBackend"}, True, id="console"),
+        pytest.param({"BACKEND": "django.core.mail.backends.smtp.EmailBackend"}, False, id="smtp"),
+        pytest.param(None, False, id="no-transport"),
+    ],
+)
+def test_the_deploy_check_reports_a_development_transport(settings: Any, transport: Any, reported: bool) -> None:
+    settings.MAILERS = {"default": LOCMEM, **({"transport": transport} if transport is not None else {})}
+    deploy = {message.id for message in run_checks(include_deployment_checks=True, tags=[Tags.mail])}
+    assert ("messaging.E004" in deploy) is reported
+    assert "messaging.E004" not in {message.id for message in run_checks(tags=[Tags.mail])}

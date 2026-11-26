@@ -163,8 +163,9 @@ It stores a `SignInLink` row with a keyed digest of the token, never the token
 itself, and a digest of the account facts the link is bound to. Once that row
 commits, the link goes to the account's `email` through Django's default mailer
 as plain text. The row then records `sent_at`, and `sign_in_link_sent` fires with
-the account and the row. The issuer never sees the link, and `created_by`
-records who issued it. System callers issue under `system_context`, which leaves
+the account and the row. The link leaves through Django's default mailer once
+the issuing transaction commits. Where that mailer records mail, the link is
+stored with it, and "accepted" means recorded. `created_by` records who issued it. System callers issue under `system_context`, which leaves
 `created_by` empty; an automatic invitation must follow an approval a person
 reviewed, never an unreviewed request. The console mutation is
 `issue_user_sign_in_link` (an `ActionResult`), offered through `account_actions`
