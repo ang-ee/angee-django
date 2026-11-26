@@ -37,11 +37,10 @@ from angee.messaging.backends import (
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.email import header_text
-from angee.messaging.managers import MessageManager, _preview
+from angee.messaging.managers import _preview
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.messaging_integrate_imap.parser import parse_message
-from angee.provenance import context as provenance_context
 from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.chatterdemo.models import ChatterDoc
@@ -526,18 +525,21 @@ def test_a_new_message_is_refused_before_anything_is_written(
         Message.objects.compose(channel=desk, actor=desk.owner, idempotency_key=f"refused-{key}", **values)
 
 
-def test_a_refusal_that_followed_a_write_is_seen_in_what_the_call_executed(
-    desk: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The refusal check reads the statements: a late refusal is caught though its rollback leaves no row."""
+def test_a_refusal_that_followed_a_write_is_seen_in_what_the_call_executed(desk: Any) -> None:
+    """The refusal check reads the statements: a late refusal is caught though its rollback leaves no row.
 
-    def refuse_late(*args: Any, **kwargs: Any) -> None:
-        raise ValidationError({"to": ValidationError("Refused after the writes.", code="invalid")})
+    A keyed call claims its key before present state decides it, so a channel whose
+    configured sender is invalid refuses it after that write.
+    """
 
-    monkeypatch.setattr(MessageManager, "_write_recipients", refuse_late)
+    unsendable = make_integration(
+        "compose-invalid-sender", model=Channel, backend_class="email", config={"from_email": "not an address"},
+    )
     before = _rows()
-    with pytest.raises(AssertionError), _refused(key="to", code="invalid"):
-        Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hi.", actor=desk.owner)
+    with pytest.raises(AssertionError), _refused(key="channel"):
+        Message.objects.compose(
+            channel=unsendable, to=["reader@example.test"], text="Hi.", actor=unsendable.owner, idempotency_key="late",
+        )
     assert _rows() == before
 
 
@@ -868,18 +870,24 @@ def test_a_keyed_compose_replays_its_message_and_refuses_changed_or_discarded_in
     assert _rows() == rows
 
 
-def test_compose_refuses_an_elevated_call_and_runs_as_its_actor_without_a_process_changeset(
-    desk: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No elevation is carried into compose; a request's changeset, with none process-wide, holds its rows."""
+def test_compose_refuses_an_elevated_call(desk: Any) -> None:
+    """No elevation is carried into compose, for its owner or anyone else."""
 
-    owner = desk.owner
-    for actor in (owner, make_user("compose-elevated-outsider")):
+    for actor in (desk.owner, make_user("compose-elevated-outsider")):
         with system_context(reason="tests.messaging.compose.elevated"), _refused(RuntimeError):
             Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hi.", actor=actor,
                                     idempotency_key="elevated")
-    # A request or a task opens its own changeset and publishes none process-wide.
-    monkeypatch.setattr(provenance_context, "_process_boundary", None)
+
+
+@pytest.mark.entrypoint_boundaries
+@pytest.mark.django_db
+def test_compose_runs_as_its_actor_under_a_requests_changeset_with_none_process_wide(settings: Any) -> None:
+    """A request or a task opens its own changeset and publishes none process-wide; that one holds compose's rows."""
+
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    with changeset(fresh=True, change_reason="setup"):
+        desk = make_integration("compose-request", model=Channel, backend_class="email", config={"from_email": DESK})
+    owner = desk.owner
     with changeset(fresh=True, change_reason="request"):
         plain = Message.objects.compose(channel=desk, to=["fresh-a@example.test"], text="Hi.", actor=owner)
         keyed = Message.objects.compose(channel=desk, to=["fresh-b@example.test"], text="Hi.", actor=owner,
