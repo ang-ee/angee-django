@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +18,14 @@ import pytest
 import yaml
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldError, ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
+from django.db.models import F, Value
+from django.db.models.functions import Concat
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.translation import gettext_lazy
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from rebac import (
@@ -228,7 +233,7 @@ def test_a_long_run_of_spaces_is_refused_in_linear_time() -> None:
 
 
 def test_every_write_that_reaches_the_database_checks_the_font_stack(db: None) -> None:
-    """``save``, ``bulk_create``, ``bulk_update`` and ``QuerySet.update`` refuse a stack the field does not admit."""
+    """``save``, ``bulk_create`` and ``QuerySet.update`` refuse a stack the field does not admit, of any type."""
 
     del db
     kit = _kit("Checked")
@@ -239,12 +244,64 @@ def test_every_write_that_reaches_the_database_checks_the_font_stack(db: None) -
             BrandKit.objects.bulk_create([BrandKit(**{**ANGEE, "name": "Bulk", "font_body": "Inter"})])
         with pytest.raises(ValidationError), transaction.atomic():
             BrandKit.objects.filter(pk=kit.pk).update(font_heading="a;b")
-        stored = BrandKit.objects.get(pk=kit.pk)
-        stored.font_body = "inherit, serif"
-        with pytest.raises(ValidationError), transaction.atomic():
-            BrandKit.objects.bulk_update([stored], ["font_body"])
+        with override_settings(SIMPLE_HISTORY_ENABLED=False), pytest.raises(ValidationError), transaction.atomic():
+            BrandKit.objects.filter(pk=kit.pk).update(font_heading=gettext_lazy("serif; color: red"))
         BrandKit.objects.filter(pk=kit.pk).update(font_heading='"Helvetica Neue", sans-serif')
         assert BrandKit.objects.get(pk=kit.pk).font_heading == "'Helvetica Neue', sans-serif"
+
+
+def _save_expression(rows: Any, kit: Any) -> None:
+    del rows
+    kit.font_body = Value("serif; color: red")
+    kit.save()
+
+
+def _bulk_update(value: Any) -> Callable[[Any, Any], None]:
+    def write(rows: Any, kit: Any) -> None:
+        del rows
+        kit.font_body = value
+        BrandKit.objects.bulk_update([kit], ["font_body"])
+
+    return write
+
+
+@pytest.mark.parametrize(
+    ("write", "history"),
+    [
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Value('"Inter", sans-serif')), True,
+            id="update-value-keeping-double-quotes",
+        ),
+        pytest.param(lambda rows, kit: rows.update(font_body=Value("serif; color: red")), True, id="update-value"),
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Value("serif; color: red")), False,
+            id="update-value-without-history",
+        ),
+        pytest.param(lambda rows, kit: rows.update(font_body=F("font_heading")), False, id="update-column"),
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Concat("font_heading", Value("; color: red"))), False,
+            id="update-function",
+        ),
+        pytest.param(_save_expression, False, id="save"),
+        pytest.param(_bulk_update(Value("serif; color: red")), False, id="bulk-update-expression"),
+        pytest.param(_bulk_update("Georgia, serif"), False, id="bulk-update"),
+    ],
+)
+def test_an_expression_write_of_a_font_stack_is_refused_whatever_it_would_store(
+    write: Callable[[Any, Any], None], history: bool, db: None,
+) -> None:
+    """The database computes an expression's result past the field's check, so the field refuses the expression.
+
+    That holds with history capture on or off, and for ``bulk_update``, which writes
+    every value through a ``Case`` expression.
+    """
+
+    del db
+    kit = _kit("Checked")
+    with override_settings(SIMPLE_HISTORY_ENABLED=history), system_context(reason="tests.brandkit.orm"):
+        with pytest.raises(FieldError, match="font_body"), transaction.atomic():
+            write(BrandKit.objects.filter(pk=kit.pk), BrandKit.objects.get(pk=kit.pk))
+        assert BrandKit._base_manager.values_list("font_body", flat=True).get(pk=kit.pk) == ANGEE["font_body"]
 
 
 def test_a_kit_refuses_a_bad_colour_and_a_bad_font_stack(db: None) -> None:

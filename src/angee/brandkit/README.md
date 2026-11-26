@@ -33,8 +33,10 @@ whole declaration, so no word of a bare family may start with a digit, be a lone
 hyphen or start with a hyphen and a digit, or be a CSS-wide keyword (`inherit`,
 `initial`, `unset`, `default`, `revert`, `revert-layer`); quote such a family
 instead, as in `'Font Awesome 5 Free'`. Double quotes are stored as single quotes. The field checks every write that reaches the
-database, not only a full clean, and its check takes time linear in the value's
-length.
+database, not only a full clean: it checks a value of any type, and refuses an
+expression (`F()`, `Value()`, a function, or `bulk_update`, which writes through
+`Case`), whose result the database computes past the check. Its check takes time
+linear in the value's length.
 
 A logo must be an image storage's `FileManager.ingest_image` put on its image
 drive, which every signed-in user reads; `BrandKit.clean` refuses any other file

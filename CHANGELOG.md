@@ -369,11 +369,14 @@ live in code docstrings.
     drafts. Every signed-in actor reads kits; platform admins create, edit and
     delete them (`brandkit/brand_kit`).
   - **Font stacks** are a field, `FontStackField`, that checks every write
-    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
-    family names of letters, digits, spaces and hyphens, bare or single-quoted,
-    closed by an unquoted generic family. A bare family with a word that starts
-    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
-    refused. Double quotes are stored as single quotes.
+    reaching the database: a value written by `save`, `bulk_create` or
+    `update()`, of any type, is checked, and an expression (`F()`, `Value()`, a
+    function, and `bulk_update`, which writes through `Case`) is refused with a
+    `FieldError`, since the database computes its result past the check. It
+    admits family names of letters, digits, spaces and hyphens, bare or
+    single-quoted, closed by an unquoted generic family. A bare family with a
+    word that starts with a digit, a lone hyphen or a hyphen and a digit, or a
+    CSS-wide keyword is refused. Double quotes are stored as single quotes.
   - **Logos** are images storage's `FileManager.ingest_image` put on its image
     drive; `BrandKit.clean` refuses any other file when a logo changes. The
     console reads the logos and writes neither.
