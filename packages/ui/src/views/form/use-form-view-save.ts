@@ -10,7 +10,7 @@ import {
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { invalidateAuthoredQueries, publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
+import { failedWriteOutcome, invalidateAuthoredQueries, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -29,7 +29,7 @@ import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-q
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
-import { createClientKey } from "../../lib/client-key";
+import { useIdempotencyKeys } from "../../lib/idempotency-key";
 import { asWidgetDefinition, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
@@ -306,8 +306,10 @@ export function useFormViewSave({
     && Boolean(dataResource?.fields?.some(({ name }) => name === "revision"));
   const mutationFields = React.useMemo(() => selectRevision && !refineFields.includes("revision")
     ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
-  const idempotencyKey = React.useRef<string | null>(null);
-  React.useEffect(() => { idempotencyKey.current = null; }, [resource, id, isCreate]);
+  // A new record of this resource is one draft: its key is minted at the first create attempt and
+  // lasts until one is accepted, so a retry, edited or not, is written once.
+  const idempotencyKeys = useIdempotencyKeys();
+  const createScope = `record.create:${resource}`;
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -555,12 +557,12 @@ export function useFormViewSave({
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
   const customSubmit = useMutation({
-    mutationFn: async ({ data, lines, submitted, baseline }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues }) => {
+    mutationFn: async ({ data, lines, submitted, baseline, idempotencyKey }: { data: FormValues; lines: LineDiff | null; submitted: FormValues; baseline: FormValues; idempotencyKey: string | null }) => {
       if (!submitOwner) throw new Error("No custom form submission is configured.");
       return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
         baselineRecord: editBasisRecordRef.current, lines,
-        idempotencyKey: idempotencyKey.current,
+        idempotencyKey,
         values: submitted, baselineValues: baseline,
       });
     },
@@ -583,52 +585,54 @@ export function useFormViewSave({
 
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
+      const keyed = isCreate && Boolean(submitOwner || dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"));
       try {
-        if (isCreate && (submitOwner || dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"))) {
-          idempotencyKey.current ??= createClientKey("create");
-        }
-        let result: FormSubmitResult<Row | FormSubmitAcknowledgement>;
-        if (submitOwner) {
-          result = await customSubmit.mutateAsync({
-            data,
-            lines,
-            submitted,
-            baseline: (form.formState.defaultValues ?? {}) as FormValues,
-          });
-        } else {
-          const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
-          const rootArguments: MutationRootArguments = {};
-          if (!isCreate && (useSave ? saveRevision : updateRevision)) {
-            const revision = editBasisRecordRef.current?.revision;
-            if (typeof revision !== "number" || !Number.isInteger(revision)) {
-              throw new Error(t("form.revisionUnavailable"));
-            }
-            rootArguments.expected_revision = revision;
-          }
-          if (isCreate && idempotencyKey.current) {
-            rootArguments.idempotency_key = idempotencyKey.current;
-          }
-          let saved: Row | null;
-          if (useSave) {
-            saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
-            if (saved) await invalidateResource();
+        // One keyed write per attempt, lines included: the draft's key goes with it.
+        const write = async (idempotencyKey: string | null): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
+          if (submitOwner) {
+            return customSubmit.mutateAsync({
+              data,
+              lines,
+              submitted,
+              baseline: (form.formState.defaultValues ?? {}) as FormValues,
+              idempotencyKey,
+            });
           } else {
-            const mutationMeta = Object.keys(rootArguments).length
-              ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
-            const response = isCreate
-              ? await create.mutateAsync({
-                  ...mutationMeta,
-                  values: lines?.hasChanges && linesField
-                    ? { ...data, [linesField]: { data: lines.payload } }
-                    : data,
-                })
-              : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
-            saved = response?.data ?? null;
+            const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
+            const rootArguments: MutationRootArguments = {};
+            if (!isCreate && (useSave ? saveRevision : updateRevision)) {
+              const revision = editBasisRecordRef.current?.revision;
+              if (typeof revision !== "number" || !Number.isInteger(revision)) {
+                throw new Error(t("form.revisionUnavailable"));
+              }
+              rootArguments.expected_revision = revision;
+            }
+            if (isCreate && idempotencyKey) {
+              rootArguments.idempotency_key = idempotencyKey;
+            }
+            let saved: Row | null;
+            if (useSave) {
+              saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
+              if (saved) await invalidateResource();
+            } else {
+              const mutationMeta = Object.keys(rootArguments).length
+                ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
+              const response = isCreate
+                ? await create.mutateAsync({
+                    ...mutationMeta,
+                    values: lines?.hasChanges && linesField
+                      ? { ...data, [linesField]: { data: lines.payload } }
+                      : data,
+                  })
+                : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
+              saved = response?.data ?? null;
+            }
+            return savedFormSubmitResult(saved, t("form.genericSaveError"));
           }
-          result = savedFormSubmitResult(saved, t("form.genericSaveError"));
-        }
+        };
+        // A refused create keeps the draft and its key; an accepted one ends it.
+        const result = keyed ? await idempotencyKeys.send(createScope, write, (answer) => answer.status === "ok") : await write(null);
         if (result.status === "ok") {
-          if (isCreate) idempotencyKey.current = null;
           // Started, not awaited: the form shows its own record, which the write's answer carries. A read
           // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
           // answers must not hold the confirmation back or keep Save from the next write; its failure is
@@ -640,9 +644,8 @@ export function useFormViewSave({
         }
         return result;
       } catch (error) {
-        if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
-          idempotencyKey.current = null;
-        }
+        // The key is spent on a record an earlier attempt created: the form shows the conflict, and its next attempt is a new draft.
+        if (keyed && failedWriteOutcome(error) === "conflict") idempotencyKeys.restart(createScope);
         throw error;
       }
     },
@@ -668,6 +671,8 @@ export function useFormViewSave({
       resourceSave,
       saveOperation.target,
       submitOwner,
+      idempotencyKeys,
+      createScope,
     ],
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
@@ -987,7 +992,11 @@ export function useFormViewSave({
     [fieldReadOnly, isCreate, writableFieldNames],
   );
   const discardChanges = React.useCallback(() => {
-    if (isCreate) localAcknowledgementRef.current = null;
+    if (isCreate) {
+      localAcknowledgementRef.current = null;
+      // The person gives the new record up: its draft ends, unless an attempt may have created it.
+      idempotencyKeys.discard(createScope);
+    }
     presetMemory.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
     resetHistory();
@@ -995,7 +1004,7 @@ export function useFormViewSave({
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [displayRecord, emptyValues, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
+  }, [createScope, displayRecord, emptyValues, idempotencyKeys, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
       startHistory(path);

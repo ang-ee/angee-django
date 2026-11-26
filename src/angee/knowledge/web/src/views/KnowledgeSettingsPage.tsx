@@ -1,15 +1,17 @@
 import { useCallback, type ReactElement } from "react";
 
-import { extractActionOutcome } from "@angee/refine";
+import { extractActionOutcome, failedWriteOutcome } from "@angee/refine";
 
 import {
   Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
-  useAuthoredResourceMutation, useIntentKeys, type ActionDescriptor } from "@angee/ui";
+  useAuthoredResourceMutation, useIdempotencyKeys, type ActionDescriptor, type ActionFormContext } from "@angee/ui";
 import { KnowledgeCreateVaultFrom, PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
 const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
+/** The clone dialog of one template is one draft: its key lasts from the first attempt until a vault is created. */
+const cloneScope = (context: ActionFormContext) => `knowledge.vault-from-template:${String(context.record?.id ?? "")}`;
 
 /**
  * The knowledge admin console: a managed list of vaults whose record form opens
@@ -18,8 +20,7 @@ const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
-  // A retry of the same clone carries its key, so the server creates one vault; another name or template is a new request.
-  const cloneKeys = useIntentKeys("knowledge.vault-from-template");
+  const keys = useIdempotencyKeys();
   const [createFrom] = useAuthoredResourceMutation(KnowledgeCreateVaultFrom, {
     invalidateModels: CLONE_MODELS,
     shouldInvalidate: (data) => data?.create_vault_from.ok === true,
@@ -31,12 +32,18 @@ export function KnowledgeSettingsPage(): ReactElement {
         return { ok: false, message: t("vault.cloneFailed") };
       }
       const name = values.name.trim();
-      const data = await cloneKeys.run({ template, name }, (key) => createFrom({
-        template, name, owned: true, idempotency_key: key,
-      }, options));
-      return extractActionOutcome(data, "create_vault_from");
+      try {
+        // The action dialog holds the draft's key (`idempotencyScope`): every attempt until a vault is created carries it.
+        const data = await createFrom({ template, name, owned: true, idempotency_key: context.idempotencyKey }, options);
+        return extractActionOutcome(data, "create_vault_from");
+      } catch (cause) {
+        if (failedWriteOutcome(cause) !== "conflict") throw cause;
+        // An earlier attempt created a vault under this draft's key: the next one is a new draft.
+        keys.restart(cloneScope(context));
+        return { ok: false, message: t("vault.clonedEarlier") };
+      }
     },
-    [cloneKeys, createFrom, t],
+    [createFrom, keys, t],
   );
   return (
     <SettingsShell maxWidth="1100" gap="6">
@@ -62,6 +69,7 @@ export function KnowledgeSettingsPage(): ReactElement {
             icon="copy"
             args={[{ name: "name", label: t("vault.cloneName"), widget: "text" }]}
             submit={cloneSubmit}
+            idempotencyScope={cloneScope}
             // Keep the action off the create drawer until a record is loaded.
             visibleWhen={() => true}
           />

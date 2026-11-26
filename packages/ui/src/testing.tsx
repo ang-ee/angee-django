@@ -20,6 +20,7 @@ import {
 } from "@angee/metadata";
 
 import { ModalsHost } from "./feedback/ModalsHost";
+import { AppRuntimeProvider } from "./runtime/runtime";
 import { InAppLinkProvider, type InAppNavigator } from "./lib/in-app-link";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -52,7 +53,9 @@ export interface UiTestProviderOptions<T extends RefineTestDataProvider = Refine
  * Tooltips open as soon as the pointer enters their trigger, so a hover assertion
  * never races Base UI's wall-clock open delay; a nested `TooltipProvider` keeps
  * its own delay. `ModalsHost` answers the confirmations a surface asks, as the app's
- * does, and `router` renders under a memory router whose instance lands in `routers`.
+ * does; an `AppRuntimeProvider` holds the runtime's idempotency keys, fresh per mount,
+ * under any the test renders; and `router` renders under a memory router whose instance
+ * lands in `routers`.
  */
 export function createUiTestProviders<T extends RefineTestDataProvider = Pick<RefineTestDataProvider, never>>(
   defaults: UiTestProviderOptions<T> = {},
@@ -98,9 +101,11 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
       providerNames={providerNames ?? ["console", ...(resources ?? []).map((resource) => resource.schemaName)]}
     >
       <TooltipProvider delay={0}>
-        <ModalsHost>
-          {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
-        </ModalsHost>
+        <AppRuntimeProvider runtime={NO_RUNTIME}>
+          <ModalsHost>
+            {navigate ? <InAppLinkProvider navigate={navigate}>{content}</InAppLinkProvider> : content}
+          </ModalsHost>
+        </AppRuntimeProvider>
       </TooltipProvider>
     </refine.Provider>;
     return router ? <RouterContextProvider router={router}>{tree}</RouterContextProvider> : tree;
@@ -108,6 +113,8 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
 
   return { ...refine, Provider, routers };
 }
+
+const NO_RUNTIME = {};
 
 export interface UiRouteTestDoubleOptions {
   routeHref?: (route: string, parameters?: Record<string, unknown>) => string;

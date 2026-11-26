@@ -1,9 +1,9 @@
-import { useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { failedWriteOutcome, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
 import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import {
-  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, errorMessage, textRoleVariants, useIntentKeys, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, errorMessage, textRoleVariants, useIdempotencyKeys, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
 } from "@angee/ui";
 import {
   StorageUploadTasks,
@@ -224,8 +224,10 @@ export function RecordThreadConversation({
   const [replyToMessage, setReplyToMessage] = React.useState<RecordMessageRow | null>(null);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  // A retry of the same post carries its key, so the server writes it once; an edited post is a new request.
-  const postKeys = useIntentKeys("messaging.record-message");
+  // The record's chatter box is one draft: every attempt until one is posted carries its key, so
+  // the server writes it once; an edit after an earlier version was written answers a conflict.
+  const keys = useIdempotencyKeys();
+  const postScope = `messaging.record-message:${modelLabel}:${recordId}`;
 
   const recipientOptions = React.useMemo(
     () =>
@@ -395,11 +397,17 @@ export function RecordThreadConversation({
           autofollowRecipients:
             selectedPostKind === "COMMENT" && args.recipientUserIds.length > 0 && args.autofollowRecipients,
         };
-        await postKeys.run(input, (idempotencyKey) => postMessage({ ...input, idempotencyKey }));
+        await keys.send(postScope, (idempotencyKey) => postMessage({ ...input, idempotencyKey }));
         setReplyToMessage(null);
         setWindow({ scope, latest: true });
         return true;
       } catch (cause) {
+        if (failedWriteOutcome(cause) === "conflict") {
+          // An earlier version of this post was written under the draft's key: the next send is a new post.
+          keys.restart(postScope);
+          setError(t("error.postedEarlier"));
+          return false;
+        }
         setError(
           errorMessage(
             cause,
@@ -409,7 +417,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postKeys, postMessage, scope, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, keys, postScope, postMessage, scope, t],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {

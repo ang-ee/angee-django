@@ -1172,6 +1172,35 @@ describe("ActionFormDialog", () => {
     expect(await screen.findByText("Review registered.")).toBeTruthy();
   });
 
+  test("an action declaring its draft sends one key through every attempt of its dialog, a lost answer and a refusal included, until an ok answer", async () => {
+    const keys: Array<string | undefined> = [];
+    const submit = vi.fn(async (_values: Record<string, unknown>, context: ActionFormContext) => {
+      keys.push(context.idempotencyKey);
+      if (keys.length === 1) throw new TypeError("Failed to fetch");
+      return keys.length === 2 ? { ok: false, message: "Fix the amount." } : { ok: true, message: "Review registered." };
+    });
+    function Reopening(): ReactElement {
+      const [open, setOpen] = useState(true);
+      return <ActionFormDialog action={{ ...registerReviewAction(submit), idempotencyScope: ({ record }) => `register-review:${String(record?.id)}` }}
+        context={context} open={open} onOpenChange={setOpen} />;
+    }
+    renderDialog(registerReviewAction(submit), undefined, undefined, { dialog: <Reopening /> });
+    await screen.findByText("DOC-1");
+    await pickCollection("Secondary Collection");
+    const register = async (count: number) => {
+      fireEvent.click(screen.getByRole("button", { name: "Register review" }));
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(count));
+    };
+    await register(1);
+    await register(2);
+    await screen.findByText("Fix the amount.");
+    await register(3);
+    expect(await screen.findByText("Review registered.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(keys.slice(0, 3)).toEqual([keys[0], keys[0], keys[0]]);
+    expect(keys[0]).toEqual(expect.any(String));
+  });
+
   test("Cancel with typed values asks first, and Stay keeps them", async () => {
     renderDialog(registerReviewAction(vi.fn()));
     await screen.findByText("DOC-1");

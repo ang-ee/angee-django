@@ -601,11 +601,12 @@ a theme rather than a template.
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
 
-**Intent key** — the request identity a keyed write carries, one per write
-intent (what the write would create, as its owner fingerprints it), so a retry
-of the same intent is written once by the server. `useIntentKeys` keeps it for
-the page's lifetime and settles it by the write's answer. Unrelated to the
-feedback intents (`FEEDBACK_INTENTS`) that name a status's tone.
+**Idempotency key (client)** — the request identity a keyed write carries, one
+per **draft**: what one surface writes to one target (a record's chatter box,
+the dialog for one action on one record, a new-record form), named by its
+scope. `useIdempotencyKeys` mints it at the draft's first attempt and keeps it
+for the app runtime until a confirmed answer ends the draft, so every retry of
+it, edited or not, is written once by the server.
 
 **Settings place** — the one synthetic destination in every console that groups
 every menu node declared with `group:"platform"`, at any depth. Its rail entry

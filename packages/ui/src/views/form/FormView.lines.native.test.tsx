@@ -78,6 +78,8 @@ async function fixture(options: {
   widgets?: Record<string, WidgetDefinition>;
   /** The form loads with its lines in values but not on the page. */
   linesHidden?: boolean;
+  /** The resource's create takes an idempotency key. */
+  keyed?: boolean;
 } = {}) {
   const seedLines = options.lines ?? initialLines;
   const activeResource = options.resourceMetadata ?? (options.publicView ? renderedResource : resource);
@@ -111,7 +113,8 @@ async function fixture(options: {
   function Probe() {
     surface = useFormViewSave({
       resource: resource.modelLabel, id: options.isCreate ? null : "doc-1", isCreate: options.isCreate ?? false,
-      dataResource: resource, modelMetadata: model, formFields, fieldByName, refineFields,
+      dataResource: options.keyed ? { ...resource, createArguments: [{ name: "idempotency_key", type: "String" }] } : resource,
+      modelMetadata: model, formFields, fieldByName, refineFields,
       submit: options.isCreate ? undefined : submit, onSaved: options.onSaved, t: (key) => key,
     });
     const array = useFieldArray({
@@ -417,6 +420,21 @@ test("failed nested creation preserves the header and lines for retry", async ()
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.surface().form.formState.errors.root?.server?.message).toBe("Line rejected");
   expect(f.provider.update).not.toHaveBeenCalled();
+});
+
+test("a create that carries its lines is one keyed write: a retry after a lost answer sends the same key with the lines", async () => {
+  const saved: Row = { id: "doc-2", title: "Draft document", lines: [{ id: "line-9", label: "Lamp", quantity: 1, position: 0 }] };
+  const create = vi.fn<() => Promise<{ data: Row }>>().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce({ data: saved });
+  const f = await fixture({ isCreate: true, keyed: true, create });
+  edit("title", "Draft document");
+  f.append({ label: "Lamp", quantity: "1" });
+  await act(async () => f.surface().submitForm());
+  await act(async () => f.surface().submitForm());
+  expect(f.provider.create).toHaveBeenCalledTimes(2);
+  // The provider's create is typed by the fixture's option, without its arguments.
+  const calls = (f.provider.create.mock.calls as unknown as [{ variables: Row; meta?: { gqlVariables?: Row } }][]).map(([call]) => call);
+  expect(calls.map((call) => call.meta?.gqlVariables?.idempotency_key)).toEqual([expect.any(String), calls[0]!.meta?.gqlVariables?.idempotency_key]);
+  expect(calls[1]!.variables.lines).toEqual({ data: [{ label: "Lamp", quantity: "1", position: 0 }] });
 });
 
 test("successful semantic no-op line saves accept the native draft baseline", async () => {

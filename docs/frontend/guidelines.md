@@ -1509,11 +1509,15 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   never guards its own `onOpenChange`, and an answer that lands after it went
   away is still reported (`useLateAnswerReport`).
 - A keyed write (one the server replays by its idempotency key) takes its key
-  from [`useIntentKeys`](../../packages/ui/src/lib/intent-key.ts): one key per
-  write intent for the page's lifetime, released by the write's answer and kept
-  while the answer is lost or the refusal came before the write read its key.
-  Never hold a key in component state, and promise "it will not go out twice"
-  only from this page.
+  from [`useIdempotencyKeys`](../../packages/ui/src/lib/idempotency-key.ts):
+  one key per draft, named by its scope (the surface and what it writes to),
+  minted at the draft's first attempt and kept until a confirmed answer ends it
+  or the surface starts another draft. What an error says never releases the
+  key: a resend, edited or not, carries it, and the server replays the write or
+  answers `CREATION_KEY_CONFLICT` for an earlier version it wrote, which the
+  caller resolves. A dialog takes its draft as `idempotencyScope`. Never hold a
+  key in component state, and promise "it will not go out twice" only from this
+  page.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:

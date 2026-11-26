@@ -14,7 +14,7 @@ import {
   useActionOutcomeMutation,
   useActionResultMutation,
   useActionResultRun,
-  useIntentKeys,
+  useIdempotencyKeys,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
@@ -23,6 +23,7 @@ import {
   type FormProps,
   type ListProps,
 } from "@angee/ui";
+import { failedWriteOutcome } from "@angee/refine";
 import * as React from "react";
 
 import { enProjectsMessages, useProjectsT } from "./i18n";
@@ -78,11 +79,21 @@ export function useProjectFormDeclaration(
     invalidateModels: [PROJECT_MODEL],
   });
   const settleCreation = useActionResultRun({ linkTo: PROJECT_MODEL });
-  // A retry of the same template carries its key, so the server replays one creation.
-  const creationKeys = useIntentKeys("projects.project-from-template");
+  // Creating from one template is one draft: every attempt until a project is created carries its
+  // key, so the server creates it once.
+  const keys = useIdempotencyKeys();
   const createProject = useRecordAction(async (id) => {
-    await settleCreation(() => creationKeys.run({ template: id },
-      (key) => createFromTemplate(id, { idempotency_key: key })));
+    const scope = `projects.project-from-template:${id}`;
+    await settleCreation(async () => {
+      try {
+        return await keys.send(scope, (key) => createFromTemplate(id, { idempotency_key: key }), (outcome) => outcome?.ok === true);
+      } catch (cause) {
+        if (failedWriteOutcome(cause) !== "conflict") throw cause;
+        // An earlier attempt created a project under this draft's key: the next one is a new draft.
+        keys.restart(scope);
+        return { ok: false, message: t("project.createdEarlier") };
+      }
+    });
   });
   const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate", "transfer"];
   const standardActions = <>

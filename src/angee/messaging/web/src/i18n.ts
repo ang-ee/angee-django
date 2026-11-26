@@ -149,6 +149,7 @@ export const enMessagingMessages: Record<string, string> = {
   "error.dismiss": "Dismiss",
   "error.postComment": "Could not post comment.",
   "error.postNote": "Could not post note.",
+  "error.postedEarlier": "An earlier version of this message was already posted.",
   "error.update": "Could not update comment.",
   "error.delete": "Could not delete message.",
   "error.trash": "Could not remove comment.",

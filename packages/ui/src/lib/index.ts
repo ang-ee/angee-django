@@ -31,7 +31,12 @@ export { LARGE_VIEWPORT_QUERY, useMediaQuery } from "./use-media-query";
 export * from "./color-scheme";
 export { useContainerQuery } from "./use-container-query";
 export { createClientKey } from "./client-key";
-export { useIntentKeys, type IntentKeys, type IntentKeyState } from "./intent-key";
+export {
+  useIdempotencyKeys,
+  useIdempotencyKeyState,
+  type IdempotencyKeys,
+  type IdempotencyKeyState,
+} from "./idempotency-key";
 export type {
   UseRenderComponentProps,
   UseRenderRenderProp,

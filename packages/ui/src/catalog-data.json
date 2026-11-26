@@ -8316,6 +8316,24 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useIdempotencyKeyState",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeys",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useImplCategory",
     "source": "packages/ui/src/views/relation/enum-options.ts",
     "kind": "contribution",
@@ -8365,15 +8383,6 @@
     "source": "packages/ui/src/lib/in-app-link.tsx",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
-    "name": "useIntentKeys",
-    "source": "packages/ui/src/lib/intent-key.ts",
-    "kind": null,
-    "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
     "status": "stable",
     "storyId": null
   },

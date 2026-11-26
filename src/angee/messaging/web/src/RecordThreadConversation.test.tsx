@@ -1,8 +1,13 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, ToastProvider } from "@angee/ui";
+import type { ReactElement, ReactNode } from "react";
+
+/** Under an app runtime, as a page is: it holds the chatter box's idempotency key. */
+const AppRuntime = ({ children }: { children?: ReactNode }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>;
+const render = (ui: ReactElement, options?: RenderOptions) => testingRender(ui, { wrapper: AppRuntime, ...options });
 
 import type { RecordMessageRow, RecordThreadPayload } from "./documents";
 import type { RecordThreadConversationChrome } from "./RecordThreadConversation";
@@ -561,10 +566,10 @@ describe("RecordThreadConversation", () => {
     expect(posts[1]?.vars.idempotencyKey).toBe(first?.vars.idempotencyKey);
   });
 
-  test("an in-band refusal is the server's answer: the same post sent again carries a new key; a refusal of who may post keeps it", async () => {
+  test("the box is one draft: a refused post, edited and sent again, carries the same key; an earlier version already posted starts a new draft", async () => {
     mocks.answers = { MessagingPostRecordMessage: [
       { post_record_message: { error: "The thread is closed.", error_code: "BAD_MESSAGE" } },
-      { post_record_message: { error: "You may not post here.", error_code: "PERMISSION_DENIED" } },
+      { post_record_message: { error: "Already posted.", error_code: "CREATION_KEY_CONFLICT" } },
       { post_record_message: { error: "You may not post here.", error_code: "PERMISSION_DENIED" } },
     ] };
     render(<RecordThreadConversation modelLabel="discuss/room" recordId="rom_1" />);
@@ -574,12 +579,13 @@ describe("RecordThreadConversation", () => {
     };
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello" } });
     await send("The thread is closed.");
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello, edited" } });
+    await send("An earlier version of this message was already posted.");
     await send("You may not post here.");
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage")).toHaveLength(3));
     const keys = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage").map((call) => call.vars.idempotencyKey);
-    expect(keys[1]).not.toBe(keys[0]);
-    expect(keys[2]).toBe(keys[1]);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[1]);
   });
 
   test("only a moderator's comment carries the remove control", () => {

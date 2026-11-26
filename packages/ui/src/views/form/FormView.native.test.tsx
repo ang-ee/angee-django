@@ -1674,6 +1674,47 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
 });
 
+test("a new record is one draft: a refused create keeps its key for the corrected retry, and discarding it then starts a new draft", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "Refused");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Invalid.", extensions: {
+    code: "VALIDATION", validationErrors: { title: ["Taken."] }, formErrors: [] } }] });
+  await act(async () => f.surface().submitForm());
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Invalid.", extensions: {
+    code: "VALIDATION", validationErrors: { title: ["Taken."] }, formErrors: [] } }] });
+  edit("title", "Corrected");
+  await act(async () => f.surface().submitForm());
+  act(() => f.surface().discardChanges());
+  edit("title", "Another record");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const [refused, corrected, afterDiscard] = f.update.mock.calls.map(([call]) => call.meta?.gqlVariables?.idempotency_key);
+  expect(refused).toEqual(expect.any(String));
+  expect(corrected).toBe(refused);
+  expect(afterDiscard).not.toBe(refused);
+});
+
+test("a create whose answer was lost keeps its key when the form is discarded, or left and returned to: the record may exist", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  await act(async () => f.surface().submitForm());
+  act(() => f.surface().discardChanges());
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  f.rerender({ recordId: "note-1" });
+  f.rerender({ recordId: null });
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const keys = f.update.mock.calls.filter(([call]) => call.meta?.gqlVariables?.idempotency_key).map(([call]) => call.meta?.gqlVariables?.idempotency_key);
+  expect(keys).toHaveLength(3);
+  expect(new Set(keys).size).toBe(1);
+});
+
 test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and receives corrected retry values without native insert capabilities", async (owner) => {
   const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(new Error("Create refused"))
     .mockImplementation(async (data) => ({ status: "ok", data: { id: "note-1", ...data } }));

@@ -19,6 +19,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "notes.prompt": "Add note",
   "notes.add": "Add note",
   "notes.added": "Note added.",
+  "notes.savedEarlier": "An earlier version of this note was already saved.",
   "notes.bodyRequired": "Write a note before posting.",
   "notes.createError": "Could not create the note.",
   "notes.loadError": "Could not load the notes.",
@@ -54,6 +55,7 @@ export const enKnowledgeMessages: Record<string, string> = {
   "vault.clone": "Create from template",
   "vault.cloneName": "New vault name",
   "vault.cloneFailed": "Could not create the vault from this template.",
+  "vault.clonedEarlier": "An earlier attempt already created a vault from this template.",
   "settings.title": "Settings",
   "settings.description": "The access boundary a tree of pages lives in.",
 };

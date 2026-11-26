@@ -21,6 +21,7 @@ import { useLateAnswerReport } from "./late-answer";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
+import { useIdempotencyKeys } from "../../lib/idempotency-key";
 
 export {
   LabeledDescriptorField,
@@ -108,6 +109,7 @@ export const mutationDialogValueCodecs = {
  * The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs.
  * Either is called with the {@link AuthoredMutateOptions} that turn refine's generic error
  * notification off, to pass on to the authored call it makes: the dialog renders the failure.
+ * A dialog given `idempotencyScope` also passes its draft's idempotency key, for a keyed write.
  */
 export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
   | {
@@ -119,6 +121,7 @@ export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
       onSubmit: (
         values: TValues,
         options?: AuthoredMutateOptions,
+        idempotencyKey?: string,
       ) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
       mutation?: never;
       mutationResult?: never;
@@ -130,7 +133,7 @@ export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
        * renders its refusal itself, under the field it names or else in the dialog, so
        * the call turns refine's generic error notification off: a failure is reported once.
        */
-      mutation: (variables: TValues, options: AuthoredMutateOptions) => Promise<TData | undefined>;
+      mutation: (variables: TValues, options: AuthoredMutateOptions, idempotencyKey?: string) => Promise<TData | undefined>;
       /** Read the mutation's data as the submit result; by default the data is the result. */
       mutationResult?: (data: TData) => FormSubmitResult<TResult>;
       onSubmit?: never;
@@ -177,6 +180,12 @@ interface MutationDialogBaseProps<
   canSubmit?: (values: Readonly<Record<string, unknown>>) => boolean;
   size?: DialogSize;
   placement?: DialogPlacement;
+  /**
+   * The draft a keyed write's submission writes (`useIdempotencyKeys`): the dialog holds one
+   * idempotency key for it from its first attempt until an accepted answer, passes it to its
+   * submission, and gives the draft up when the person dismisses it with nothing possibly written.
+   */
+  idempotencyScope?: string;
 }
 
 /**
@@ -222,10 +231,13 @@ export async function submitMutationDialog<TValues, TResult, TData>(
   submission: MutationDialogSubmission<TValues, TResult, TData>,
   values: TValues,
   fallback: string,
+  idempotencyKey?: string,
 ): Promise<FormSubmitResult<TResult>> {
-  if (!submission.mutation) return submission.onSubmit(values, SURFACE_RENDERS_FAILURE);
+  // The key goes with a keyed dialog's submission only.
+  const keyed = idempotencyKey === undefined ? [] as const : [idempotencyKey] as const;
+  if (!submission.mutation) return submission.onSubmit(values, SURFACE_RENDERS_FAILURE, ...keyed);
   const { mutation, mutationResult } = submission;
-  const data = await mutation(values, SURFACE_RENDERS_FAILURE);
+  const data = await mutation(values, SURFACE_RENDERS_FAILURE, ...keyed);
   if (data == null) return savedFormSubmitResult<TResult>(null, fallback);
   return mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult };
 }
@@ -252,6 +264,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   size = "md",
   placement = "prompt",
   trigger,
+  idempotencyScope,
 }: Omit<MutationDialogBaseProps<TValues, TResult>, "open" | "onOpenChange">
   & MutationDialogSubmission<TValues, TResult, TData> & {
   open: boolean;
@@ -308,6 +321,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     [form, openRef],
   );
   const reportLate = useLateAnswerReport();
+  const keys = useIdempotencyKeys();
   const footer = ({ dismiss, dismissRefusal }: DialogFormFooterContext) => (
     <>
       <Button
@@ -359,7 +373,10 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       }
       const submission = (mutation ? { mutation, mutationResult } : { onSubmit }) as MutationDialogSubmission<TValues, TResult, TData>;
       sent = true;
-      const result = await submitMutationDialog(submission, submittedValues, errorOptions.fallback);
+      const submitted = (idempotencyKey?: string) => submitMutationDialog(submission, submittedValues, errorOptions.fallback, idempotencyKey);
+      const result = idempotencyScope
+        ? await keys.send(idempotencyScope, submitted, (answer) => answer.status === "ok")
+        : await submitted();
       if (!current()) {
         // The dialog went away while the write ran: its answer is still reported, so nobody
         // writes it again, or trusts it went out, unaware; its close and `onSubmitted` are the dialog's own.
@@ -399,7 +416,11 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   return (
     <DialogForm
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        // A dismissal gives the draft up; the accepted close has ended it already.
+        if (!next && idempotencyScope) keys.discard(idempotencyScope);
+        onOpenChange(next);
+      }}
       pending={submitting}
       dirty={dirty}
       holdsWork={holdsWork}

@@ -1,7 +1,7 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
-import { useAuthoredQuery } from "@angee/refine";
-import { useAuthoredResourceMutation, useIntentKeys, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { failedWriteOutcome, useAuthoredQuery } from "@angee/refine";
+import { useAuthoredResourceMutation, useIdempotencyKeys, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
@@ -54,8 +54,10 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
   const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
-  // A retry of the same note carries its key, so the server inserts it once; an edited draft is a new request.
-  const noteKeys = useIntentKeys("knowledge.record-note");
+  // The record's note box is one draft: every attempt until one is saved carries its key, so the
+  // server inserts the note once; an edit after an earlier version was saved answers a conflict.
+  const keys = useIdempotencyKeys();
+  const noteScope = `knowledge.record-note:${target.modelLabel}:${target.recordId}:${role}`;
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
@@ -87,7 +89,14 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       if (!body) throw new Error(t("notes.bodyRequired"));
       if (!writableVault) throw new Error(t("notes.createError"));
       const input = { model_label: target.modelLabel, record_id: target.recordId, vault: writableVault.id, body, role };
-      await noteKeys.run(input, (key) => createNote({ ...input, idempotency_key: key }, options));
+      try {
+        await keys.send(noteScope, (key) => createNote({ ...input, idempotency_key: key }, options));
+      } catch (cause) {
+        if (failedWriteOutcome(cause) !== "conflict") throw cause;
+        // An earlier version of this note was saved under the draft's key: the next send is a new note.
+        keys.restart(noteScope);
+        return { ok: false, message: t("notes.savedEarlier") };
+      }
       return { ok: true, message: t("notes.added") };
     },
   } : undefined;

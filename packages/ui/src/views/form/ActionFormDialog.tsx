@@ -9,6 +9,7 @@ import { errorMessage } from "../../feedback";
 import { Button } from "../../ui/button";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
+import { useIdempotencyKeys } from "../../lib/idempotency-key";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { useRuntimeViewAs } from "../../runtime";
 import { emptyValueForField } from "./field-values";
@@ -103,6 +104,9 @@ function ActionArgsDialog({
   // Set when an accepted submit closes the dialog: `onSucceeded` may move on in the same tick,
   // before the close renders, and the dialog then holds nothing a move would lose.
   const accepted = React.useRef(false);
+  // An action declaring the draft it writes holds one idempotency key for it, from its first attempt.
+  const keys = useIdempotencyKeys();
+  const draftScope = action.idempotencyScope?.(context);
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
@@ -120,8 +124,12 @@ function ActionArgsDialog({
         : { values, errors: {} };
     },
     submit: async (collected, options) => {
-      const result = await action.submit?.(serializeActionArgValues(args, collected), context, options);
-      return result && "status" in result ? result : actionOutcomeSubmitResult(result);
+      const values = serializeActionArgValues(args, collected);
+      const submitted = async (idempotencyKey?: string) => {
+        const result = await action.submit?.(values, idempotencyKey ? { ...context, idempotencyKey } : context, options);
+        return result && "status" in result ? result : actionOutcomeSubmitResult(result);
+      };
+      return draftScope ? keys.send(draftScope, submitted, (result) => result.status === "ok") : submitted();
     },
     onSuccess: (_values, outcome) => {
       if (!inline) accepted.current = true;
@@ -173,7 +181,11 @@ function ActionArgsDialog({
     <ActionFormProvider {...form}>
     <DialogForm
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        // A dismissal gives the draft up; the accepted close has ended it already.
+        if (!next && draftScope) keys.discard(draftScope);
+        onOpenChange(next);
+      }}
       pending={submitting}
       dirty={form.formState.isDirty}
       holdsWork={() => !accepted.current && (form.formState.isDirty || form.formState.isSubmitting)}

@@ -507,6 +507,58 @@ describe("MutationDialog", () => {
     if (description) expect(screen.getAllByText(description).length).toBeGreaterThan(0);
   });
 
+  test("a dialog given a draft scope sends one key for it: across a lost answer, a close and a reopening, until one is accepted", async () => {
+    const sent: Array<string | undefined> = [];
+    const answers: Array<() => Promise<{ id: string }>> = [
+      async () => { throw new TypeError("Failed to fetch"); },
+      async () => { throw new TypeError("Failed to fetch"); },
+      async () => ({ id: "dsh_1" }),
+      async () => ({ id: "dsh_2" }),
+    ];
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New dashboard</button>} title="Create" fields={[]} submitLabel="Create"
+        parseValues={parseRawValues} idempotencyScope="dashboards.create-personal"
+        mutation={(_values, _options, idempotencyKey) => { sent.push(idempotencyKey); return answers.shift()!(); }} />
+    </AppRuntimeProvider>);
+    const create = async () => {
+      if (!screen.queryByRole("dialog")) fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+      const count = sent.length;
+      fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+      await waitFor(() => expect(sent).toHaveLength(count + 1));
+    };
+    await create();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await create();
+    await create();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await create();
+    expect(sent[0]).toEqual(expect.any(String));
+    expect(sent.slice(0, 3)).toEqual([sent[0], sent[0], sent[0]]);
+    expect(sent[3]).not.toBe(sent[0]);
+  });
+
+  test("a draft given up with nothing possibly written ends with its dialog: the next opening sends a new key", async () => {
+    const sent: Array<string | undefined> = [];
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New dashboard</button>} title="Create" fields={[]} submitLabel="Create"
+        parseValues={parseRawValues} idempotencyScope="dashboards.create-personal"
+        onSubmit={(_values, _options, idempotencyKey) => {
+          sent.push(idempotencyKey);
+          return { status: "invalid", issues: { fieldErrors: {}, formErrors: ["Name is taken."] } };
+        }} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    await screen.findByText("Name is taken.");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).not.toBe(sent[0]);
+  });
+
   test("a trigger-owned dialog whose owner stops offering the trigger while it is open stays open, and reports its answer", async () => {
     let resolve!: (value: FormSubmitResult<string>) => void;
     const onSubmitted = vi.fn();

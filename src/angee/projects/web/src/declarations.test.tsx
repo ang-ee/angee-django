@@ -3,8 +3,9 @@
 import * as React from "react";
 import { cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { boundedGraphQLTransportError } from "@angee/refine";
 import {
-  Column, Field, Form, Group, List, parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups,
+  AppRuntimeProvider, Column, Field, Form, Group, List, parsePageActions, parsePageColumns, parsePageFacets, parsePageFields, parsePageGroups,
   type FormProps, type ListProps, type ListViewProps, type RecordPanelContext, type ResourceListProps,
 } from "@angee/ui";
 
@@ -20,6 +21,7 @@ import { TasksPage } from "./views/TasksPage";
 // Keep the real declarations/parsers; only transport hooks and the page mount are replaced.
 const transfer = vi.hoisted(() => vi.fn());
 const fromTemplate = vi.hoisted(() => vi.fn());
+const settled = vi.hoisted(() => [] as unknown[]);
 const mounted = vi.hoisted(() => ({ props: null as ResourceListProps | null, list: null as ListViewProps | null }));
 vi.mock("@angee/ui", async () => {
   const actual = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
@@ -34,13 +36,16 @@ vi.mock("@angee/ui", async () => {
     ],
     useRecordActionMutation: () => [vi.fn(), {}],
     useAuthoredResourceMutation: () => [vi.fn(), {}],
-    // Settle as the real owner does for a failure: report it, resolve nothing.
-    useActionResultRun: () => (run: () => Promise<unknown>) => run().catch(() => undefined),
+    // Settle as the real owner does: report the outcome (kept for the test) or a failure, resolve nothing.
+    useActionResultRun: () => (run: () => Promise<unknown>) => run().then((outcome) => { settled.push(outcome); }, () => undefined),
     useRecordAction: (run: unknown) => run,
   };
 });
 
-afterEach(() => { cleanup(); mounted.props = null; mounted.list = null; });
+afterEach(() => { cleanup(); mounted.props = null; mounted.list = null; settled.length = 0; });
+
+/** Under an app runtime, as a page is: it holds the action's idempotency keys. */
+const AppRuntime = ({ children }: { children?: React.ReactNode }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>;
 
 function propsOf<T>(element: React.ReactNode): T {
   if (!React.isValidElement<T>(element)) throw new Error("Expected a declaration element");
@@ -129,22 +134,35 @@ describe("composable standard project and task declarations", () => {
     expect(actions.find(({ id }) => id === "pause")?.placement).toBe("menu");
   });
 
-  test("Create from template sends the same key again after a lost answer, and a new one after a refused result", async () => {
-    const { result } = renderHook(useProjectFormDeclaration);
+  test("Create from template is one draft per template: a lost answer and a refused result keep its key until a project is created", async () => {
+    const { result } = renderHook(useProjectFormDeclaration, { wrapper: AppRuntime });
     const create = parsePageActions(propsOf<FormProps>(result.current).children).find(({ id }) => id === "create-from-template")!;
     // The declaration's run is the record action the mock hands back unwrapped: it takes the template id.
     const run = create.run as unknown as (id: string) => Promise<void>;
     fromTemplate.mockReset()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
       .mockResolvedValueOnce({ ok: false, message: "The template changed." })
-      .mockResolvedValueOnce({ ok: true, message: "Project created.", id: "prj_new" });
-    await run("prj_template");
-    await run("prj_template");
-    await run("prj_template");
+      .mockResolvedValueOnce({ ok: true, message: "Project created.", id: "prj_new" })
+      .mockResolvedValueOnce({ ok: true, message: "Project created.", id: "prj_next" });
+    for (let attempt = 0; attempt < 4; attempt += 1) await run("prj_template");
     const keys = fromTemplate.mock.calls.map(([, variables]) => (variables as { idempotency_key: string }).idempotency_key);
-    expect(fromTemplate.mock.calls.map(([id]) => id)).toEqual(["prj_template", "prj_template", "prj_template"]);
     expect(keys[1]).toBe(keys[0]);
-    expect(keys[2]).not.toBe(keys[1]);
+    expect(keys[2]).toBe(keys[0]);
+    expect(keys[3]).not.toBe(keys[0]);
+  });
+
+  test("an earlier attempt that already created the project says so and starts a new draft", async () => {
+    const { result } = renderHook(useProjectFormDeclaration, { wrapper: AppRuntime });
+    const run = parsePageActions(propsOf<FormProps>(result.current).children).find(({ id }) => id === "create-from-template")!.run as unknown as (id: string) => Promise<void>;
+    fromTemplate.mockReset()
+      .mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+        message: "Already created.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }))
+      .mockResolvedValueOnce({ ok: true, message: "Project created.", id: "prj_new" });
+    await run("prj_conflict");
+    await run("prj_conflict");
+    const keys = fromTemplate.mock.calls.map(([, variables]) => (variables as { idempotency_key: string }).idempotency_key);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(settled.at(0)).toEqual({ ok: false, message: "An earlier attempt already created a project from this template." });
   });
 
   test.each(["OPEN", "PAUSED", "DROPPED", "DONE"])("a %s template offers only Create from template", (status) => {

@@ -1,9 +1,14 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render as testingRender, screen, type RenderOptions } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { RecordThreadStreamSource } from "@angee/messaging";
-import type { ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, type ChatterViewContext } from "@angee/ui";
+
+/** Under an app runtime, as a page is: it holds the note box's idempotency key. */
+const AppRuntime = ({ children }: { children?: ReactNode }) => <AppRuntimeProvider runtime={{}}>{children}</AppRuntimeProvider>;
+const render = (ui: ReactElement, options?: RenderOptions) => testingRender(ui, { wrapper: AppRuntime, ...options });
 
 const sdk = vi.hoisted(() => ({
   query: vi.fn(), refetch: vi.fn(), createNote: vi.fn(),
@@ -147,32 +152,38 @@ function lastChildSource(): Extract<RecordThreadStreamSource, { kind: "children"
   return source;
 }
 
-test("a transport retry reuses its receipt key; changing the draft starts a new request", async () => {
-  sdk.createNote.mockRejectedValue(new Error("Offline"));
+test("the note box is one draft: a lost send, an edit and a resend carry one key, and a saved note ends it", async () => {
+  sdk.createNote.mockRejectedValueOnce(new Error("Offline")).mockRejectedValueOnce(new Error("Offline"));
   render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
   const submit = lastChildSource().createAction!.submit;
   const context = { record: null, selectedIds: [] };
   await expect(submit({ body: "Draft" }, context)).rejects.toThrow("Offline");
-  await expect(submit({ body: "Draft" }, context)).rejects.toThrow("Offline");
-  const first = sdk.createNote.mock.calls[0]![0].idempotency_key;
-  expect(sdk.createNote.mock.calls[1]![0].idempotency_key).toBe(first);
   await expect(submit({ body: "Changed" }, context)).rejects.toThrow("Offline");
-  expect(sdk.createNote.mock.calls[2]![0].idempotency_key).not.toBe(first);
+  await submit({ body: "Changed" }, context);
+  await submit({ body: "Next note" }, context);
+  const [first, edited, saved, next] = sdk.createNote.mock.calls.map(([variables]) => variables.idempotency_key);
+  expect(edited).toBe(first);
+  expect(saved).toBe(first);
+  expect(next).not.toBe(first);
 });
 
-test("a keyed insert refused with a validation error released its key: the same note sent again carries a new one", async () => {
+test("a keyed insert refused with a validation error keeps its key for the corrected note; an earlier version already saved starts a new draft", async () => {
   sdk.createNote.mockReset()
     .mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
       message: "Fix the highlighted fields.", extensions: { code: "VALIDATION", validationErrors: { body: ["Too long."] }, formErrors: [] },
     }] } }))
+    .mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+      message: "Already created.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }))
     .mockResolvedValueOnce({ create_record_note: { id: "binding_new", page: "pg_new" } });
   render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
   const submit = lastChildSource().createAction!.submit;
   const context = { record: null, selectedIds: [] };
   await expect(submit({ body: "Refused draft" }, context)).rejects.toThrow("Fix the highlighted fields.");
-  await submit({ body: "Refused draft" }, context);
-  const [first, second] = sdk.createNote.mock.calls.map(([variables]) => variables.idempotency_key);
-  expect(second).not.toBe(first);
+  expect(await submit({ body: "Corrected draft" }, context)).toEqual({ ok: false, message: "An earlier version of this note was already saved." });
+  await submit({ body: "Corrected draft" }, context);
+  const [refused, corrected, afterConflict] = sdk.createNote.mock.calls.map(([variables]) => variables.idempotency_key);
+  expect(corrected).toBe(refused);
+  expect(afterConflict).not.toBe(corrected);
 });
 
 test("notes destinations use canonical resource identity instead of a display name", () => {

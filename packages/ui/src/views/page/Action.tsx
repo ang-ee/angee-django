@@ -51,6 +51,8 @@ export interface ActionFormContext {
   selectedIds: readonly string[];
   /** Refetch the invoking record without replacing this action's collected draft. */
   refresh?: () => Promise<Row | null>;
+  /** The draft's idempotency key, given to `submit` when the action declares `idempotencyScope`. */
+  idempotencyKey?: string;
 }
 
 /** A descriptor form, including record-specific JSON Schema argument forms. */
@@ -191,6 +193,13 @@ interface ActionBinding {
     context: ActionFormContext,
     options?: AuthoredMutateOptions,
   ) => ActionSubmitResult | Promise<ActionSubmitResult>;
+  /**
+   * The draft a keyed `submit` writes, named for the record it acts on (`useIdempotencyKeys`): the
+   * action dialog holds one idempotency key for it from its first attempt until an `ok` answer,
+   * gives it to `submit` as `context.idempotencyKey`, and gives the draft up when the person
+   * dismisses the dialog with nothing possibly written.
+   */
+  idempotencyScope?: (context: ActionFormContext) => string;
 }
 
 export interface ActionProps extends ActionBinding {
