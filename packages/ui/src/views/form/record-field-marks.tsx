@@ -1,4 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useModelMetadata } from "@angee/metadata";
+import { isUnregisteredImplementation } from "../../lib/empty-value";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
@@ -119,6 +121,8 @@ function useRecordFieldMarksForField(field: string) {
 }
 
 /** Every native form field placement composes attention, provenance, and access marks once.
+ * An implementation-key field whose stored key the registry no longer names carries "Not
+ * registered" as an attention mark, while its control still offers every registered one.
  * @kind fragment
  */
 export function RecordFieldMarkControl({ field, label, restricted = false }: {
@@ -128,9 +132,15 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
 }) {
   const t = useUiT();
   const published = useRecordFieldMarksForField(field);
-  const marks: readonly RecordFieldMark[] = restricted
-    ? [...published, { field, label: t("form.restricted"), tone: "neutral", icon: "lock" }]
-    : published;
+  const record = useRecordChromeContextMaybe();
+  const model = useModelMetadata(record?.resource ?? "");
+  // The stored row, not the draft: a create form's empty selector is not a retired key.
+  const unregistered = record?.record != null && isUnregisteredImplementation(model, field, record.record[field]);
+  const marks: readonly RecordFieldMark[] = [
+    ...published,
+    ...(unregistered ? [{ field, label: t("implementation.notRegistered"), tone: "warning" as const }] : []),
+    ...(restricted ? [{ field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }] : []),
+  ];
   if (!marks.length) return null;
   return <>
     {marks.map((mark, index) => (

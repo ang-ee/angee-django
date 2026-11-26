@@ -3,6 +3,7 @@ import { type CellContext, type Column as TableColumn, type ColumnDef, type Row 
 import { resourceOrderFieldForPath, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { DefinitionPair } from "../../../fragments/DefinitionPair";
+import { isUnregisteredImplementation } from "../../../lib/empty-value";
 import { useUiT, type UiTranslate } from "../../../i18n";
 import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
 import type { ResourceViewGroup } from "../resource-view-model";
@@ -154,6 +155,9 @@ function resolvedCellContent<TRow extends Row>(
   metadata: ModelMetadata | null | undefined,
   widget: WidgetDefinition | undefined,
 ): React.ReactNode {
+  if (!column.render && isUnregisteredImplementation(metadata, column.field, readPath(row, column.field))) {
+    return t("implementation.notRegistered");
+  }
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
     return (

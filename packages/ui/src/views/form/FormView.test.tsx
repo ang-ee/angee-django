@@ -1328,6 +1328,30 @@ describe("FormView", () => {
     expect(document.querySelectorAll("aside")).toHaveLength(1);
   });
 
+  test("a record whose implementation key is not registered opens, says so and offers the registered ones", async () => {
+    const backend = { name: "backend", kind: "enum" as const, readable: true, aggregatable: false,
+      creatable: true, updatable: true, requiredOnCreate: false,
+      values: [{ value: "LOCAL", description: "Local" }, { value: "STUB", description: "Stub" }] };
+    const resource = testDataResource("notes.Note", { fields: [backend], implFields: ["backend"] });
+    const record = { id: "note-1", title: "First", backend: null, permissions: ["read", "write"] };
+    const page = (readOnly: boolean) => renderWithProviders(<FormView resource="notes.Note" id="note-1"
+      fields={[{ name: "title", title: true }, { name: "backend", label: "Backend", readOnly }]}
+      acknowledgedSource={{ record, values: record }} />,
+    { types: { NoteType: { resource, fields: { backend } } } });
+
+    page(false);
+    const control = await screen.findByRole("combobox", { name: "Backend" });
+    expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+    fireEvent.click(control);
+    expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
+
+    cleanup();
+    page(true);
+    expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  });
+
   test("a rail child's permission gates the groups it declares", async () => {
     const renderRail = (permissions: string[]) => {
       const record = { id: "note-1", title: "First", permissions };

@@ -711,6 +711,7 @@ export const enUiMessages: Record<string, string> = {
   "lines.system": "System",
   "lines.systemHint": "Managed by the system: it stays in place and its locked cells can't change.",
   "select.label": "Select",
+  "implementation.notRegistered": "Not registered",
   "date.select": "Select date",
   "date.label": "Date",
   "date.clear": "Clear",
