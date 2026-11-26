@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A failed request of a verb bound with `useRecordActionMutation`,
+  or settled through `useActionResultMutation` or
+  `useRecordChromeActionMutation`, is told once. These hooks toast a failed
+  request themselves, and the data layer raised its own "Something went wrong"
+  beside it. They now turn the data layer's own error notice off for their
+  verb. `useActionOutcomeMutation`, which leaves the outcome to its caller, is
+  unchanged: a caller of it that shows the failure itself and does not turn
+  the notice off still tells a failed request twice.
 - `@angee/ui`: A number shown as a percentage or a progress bar holds `null`
   when it holds nothing, where it held the empty text. `percent` and
   `progressBar` join the number widgets (`NUMBER_WIDGETS`) in the one rule for

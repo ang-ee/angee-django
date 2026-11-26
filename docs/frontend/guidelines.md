@@ -335,6 +335,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A hook that toasts a verb's failure itself (`useActionResultMutation`,
+  `useRecordChromeActionMutation`, `useRecordActionMutation`) turns the data
+  layer's own error notice off for it, so a failed request is told once.
   A record action bound with `useRecordActionMutation` is not settled there:
   its bar toasts it, and both follow a created record through one hook. A
   record action whose own `run` calls `useActionResultRun`, directly or
