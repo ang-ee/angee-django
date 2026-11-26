@@ -121,22 +121,28 @@ live in code docstrings.
     `DecisionNotice` records each person mailed per question and occasion, and
     `DigestNotice` per person and UTC day, each in the durable transaction of that
     one send, so a retried task mails nobody twice; the mail verbs therefore run
-    outside any transaction. One person's failure is logged and counted and the
-    others still go, and the task then fails; Celery's soft time limit stops the run
-    at once. A permanent defect (no `ANGEE_PUBLIC_ORIGIN`, a missing template row, a
-    render or address refusal, system mail not configured) is not retried; a system
-    channel that is missing or not connected is, 5, 15 and 45 minutes later. A
-    question a workflow step holds gets no reminder mail, since `remind_due` skips
-    it.
+    outside any transaction. A notice's mail stands unless messaging recorded it as
+    failed: then the occasion's next run mails the person again on their one notice
+    (a digest that same day), and the digest's overlap counts the failed mail as never
+    sent. An uncertain mail may have been delivered, so the addon never sends it
+    again and never surfaces it: surfacing an uncertain system mail once is
+    messaging's open item, and the addon has no "send again" act. Each send names
+    the question's link as what the mail must show (`must_print`), and a template row
+    that cannot show it fails the run once (`DecisionMailUnsendable`), never a
+    person's skip. One person's failure is logged and counted and the others still
+    go, and the task then fails; Celery's soft time limit stops the run at once. A
+    permanent defect (no public origin, system mail not configured, a missing
+    template row, a render or address refusal) is not retried; a system channel that
+    is missing or not connected is, 5, 15 and 45 minutes later. A question a workflow
+    step holds gets no reminder mail, since `remind_due` skips it.
   - **Upgrade.** Add `angee.decisions_messaging` to the host's `INSTALLED_APPS`
     (the full addons profile lists it), run `manage.py makemigrations
     decisions_messaging` after compose and commit the migration, which creates
     `DecisionNotice` and `DigestNotice`, then `manage.py provision`, which migrates,
     synchronizes permissions and loads the install tier with the mails. Set
     `ANGEE_PUBLIC_ORIGIN` and system mail (`MAILERS["transport"]`,
-    `DEFAULT_FROM_EMAIL`). Without the origin a task refuses before anyone is
-    mailed; without system mail each person's mail renders and its send is
-    refused, nobody is mailed, and the task fails, once per run. Only questions
+    `DEFAULT_FROM_EMAIL`). Without the origin or system mail a task refuses before
+    anyone is mailed, once per run. Only questions
     asked after the upgrade get an asked mail; the digest lists the open questions
     waiting on each person, older ones included.
 - `angee.messaging_templates`: **A message template is sent as system work.**

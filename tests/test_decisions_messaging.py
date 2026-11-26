@@ -17,7 +17,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.checks import Tags, run_checks
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, transaction
 from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
@@ -45,6 +45,7 @@ from angee.decisions_messaging.models import (
     QUESTION_FACT_LIMIT,
     REASON_TEXT_LIMIT,
     RETRIED_REFUSALS,
+    DecisionMailUnsendable,
     DecisionNoticeOccasion,
     MailAudience,
     refusal_codes,
@@ -60,11 +61,11 @@ from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
 from angee.projects.testing.models import Task
 from tests.conftest import create_platform_admin, vault_for
+from tests.test_messaging_compose import MAILERS, NO_TRANSPORT
 
 ORIGIN = "https://app.example.test"
 READ = "tests.decisions_messaging.read"
 CHOICES = ("Confirm the order", "Decline the order")
-LOCMEM = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
 SENDER = "Angee <noreply@example.test>"
 
 
@@ -82,7 +83,7 @@ def world(db: None, settings: Any, sent: list[Any]) -> SimpleNamespace:
     """System mail on an in-memory transport, the shipped rows, and the people around one order."""
 
     del db, sent
-    settings.MAILERS = {"transport": LOCMEM}
+    settings.MAILERS = MAILERS
     settings.DEFAULT_FROM_EMAIL = SENDER
     settings.ANGEE_PUBLIC_ORIGIN = ORIGIN
     install_decision_mail()
@@ -343,7 +344,7 @@ def test_one_persons_failure_stops_nobody_else_and_still_fails_the_run(world: An
     question = ask(world, world.reviewer, world.reader)
     speak(world.reader, "fr")
     break_in("fr", DecisionNoticeOccasion.ASKED.template_key)
-    with pytest.raises(ValidationError):
+    with pytest.raises(DecisionMailUnsendable):
         mail_decision(question.pk, "asked")
     assert world.reviewer.pk < world.reader.pk < world.admin.pk, "the failing person sits between two others"
     assert mailed(question) == [(world.reviewer.pk, "asked"), (world.admin.pk, "asked")]
@@ -358,7 +359,7 @@ def test_one_persons_failed_digest_stops_nobody_elses(world: Any) -> None:
     ask(world, world.reader)
     speak(world.reviewer, "fr")
     break_in("fr", decision_mail.DIGEST_TEMPLATE_KEY)
-    with pytest.raises(ValidationError):
+    with pytest.raises(DecisionMailUnsendable):
         DigestNotice.objects.mail_digests(now=timezone.now())
     assert mails(DigestNotice, world.reviewer) == [] and len(mails(DigestNotice, world.reader)) == 1
 
@@ -375,6 +376,107 @@ def _system_channel_disconnected(settings: Any) -> None:
     )
 
 
+def deliver_as(message_id: Any, status: Any) -> None:
+    """Set the delivery state messaging recorded for one message, as its delivery would."""
+
+    with system_context(reason="tests.decisions_messaging.delivery"):
+        Message._base_manager.filter(pk=message_id).update(status=status)
+
+
+def notice_of(ledger: Any, user: Any, **identity: Any) -> Any:
+    with system_context(reason=READ):
+        return ledger.objects.get(user=user, **identity)
+
+
+def test_a_mail_whose_delivery_failed_is_sent_again_on_its_one_notice(world: Any) -> None:
+    question = ask(world, world.reviewer)
+    assert mail_decision(question.pk, "asked") == 2
+    first = notice_of(DecisionNotice, world.reviewer, decision=question)
+    deliver_as(first.message_id, Message.MessageStatus.FAILED)
+    assert mail_decision(question.pk, "asked") == 1
+    again = notice_of(DecisionNotice, world.reviewer, decision=question)
+    assert again.pk == first.pk and again.message_id != first.message_id
+    assert len(mailed(question)) == 2, "one notice per person, the failed one pointed at the new mail"
+    assert mail_decision(question.pk, "asked") == 0, "the new mail is queued, so it stands"
+
+
+@pytest.mark.parametrize("status", ["queued", "sent", "uncertain", "purged"])
+def test_a_mail_that_was_or_may_have_been_delivered_is_never_sent_again(world: Any, status: str) -> None:
+    """An uncertain mail may have been delivered, and a purged one was: neither is sent again, nor surfaced here."""
+
+    question = ask(world, world.reviewer)
+    assert mail_decision(question.pk, "asked") == 2
+    notice = notice_of(DecisionNotice, world.reviewer, decision=question)
+    if status == "purged":
+        with system_context(reason="tests.decisions_messaging.purge"):
+            DecisionNotice._base_manager.filter(pk=notice.pk).owner_update(message=None)
+    else:
+        deliver_as(notice.message_id, status)
+    assert mail_decision(question.pk, "asked") == 0
+
+
+def test_the_digest_counts_a_failed_asked_mail_as_never_sent(world: Any) -> None:
+    question = ask(world, world.reviewer)
+    assert mail_decision(question.pk, "asked") == 2
+    now = timezone.now()
+    assert DigestNotice.objects.mail_digests(now=now) == 0, "both were mailed about it today"
+    deliver_as(notice_of(DecisionNotice, world.reviewer, decision=question).message_id, "failed")
+    assert DigestNotice.objects.mail_digests(now=now) == 1
+    ((_subject, text),) = mails(DigestNotice, world.reviewer)
+    assert link(question) in text and mails(DigestNotice, world.admin) == []
+
+
+def test_a_digest_whose_delivery_failed_is_sent_again_that_day_on_its_one_notice(world: Any) -> None:
+    ask(world, world.reviewer)
+    now = timezone.now() + timedelta(days=2)
+    day = now.astimezone(UTC).date()
+    assert DigestNotice.objects.mail_digests(now=now) == 2
+    first = notice_of(DigestNotice, world.reviewer, day=day)
+    deliver_as(first.message_id, "failed")
+    assert DigestNotice.objects.mail_digests(now=now) == 1
+    again = notice_of(DigestNotice, world.reviewer, day=day)
+    assert again.pk == first.pk and again.message_id != first.message_id
+    assert DigestNotice.objects.mail_digests(now=now) == 0
+
+
+def test_a_row_that_gives_a_non_link_as_a_link_refuses_the_run_once(world: Any) -> None:
+    """``value_not_linkable``: a deployment's row prints the question's title as a link's destination."""
+
+    with system_context(reason="tests.decisions_messaging.titled_link_row"):
+        MessageTemplate(
+            kind="template", key=DecisionNoticeOccasion.ASKED.template_key, language="en", name="Titled link",
+            format="markdown", layout="base", subject="A question", preheader="A question",
+            source="Open [the question]({{ question.url }}).\n\n"
+                   "It is about [{{ question.title }}]({{ question.title }}).",
+            variables={"question.url": "Where it opens.", "question.title": "What it asks."},
+        ).save()
+    question = ask(world, world.reviewer)
+    with pytest.raises(DecisionMailUnsendable, match="value_not_linkable") as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    words = str(refused.value)
+    assert "value_not_printed" not in words and ORIGIN not in words and "@" not in words
+    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+    with system_context(reason=READ):
+        assert mailed() == [] and not Message._base_manager.exists()
+
+
+def test_a_template_that_does_not_show_the_link_refuses_the_run_once(world: Any) -> None:
+    """``must_print`` refuses a body without the question's link: the deployment's row is at fault, not a person."""
+
+    with system_context(reason="tests.decisions_messaging.linkless_row"):
+        MessageTemplate(
+            kind="template", key=DecisionNoticeOccasion.ASKED.template_key, language="en", name="Linkless",
+            format="markdown", layout="base", subject="A question", preheader="A question",
+            source="A question is waiting for you.", variables={},
+        ).save()
+    question = ask(world, world.reviewer)
+    with pytest.raises(DecisionMailUnsendable, match="decision_asked") as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert "value_not_printed" in str(refused.value) and ORIGIN not in str(refused.value)
+    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+    assert mailed() == []
+
+
 @pytest.mark.parametrize(
     ("break_it", "refusal", "runs"),
     [
@@ -385,7 +487,10 @@ def _system_channel_disconnected(settings: Any) -> None:
             lambda settings: MessageTemplate.objects.filter(key=DecisionNoticeOccasion.ASKED.template_key).delete(),
             MessageTemplate.DoesNotExist, 1, id="no-template-row",
         ),
-        pytest.param(lambda settings: setattr(settings, "MAILERS", {}), ValidationError, 1, id="mail-not-configured"),
+        pytest.param(
+            lambda settings: setattr(settings, "MAILERS", NO_TRANSPORT), DecisionMailUnsendable, 1,
+            id="mail-not-configured",
+        ),
         pytest.param(_no_system_channel, SystemChannelMissing, 4, id="system-channel-missing"),
         pytest.param(_system_channel_disconnected, OutboundEmailChannelMissing, 4, id="system-channel-disconnected"),
     ],

@@ -28,8 +28,9 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import F, prefetch_related_objects
-from django.utils import translation
+from django.utils import timezone, translation
 from django.utils.text import Truncator
+from django.views.decorators.debug import sensitive_variables
 from rebac import system_context
 
 from angee.base.fields.state import StateField
@@ -37,10 +38,11 @@ from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.audit import retained_set_null
 from angee.base.models.base import AngeeModel
-from angee.base.origins import public_origin
+from angee.base.origins import configured_public_origin
 from angee.base.querysets import AngeeQuerySet
 from angee.decisions.contracts import DecisionProposal
 from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
+from angee.messaging_templates.engine import VALUE_NOT_LINKABLE
 from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -100,6 +102,26 @@ When every question waiting on a person was mailed to them this recently, they g
 
 DIGEST_TEMPLATE_KEY = "decisions_messaging.decision_digest"
 """The shipped message template the daily digest is written from."""
+
+QUESTION_LINK = ("question.url",)
+"""What an asked or reminder mail must show (``send_as_system``'s ``must_print``): its question's link."""
+
+DIGEST_LINKS = ("questions.*.url",)
+"""What a digest must be able to print for every question it lists: each one's link."""
+
+TEMPLATE_REFUSALS = frozenset({"value_not_printed", VALUE_NOT_LINKABLE})
+"""A send's refusals that are the template's or the deployment's fault, the same for every recipient of a run."""
+
+
+class DecisionMailUnsendable(ImproperlyConfigured):
+    """Decision mail cannot be sent this run: the deployment, or its own row of a template, must change.
+
+    Raised once per run, worded for an administrator, and never a person's skip: by
+    :meth:`_Run.start` before anyone is mailed, or once a run tried everyone, when a
+    template row refused what the mail must show (:data:`TEMPLATE_REFUSALS`). It
+    carries no link and no address.
+    """
+
 
 type Mailed = Literal["mailed", "already", "skipped", "refused"]
 """What mailing one person came to: mailed now, mailed before, nothing to mail, or their address refused."""
@@ -182,20 +204,13 @@ class MailAudience(models.TextChoices):
         return questions.put_to(person) if self is MailAudience.DECIDERS else questions.for_administrator(person)
 
 
-def decision_link_origin() -> str:
-    """Return the deployment's public origin a mailed question links from, or refuse before anything is mailed.
+def mail_hints(questions: Any, reader: Any) -> tuple[models.Prefetch, ...]:
+    """The per-reader hints a mail's list of questions takes: ``Decision.reader_prefetches`` and the asker's name."""
 
-    Blocked debt: ``SignInLink.url_for`` spells the same rule, the configured public
-    origin or ``ImproperlyConfigured``. Its owner is ``angee.base.origins``, beside
-    ``public_origin``; this copy goes when the accessor lands there.
-    """
-
-    origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
-    if origin is None:
-        raise ImproperlyConfigured("Decision mail links the app: set ANGEE_PUBLIC_ORIGIN.")
-    return origin
+    return (*questions.reader_prefetches(reader), questions.requester_names_prefetch(reader))
 
 
+@sensitive_variables()
 def shared_values(decision: Any, *, origin: str) -> dict[str, Any]:
     """What every person mailed about ``decision`` reads alike: its kind, due time, choices and link.
 
@@ -226,6 +241,7 @@ def fact_values(fact: Any, *, text_limit: int) -> dict[str, Any]:
     }
 
 
+@sensitive_variables()
 def question_values(
     row: Any, reader: Any, shared: dict[str, Any], *, text_limit: int, reason_limit: int,
 ) -> dict[str, Any]:
@@ -264,17 +280,28 @@ class _Run:
     rows: dict[tuple[Any, str], Any]
 
     @classmethod
+    @sensitive_variables()
     def start(cls, people: Iterable[Any], keys: Sequence[str]) -> Self:
-        """Read the origin, refusing without one, and the row of each of ``keys`` each of ``people`` reads.
+        """Refuse a run no mail of could be sent, then read the row of each of ``keys`` each of ``people`` reads.
 
-        Each row is the library's own answer for the person (``effective(person=)``),
-        read once per list of languages the library tries for them
-        (``language_candidates``), all in one elevated read here, so its audit stays
-        whatever a person's own transaction does later. A key with no row refuses
-        with ``DoesNotExist`` before anyone is mailed.
+        In order, each once for the whole run and before any render: the public origin
+        (``configured_public_origin``, which raises ``PublicOriginUnavailable``), and
+        system mail (``Channel.objects.system_mail_configured``, else
+        :class:`DecisionMailUnsendable`). A link the send cannot carry is refused at the
+        send (``value_not_linkable``, one of :data:`TEMPLATE_REFUSALS`). Each row is the
+        library's own answer for the person (``effective(person=)``), read once per
+        list of languages the library tries for them (``language_candidates``), all in
+        one elevated read here, so its audit stays whatever a person's own transaction
+        does later. A key with no row refuses with ``DoesNotExist`` before anyone is
+        mailed.
         """
 
-        origin = decision_link_origin()
+        origin = configured_public_origin()
+        if not apps.get_model("messaging", "Channel").objects.system_mail_configured():
+            raise DecisionMailUnsendable(
+                "Decision mail cannot be sent: this deployment's system mail is not configured "
+                "(messaging's README, \"System mail\").",
+            )
         people = list(people)
         templates = apps.get_model("messaging_templates", "MessageTemplate").objects
         rows: dict[tuple[Any, str], Any] = {}
@@ -338,28 +365,34 @@ def _refused(user: Any, key: str, refusal: ValidationError) -> Mailed:
     return "refused"
 
 
+@sensitive_variables()
 def _mail_one(
-    ledger: MailNoticeManager[Any], user: Any, *, key: str, run: _Run,
-    values: Callable[[], dict[str, Any] | None], **identity: Any,
+    ledger: MailNoticeManager[Any], user: Any, *, key: str, run: _Run, must_print: Iterable[str],
+    values: Callable[[], dict[str, Any] | None], replacing: Any = None, **identity: Any,
 ) -> Mailed:
     """Mail ``user`` the template ``key`` once for ``identity`` in ``ledger``, in a transaction of its own.
 
-    The one send path both ledgers share. An address messaging would refuse
-    (``Message.objects.clean_recipient``, asked before the reads and the render) is
-    skipped as ``refused``, as is a refusal of the send keyed ``to``, which wrote
-    nothing. ``values`` is read inside the transaction; ``None`` means nothing is left
-    to mail (``skipped``); it is read in the language of ``user``'s template row, so
-    the text it gives reads in that language. The notice is written after the send
-    (:meth:`MailNoticeManager.record`), so a send that raises writes none and the next
-    run mails the person; a notice another run wrote first is ``already``, and this
-    run's message rolls back with this notice. The transaction is durable, never a
-    savepoint: inside an outer transaction the send's delivery would wait for it, and
-    one person's failure would roll the others back.
+    The one send path both ledgers share. An address system mail would refuse
+    (``Message.objects.clean_system_recipient``, asked before the reads and the
+    render) is skipped as ``refused``, as is a refusal of the send keyed ``to``,
+    which wrote nothing. ``values`` is read inside the transaction; ``None`` means
+    nothing is left to mail (``skipped``); it is read in the language of ``user``'s
+    template row, so the text it gives reads in that language. The send names what
+    the mail must show (``must_print``); a refusal of that, or of a link, is the
+    template row's or the deployment's (:data:`TEMPLATE_REFUSALS`) and raises
+    :class:`DecisionMailUnsendable`, never a person's skip, with no link or address in it. The notice is written
+    after the send (:meth:`MailNoticeManager.record`), replacing the failed message
+    ``replacing`` when the person's notice holds one, so a send that raises writes
+    none and the next run mails the person; a notice another run wrote or replaced
+    first is ``already``, and this run's message rolls back with this notice. The
+    transaction is durable, never a savepoint: inside an outer transaction the
+    send's delivery would wait for it, and one person's failure would roll the
+    others back.
     """
 
     messages = apps.get_model("messaging", "Message").objects
     try:
-        _name, address = messages.clean_recipient(user.email or "")
+        _name, address = messages.clean_system_recipient(user.email or "")
     except ValidationError as refusal:
         return _refused(user, key, refusal)
     templates = apps.get_model("messaging_templates", "MessageTemplate").objects
@@ -371,13 +404,18 @@ def _mail_one(
             if content is None:
                 return "skipped"
             message = templates.send_as_system(
-                row, reason=mail_reason(key), to=address,
+                row, reason=mail_reason(key), to=address, must_print=must_print,
                 values={"person": {"first_name": user.first_name}, **content},
             )
-            if not ledger.record(user=user, message=message, **identity):
+            if not ledger.record(user=user, message=message, replacing=replacing, **identity):
                 transaction.set_rollback(True)
                 return "already"
     except ValidationError as refusal:
+        if broken := sorted(refusal_codes(refusal) & TEMPLATE_REFUSALS):
+            raise DecisionMailUnsendable(
+                f"Decision mail's template {key} cannot be sent ({', '.join(broken)}): it must show every "
+                "question's link, which the deployment's own row of it, or its public origin, prevents.",
+            ) from None
         if not (hasattr(refusal, "error_dict") and set(refusal.error_dict) == {"to"}):
             raise
         return _refused(user, key, refusal)
@@ -395,39 +433,60 @@ def _mail_each(people: Iterable[Any], mail: Callable[[Any], Mailed], *, what: st
 
     A failure is logged by the person's primary key and its refusal code, and counted.
     Once everyone was tried, the run raises: the first failure a retry may cure
-    (``retry_may_cure``), else the first, so the task still fails visibly. Celery's
-    ``SoftTimeLimitExceeded`` is no person's failure: it is raised at once, so the
-    task stops inside its time limit.
+    (``retry_may_cure``), else the run's own defect, else the first, so the task still
+    fails visibly. Celery's ``SoftTimeLimitExceeded`` is no person's failure: it is
+    raised at once, so the task stops inside its time limit. Nor is
+    :class:`DecisionMailUnsendable`: it is the deployment's row's, which is one
+    language's, so the others are still mailed, and it is logged and raised once,
+    never per person.
     """
 
     outcomes: Counter[str] = Counter()
     failures: list[Exception] = []
+    defect: DecisionMailUnsendable | None = None
     for user in people:
         try:
             outcomes[mail(user)] += 1
         except SoftTimeLimitExceeded:
             raise
+        except DecisionMailUnsendable as error:
+            outcomes["failed"] += 1
+            defect = defect or error
         except Exception as error:
             outcomes["failed"] += 1
             failures.append(error)
             logger.warning("%s to user %s failed (%s).", what, user.pk, _failure(error))
     logger.info("%s: %s.", what, ", ".join(f"{count} {outcome}" for outcome, count in sorted(outcomes.items())))
+    if defect is not None:
+        logger.error("%s: %s", what, defect)
+    if retryable := next((error for error in failures if retry_may_cure(error)), None):
+        raise retryable
+    if defect is not None:
+        raise defect
     if failures:
-        raise next((error for error in failures if retry_may_cure(error)), failures[0])
+        raise failures[0]
     return outcomes
 
 
 class MailNoticeManager[NoticeT: MailNotice](AngeeManager[NoticeT]):
     """The send-once write both ledgers share."""
 
-    def record(self, *, user: Any, message: Any, **identity: Any) -> bool:
+    def record(self, *, user: Any, message: Any, replacing: Any = None, **identity: Any) -> bool:
         """Write the notice that ``message`` mailed ``user`` for ``identity``; ``False`` when another run wrote it.
 
         Inside the caller's send transaction, in a savepoint of its own. The ledger's
         unique key is the arbiter; a conflict is told from any other integrity failure
-        by reading the notice again, and anything else raises.
+        by reading the notice again, and anything else raises. With ``replacing``, the
+        failed message the person's one notice holds, the notice is pointed at
+        ``message`` instead, only while it still holds ``replacing``: a compare on the
+        notice's own column, so of two runs re-sending at once one counts and the other
+        is ``False``, and the notice is never written twice.
         """
 
+        if replacing is not None:
+            return bool(self.model._base_manager.filter(user=user, message=replacing, **identity).owner_update(
+                message=message, updated_at=timezone.now(),
+            ))
         notice: Any = self.model(user=user, message=message, **identity)
         try:
             with transaction.atomic():
@@ -444,8 +503,11 @@ class MailNotice(AppendOnlyModel, AngeeModel):
 
     Written in the transaction of that one send (``MailNoticeManager.record``); a send
     that raises writes none. The message is messaging's to keep or purge: purging it
-    empties ``message`` and keeps the notice, so nobody is mailed again. Notices are
-    otherwise kept as written. Internal to this addon, like a sequence counter: no
+    empties ``message`` and keeps the notice, so nobody is mailed again. A notice
+    whose message messaging recorded as failed holds no mail that reached anyone:
+    the occasion's next run mails the person again and points this one notice at the
+    new message (its ``updated_at``). An uncertain one is never sent again. Notices
+    are otherwise kept as written. Internal to this addon, like a sequence counter: no
     public id, no GraphQL surface and no REBAC resource type.
     """
 
@@ -460,13 +522,41 @@ class MailNotice(AppendOnlyModel, AngeeModel):
         abstract = True
 
 
-class DecisionNoticeQuerySet[NoticeT: DecisionNotice](AppendOnlyQuerySet[NoticeT], AngeeQuerySet[NoticeT]):
-    """Question notices are written once, with the message they record."""
+class MailNoticeQuerySet[NoticeT: MailNotice](AppendOnlyQuerySet[NoticeT], AngeeQuerySet[NoticeT]):
+    """What each notice's mail came to, as messaging recorded the delivery of its message.
+
+    Debt: messaging has no boolean "this outbound may have reached its recipient"
+    predicate to compose, so this reads its named set, ``ACTIVE_OUTBOUND_STATUSES``,
+    as ``angee.posts`` does. For a locally sent mail that set is every delivery state
+    but ``failed`` (``synced`` and ``edited`` are ingested states); messaging records
+    ``failed`` only once nothing was accepted.
+    """
+
+    def standing(self) -> Self:
+        """The notices whose mail counts as sent: an active outbound state, or a message messaging purged.
+
+        Queued and sent count, and so does ``uncertain``: that mail may have been
+        delivered, so it is never sent again.
+        """
+
+        return self.filter(
+            models.Q(message__isnull=True)
+            | models.Q(message__status__in=apps.get_model("messaging", "Message").ACTIVE_OUTBOUND_STATUSES),
+        )
+
+    def failed(self) -> Self:
+        """The notices whose mail messaging recorded as ``failed``: it reached nobody, so its occasion mails again."""
+
+        return self.filter(message__status=apps.get_model("messaging", "Message").MessageStatus.FAILED)
+
+
+class DecisionNoticeQuerySet[NoticeT: DecisionNotice](MailNoticeQuerySet[NoticeT]):
+    """Question notices, each holding the one message its occasion's mail recorded."""
 
     def mailed_since(self, moment: datetime) -> Self:
-        """The notices of mails sent since ``moment``."""
+        """The notices whose mail was recorded since ``moment``: a notice's ``updated_at``, its send or its re-send."""
 
-        return self.filter(created_at__gte=moment)
+        return self.filter(updated_at__gte=moment)
 
 
 _DecisionNoticeManagerBase = AngeeManager.from_queryset(DecisionNoticeQuerySet)
@@ -477,21 +567,25 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
 ):
     """Mails one question to its deciders, once per occasion each."""
 
+    @sensitive_variables()
     def mail_decision(self, decision_id: Any, *, occasion: str) -> int:
         """Mail an open question to each person in its kind's audience once for ``occasion``; return how many.
 
         ``occasion`` is ``asked`` or ``reminder``. The audience (:meth:`MailAudience.of`
         the question's kind) is read once, from the question's side
         (:meth:`MailAudience.people`); a person the ledger already holds for the
-        question and occasion is not mailed again. A question that closed since, or that nobody
+        question and occasion is not mailed again unless messaging recorded that mail
+        as failed (:meth:`MailNoticeQuerySet.standing`), when they are mailed once more
+        and their one notice points at the new mail. An uncertain one is never sent
+        again. A question that closed since, or that nobody
         can be put to, mails nobody. Each person's values are read in their own scope
         as their mail is sent (:func:`question_values`), so a question since closed or
         no longer readable to them is not mailed (``skipped``); this does not depend
         on the authority ``decision_asked`` was sent under, which a supersede elevates.
         Each person is mailed as :func:`_mail_one` says and isolated as
-        :func:`_mail_each` says. An unset public origin refuses before anyone is
-        mailed. Each person's mail is a durable transaction, so this runs outside any
-        transaction, as a task does.
+        :func:`_mail_each` says. A run no mail of could be sent refuses before anyone
+        is mailed (:meth:`_Run.start`). Each person's mail is a durable transaction,
+        so this runs outside any transaction, as a task does.
         """
 
         occasion = DecisionNoticeOccasion(occasion)
@@ -502,7 +596,9 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
             decision = rows.first()
             if decision is None:
                 return 0
-            mailed = set(self.filter(decision=decision, occasion=occasion).values_list("user_id", flat=True))
+            notices = self.filter(decision=decision, occasion=occasion)
+            mailed = set(notices.standing().values_list("user_id", flat=True))
+            failed = dict(notices.failed().values_list("user_id", "message_id"))
             audience = MailAudience.of(decision.kind)
             people = [user for user in audience.people(rows).get(decision.pk, []) if user.pk not in mailed]
         if not people:
@@ -510,11 +606,11 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
         run = _Run.start(people, [key])
         shared = shared_values(decision, origin=run.origin)
 
+        @sensitive_variables()
         def values_for(user: Any) -> dict[str, Any] | None:
-            row = (
-                questions.objects.with_actor(user).open().filter(pk=decision.pk)
-                .prefetch_related(*questions.reader_prefetches(user), questions.requester_names_prefetch(user)).first()
-            )
+            row = questions.objects.with_actor(user).open().filter(pk=decision.pk).prefetch_related(
+                *mail_hints(questions, user),
+            ).first()
             return None if row is None else {"question": question_values(
                 row, user, shared, text_limit=FACT_TEXT_LIMIT, reason_limit=REASON_TEXT_LIMIT,
             )}
@@ -522,15 +618,16 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
         outcomes = _mail_each(
             people,
             lambda user: _mail_one(
-                self, user, key=key, run=run, values=lambda: values_for(user), decision=decision, occasion=occasion,
+                self, user, key=key, run=run, must_print=QUESTION_LINK, values=lambda: values_for(user),
+                replacing=failed.get(user.pk), decision=decision, occasion=occasion,
             ),
             what=f"Decision {decision.pk} {occasion.value} mail",
         )
         return outcomes["mailed"]
 
 
-class DigestNoticeQuerySet[NoticeT: DigestNotice](AppendOnlyQuerySet[NoticeT], AngeeQuerySet[NoticeT]):
-    """Digest notices are written once, with the message they record."""
+class DigestNoticeQuerySet[NoticeT: DigestNotice](MailNoticeQuerySet[NoticeT]):
+    """Digest notices, each holding the one message its day's digest recorded."""
 
 
 _DigestNoticeManagerBase = AngeeManager.from_queryset(DigestNoticeQuerySet)
@@ -539,6 +636,7 @@ _DigestNoticeManagerBase = AngeeManager.from_queryset(DigestNoticeQuerySet)
 class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _DigestNoticeManagerBase[NoticeT]):
     """Mails each active person one daily digest of the open questions waiting on them."""
 
+    @sensitive_variables()
     def mail_digests(self, *, now: datetime) -> int:
         """Mail each active person one digest, once per UTC day; return how many were mailed.
 
@@ -555,20 +653,25 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
         window; a person whose address messaging refuses, none included, is refused and
         counted as the asked and reminder mails refuse them. Each person is mailed as
         :func:`_mail_one` says and isolated as :func:`_mail_each` says. A second run on
-        the same day mails nobody. Each person's mail is a durable transaction, so this
-        runs outside any transaction, as a task does.
+        the same day mails nobody, except a person whose digest messaging recorded as
+        failed, who is mailed once more on their one notice; the overlap reads only
+        mails that stand (:meth:`MailNoticeQuerySet.standing`), so a failed asked mail
+        counts as never sent. Each person's mail is a durable
+        transaction, so this runs outside any transaction, as a task does.
         """
 
         day = now.astimezone(UTC).date()
         questions = apps.get_model("decisions", "Decision")
         notices = apps.get_model("decisions_messaging", "DecisionNotice")
         with system_context(reason=mail_reason(DIGEST_TEMPLATE_KEY)):
+            today = self.filter(day=day)
             candidates = get_user_model().system_queryset().active_people().exclude(
-                pk__in=self.filter(day=day).values("user_id"),
+                pk__in=today.standing().values("user_id"),
             )
             people = list(candidates.order_by("pk"))
+            failed = dict(today.failed().values_list("user_id", "message_id"))
             recent = set(
-                notices.objects.mailed_since(now - DIGEST_WINDOW)
+                notices.objects.mailed_since(now - DIGEST_WINDOW).standing()
                 .filter(user__in=candidates.values("pk")).values_list("user_id", "decision_id")
             )
         if not people:
@@ -576,6 +679,7 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
         run = _Run.start(people, [DIGEST_TEMPLATE_KEY])
         shared: dict[Any, dict[str, Any]] = {}
 
+        @sensitive_variables()
         def mail(user: Any) -> Mailed:
             put = models.Q(pk__in=[])
             for audience in MailAudience.used():
@@ -587,15 +691,13 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
             if all((user.pk, row.pk) in recent for row in listed):
                 return "skipped"
             shown = listed[:DIGEST_QUESTION_LIMIT]
-            prefetch_related_objects(
-                shown, *questions.reader_prefetches(user), questions.requester_names_prefetch(user),
-            )
+            prefetch_related_objects(shown, *mail_hints(questions, user))
             for row in shown:
                 if row.pk not in shared:
                     shared[row.pk] = shared_values(row, origin=run.origin)
             return _mail_one(
-                self, user, key=DIGEST_TEMPLATE_KEY, run=run, day=day,
-                values=lambda: {
+                self, user, key=DIGEST_TEMPLATE_KEY, run=run, must_print=DIGEST_LINKS, replacing=failed.get(user.pk),
+                day=day, values=lambda: {
                     "count": len(listed),
                     "more": len(listed) - len(shown),
                     "questions": [

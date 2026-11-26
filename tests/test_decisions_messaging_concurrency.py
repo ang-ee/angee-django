@@ -17,6 +17,7 @@ from angee.decisions_messaging.testing.models import DecisionNotice
 from angee.messaging.testing.models import Message, Recipient
 from tests.conftest import vault_for
 from tests.lock_waits import submit, wait_for_lock
+from tests.test_messaging_compose import MAILERS
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -30,7 +31,7 @@ READ = "tests.decisions_messaging.race.read"
 def race(settings: Any) -> SimpleNamespace:
     """One question whose only decider is its assignee, with system mail on an in-memory transport."""
 
-    settings.MAILERS = {"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}}
+    settings.MAILERS = MAILERS
     settings.DEFAULT_FROM_EMAIL = "Angee <noreply@example.test>"
     settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
     install_decision_mail()
@@ -81,3 +82,39 @@ def test_a_notice_another_run_gave_up_leaves_this_run_to_mail(race: Any) -> None
     assert contend(race, holder_commits=False) == 1
     notices, messages = mailed_to(race.reviewer)
     assert len(notices) == 1 and notices == messages
+
+
+def resend_against(race: Any, *, holder_commits: bool) -> int:
+    """Hold the reviewer's failed notice re-pointed, uncommitted, while another run re-sends; return what it mailed."""
+
+    assert DecisionNotice.objects.mail_decision(race.question.pk, occasion="asked") == 1
+    with system_context(reason=READ):
+        notice = DecisionNotice.objects.get(user=race.reviewer)
+        Message._base_manager.filter(pk=notice.message_id).update(status=Message.MessageStatus.FAILED)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            with system_context(reason="tests.decisions_messaging.race.holder"):
+                # Another run's re-send, standing in as an emptied message: the notice no longer holds the failure.
+                DecisionNotice._base_manager.filter(pk=notice.pk).owner_update(message=None)
+            contender, pid = submit(
+                pool, lambda: DecisionNotice.objects.mail_decision(race.question.pk, occasion="asked"),
+            )
+            wait_for_lock(pid, contender)
+            if not holder_commits:
+                transaction.set_rollback(True)
+        return contender.result(timeout=60)
+
+
+def test_a_failed_notice_another_run_re_sent_first_keeps_its_mail_and_this_runs_rolls_back(race: Any) -> None:
+    assert resend_against(race, holder_commits=True) == 0
+    notices, _messages = mailed_to(race.reviewer)
+    assert notices == [None]
+    with system_context(reason=READ):
+        assert Message._base_manager.count() == 1, "only the first, failed mail was ever recorded"
+
+
+def test_a_failed_notice_another_run_left_is_re_sent_once_by_this_run(race: Any) -> None:
+    assert resend_against(race, holder_commits=False) == 1
+    notices, _messages = mailed_to(race.reviewer)
+    with system_context(reason=READ):
+        assert Message._base_manager.count() == 2 and notices == [Message._base_manager.latest("pk").pk]

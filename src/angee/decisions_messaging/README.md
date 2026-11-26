@@ -96,11 +96,16 @@ and `decisions_messaging.decision_digest`. Each includes the part
 one "Open the decision" button. A deployment overrides any of them as it overrides
 any shipped row.
 
-The button links the question's page in the app: `ANGEE_PUBLIC_ORIGIN` joined with
-`Decision.get_absolute_url()`. The person signs in if needed and decides there; no
-link in a mail decides anything, and none carries a token. The values a mail is
-written from are kept with its message, which administrators read, so they hold
-nothing secret.
+The button links the question's page in the app: the deployment's public origin
+(`angee.base.origins.configured_public_origin`) joined with
+`Decision.get_absolute_url()`. Every send names it as what the mail must show
+(`send_as_system`'s `must_print`): `question.url` in an asked or reminder mail, and
+`questions.*.url` in a digest, which lists a question only with its link and is not
+sent for an empty list. The person signs in if needed and decides there; no link in
+a mail decides anything, and none carries a token. The values a mail is written from
+are kept with its message, which administrators read, so they hold nothing secret.
+The frames that hold a link or an address hide every local from an error report
+(a bare `sensitive_variables()`), and no error this addon raises names either.
 
 ## Mailed once
 
@@ -110,28 +115,51 @@ both share `MailNotice`, whose manager writes a notice once
 (`MailNoticeManager.record`).
 Each person is mailed in a durable transaction of their own: the send and its notice
 together, never one transaction around many sends, so the mail verbs run outside any
-transaction, as their tasks do. A notice that exists means the
-mail is not sent again, so a retried task mails nobody twice; when two runs race, the
-notice's unique key decides and the loser's mail rolls back with its notice. The
-message is messaging's to keep or purge: purging it empties the notice's link and
-keeps the notice. The ledgers are internal: no public id, no GraphQL surface and no
-REBAC resource type, since nothing outside this addon reads them; who was mailed is
-also on messaging's system channel, which administrators read.
+transaction, as their tasks do. A notice whose mail stands means it is not sent
+again, so a retried task mails nobody twice; when two runs race, the notice's unique
+key decides and the loser's mail rolls back with its notice. What a notice's mail
+came to is the delivery state messaging recorded for its message:
+
+- **Queued or sent:** it stands.
+- **Failed:** it reached nobody. Messaging never retries system mail, so the
+  occasion's next run mails the person again and points their one notice at the new
+  message; there is never a second notice. Of two runs re-sending at once, the
+  notice's compare on the message it held decides, and the loser's mail rolls back.
+  A failed asked or reminder mail is re-sent only when that occasion runs again (a
+  re-run of its task, or a retry the task makes for another person's refusal); the
+  daily digest is the backstop, since its overlap rule counts only mails that stand,
+  so it lists that question as never mailed. A digest notice whose mail failed
+  leaves that day open, and the day's next run sends it again.
+- **Uncertain:** it may have been delivered, so this addon never sends it again and
+  never surfaces it. Telling administrators once about a system mail whose delivery
+  is uncertain is messaging's open item, for every sender of system mail; this addon
+  has no "send again" act, so sending one again is a person's deliberate act outside
+  it.
+
+The message is messaging's to keep or purge: purging it empties the notice's link and
+keeps the notice, which then stands. The ledgers are internal: no public id, no
+GraphQL surface and no REBAC resource type, since nothing outside this addon reads
+them; who was mailed is also on messaging's system channel, which administrators
+read.
 
 ## When a mail cannot be sent
 
-- **A person's address is refused** (none, or one messaging refuses before or at the
-  send, keyed `to`): that person is skipped and counted in the task's log, and the
-  others still go.
+- **A person's address is refused** (none, or one system mail refuses:
+  `Message.objects.clean_system_recipient` before the send, or the send keyed `to`):
+  that person is skipped and counted in the task's log, and the others still go.
 - **One person's mail fails** (a deployment's override that refuses to render in their
   language, a value too large for the renderer): it is logged by their primary key
   and the refusal's code and counted, the others still go, and the task fails once
   everyone was tried, so the failure stays visible.
-- **The deployment cannot mail at all.** Without `ANGEE_PUBLIC_ORIGIN`, or without a
-  shipped row, a task refuses before anyone is mailed (`ImproperlyConfigured`,
-  `DoesNotExist`). When system mail is not configured, each person's mail renders and
-  its send is refused; it is counted, nobody is mailed and the task then fails. These
-  fail their run once, in the worker's log, and are not retried. A system channel
+- **A template row cannot show what the mail needs** (`value_not_printed`, or a link
+  it cannot carry, `value_not_linkable`): that is the row's or the deployment's
+  fault, never a person's skip. The others are still mailed, and the run fails once
+  with `DecisionMailUnsendable`, worded for an administrator.
+- **The deployment cannot mail at all.** Each run refuses before anyone is mailed,
+  in order: no public origin (`PublicOriginUnavailable`), system mail not configured
+  (`Channel.objects.system_mail_configured()`, as `DecisionMailUnsendable`), and a
+  missing shipped row (`DoesNotExist`). These fail
+  their run once, in the worker's log, and are not retried. A system channel
   that is missing or not connected (`SYSTEM_CHANNEL_MISSING`,
   `OUTBOUND_EMAIL_CHANNEL_MISSING`) is refused the same way per person, but an
   operator can restore it while the task waits, so the task is retried 5, 15 and 45
