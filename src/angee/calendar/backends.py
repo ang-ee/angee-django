@@ -111,7 +111,7 @@ class ParsedAttendee:
     """One invited address of a parsed event, with its role and RSVP in the calendar's vocabulary.
 
     ``address`` is as the source gave it; dedup and the projection read the handle
-    owner's normalized form (:func:`normalized_address`).
+    owner's person-matching key (``Handle.normalize_value``).
     """
 
     address: str
@@ -216,23 +216,22 @@ def organizer_first(
     )
 
 
-def normalized_address(address: str) -> str:
-    """Return the ``parties.Handle`` owner's normalized form of an attendee address, ``""`` for none."""
-
-    handles: Any = apps.get_model("parties", "Handle")
-    return str(handles.normalize_value(handles.Platform.for_value(address), address) or "")
-
-
 def attendee_identity(handle: Any | None, address: str) -> str:
     """Return what an attendee compares on: the handle it lands on, or its address before that handle exists.
 
     ``handle`` is the canonical handle ``HandleManager.find_identity`` finds for the
     address (``CalendarEventManager.attendee_handles``). A stored attendee row
     compares on its handle the same way, so a merged pair of handles is one
-    attendee on both sides.
+    attendee on both sides. Before the handle exists, the address compares by the
+    handle owner's person-matching key (``Handle.normalize_value``), so a
+    provider's two aliases are one attendee, as before; whether they should be
+    two is open for a ruling.
     """
 
-    return str(handle.pk) if handle is not None else f"new:{normalized_address(address)}"
+    if handle is not None:
+        return str(handle.pk)
+    handles: Any = apps.get_model("parties", "Handle")
+    return f"new:{handles.normalize_value(handles.Platform.for_value(address), address)}"
 
 
 def event_columns(event: Any, fields: Sequence[str] = PROJECTED_FIELDS) -> dict[str, Any]:
