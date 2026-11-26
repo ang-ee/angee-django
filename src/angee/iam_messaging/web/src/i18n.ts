@@ -17,6 +17,8 @@ export const enIamMessagingMessages: Record<string, string> = {
   "signInLink.refused": "It may be used, expired or replaced by a newer one. Open the latest link from your email, ask for a new one, or sign in with your password.",
   "signInLink.unreachableTitle": "Could not reach the server",
   "signInLink.unreachable": "Your link may still work. Check your connection and try again.",
+  "signInLink.failedTitle": "Could not sign in",
+  "signInLink.failed": "The server could not complete the sign-in, and your link may still work. Try again, or sign in with your password.",
   "signInLink.retry": "Try again",
   "signInLink.signedInAs": "You are signed in as {name}.",
   "signInLink.proceed": "Continue",

@@ -3,7 +3,7 @@ import { ACCOUNT_ACTION_FIELDS } from "@angee/iam";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { createElement } from "react";
 
-import { SendSignInLinkRecordAction } from "./account-actions";
+import { IssueSignInLinkRecordAction } from "./account-actions";
 import { enIamMessagingMessages } from "./i18n";
 
 // The public route a sign-in link opens; the server builds links to this same
@@ -25,10 +25,10 @@ const iamMessaging = defineBaseAddon({
   containers: {
     // IAM's account actions on every saved user form, this one offered by the row's `account_actions`.
     "iam.User#actions-menu": {
-      "iam_messaging.send-sign-in-link": {
+      "iam_messaging.issue-sign-in-link": {
         sequence: 9,
         requiredFields: ACCOUNT_ACTION_FIELDS,
-        content: createElement(SendSignInLinkRecordAction),
+        content: createElement(IssueSignInLinkRecordAction),
       },
     },
   },

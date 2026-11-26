@@ -20,8 +20,8 @@ describe("iam_messaging addon manifest", () => {
 
   test("offers Send sign-in link among IAM's account actions, read from the row's projection", () => {
     const actions = iamMessaging.containers?.["iam.User#actions-menu"] as Record<string, { requiredFields?: readonly string[] }>;
-    expect(Object.keys(actions)).toEqual(["iam_messaging.send-sign-in-link"]);
-    expect(actions["iam_messaging.send-sign-in-link"]?.requiredFields).toEqual(["account_actions", "revision", "username"]);
+    expect(Object.keys(actions)).toEqual(["iam_messaging.issue-sign-in-link"]);
+    expect(actions["iam_messaging.issue-sign-in-link"]?.requiredFields).toEqual(["account_actions", "revision", "username"]);
     expect(iam.containers?.["iam.User#actions-menu"]).not.toHaveProperty("iam.issue-sign-in-link");
   });
 });

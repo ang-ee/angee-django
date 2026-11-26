@@ -9,7 +9,7 @@ import { useIamMessagingT } from "./i18n";
 export const ISSUE_SIGN_IN_LINK = "issue_sign_in_link";
 
 /** Email a person a single-use sign-in link; the link goes to their email and is never shown here. */
-export function useSendSignInLinkAction(): ActionDescriptor {
+export function useIssueSignInLinkAction(): ActionDescriptor {
   const t = useIamMessagingT();
   const [issueLink] = useActionResultMutation<ActionFieldName>("issue_user_sign_in_link", { invalidateModels: [USER_MODEL] });
   const run = useRecordAction((id) => issueLink(id));
@@ -21,7 +21,7 @@ export function useSendSignInLinkAction(): ActionDescriptor {
 }
 
 /** `iam.User#actions-menu` child: email the open account a sign-in link. */
-export function SendSignInLinkRecordAction(): ReactElement | null {
-  const action = useSendSignInLinkAction();
+export function IssueSignInLinkRecordAction(): ReactElement | null {
+  const action = useIssueSignInLinkAction();
   return <AccountActionBar actions={[action]} />;
 }

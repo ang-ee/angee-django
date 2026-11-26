@@ -2,7 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { useSendSignInLinkAction } from "./account-actions";
+import { useIssueSignInLinkAction } from "./account-actions";
 
 const mocks = vi.hoisted(() => ({ issue: vi.fn(), options: vi.fn() }));
 vi.mock("@angee/ui", async (original) => ({
@@ -18,16 +18,16 @@ const record = { id: "user-1", revision: 4, account_actions: ["rename", "issue_s
 
 describe("Send sign-in link follows the row's server projection", () => {
   test("is offered only where the projection names the action, and confirms first", () => {
-    const { result } = renderHook(useSendSignInLinkAction);
+    const { result } = renderHook(useIssueSignInLinkAction);
     expect(result.current.visibleWhen?.(record)).toBe(true);
     expect(result.current.visibleWhen?.({ ...record, account_actions: ["rename"] })).toBe(false);
     expect(result.current.visibleWhen?.({ id: "user-2" })).toBe(false);
-    expect(result.current.confirm?.title).toBe("Send a sign-in link?");
+    expect(result.current.confirm).toMatchObject({ title: "Send a sign-in link?" });
   });
 
   test("emails the open account through the console mutation, never returning the link", async () => {
     mocks.issue.mockResolvedValue({ ok: true, message: "Sign-in link sent to the account's email." });
-    const { result } = renderHook(useSendSignInLinkAction);
+    const { result } = renderHook(useIssueSignInLinkAction);
     expect(mocks.options).toHaveBeenCalledWith("issue_user_sign_in_link", { invalidateModels: ["iam.User"] });
     await act(async () => {
       await result.current.run?.({ record, values: {}, refresh: vi.fn(), update: vi.fn(), prompt: vi.fn() });
