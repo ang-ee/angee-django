@@ -108,7 +108,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
    that entry's existing rows once, since their hashes change. If an adapter's owner verb does not treat an
    omitted column as keeping what is stored (it publishes the stored value or applies a default instead) → name
    it, with the reason, in the adapter's `never_create_only` (`AngeeResource` in `loader.py`; `FormResource`,
-   `WorkflowDefinitionResource`), and the load refuses an entry listing it.
+   `WorkflowDefinitionResource`); the load refuses an entry listing it before any row of that entry, and rolls back.
    If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
    in a tier at or below yours (`EntryGraph.ordered` in `entries.py`). **Owner rule:** the manifest selects files
    and keys; the model owns uniqueness, so no field is adoptable without it

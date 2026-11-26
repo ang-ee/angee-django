@@ -34,9 +34,9 @@ live in code docstrings.
   historical queryset's `versions_of` and `dated_versions_of` (an MTI descendant's,
   dated), the builders the verb fetches the restored state with and the history page's
   deltas read, and a merge's unchanged survivor through `ModelHistory.merge_survivors`.
-  `revert_changeset` refuses a changeset whose complete
-  write boundary is not the record's first, with its message as before, then the
-  verb's refusal in band, now worded for a person and naming no model label or primary
+  `revert_changeset` first refuses a changeset whose complete write boundary is not
+  the record's, with its message as before, then answers with the verb's refusal in
+  band, now worded for a person and naming no model label or primary
   key: "A later change to this record prevents this revert." (code `later_change`) or
   "The state before this change is no longer recorded, so it cannot be reverted."
   (code `earlier_state_unavailable`); the label and changeset go to the
@@ -58,8 +58,9 @@ live in code docstrings.
   resource adapter names, in `AngeeResource.never_create_only`, the columns whose
   omission its owner verb does not treat as keeping what is stored (it publishes the
   stored value or applies a default instead), each with why; a subclass adds to its
-  parents'. The load refuses an entry listing one under `create_only` before any
-  row, and rolls back, as for any entry configuration error. Web forms' refusal of
+  parents'. The load refuses an entry listing one under `create_only`, by field or
+  column name, before any row of that entry, and rolls back, as for any entry
+  configuration error. Web forms' refusal of
   `publish` moved there with its message. A workflow entry may no longer list `draft`
   or `publish`: under `create_only: [draft]` a changed row (a rename, or the entry
   newly gaining it) published the draft staff held, with no publisher, so a run as

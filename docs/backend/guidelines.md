@@ -1742,7 +1742,8 @@ retains its native routing contract.
   verb does not treat as keeping what is stored is never create-only: under `create_only`
   a changed row omits it, and such a verb publishes the stored value or applies a default
   instead. The adapter names it in `AngeeResource.never_create_only`, which adds to its
-  parents', and the load refuses an entry listing it.
+  parents', and the load refuses an entry listing it, by field or column name, before any
+  row of that entry, and rolls back.
 - **Demo resource tiers are additive across installed addons.** A deployment that
   needs demo rows but not one permissive seed must exclude that exact entry with
   `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;

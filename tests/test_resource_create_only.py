@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from import_export import fields
 from rebac import system_context
 
 from angee.resources.entries import ResourceEntry
@@ -28,6 +29,13 @@ class DescribedVendorResource(AngeeResource):
     """A vendor adapter whose owner verb writes ``description`` on every changed row."""
 
     never_create_only = {"description": "description is written on every changed row."}
+
+
+class SummarizedVendorResource(AngeeResource):
+    """An adapter whose field and column names differ: either spelling in ``create_only`` names the column."""
+
+    summary = fields.Field(attribute="description", column_name="summary_text")
+    never_create_only = {"summary": "summary is written on every changed row."}
 
 
 class BrandedVendorResource(DescribedVendorResource):
@@ -191,6 +199,18 @@ def test_an_entry_listing_a_column_its_adapter_applies_on_every_changed_row_is_r
     with system_context(reason="test refused vendor load"):
         assert not Vendor.objects.filter(slug="shipped-vendor").exists()
         assert not Resource.objects.filter(source_addon=addon.name).exists()
+
+
+@pytest.mark.parametrize("spelling", ["summary", "summary_text"])
+def test_a_refused_column_is_refused_by_its_field_name_and_by_its_column_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str,
+) -> None:
+    monkeypatch.setattr(Vendor, "resource_class", SummarizedVendorResource)
+
+    with pytest.raises(ResourceLoadError) as refused:
+        Resource.objects.load_addons((_vendor_addon(tmp_path, [spelling]),), tiers=[Resource.Tier.MASTER])
+
+    assert str(refused.value).endswith(": summary is written on every changed row.")
 
 
 def test_an_unknown_create_only_name_keeps_its_error_before_a_column_its_adapter_refuses(
