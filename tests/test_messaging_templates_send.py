@@ -310,10 +310,15 @@ def test_an_override_that_no_longer_prints_the_value_its_sender_needs_is_refused
     _mail("Hello. [Sign in]({{ link }})", LINKED, key="tests.signin", is_baseline=True)
     override = _mail("Hello, and welcome.", LINKED, key="tests.signin")
     undeclared = _mail("Hello, and welcome.", {}, key="tests.signin_bare")
-    for row, expected in ((override, 2), (undeclared, 1)):
+    for row, expected in (
+        (override, [f"The {body} body does not print link, which this mail is sent for."
+                    for body in ("HTML", "plain-text")]),
+        (undeclared, ["This message template does not declare link, so neither body prints it."]),
+    ):
         with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
             _send(row, LINK, must_print=["link"])
-        assert [item.code for item in refusal.value.error_list] == ["value_not_printed"] * expected, row.key
+        assert [(item.code, item.message) for item in refusal.value.error_list] == [
+            ("value_not_printed", message) for message in expected], row.key
         assert (callbacks, sent) == ([], [])
     assert "sign-in/once" not in _stored(_send(override, LINK))[1]
     shipped = _mail("Hello. [Sign in]({{ link }})", LINKED, key="tests.signin_shipped")
@@ -353,9 +358,9 @@ def test_a_required_value_must_be_printed_by_each_body_through_any_include(
         return
     with _refused(ValidationError) as refusal:
         _send(row, {"link": values["link"]}, must_print=must_print)
-    assert [item.code for item in refusal.value.error_list] == ["value_not_printed"] * len(unprinted)
-    assert [body for body in ("HTML", "plain-text") if any(f"The {body} body" in item.message
-                                                          for item in refusal.value.error_list)] == unprinted
+    assert [(item.code, item.message) for item in refusal.value.error_list] == [
+        ("value_not_printed", f"The {body} body does not print {must_print[0]}, which this mail is sent for.")
+        for body in unprinted]
 
 
 SIGN_IN = "https://app.example.test/sign-in#token=a&b"
