@@ -5,6 +5,7 @@
 import { createElement, useEffect, type ReactElement, type ReactNode } from "react";
 import { waitFor } from "@testing-library/react";
 import { useBreadcrumb as useRefineBreadcrumb } from "@refinedev/core";
+import { useRouter } from "@tanstack/react-router";
 import type { Root } from "react-dom/client";
 import {
   ChatterProvider,
@@ -34,9 +35,15 @@ import { compileContainers } from "./containers";
 import { CORE_CONTAINERS } from "./core-containers";
 import type { BaseAddonRoute } from "./define-base-addon";
 
-export interface ShellPageTestProvidersProps extends Pick<AppShellTestProvidersProps, "router" | "onRouter"> {
+export interface ShellPageTestProvidersProps extends Pick<AppShellTestProvidersProps, "onRouter"> {
   children: ReactNode;
   runtime?: Partial<AppRuntime>;
+  /**
+   * The memory router the page renders under, as every shell page renders under the app's router:
+   * by default one at `/`, and `{ initialEntries }` places it. Under a router the test or story
+   * brings around the providers, the page renders under that one instead.
+   */
+  router?: AppShellTestProvidersProps["router"];
 }
 
 /** The framework's containers with their own children, as a composed app has them before any addon. */
@@ -44,19 +51,25 @@ const FRAMEWORK_CONTAINERS = compileContainers([], CORE_CONTAINERS);
 
 /**
  * A shell page's providers for a test: the app shell's (`AppShellTestProviders`: the runtime with
- * the framework's icons and containers, `ModalsHost`, and with `router` a memory router), then the
- * primary pane and the chatter a page publishes to.
+ * the framework's icons and containers, `ModalsHost`, and a memory router unless one is already
+ * above), then the primary pane and the chatter a page publishes to. Entries asked for inside a
+ * router of the test's own would be a second router, so they are refused.
  */
 export function ShellPageTestProviders({
   children,
   runtime = {},
-  router,
+  router = true,
   onRouter,
 }: ShellPageTestProvidersProps): ReactElement {
+  // The router around these providers, if the test brought one (null outside any).
+  const outer: unknown = useRouter({ warn: false });
+  if (outer && typeof router === "object") {
+    throw new Error("ShellPageTestProviders was given initialEntries inside a router of the test's own: place that router instead.");
+  }
   return (
     <AppShellTestProviders
       runtime={{ icons: baseIcons, containers: FRAMEWORK_CONTAINERS, ...runtime }}
-      router={router}
+      router={outer ? undefined : router}
       onRouter={onRouter}
     >
       <PrimaryPaneProvider>

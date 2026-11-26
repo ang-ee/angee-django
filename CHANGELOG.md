@@ -44,8 +44,9 @@ live in code docstrings.
   **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`; an
   open form dialog renders under the router and `ModalsHost` and says so when
   one is missing; `createUiTestProviders` and `ShellPageTestProviders` render
-  one app shell (`AppShellTestProviders`), which provides `ModalsHost` and
-  takes `router`; a keyed dialog's submission drops any assertion of its key,
+  one app shell (`AppShellTestProviders`), which provides `ModalsHost`;
+  `ShellPageTestProviders` renders under a memory router unless one is already
+  above, and `createUiTestProviders` takes `router`; a keyed dialog's submission drops any assertion of its key,
   and a caller that turned a key conflict into an answer rethrows it.
 - `angee.workflows`: a manual start that reuses a request key for a different
   request raises `CreationKeyConflict`, as the other keyed creates do, rather

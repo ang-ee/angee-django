@@ -533,6 +533,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   describes the record (see the shell's regions below). Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
+  `ShellPageTestProviders` renders under a memory router, as a shell page
+  renders under the app's router, unless the test brings its own around it.
 - **The shell has four regions, each with a test.** The left pane is the
   explorer: trees, collection lists in split placement, session rails, smart
   views and the record pager; it changes which record is in the middle and

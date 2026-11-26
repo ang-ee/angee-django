@@ -16,8 +16,7 @@ vi.mock("@angee/ui", async (original) => ({
 vi.mock("@tanstack/react-router", async (original) => ({
   ...await original<typeof import("@tanstack/react-router")>(), useNavigate: () => vi.fn(),
 }));
-// Under a router, as an app page is: a form dialog guards route moves while it holds work.
-const { Provider, clearClients } = createUiTestProviders({ resources: [], router: true });
+const { Provider, clearClients } = createUiTestProviders({ resources: [] });
 afterEach(() => { cleanup(); clearClients(); });
 beforeEach(() => mocks.changePassword.mockReset().mockResolvedValue({ ok: true, message: "Password changed." }));
 

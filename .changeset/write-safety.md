@@ -88,10 +88,15 @@ Upgrade:
   app's router and `ModalsHost`, as every app page provides both, and says so as
   it opens when one is missing. `createUiTestProviders` (`@angee/ui/testing`)
   and `ShellPageTestProviders` (`@angee/app/testing`) render the same app shell,
-  `AppShellTestProviders` (`@angee/ui/testing`): both always provide
-  `ModalsHost`, and `router: true` (or `{ initialEntries }`) renders under a
-  memory router (kept in `routers`; `onRouter` receives it): a test that opens
-  a real dialog passes `router`.
+  `AppShellTestProviders` (`@angee/ui/testing`), which always provides
+  `ModalsHost`. `ShellPageTestProviders` renders under a memory router by
+  default, as every shell page renders under the app's router (`{ initialEntries }`
+  places it; `onRouter` receives it), and under a router a test or story brings
+  around it, it renders that one alone; entries asked for inside such a router
+  are refused.
+  `createUiTestProviders` renders under one when given `router: true` (or
+  `{ initialEntries }`, kept in `routers`): a component test that opens a real
+  dialog passes `router`.
 - A keyed `MutationDialog` submission reads its third argument as a `string`;
   one that asserted it drops the assertion. A caller that turned a
   `CREATION_KEY_CONFLICT` into an answer rethrows it (an
