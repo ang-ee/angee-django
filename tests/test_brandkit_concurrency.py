@@ -1,9 +1,10 @@
 """PostgreSQL interleavings of brand kit writes around the default kit.
 
 A change of default locks every kit first, in key order, so a second change waits
-for the first and then reads its result; a delete and a console write lock the
-same way before their own row. Row locks do nothing on SQLite, so this module runs
-only on PostgreSQL.
+for the first and then reads its result. A console write, a changeset revert, a
+delete and a resource load take the same lock before any kit row, and a save that
+unticks a stored kit judges it under its row lock. Row locks do nothing on SQLite,
+so this module runs only on PostgreSQL.
 """
 
 from collections.abc import Callable

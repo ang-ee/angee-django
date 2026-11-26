@@ -56,12 +56,22 @@ console and the resource loader) keep exactly one default:
 - the default kit cannot be unticked (`BrandKit.clean`) or deleted
   (`BrandKit.delete_blocker`, enforced on every delete path, which locks the row
   first): make another kit the default first;
-- changes of default made at once take turns: each locks every kit, in key
-  order, before it reads the default (`BrandKitManager.lock_default`), and a
-  console write to the default kit and every delete take that lock before their
-  own row, so the second change waits and then takes the default from the first.
-  An empty table has no row to lock: of two first kits saved at once, the second
-  meets the constraint.
+- changes of default made at once take turns: every kit is locked, in key order
+  (`BrandKitManager.lock_default`), before any kit row by a save that can move
+  the default, every console write and changeset revert of a kit
+  (`BrandKit.lock_subject`), every delete (`BrandKit.lock_for_delete`) and a
+  resource load that writes kits, once before its first row (`BrandKitResource`),
+  so the second change waits and then takes the default from the first;
+- a save that marks a stored kit not the default rereads its flag under the
+  kit's row lock and refuses as `BrandKit.clean` does, so an edit cleaned before
+  its kit became the default never leaves no default.
+
+Two writers take kit rows without that lock. A file purge clears the logo of
+every kit that shows the file, under the history capture's row lock, in scan
+order: against a change of default it can deadlock, and one of the two then fails
+with a database error. And an empty table has no row to lock: of two first kits
+created at once, the second fails on the one-default constraint with a database
+error, which a person does not reach because provisioning loads the first kit.
 
 `BrandKit.objects.default()` returns the default kit the actor reads, or `None`:
 before any kit exists, as in a database before its first resource load; after a

@@ -384,11 +384,20 @@ live in code docstrings.
     `clean()` keep one: the first kit saved becomes the default, saving another
     kit as the default takes the flag from the previous one, and the default can
     be neither unticked nor deleted, on any delete path. Changes of default made
-    at once take turns: each locks every kit, in key order, before it reads the
-    default (`BrandKitManager.lock_default`), as a console write to the default
-    kit and a delete do first, so the second waits and then takes the default
-    from the first. A conditional unique constraint refuses a second default
-    written past the save, and the second of two first kits saved at once.
+    at once take turns: every kit is locked, in key order
+    (`BrandKitManager.lock_default`), before any kit row by a save that can move
+    the default, every console write and changeset revert of a kit, every delete,
+    and a resource load that writes kits (once, before its first row), so the
+    second change waits and then takes the default from the first. A save that
+    marks a stored kit not the default rereads its flag under the kit's row lock,
+    so an edit cleaned before its kit became the default is refused, as `clean()`
+    refuses it, instead of leaving no default. Two writers take kit rows without
+    the lock: a file purge that clears kits' logos, which can deadlock with a
+    change of default (one of the two fails with a database error); and the
+    second of two first kits created at once into an empty table, which fails on
+    the conditional unique constraint with a database error (provisioning loads
+    the first kit, so a person does not reach it). The same constraint refuses a
+    second default written past the save.
     `BrandKit.objects.default()` and the console's `default_brand_kit` query
     return it, or `None` before any kit exists, after a write past `save()` and
     `clean()`, and for an actor who reads no kit.

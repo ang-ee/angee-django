@@ -257,13 +257,23 @@ class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
     def lock_default(self) -> None:
         """Lock every kit, in key order: the lock a write takes before it moves or judges the default.
 
-        No one row stands for the default, so every kit row is the lock. A writer
-        takes it before any other kit row (:meth:`demote_defaults`,
-        :meth:`BrandKit.lock_subject`, :meth:`BrandKit.lock_for_delete`), so a
-        second change of default waits for the first and then reads the default it
-        left, and no two writers hold kit rows in different orders. An empty table
-        has no row to lock: two first kits saved at once still meet the one-default
-        constraint.
+        No one row stands for the default, so every kit row is the lock. These
+        writers take it before any kit row, so they take kit rows in one order and a
+        second change of default waits for the first, then reads the default it left:
+        a save that can move the default (:meth:`demote_defaults`); every write that
+        locks its kit before saving it, the console's and a changeset revert's
+        (:meth:`BrandKit.lock_subject`); every delete (:meth:`BrandKit.lock_for_delete`);
+        and a resource load that writes kits, once before its first row
+        (:class:`~angee.brandkit.resources.BrandKitResource`). A save that cannot
+        move the default takes only its own row.
+
+        Two writers take kit rows without it. A file purge clears the logo of every
+        kit that shows the file, one column at a time, and the history capture locks
+        those kits in scan order; against a change of default it can deadlock, and
+        one of the two then fails with a database error. And an empty table has no
+        row to lock: of two first kits created at once, the second fails on the
+        one-default constraint with a database error, which a person does not reach
+        because provisioning loads the first kit.
         """
 
         list(row_lock_queryset(self.model).order_by("pk").values_list("pk", flat=True))
