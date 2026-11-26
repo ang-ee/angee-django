@@ -145,14 +145,11 @@ class TriggerResource(AngeeResource):
     def before_save_instance(self, instance: Any, row: Mapping[str, Any], **kwargs: Any) -> None:
         """Install a new declaration disabled; keep a re-applied one's activation unless its rule changes.
 
-        The stored row is read under the locks ``Trigger.save`` and the operator's
-        verbs take, the workflow's and then the trigger's, so an enable or disable
-        finishes first or waits; a row the load leaves unchanged is never locked.
+        The stored row is read under ``TriggerManager.lock_stored``, the locks ``Trigger.save``
+        and the operator's verbs take, so an enable or disable finishes first or waits; a row
+        the load leaves unchanged is never locked.
         """
-        stored = None
-        if not instance._state.adding:
-            type(instance).objects.lock_grants(instance.workflow_id)
-            stored = type(instance).system_queryset().filter(pk=instance.pk).lock_if_supported(no_key=True).get()
+        stored = None if instance._state.adding else type(instance).objects.lock_stored(instance)
         if stored is not None and not instance.changes_rule_of(stored):
             instance.enabled, instance.disabled_reason = stored.enabled, stored.disabled_reason
         else:

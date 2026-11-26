@@ -337,3 +337,25 @@ def test_a_trigger_row_the_load_leaves_unchanged_is_not_locked_so_the_schedule_t
             go.set()
         assert (loading.result(timeout=30).updated, recorded) == (1, 2)
     assert Trigger.system_queryset().get(pk=schedule.pk).enabled
+
+
+def test_a_writer_holding_the_workflow_then_taking_the_trigger_never_deadlocks_with_a_load(
+    execution, trigger_resource_schema, tmp_path,
+):
+    """A transaction holding the workflow disables the trigger a load re-applies: the load waits at the workflow."""
+    admin, _sent = execution
+    release = InstalledTriggers(tmp_path)
+    release.load()
+    record, _schedule = release.triggers()
+    Trigger.objects.enable(record, actor=admin)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            Trigger.objects.lock_grants(record.workflow_id)
+            loading, pid = submit(pool, lambda: release.load(create_only=("condition",)))
+            wait_for_lock(pid, loading)
+            Trigger.objects.disable(record, actor=admin)
+        assert loading.result(timeout=30).updated == 1
+
+    stored = Trigger.system_queryset().get(pk=record.pk)
+    assert (stored.enabled, bool(stored.granted_targets)) == (False, False)

@@ -1705,11 +1705,11 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate native saves as well as resource writes."""
         with transaction.atomic():
-            if self.pk:
-                type(self).objects.lock_grants(self.workflow_id)
             previous = None
             if not self._state.adding:
-                previous = type(self).system_queryset().filter(pk=self.pk).lock_if_supported(no_key=True).get()
+                previous = type(self).objects.lock_stored(self)
+            elif self.pk:
+                type(self).objects.lock_grants(self.workflow_id)
             self.clean()
             self.workflow.require_access("write", self.actor())
             if not self.enabled:

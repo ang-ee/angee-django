@@ -18,9 +18,11 @@ live in code docstrings.
   configuration changed; enable it again."; a new row still installs disabled. The
   rule's fields are named once, `Trigger.rule_fields`, and `Trigger.changes_rule_of`
   compares them, for `Trigger.clean` and the adapter. The adapter reads the activation
-  it keeps under the re-applied trigger's workflow lock, then its row lock, the order
-  `Trigger.save` and the operator's verbs take, so an operator's enable or disable and
-  the load serialize; a row the load leaves unchanged is never locked. The workflows
+  it keeps through `TriggerManager.lock_stored`, the trigger's committed row under its
+  workflow's lock, then its own: the one place that order is written, which
+  `Trigger.save`, `enable`, `disable` and `revoke_grant` now call too. An operator's
+  enable or disable and the load serialize; a row the load leaves unchanged is never
+  locked. The workflows
   README names the open gap: a changed workflow row installs
   its declared `draft` over a draft staff saved, whatever `publish` says.
   **Upgrade:** at the next load a re-applied trigger an operator enabled stays
