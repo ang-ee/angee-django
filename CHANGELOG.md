@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
+  as its value, are honoured by every relation control a descriptor field
+  renders through. The dialogs' own relation control passed the picker
+  neither the opt-out nor a known option, so a dialog still offered Edit and
+  read a record it had been given. An action's relation argument
+  (`ActionRelationArg`) can declare the opt-out; it still holds a bare id, so
+  its record is read for its label. A registered widget's `field` now carries
+  `relationEdit` (declared on `FieldPresentation`) from a form, a dialog and a
+  line's cell, and the party picker and the calendar picker pass it on.
+  `relationSelectedOption` returns `undefined` when the row's label path reads
+  `undefined`, so a relation value such as `{ id }` is read for its label
+  instead of showing its raw id; a member held as `null` or blank still labels
+  the option by its id. A form spec cannot declare the opt-out.
 - `@angee/ui`, `@angee/refine`, `@angee/app`: **Changed API.** A write from a
   dialog or a composer is safe to retry. `useIdempotencyKeys()` (beside
   `createClientKey`) keeps one idempotency key per draft, named by its scope,
