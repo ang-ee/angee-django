@@ -269,13 +269,15 @@ test("an edited send after a lost one is told the earlier version was sent, and 
   expect(third?.idempotency_key).not.toBe(first?.idempotency_key);
 });
 
-test("a lost Send now, then Send later: the same key lands on the original, unscheduled, and the toast says what it became", async () => {
+test("a lost Send now, then Send later: the hint says the earlier attempt keeps its timing, and the same key lands on the original, unscheduled", async () => {
   const { sends, onSent } = mount({ surface: "new-message", seat: "ana", lose: true });
   const dialog = await openNewMessage();
   address(dialog, word("compose.to"), "client@example.test");
   fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  expect(within(dialog).getByText(word("compose.sendLaterHint"))).toBeTruthy();
   await send(dialog);
   await banner(dialog);
+  expect(await within(dialog).findByText(word("compose.sendLaterKeptHint"))).toBeTruthy();
   fireEvent.click(within(dialog).getByRole("button", { name: word("compose.sendLater") }));
   fireEvent.click(await screen.findByRole("button", { name: "Go to the Next Month" }));
   fireEvent.click((await screen.findAllByRole("button", { name: /15th/ }))[0]!);

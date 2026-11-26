@@ -193,6 +193,7 @@ export const enMessagingMessages: Record<string, string> = {
   "compose.message": "Message",
   "compose.sendLater": "Send later",
   "compose.sendLaterHint": "Only a manager of this channel can cancel a scheduled message.",
+  "compose.sendLaterKeptHint": "Only a manager of this channel can cancel a scheduled message. An earlier attempt that may have been sent keeps the timing it had.",
   "compose.send": "Send",
   "compose.sending": "Sending…",
   "compose.notSent": "Message not sent.",

@@ -67,6 +67,7 @@ export function NewMessageAction({ onSent }: NewMessageActionProps): React.React
   const only = channels?.length === 1 ? channels[0] : undefined;
   const compose = useComposeMessage();
   const state = useIdempotencyKeyState(NEW_EMAIL_SCOPE);
+  const uncertain = mayAlreadyBeSent(state);
   const fields = React.useMemo<readonly DescriptorField[]>(() => [
     {
       name: "channel", label: t("compose.channel"), description: t("compose.channelHint"),
@@ -81,8 +82,10 @@ export function NewMessageAction({ onSent }: NewMessageActionProps): React.React
     { name: "bcc", label: t("compose.bcc"), widget: "tagInput" },
     { name: "subject", label: t("compose.subject"), widget: "text" },
     { name: "text", label: t("compose.message"), widget: "textarea", required: true },
-    { name: "scheduled_at", label: t("compose.sendLater"), widget: "datetime", description: t("compose.sendLaterHint") },
-  ], [limit, only, t]);
+    // A resend of an attempt that may have been written replays it as it was, its timing included.
+    { name: "scheduled_at", label: t("compose.sendLater"), widget: "datetime",
+      description: t(uncertain ? "compose.sendLaterKeptHint" : "compose.sendLaterHint") },
+  ], [limit, only, t, uncertain]);
   const initialValues = React.useMemo(() => (only ? { channel: only.id } : undefined), [only]);
   return (
     <MutationDialog
@@ -90,7 +93,7 @@ export function NewMessageAction({ onSent }: NewMessageActionProps): React.React
         <Button size="sm" variant="secondary"><Glyph decorative name="send" />{t("compose.newMessage")}</Button>
       ) : undefined}
       title={t("compose.newMessage")}
-      description={<span role="status">{mayAlreadyBeSent(state) ? t("compose.mayAlreadyBeSent") : null}</span>}
+      description={<span role="status">{uncertain ? t("compose.mayAlreadyBeSent") : null}</span>}
       fields={fields}
       initialValues={initialValues}
       submitLabel={t("compose.send")}
