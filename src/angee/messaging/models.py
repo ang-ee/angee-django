@@ -1386,7 +1386,8 @@ class Message(
         with ``actor``'s access). A ``Reply-To`` that names no address is refused
         (``reply_to``, ``reply_to_invalid``) rather than answered at its sender,
         which may be a relay; only a message with no ``Reply-To`` is answered at
-        its sender (``parent``, ``reply_unaddressed`` when it has none). A
+        its sender (``parent``, ``reply_unaddressed`` when it has none, or one the
+        handle owner's predicate does not take as an address). A
         ``Reply-To`` naming more than ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses
         is refused (``reply_to``, ``too_many``), as a typed list of as many is. Any other
         kind is answered by its transport's own sender: the envelope is empty.
@@ -1410,7 +1411,8 @@ class Message(
             raise ValidationError({"reply_to": ValidationError(
                 "The message's Reply-To names no address to answer.", code="reply_to_invalid",
             )})
-        if not addresses and self.sender_id is None:
+        if not addresses and (self.sender is None or not Handle.is_email_address(self.sender.value)):
+            # The sender an answer falls back to is checked as a Reply-To address is.
             raise ValidationError({"parent": ValidationError(
                 "An email answer needs a Reply-To or a sender to address.", code="reply_unaddressed",
             )})
@@ -1471,19 +1473,30 @@ class Message(
     def delete_error(self) -> str | None:
         """Only comments may be deleted; notes and automatic messages are retained."""
 
-        return self._retained_error("deleted")
+        if self.message_type != self.MessageKind.COMMENT:
+            return "Only comment messages can be deleted."
+        return None
 
     def trash_error(self) -> str | None:
-        """Only comments may be trashed; notes and automatic messages stay on record."""
+        """Only comments and received messages may be trashed; sent mail and system notes stay on record.
 
-        return self._retained_error("removed")
+        Trash is a record moderator's verb, asked on the record's own thread
+        (``ThreadedModelMixin.message_trash``, the chatter's ``can_trash``). A
+        message received there came from outside, whoever sent it (an answer that
+        its threading headers placed on the chatter, or anything mailed with a
+        chatter mail's Message-ID), so its moderator may take it off as a comment.
+        A record's chatter thread has no channel, nor has one a record merge folded
+        in: a message whose own thread has one is mail in a mailbox's conversation
+        that an earlier version merged into the record, and stays its owner's.
+        """
 
-    def _retained_error(self, verb: str) -> str | None:
-        """Return why this message is a retained record that no removal verb may take."""
-
-        if self.message_type != self.MessageKind.COMMENT:
-            return f"Only comment messages can be {verb}."
-        return None
+        if self.message_type == self.MessageKind.COMMENT:
+            return None
+        if self.thread_id is not None and cast(Thread, self.thread).channel_id is not None:
+            return "Mail in its owner's own mailbox conversation stays theirs to remove."
+        if self.direction == self.Direction.INBOUND:
+            return None
+        return "Only comments and received messages can be removed."
 
     def can_trash(self, *, moderate_access: bool) -> bool:
         """Return whether a record moderator may move this comment to the trash."""

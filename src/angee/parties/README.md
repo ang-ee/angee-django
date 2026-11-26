@@ -486,7 +486,9 @@ written keep the handle they were written to. A system fold (`reidentify`
 folding an `@lid` into its number) merges any two handles on one platform. The
 merge writes the redirect before it resolves both handles' parties, so a contact
 administrator, who writes a handle only through the party it reaches, completes
-it.
+it. That merge leaves the merged handle on no contact, so the administrator
+cannot revert it: a platform administrator can, and so can the handles' creator
+when the contact is also theirs to write.
 
 A handle's ingestion keys, `platform`, `value` and `external_id`, are written
 once (`Handle.immutable_fields`, through the foundation's `ImmutableFieldsMixin`).

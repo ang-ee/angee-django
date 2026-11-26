@@ -22,7 +22,7 @@ from django.utils import timezone
 from hypothesis import example, given
 from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import PermissionAuditEvent
 
 from angee.jobs.enqueue import celery_app
@@ -37,11 +37,10 @@ from angee.messaging.backends import (
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.email import header_text
-from angee.messaging.managers import MessageManager, _preview
+from angee.messaging.managers import _preview
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.messaging_integrate_imap.parser import parse_message
-from angee.provenance import context as provenance_context
 from angee.provenance.context import changeset, changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.chatterdemo.models import ChatterDoc
@@ -347,6 +346,105 @@ def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, s
         assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
 
 
+def test_mail_in_a_mailbox_thread_an_earlier_version_folded_into_a_record_stays_its_owners(desk: Any) -> None:
+    """The record's moderator removes what was received on the chatter, never a colleague's own mail in its group."""
+
+    owner = desk.owner
+    colleague = make_user("compose-folded-colleague")
+    mailbox = make_integration("compose-folded-mailbox", model=Channel, backend_class="manual", owner=colleague)
+    with system_context(reason="tests.messaging.compose.folded"):
+        doc = ChatterDoc.objects.create(title="Quote 7")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(channel=desk, record=doc, to=["client@example.test"], subject="Quote 7",
+                                   text="Here is the quote.", actor=owner)
+    private = (
+        b"From: friend@example.test\r\nTo: colleague@example.test\r\nMessage-ID: <private@example.test>\r\n"
+        b"Subject: Between us\r\n\r\nPrivate note.\r\n"
+    )
+    planted = (
+        f"From: stranger@evil.test\r\nTo: desk@example.test\r\nMessage-ID: <planted@evil.test>\r\n"
+        f"In-Reply-To: <{sent.external_id}>\r\nSubject: Re: Quote 7\r\n\r\nPay this other account.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.folded"):
+        (mail,) = Message.objects.ingest(
+            [parse_message(private, mailbox="INBOX", uid=1, uidvalidity=1)], channel=mailbox,
+        )
+        (spam,) = Message.objects.ingest([parse_message(planted, mailbox="INBOX", uid=2, uidvalidity=1)], channel=desk)
+        chatter = doc.message_thread(create=False)
+        chatter.fold([Thread._base_manager.get(pk=mail.thread_id)])  # as source identity folded one before
+    with actor_context(owner):
+        record = ChatterDoc.objects.with_actor(owner).get(pk=doc.pk)
+        rows, _count = Message.objects.for_record(record)
+        assert {row.pk: row.can_trash(moderate_access=True) for row in rows if row.pk in (mail.pk, spam.pk)} == {
+            mail.pk: False, spam.pk: True,
+        }
+        with pytest.raises(ValidationError) as retained:
+            record.message_trash(Message.objects.in_record(record, mail.public_id), reason="moderated")
+        record.message_trash(Message.objects.in_record(record, spam.public_id), reason="spam")
+        removed, _count = record.message_removed()
+    assert retained.value.code == "retained"
+    assert [message.pk for message in removed] == [spam.pk]
+    assert not Message._base_manager.get(pk=mail.pk).is_trashed
+
+
+def test_a_stored_message_keeps_the_kind_it_was_ingested_with_through_every_re_sync(desk: Any) -> None:
+    """An answer stored as a comment before email answers landed as email stays one, edited or not."""
+
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.kept_kind"):
+        doc = ChatterDoc.objects.create(title="Invoice 10")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(channel=desk, record=doc, to=["client@example.test"], subject="Invoice 10",
+                                   text="Your invoice.", actor=owner)
+
+    def answer(text: str) -> Any:
+        raw = (
+            f"From: client@example.test\r\nTo: desk@example.test\r\nMessage-ID: <earlier@example.test>\r\n"
+            f"In-Reply-To: <{sent.external_id}>\r\nSubject: Re: Invoice 10\r\n\r\n{text}\r\n"
+        ).encode()
+        return parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)
+
+    with system_context(reason="tests.messaging.compose.kept_kind"):
+        (earlier,) = Message.objects.ingest([answer("Thanks.")], channel=desk)
+        Message._base_manager.filter(pk=earlier.pk).update(message_type="comment")  # as ingested before
+        kinds = []
+        for text in ("Thanks.", "Thanks, corrected."):
+            Message.objects.ingest([answer(text)], channel=desk)
+            kinds.append(Message._base_manager.get(pk=earlier.pk).message_type)
+    assert kinds == ["comment", "comment"]
+
+
+def test_mail_a_stranger_sends_onto_a_records_chatter_is_removable_and_mail_sent_from_it_is_retained(
+    desk: Any,
+) -> None:
+    """Anyone who saw a chatter mail's Message-ID can answer onto the record; its moderator can take it off."""
+
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.planted"):
+        doc = ChatterDoc.objects.create(title="Invoice 9")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(channel=desk, record=doc, to=["client@example.test"], subject="Invoice 9",
+                                   text="Your invoice.", actor=owner)
+    raw = (
+        f"From: stranger@evil.test\r\nTo: desk@example.test\r\nMessage-ID: <planted@evil.test>\r\n"
+        f"In-Reply-To: <{sent.external_id}>\r\nSubject: Re: Invoice 9\r\n\r\nPay this other account.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.planted"):
+        (planted,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        assert planted.thread_id == doc.message_thread(create=False).pk
+    with actor_context(owner):
+        record = ChatterDoc.objects.with_actor(owner).get(pk=doc.pk)
+        assert Message.objects.with_actor(owner).get(pk=planted.pk).can_trash(moderate_access=True)
+        record.message_trash(Message.objects.with_actor(owner).get(pk=planted.pk), reason="spam")
+        with pytest.raises(ValidationError) as retained:
+            record.message_trash(Message.objects.with_actor(owner).get(pk=sent.pk))
+    assert Message._base_manager.get(pk=planted.pk).is_trashed
+    assert not Message._base_manager.get(pk=sent.pk).is_trashed
+    assert (retained.value.code, retained.value.messages) == (
+        "retained", ["Only comments and received messages can be removed."],
+    )
+
+
 def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_so(desk: Any, settings: Any) -> None:
     """Admitted, as inbound mail stores such senders, and refused at delivery with the reason a person can act on."""
 
@@ -424,18 +522,21 @@ def test_a_new_message_is_refused_before_anything_is_written(
         Message.objects.compose(channel=desk, actor=desk.owner, idempotency_key=f"refused-{key}", **values)
 
 
-def test_a_refusal_that_followed_a_write_is_seen_in_what_the_call_executed(
-    desk: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The refusal check reads the statements: a late refusal is caught though its rollback leaves no row."""
+def test_a_refusal_that_followed_a_write_is_seen_in_what_the_call_executed(desk: Any) -> None:
+    """The refusal check reads the statements: a late refusal is caught though its rollback leaves no row.
 
-    def refuse_late(*args: Any, **kwargs: Any) -> None:
-        raise ValidationError({"to": ValidationError("Refused after the writes.", code="invalid")})
+    A keyed call claims its key before present state decides it, so a channel whose
+    configured sender is invalid refuses it after that write.
+    """
 
-    monkeypatch.setattr(MessageManager, "_write_recipients", refuse_late)
+    unsendable = make_integration(
+        "compose-invalid-sender", model=Channel, backend_class="email", config={"from_email": "not an address"},
+    )
     before = _rows()
-    with pytest.raises(AssertionError), _refused(key="to", code="invalid"):
-        Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hi.", actor=desk.owner)
+    with pytest.raises(AssertionError), _refused(key="channel"):
+        Message.objects.compose(
+            channel=unsendable, to=["reader@example.test"], text="Hi.", actor=unsendable.owner, idempotency_key="late",
+        )
     assert _rows() == before
 
 
@@ -766,18 +867,24 @@ def test_a_keyed_compose_replays_its_message_and_refuses_changed_or_discarded_in
     assert _rows() == rows
 
 
-def test_compose_refuses_an_elevated_call_and_runs_as_its_actor_without_a_process_changeset(
-    desk: Any, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No elevation is carried into compose; a request's changeset, with none process-wide, holds its rows."""
+def test_compose_refuses_an_elevated_call(desk: Any) -> None:
+    """No elevation is carried into compose, for its owner or anyone else."""
 
-    owner = desk.owner
-    for actor in (owner, make_user("compose-elevated-outsider")):
+    for actor in (desk.owner, make_user("compose-elevated-outsider")):
         with system_context(reason="tests.messaging.compose.elevated"), _refused(RuntimeError):
             Message.objects.compose(channel=desk, to=["reader@example.test"], text="Hi.", actor=actor,
                                     idempotency_key="elevated")
-    # A request or a task opens its own changeset and publishes none process-wide.
-    monkeypatch.setattr(provenance_context, "_process_boundary", None)
+
+
+@pytest.mark.entrypoint_boundaries
+@pytest.mark.django_db
+def test_compose_runs_as_its_actor_under_a_requests_changeset_with_none_process_wide(settings: Any) -> None:
+    """A request or a task opens its own changeset and publishes none process-wide; that one holds compose's rows."""
+
+    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    with changeset(fresh=True, change_reason="setup"):
+        desk = make_integration("compose-request", model=Channel, backend_class="email", config={"from_email": DESK})
+    owner = desk.owner
     with changeset(fresh=True, change_reason="request"):
         plain = Message.objects.compose(channel=desk, to=["fresh-a@example.test"], text="Hi.", actor=owner)
         keyed = Message.objects.compose(channel=desk, to=["fresh-b@example.test"], text="Hi.", actor=owner,
@@ -906,6 +1013,16 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert to == {"reply-to": ["ann@example.test"], "sender": ["requester@example.test"]}
     unaddressed = _receive(desk, "unaddressed", sender=None)
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
+
+
+@pytest.mark.parametrize("local", ["a\x1bb", "a\u202eb", "a\u2028b", "a\u200bb", "a\x85b"])
+def test_an_answer_to_a_sender_whose_address_is_not_one_is_refused_unwritten(desk: Any, local: str) -> None:
+    """The sender an answer falls back to is checked as a Reply-To is, so no unprintable address reaches the wire."""
+
+    parent = _receive(desk, f"sender-{ord(local[1])}", sender=f"{local}@example.test")
+    assert parent.reply_error(actor=desk.owner).error_dict["parent"][0].code == "reply_unaddressed"
+    with _refused(key="parent", code="reply_unaddressed"):
+        Message.objects.compose(parent=parent, text="Thanks.", actor=desk.owner)
 
 
 def test_an_answer_to_a_reply_to_over_the_recipient_bound_is_refused_and_one_at_it_is_written(desk: Any) -> None:

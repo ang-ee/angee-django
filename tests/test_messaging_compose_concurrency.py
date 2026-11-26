@@ -1,5 +1,6 @@
-"""PostgreSQL: two composes of one keyed message land one message, and a typed name never overwrites a filled one."""
+"""PostgreSQL: composes racing on one claim, one blank handle, or the same handles in opposite orders."""
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -8,7 +9,8 @@ from django.db import connection, transaction
 from django.test import override_settings
 from rebac import system_context, to_subject_ref
 
-from angee.messaging.testing.models import Channel, Handle, Message, Thread
+from angee.messaging.testing.models import Channel, Handle, Message, Recipient, Thread
+from angee.parties.managers import HandleManager
 from angee.provenance.context import changeset_model
 from tests.conftest import make_integration
 from tests.lock_waits import submit, wait_for_lock
@@ -83,3 +85,50 @@ def test_a_typed_name_waits_on_a_fill_of_the_blank_handle_and_keeps_what_it_wrot
             wait_for_lock(pid, contender)
         contender.result(timeout=10)
     assert Handle._base_manager.get(pk=blank.pk).display_name == "Directory Name"
+
+
+@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+def test_two_composes_naming_the_same_addresses_in_opposite_orders_take_their_handles_in_one_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each compose pauses after its first handle until the other has one: taken in entry order, they deadlock.
+
+    The order is the handles' identity key, so it holds between two composes; it cannot order a
+    compose against another writer that takes the same handles.
+    """
+
+    channel: Any = make_integration(
+        "compose-order", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
+    )
+    Message.objects.compose(channel=channel, to=["warm@example.test"], text="Warm.", actor=channel.owner)
+    upsert = HandleManager.upsert
+    first: dict[int, threading.Event] = {}
+    arrived = {"a": threading.Event(), "b": threading.Event()}
+
+    def pausing(self: Any, **fields: Any) -> Any:
+        handle = upsert(self, **fields)
+        mine = first.pop(threading.get_ident(), None)
+        if mine is not None:
+            mine.set()
+            other = next(event for event in arrived.values() if event is not mine)
+            other.wait(timeout=3)
+        return handle
+
+    monkeypatch.setattr(HandleManager, "upsert", pausing)
+
+    def compose(name: str, to: list[str]) -> Any:
+        def run() -> Any:
+            first[threading.get_ident()] = arrived[name]
+            return Message.objects.compose(channel=channel, to=to, text=f"From {name}.", actor=channel.owner)
+        return run
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one, _pid = submit(pool, compose("a", ["Zed <z@example.test>", "Ann <y@example.test>"]))
+        two, _pid = submit(pool, compose("b", ["Ann <y@example.test>", "Zed <z@example.test>"]))
+        messages = [one.result(timeout=30), two.result(timeout=30)]
+    # The recipient rows keep the order each compose named them in.
+    assert [
+        list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("handle__value", flat=True))
+        for message in messages
+    ] == [["z@example.test", "y@example.test"], ["y@example.test", "z@example.test"]]
+    assert Handle._base_manager.filter(value__in=("y@example.test", "z@example.test")).count() == 2
