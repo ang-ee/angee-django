@@ -95,7 +95,7 @@ export function RelationMultiFieldWidget({
   const [search, setSearch] = useState("");
   const [searchText] = useDebounce(search, 250);
   const forms = useRelationForms(relation, create);
-  const quickCreate = useRelationQuickCreate(forms.create);
+  const quickCreate = useRelationQuickCreate(forms.create, fieldName);
   const { options, list } = useRelationPickerSearch(relation, {
     enabled: !readOnly,
     filters,
@@ -150,7 +150,8 @@ export function RelationMultiFieldWidget({
   };
   const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef}
     onSearchChange={setSearch}
-    onCreate={quickCreate ? (query) => void quickCreate(query).then(created) : undefined}
+    // A failed quick create is reported by the data layer's own notice; nothing is left to settle here.
+    onCreate={quickCreate ? (query) => void quickCreate(query).then(created, () => undefined) : undefined}
     onCreateAndEdit={forms.create ? (query) => setDialog({ mode: "create", query }) : undefined} />;
   if (!forms.create) return control;
   const cell = controlProps?.presentation === "cell";

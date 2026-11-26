@@ -51,6 +51,13 @@ const node = testDataResource("tree.Node", {
   }))],
 });
 
+/** A tag-like resource whose create root takes an idempotency key, quick-created from its name. */
+const label = testDataResource("labels.Label", {
+  recordRepresentation: "name",
+  createArguments: [{ name: "idempotency_key", type: "String" }],
+  fields: [id, text("name")],
+});
+
 const partyRelation = { resource: "parties.Party", labelField: "display_name", canCreate: false };
 const tagRelation = { resource: "tags.Tag", labelField: "name", canCreate: true };
 
@@ -254,3 +261,27 @@ test("two relation fields to one resource keep their drafts apart: a lost create
   // A's retry carries A's key: the server replays the record it may have written, so it is written once.
   expect(keys[2]).toBe(keys[0]);
 }, 20_000);
+
+test("a quick create on a keyed root sends its draft's key through the create root the form uses: a retry after a lost answer carries it", async () => {
+  const { create, Wrapper } = harness([...resources, label]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const change = vi.fn();
+  render(<Wrapper><RelationMultiFieldWidget value={[]} onChange={change} fieldName="labels"
+    relation={{ resource: "labels.Label", labelField: "name", canCreate: true }} aria-label="Labels" /></Wrapper>);
+  const quick = async (query: string, count: number) => {
+    fireEvent.input(screen.getByRole("combobox", { name: "Labels" }), { target: { value: query }, inputType: "insertText" });
+    fireEvent.click(await screen.findByRole("option", { name: `Create “${query}”` }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+  };
+  await quick("Urgent", 1);
+  await quick("Urgent", 2);
+  await waitFor(() => expect(change).toHaveBeenCalledOnce());
+  await quick("Later", 3);
+  const calls = create.mock.calls.map(([call]) => call as { resource?: string; meta?: { gqlVariables?: { idempotency_key?: string } } });
+  // The same create the record form saves through: the root's resource, the key as its root argument.
+  expect(calls.map((call) => call.resource)).toEqual(["labels", "labels", "labels"]);
+  const keys = calls.map((call) => call.meta?.gqlVariables?.idempotency_key);
+  expect(keys[0]).toEqual(expect.any(String));
+  expect(keys[1]).toBe(keys[0]);
+  expect(keys[2]).not.toBe(keys[0]);
+});

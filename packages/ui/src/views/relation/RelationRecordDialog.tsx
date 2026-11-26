@@ -13,7 +13,7 @@ import { useCreate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { useUiT } from "../../i18n";
 import { ControlBandProvider } from "../../layouts/ControlBand";
-import { DraftScopeProvider, useDraftScope } from "../../lib/idempotency-key";
+import { DraftScopeProvider, useDraftScope, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { modelDisplayLabel } from "../../lib/labels";
 import { Dialog } from "../../ui/dialog";
 import { SegmentedControl } from "../../ui/toggle-group";
@@ -70,13 +70,20 @@ const QUICK_CREATE_FIELDS = refineFieldsFromPaths(["id"]);
  * Create a related record from its name alone, Odoo's "Create “name”": offered for a
  * single-kind create whose model requires nothing on create beyond the field the typed
  * query prefills. The record is created at once through the create root the create form
- * saves through, and its public id returned; anything more opens the create form.
+ * saves through, and its public id returned; anything more opens the create form. A root
+ * that takes an idempotency key gets the draft's, as the create form's does: the quick
+ * create of `fieldName` is one draft (`relation:<field>`), so a retry after a lost answer
+ * is written once.
  */
 export function useRelationQuickCreate(
   create: RelationCreateConfig | undefined,
+  fieldName?: string,
 ): ((query: string) => Promise<string | undefined>) | undefined {
   const metadata = useModelMetadata(create?.resource ?? "");
   const resource = metadata?.resource ?? null;
+  const keys = useIdempotencyKeys();
+  const keyed = Boolean(resource?.createArguments?.some(({ name }) => name === "idempotency_key"));
+  const draftScope = useDraftScope(`${fieldName ? `relation:${fieldName}` : "relation"}/record.quick-create:${resource?.schemaName ?? "default"}:${create?.resource ?? ""}`);
   const mutation = useCreate<BaseRecord, HttpError>({
     resource: refineResourceName(resource),
     dataProviderName: resource?.schemaName,
@@ -90,9 +97,14 @@ export function useRelationQuickCreate(
   const { mutateAsync } = mutation;
   const defaultValues = create?.defaultValues;
   const quickCreate = useCallback(async (query: string) => {
-    const result = await mutateAsync({ values: { ...defaultValues, [prefillField]: query } });
+    const values = { ...defaultValues, [prefillField]: query };
+    const result = keyed
+      ? await keys.send(draftScope, (idempotencyKey) => mutateAsync({
+          values, meta: { fields: QUICK_CREATE_FIELDS, gqlVariables: { idempotency_key: idempotencyKey } },
+        }))
+      : await mutateAsync({ values });
     return rowPublicId(result.data as Row) ?? undefined;
-  }, [defaultValues, mutateAsync, prefillField]);
+  }, [defaultValues, draftScope, keyed, keys, mutateAsync, prefillField]);
   return quick ? quickCreate : undefined;
 }
 

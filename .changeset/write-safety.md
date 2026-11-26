@@ -28,7 +28,10 @@ pending write and typed values.
   write may have gone through and that sending again from the page sends it
   once (`formSubmitError`'s `answerLost`; chatter and notes in their own
   words); the dashboards' create and duplicate tell a spent key in their own
-  words.
+  words. The relation picker's quick create ("Create “name”") sits on it too
+  when its create root takes a key, as one draft per relation field, so a
+  retry after a lost answer no longer writes the record twice
+  (`useRelationQuickCreate` takes the field's name).
 - One draft scope belongs to one surface at a time. `useIdempotencyDraftOwner(scope, holder)`
   holds it while the surface is mounted (an open keyed dialog, a composer that
   can post, and every create form, keyed or not), and in development two
