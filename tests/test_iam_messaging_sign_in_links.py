@@ -369,8 +369,8 @@ def test_issue_requires_the_permission_and_an_actor_or_the_system(
         # Messaging's system mail rule decides, before anything is sent, and the account's refusal names no address:
         # the transport carries no address whose part before the @ is outside ASCII (cannot_carry) ...
         ({"email": "jörg@example.com"}, "no valid email address"),
-        # ... and refuses a quoted local part with a space, which Django's own validator admits (invalid).
-        ({"email": '"a b"@example.com'}, "no valid email address"),
+        # ... and refuses a quoted local part holding an escaped space, which Django's own validator admits (invalid).
+        ({"email": '"a\\ b"@example.com'}, "no valid email address"),
     ],
 )
 def test_issue_refuses_ineligible_accounts_and_sends_nothing(deliverable, iam_admin, attrs, refusal):

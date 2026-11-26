@@ -32,7 +32,7 @@ live in code docstrings.
   receive its link is messaging's `Message.objects.clean_system_recipient`, no
   longer Django's `validate_email`: an administrator sees the account's own
   refusal for an address outside ASCII before the @ (as before) and now also for
-  one messaging refuses that Django admits (a quoted local part with a space),
+  one messaging refuses that Django admits (a quoted local part with an escaped space),
   which used to be offered and refused at the send in messaging's words. Every
   entry holding the token hides its locals from an error report (bare
   `sensitive_variables`). The addon now requires `angee-messaging`,
