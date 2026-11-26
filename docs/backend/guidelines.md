@@ -465,25 +465,25 @@ Use these owners instead of maintaining another contract in an addon:
   `migrate`, where a column the pending migrations have yet to add is passed
   over, and the addon that stopped providing a key states the remedy in
   `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
-  read as text; no value the field prepares writes a key its choices do not
-  name (a history copy and a migration's state model write the key their row
-  stored), or a key spelled other than the registry's (except where a model or
-  the GraphQL input normalises it first: an `ImplDefaultsMixin` insert, a
-  GraphQL input), while any other expression (`F`, `Subquery`, `Cast`, `Case`,
-  or a `Value` inside one) is not checked; a lookup forgives what a person or a
-  URL may spell. Resolving the
-  key raises naming the field, the key and the setting. Every Angee GraphQL
+  read as text; nothing writes such a key the row does not already hold (a
+  history copy and a migration's state model write the key their row stored),
+  and no value the field prepares writes a key spelled other than the
+  registry's (except where a model or the GraphQL input normalises it first: an
+  `ImplDefaultsMixin` insert, a GraphQL input), while any other expression
+  (`F`, `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not checked; a
+  lookup forgives what a person or a URL may spell. An update does not
+  validate a key it is not changing
+  ([`ImplClassField.holds`](../../src/angee/base/fields/implementation.py)
+  reads the stored row): the row saves its other fields, the generic GraphQL
+  update and a model form included, and keeps the key and its config. Resolving
+  the key raises naming the field, the key and the setting. Every Angee GraphQL
   schema reads such a key as null on a type's field
   ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
   the console labels "Not registered"; a group's key is not such a field, so a
   list grouped, a board laned or a facet counted by the column fails the whole
   read, masked as an internal error (`strawberry-django-aggregates` refuses a
   group key outside the column's choices: `ChoicesValueNotInEnumError`). A
-  save that leaves the column out keeps the key; a whole-row save (the
-  generic GraphQL update, a model form) is refused under the key's field until
-  a registered implementation is chosen. A `create_only` selector is never
-  chosen again by a save, so such a row saves only without the column, and
-  from the console only its deletion succeeds. `angee.E052` and
+  `create_only` selector is never chosen again by a save. `angee.E052` and
   `ANGEE_IMPL_KEY_REMEDIES` name the rows and the remedy but move none: the
   key resolves again once the addon that registers it is installed, and only a
   write outside the model's save (`QuerySet.update` with a registered key)

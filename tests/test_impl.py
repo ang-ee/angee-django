@@ -7,6 +7,7 @@ import os
 import pickle
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Any, Literal
@@ -41,7 +42,7 @@ from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.provenance.context import changeset
 from angee.provenance.querysets import model_history
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import OAuthClient, VcsBridge, Vendor, create_user, vault_for
+from tests.conftest import OAuthClient, VcsBridge, Vendor, create_user, make_integration, vault_for
 from tests.tables import model_tables, store_column
 
 
@@ -1510,6 +1511,15 @@ def test_a_config_only_save_is_validated_against_the_rows_implementation(registe
     assert VcsBridge._base_manager.get(pk=row.pk).config == stored
 
 
+def _retired_bridge(slug: str) -> Any:
+    """A VCS bridge, a create-only selector's row whose model keeps its loaded keys, whose stored key is retired."""
+
+    bridge = make_integration(slug, model=VcsBridge, backend_class="local")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    with system_context(reason="test.impl.retired.bridge"):
+        return VcsBridge._base_manager.get(pk=bridge.pk)
+
+
 def _retired_backend(slug: str) -> Any:
     """A storage backend row whose stored key no implementation is registered under any more."""
 
@@ -1546,29 +1556,60 @@ def test_a_stored_key_its_choices_no_longer_name_loads_lists_and_filters_as_its_
 
 
 @pytest.mark.django_db
-def test_a_key_its_choices_no_longer_name_is_refused_wherever_the_field_prepares_it() -> None:
-    """Saving, updating, bulk-writing, creating or cleaning with the key is refused; a save leaving it out is not."""
+def test_an_update_keeps_a_key_its_row_holds_and_nothing_writes_one_the_row_does_not_hold() -> None:
+    """A rename saves, whole or partial, and keeps the key; writing one the row does not hold is refused."""
 
     retired = _retired_backend("unwritten")
     backend_model = type(retired)
-    writes = (
-        retired.save,
-        retired.full_clean,
-        lambda: backend_model._base_manager.filter(pk=retired.pk).update(backend_class="also-unknown"),
-        lambda: backend_model._base_manager.bulk_update([retired], ["backend_class"]),
-        lambda: backend_model.objects.create(slug="new", label="New", backend_class="retired"),
-    )
+    rows = backend_model._base_manager.filter(pk=retired.pk)
+
+    def choose(key: str) -> Callable[[], None]:
+        def write() -> None:
+            chosen = backend_model._base_manager.get(pk=retired.pk)
+            chosen.backend_class = key
+            chosen.save()
+        return write
+
+    writes = {
+        "choose another": choose("also-unknown"),
+        "re-spell the held key": choose("RETIRED"),
+        "QuerySet.update": lambda: rows.update(backend_class="also-unknown"),
+        "bulk_update": lambda: backend_model._base_manager.bulk_update([retired], ["backend_class"]),
+        "insert": lambda: backend_model.objects.create(slug="new", label="New", backend_class="retired"),
+    }
     with system_context(reason="test.impl.retired.write"):
-        for write in writes:
+        for path, write in writes.items():
             with pytest.raises(ValidationError) as refused, transaction.atomic():
                 write()
-            assert "backend_class" in refused.value.message_dict
+            assert "backend_class" in refused.value.message_dict, path
         retired.label = "Renamed"
+        retired.full_clean()
+        retired.save()
+        retired.label = "Again"
         retired.save(update_fields=["label"])
 
     stored = backend_model._base_manager.get(pk=retired.pk)
-    assert (stored.label, stored.backend_class) == ("Renamed", "retired")
+    assert (stored.label, stored.backend_class) == ("Again", "retired")
     assert not backend_model._base_manager.filter(slug="new").exists()
+
+
+@pytest.mark.django_db
+def test_a_model_tracking_its_keys_saves_a_record_whose_key_is_not_registered_and_keeps_its_config() -> None:
+    """A create-only selector's row saves its other fields and its config as stored; a changed config is refused."""
+
+    bridge = _retired_bridge("held")
+    with system_context(reason="test.impl.retired.mixin"):
+        loaded = VcsBridge._base_manager.get(pk=bridge.pk)
+        loaded.display_name = "Renamed"
+        loaded.full_clean()
+        loaded.save()
+        loaded.config = {**loaded.config, "added": True}
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            loaded.save()
+    held_config = "The configuration cannot change while the backend class is not registered."
+    assert refused.value.message_dict == {"config": [held_config]}
+    stored = VcsBridge._base_manager.get(pk=bridge.pk)
+    assert (stored.display_name, stored.backend_class, stored.config) == ("Renamed", "retired", bridge.config)
 
 
 @pytest.mark.django_db
@@ -1675,7 +1716,7 @@ def test_a_copy_that_writes_a_retired_key_still_refuses_another_spelling_of_a_re
 
 @pytest.mark.django_db
 def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_recording_it() -> None:
-    """History loads under the retired key, shows it and keeps recording it; the live row's full save refuses it."""
+    """History loads under the retired key, shows it and keeps recording it; the live row refuses another one."""
 
     owner = create_user("retired-history-owner")
     vault = vault_for(owner)
@@ -1692,7 +1733,9 @@ def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_rec
         transaction.atomic(),
         changeset(fresh=True, change_reason="Refused"),
     ):
-        vault_model._base_manager.get(pk=vault.pk).save()
+        chosen = vault_model._base_manager.get(pk=vault.pk)
+        chosen.retrieval_class = "also-retired"
+        chosen.save()
     assert "retrieval_class" in refused.value.message_dict
 
     history = model_history(vault_model)
@@ -1710,7 +1753,7 @@ def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_rec
 
 @pytest.mark.django_db(transaction=True)
 @isolate_apps()
-def test_a_release_whose_registry_lacks_a_key_reads_its_rows_and_refuses_only_to_resolve_or_write_it() -> None:
+def test_a_release_whose_registry_lacks_a_key_reads_and_saves_its_rows_and_refuses_to_resolve_or_insert_it() -> None:
     """Two releases share one table in a rolling deploy; each field's choices are its own release's registry."""
 
     both = {"base": "tests.test_impl._BaseImpl", "refined": "tests.test_impl._RefinedImpl"}
@@ -1749,11 +1792,10 @@ def test_a_release_whose_registry_lacks_a_key_reads_its_rows_and_refuses_only_to
                 match=r"^tests\.OldRelease\.adapter: No impl for key 'refined' in settings\.ANGEE_TEST_IMPLS ",
             ):
                 row.get_adapter_impl()
-            for write in (row.save, lambda: OldRelease.objects.create(adapter="refined")):
-                with pytest.raises(ValidationError, match="Value 'refined' is not a valid choice"):
-                    write()
+            with pytest.raises(ValidationError, match="Value 'refined' is not a valid choice"):
+                OldRelease.objects.create(adapter="refined")
             row.label = "renamed"
-            row.save(update_fields=["label"])
+            row.save()
         with override_settings(ANGEE_TEST_IMPLS=both):
             current = NewRelease.objects.get(pk=written.pk)
             assert (current.label, current.get_adapter_impl()) == ("renamed", _RefinedImpl)

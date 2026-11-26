@@ -1672,32 +1672,31 @@ def test_an_implementation_key_the_registry_no_longer_names_reads_null_in_a_list
     assert "  backend_class: VcsBackendImpl\n" in schema.as_str()
 
 
-def test_editing_a_row_whose_implementation_key_is_retired_is_refused_under_the_key_column(db: None) -> None:
-    """The generic update saves the whole row, so the key's own refusal answers, under its field, not a failure."""
+def test_editing_a_row_whose_implementation_key_is_retired_saves_and_keeps_the_key(db: None) -> None:
+    """The generic update saves a rename and keeps the key the row holds; choosing an unregistered one is refused."""
 
     del db
     admin = _platform_admin("retired-key-editor")
     bridge = make_integration("retired-key-edit", model=VcsBridge, backend_class="stub")
     store_column(VcsBridge, bridge.pk, "backend_class", "retired")
-
-    result = execute_schema(
-        _schema(),
-        """
-        mutation($id: String!) {
-          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: {display_name: "Renamed"}) { id }
+    update = """
+        mutation($id: String!, $set: vcs_bridges_set_input!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: $set) { display_name backend_class }
         }
-        """,
-        {"id": _public_id(bridge)},
-        user=admin,
-    )
+    """
 
-    assert result.errors is not None
-    assert result.errors[0].extensions == {
+    target = _public_id(bridge)
+    renamed = _data(execute_schema(_schema(), update, {"id": target, "set": {"display_name": "Renamed"}}, user=admin))
+    chosen = execute_schema(_schema(), update, {"id": target, "set": {"backend_class": "also-retired"}}, user=admin)
+
+    assert renamed["update_vcs_bridges_by_pk"] == {"display_name": "Renamed", "backend_class": None}
+    assert chosen.errors is not None and chosen.errors[0].extensions == {
         "code": "VALIDATION",
-        "validationErrors": {"backend_class": ["Value 'retired' is not a valid choice."]},
+        "validationErrors": {"backend_class": ["Value 'also-retired' is not a valid choice."]},
         "formErrors": [],
     }
-    assert VcsBridge._base_manager.get(pk=bridge.pk).display_name == bridge.display_name
+    stored = VcsBridge._base_manager.get(pk=bridge.pk)
+    assert (stored.display_name, stored.backend_class) == ("Renamed", "retired")
 
 
 def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(db: None) -> None:

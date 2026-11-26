@@ -12,6 +12,7 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django_choices_field import TextChoicesField
+from rebac import system_context
 
 from angee.base.fields.state import enum_member_for
 from angee.base.implementations import (
@@ -32,16 +33,18 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
     A stored key its choices do not name (one a later release retired, or one
     another process's registry holds) still loads, lists and filters, as its
-    text; no value the field prepares writes one, and resolving it raises. Its
-    GraphQL read is null, so the row's list and record still answer. A save
-    that leaves the column out (``save(update_fields=[...])``) keeps the key and
-    writes none, so sync jobs, lifecycle changes and the workers of a rolling
-    deploy go on with the row; a whole-row save is refused until a registered
-    implementation is chosen. A ``create_only`` selector is never chosen again
-    by a save, so its row saves only without the column: ``check --database``
-    (``angee.E052``) names such rows and moves none, and they resolve again once
-    the addon that registers the key is installed, or move by a write outside
-    the model's save (``QuerySet.update``).
+    text, and resolving it raises. Its GraphQL read is null, so the row's list
+    and record still answer. An update does not validate such a key it is not
+    changing (:meth:`holds`): the row saves its other fields, a whole-row save
+    and ``full_clean`` included, and keeps the key, so a person, a sync job, a
+    lifecycle change or a rolling deploy's other release goes on with it.
+    Nothing writes such a key the row does not already hold: choosing another
+    is validated as any write is, and an insert, ``bulk_update`` or
+    ``QuerySet.update`` has no stored row to keep, so each refuses it. A
+    ``create_only`` selector is never chosen again by a save: ``check
+    --database`` (``angee.E052``) names such rows and moves none, and they
+    resolve again once the addon that registers the key is installed, or move
+    by a write outside the model's save (``QuerySet.update``).
 
     Reads forgive and writes do not: a lookup matches what a person or a URL
     may spell (``" local "``, the member's name ``"LOCAL"``), while a write
@@ -132,6 +135,22 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
         return self.key_for(value) in {member.value for member in self.choices_enum}
 
+    def holds(self, instance: models.Model, value: Any) -> bool:
+        """Whether ``instance``, a stored row, holds ``value``, a key the choices do not name, as stored.
+
+        The column is read as the row stands, so an update writes such a key back only to the row
+        that holds it, spelled as it is stored. A new row holds nothing.
+        """
+
+        if instance._state.adding or instance.pk is None or value in self.empty_values or self.has_key(value):
+            return False
+        with system_context(reason="base.impl.held_key"):
+            stored = (
+                type(instance)._base_manager.using(instance._state.db).filter(pk=instance.pk)
+                .values_list(self.attname, flat=True).first()
+            )
+        return stored is not None and stored == (value.value if isinstance(value, Enum) else value)
+
     def invalid_key(self, value: Any) -> ValidationError:
         """The field's plain refusal of ``value``, naming the key and nothing internal."""
 
@@ -148,6 +167,21 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         if value not in self.empty_values and not self.has_key(value):
             raise self.invalid_key(value)
         return super().to_python(value)
+
+    def clean(self, value: Any, model_instance: models.Model | None) -> Any:
+        """Clean ``value`` as input, except a key the choices do not name that the stored row holds (:meth:`holds`)."""
+
+        if model_instance is not None and self.holds(model_instance, value):
+            return value
+        return super().clean(value, model_instance)
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
+        """Mark a key the choices do not name that an update writes back to the stored row holding it."""
+
+        value = super().pre_save(model_instance, add)
+        if not add and not hasattr(value, "as_sql") and self.holds(model_instance, value):
+            return _HeldKey(value)
+        return value
 
     def from_db_value(self, value: Any, expression: Any, connection: Any) -> Any:
         """Load a stored key as its member, or as the stored text once the choices no longer name it."""
@@ -188,15 +222,17 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         after the save's REBAC gates, so a caller who may not save the row gets
         that refusal. A stored row saves a key its choices name, even once the
         registry dropped it; a save that leaves the column out writes nothing
-        here. A history copy and a historical migration field write a key the
-        choices no longer name (the one their row stored), but they refuse
+        here, and an update writes back the key its row holds (:meth:`pre_save`
+        marks it). A history copy and a historical migration field write a key
+        the choices no longer name (the one their row stored), but they refuse
         another spelling of a key the choices name as every field does.
         """
 
         written = value.value if isinstance(value, models.Value) else value
         spelled = written.value if isinstance(written, Enum) else written
         if (
-            not hasattr(written, "as_sql")
+            not isinstance(written, _HeldKey)
+            and not hasattr(written, "as_sql")
             and written not in self.empty_values
             and spelled not in tuple(member.value for member in self.choices_enum)
             and (self.has_key(spelled) or (self.refuses_unknown_keys and self.base_class is not None))
@@ -255,6 +291,12 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
                 keys = (default if isinstance(default, str) and default else "historical",)
             return _impl_choices_enum(self.registry_setting, keys)
         return impl_choices_enum(self.base_class)
+
+
+class _HeldKey(str):
+    """A key its field's choices do not name, written back by an update to the stored row that holds it."""
+
+    __slots__ = ()
 
 
 def _resolve_bound_implementation[T: RegistryBase](

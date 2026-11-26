@@ -188,7 +188,9 @@ class ImplDefaultsMixin(models.Model):
 
         The fields that implementation would have defaulted are not the
         caller's error while its key is unknown, so the key's field error
-        stands alone.
+        stands alone. A stored row keeps such a key it holds
+        (:meth:`ImplClassField.holds`): an update does not validate a key it
+        is not changing.
         """
 
         excluded = set(exclude or ())
@@ -199,6 +201,7 @@ class ImplDefaultsMixin(models.Model):
             and field.name not in excluded
             and (key := getattr(self, field.attname, None))
             and not field.has_key(key)
+            and not field.holds(self, key)
         }
         if unknown:
             raise ValidationError(unknown)
@@ -288,7 +291,9 @@ class ImplDefaultsMixin(models.Model):
 
         A new row's key outside the field's choices has no config model to
         validate against: the field refuses that key when the row is inserted.
-        A stored row's config is written only under a key its field knows.
+        A stored row that keeps such a key it holds has no implementation to
+        read its config either, so the config is written only as it is stored;
+        a changed one is refused under the config column.
         """
 
         name = self.impl_config_field
@@ -308,7 +313,10 @@ class ImplDefaultsMixin(models.Model):
             if not field.has_key(key):
                 if self._state.adding:
                     continue
-                raise ValidationError({field.name: field.invalid_key(key)})
+                if not field.holds(self, key):
+                    raise ValidationError({field.name: field.invalid_key(key)})
+                self._refuse_changed_config_under(field)
+                continue
             impl = field.resolve_class(key)
             if isinstance(impl, type) and issubclass(impl, ImplBase) and impl.config_model is not None:
                 config_field = self._config_field()
@@ -321,6 +329,22 @@ class ImplDefaultsMixin(models.Model):
                 except ValidationError as error:
                     raise self.impl_config_error(error) from None
                 config_field.save_form_data(self, normalized)
+
+    def _refuse_changed_config_under(self, field: ImplClassField[Any]) -> None:
+        """Refuse a config other than the stored one while ``field`` keeps a key no implementation reads."""
+
+        try:
+            config_field = self._config_field()
+        except FieldDoesNotExist:
+            return
+        with system_context(reason="base.impl.held_key_config"):
+            stored = type(self)._base_manager.using(self._state.db).filter(pk=self.pk).values_list(
+                config_field.attname, flat=True,
+            ).first()
+        if config_field.value_from_object(self) != stored:
+            raise ValidationError({config_field.name: (
+                f"The configuration cannot change while the {field.verbose_name} is not registered."
+            )})
 
     def materialize_impl_defaults(
         self,
