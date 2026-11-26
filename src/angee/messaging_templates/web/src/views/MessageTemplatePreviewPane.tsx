@@ -265,13 +265,11 @@ export function MessageTemplatePreviewPane({
     <div className="flex min-h-0 flex-1 flex-col bg-sheet"
       aria-busy={busy || undefined}>
       {toolbar}
-      {result || preview.error ? (
-        <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}
-          className={cn("grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-2",
-            standIn)}>
-          {facts}
-        </div>
-      ) : null}
+      <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}
+        className={cn("grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-2",
+          standIn)}>
+        {facts}
+      </div>
       {body}
       {reasons}
     </div>

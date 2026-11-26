@@ -972,6 +972,24 @@ test("the same words refused under two fields read apart, each titled by the for
   }
 });
 
+test("the band's polite region is in the pane before the first answer, and that answer's warnings arrive in it", async () => {
+  const first = heldAnswer();
+  let reads = 0;
+  render(<MessageTemplateStory open={ROW.passwordReset}
+    beforePreview={() => (reads++ === 0 ? first.promise : undefined)} />);
+  await waitFor(() => expect(reads).toBe(1));
+  // While the first read is held, the band says what is being previewed, and its region is there, empty.
+  const [told] = politeRegions();
+  expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy();
+  expect(told!.textContent).toBe("");
+  expect(told!.parentElement!.className).toContain("sr-only");
+  act(() => first.release());
+  for (const warning of RECORDED.previews[ROW.passwordReset]!.warnings) {
+    expect(await within(told!).findByText(warning.detail)).toBeTruthy();
+  }
+  expect(politeRegions()[0]).toBe(told);
+});
+
 test("the warnings' and the reasons' polite regions stay in the pane, taking no room while they hold nothing", async () => {
   render(<MessageTemplateStory open={ROW.conditionalInclude} />);
   await screen.findByTitle(word("preview.frameTitle"));
