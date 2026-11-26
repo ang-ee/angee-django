@@ -111,10 +111,10 @@ export function HostAppearanceStory({
         await kitReadGate;
         return defaultKitColors(wire.kits());
       },
-    }, (request) => onRequest?.("public", request)).public!.fetch!;
-    const consoleFetch = storySchema({
+    }, { onRequest: (request) => onRequest?.("public", request) }).public!.fetch!;
+    const consoleSchema = storySchema({
       current_user: () => user, real_user: () => user, viewable_people: () => [], ...wire.operations,
-    }, (request) => onRequest?.("console", request)).public!.fetch!;
+    }, { schema: "console", resources: [brandKitResource], onRequest: (request) => onRequest?.("console", request) }).console!;
     // The wire fake answers only data or GraphQL errors, so an HTTP failure wraps its fetch.
     let kitReads = 0;
     const failingKitRead: typeof publicFetch = (resource, init) => {
@@ -128,10 +128,7 @@ export function HostAppearanceStory({
       layouts: { console: { chrome: ConsoleLayout }, public: { schema: "public" } },
       schemas: {
         public: { url: "/graphql/public/", live: false, fetch: failKitRead ? failingKitRead : publicFetch },
-        console: {
-          url: "/graphql/console/", live: false, fetch: consoleFetch,
-          metadata: { angee: { resources: [brandKitResource] } }, operationDocuments,
-        },
+        console: { ...consoleSchema, live: false, operationDocuments },
       },
       defaultSchema: "console",
       appearance: { themeId, colorScheme },

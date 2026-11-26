@@ -2420,12 +2420,30 @@ Transport fixtures use the GraphQL wire fake
 each root field of a request from the handler named for it, fails loudly on a
 field without a handler or a missing required variable, and reports each parsed
 request; a handler throws `GraphQLError` to answer an error. Stories and addon
-tests wrap it as `storySchema(operations, onRequest)`; framework package tests
+tests wrap it as `storySchema(operations, { schema, resources, onRequest })`:
+the schema it names (`public` unless `schema` says), whose metadata names the
+data resources a story declares once, without which a resource surface finds
+no model, warns and loads no record. `testDataResource` declares `console`
+unless told otherwise, so a `public` story schema names `schemaName: "public"`
+resources; naming a resource of another schema throws. Framework package tests
 pass it as the `fetch` of a real Angee data provider. Tests match requests by
 `fields` or `operationName`, never by query text. A routed fixture
 reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
-has one provider stack — appearance, data, toasts and modals.
+has one provider stack — appearance, data, toasts and modals. The data layer
+tells its notices only to a `notificationProvider` a test passes to record them,
+so such a test records which notices the data layer opens for a surface's calls
+(none for a call passing `SURFACE_RENDERS_FAILURE`), not what the app's
+`useConnectionNotifications` holds back or tells once; a surface's own toast is
+not recorded. The workshop package's
+[story check](../../packages/storybook/src/stories/stories.test.tsx) imports
+each story module of that package and renders each of its stories (but one
+that fetches a missing file on purpose) through the preview's own annotations,
+failing on a model its schema does not name, a crash or an unanswered read; the
+fragments' and products' stories the workshop also loads need generated
+documents, so it does not import them. No story's runtime imports reach a test
+runner, which the [architecture guardrails](../../packages/app/src/architecture-guardrails.test.ts)
+check.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires

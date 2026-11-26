@@ -45,7 +45,7 @@ export function TriggerStory({ appearance, embedded = false, canEdit = true, onR
   const schemas = useMemo(() => {
     let current = { ...triggerFixture, can_edit: canEdit, enable_preview: canEdit ? triggerFixture.enable_preview : null };
     const result = (message: string) => ({ ok: true, message, id: current.id });
-    const fixture = storySchema({
+    return storySchema({
       impl_choices: () => ["record_changed", "custom_changed", "message_ingested"].map((key) => ({ key, label: key, defaults: { source_model: key === "message_ingested" ? "messaging.Message" : "" }, config_schema: null })),
       revoke_workflow_trigger_grant: () => {
         current = { ...current, enabled: false, grants: [], disabled_reason: "The workflow principal's member grant was revoked; enable this trigger again." };
@@ -63,10 +63,9 @@ export function TriggerStory({ appearance, embedded = false, canEdit = true, onR
       workflow_by_pk: () => current.workflow,
       workflowrun_by_pk: () => triggerEventFixture.started_run,
       notes_by_pk: () => ({ id: "nte_7", display_name: "Review notes" }),
-    }, onRequest).public!;
-    return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
+    }, { schema: "console", onRequest, resources: [
       triggerResourceFixture, triggerEventResourceFixture, workflowResourceFixture, runResourceFixture, userResourceFixture, triggerNoteResourceFixture, triggerMessageResourceFixture,
-    ] } } } };
+    ] });
   }, [canEdit, onRequest]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/workflows/triggers"
     initialEntry={embedded ? "/workflows/triggers" : "/workflows/triggers/wft_review"} runtime={runtime}

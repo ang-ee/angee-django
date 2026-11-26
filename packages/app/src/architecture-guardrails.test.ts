@@ -248,6 +248,35 @@ describe("React architecture guardrails", () => {
     FULL_TREE_SCAN_TIMEOUT_MS,
   );
 
+  test(
+    "no story's runtime imports reach a test runner, through testing entries too",
+    () => {
+      expect(storyRunnerViolations(allPackageRoots())).toEqual([]);
+    },
+    // It walks every story's import graph across the framework, tooling, and addon packages.
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
+
+  test("a story whose imports reach a test runner is reported with its chain, and an `import type` clause is not followed", () => {
+    const scratch = join(PACKAGES_ROOT, "app", "test-results");
+    mkdirSync(scratch, { recursive: true });
+    const root = mkdtempSync(join(scratch, "guardrail-"));
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@angee/fixture" }));
+      writeFileSync(join(root, "harness.ts"), 'import { vi } from "vitest";\nexport const harness = vi;\n');
+      writeFileSync(join(root, "loaded.stories.tsx"), 'import { harness } from "./harness";\nexport default { harness };\n');
+      // Inline types only: the module still loads.
+      writeFileSync(join(root, "inline.stories.tsx"), 'import { type Mock } from "vitest";\nexport type Story = Mock;\n');
+      writeFileSync(join(root, "typed.stories.tsx"), 'import type { Mock } from "vitest";\nexport type Story = Mock;\n');
+      expect(storyRunnerViolations([{ name: "@angee/fixture", root }])).toEqual([
+        `${workspaceRelative(join(root, "inline.stories.tsx"))} imports vitest`,
+        `${workspaceRelative(join(root, "loaded.stories.tsx"))} reaches vitest through ./harness (${workspaceRelative(join(root, "harness.ts"))}) -> vitest`,
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("relative package escape detection reports a seeded violation", () => {
     const root = join(PACKAGES_ROOT, "ui");
     const file = join(root, "src", "views", "ListView.tsx");
@@ -284,6 +313,7 @@ describe("React architecture guardrails", () => {
   test("runtime dependency scans retain mixed imports while excluding erased type edges", () => {
     const source = ts.createSourceFile("fixture.ts", `
       import type { ErrorObject } from "ajv";
+      // Inline types only: verbatimModuleSyntax keeps the import, so the module loads.
       import { type Options } from "ajv/options";
       export type { Schema } from "ajv/types";
       export { type Schema as Erased } from "ajv/erased";
@@ -296,7 +326,7 @@ describe("React architecture guardrails", () => {
     expect(importSpecifiersFromSource(source)).toEqual([
       "ajv", "ajv/options", "ajv/types", "ajv/erased", "ajv/validator", "./compiler", "./exports", "./side-effect", "./lazy",
     ]);
-    expect(importSpecifiersFromSource(source, true)).toEqual(["./compiler", "./exports", "./side-effect", "./lazy"]);
+    expect(importSpecifiersFromSource(source, true)).toEqual(["ajv/options", "./compiler", "./exports", "./side-effect", "./lazy"]);
   });
 
   test.each(["vi", "v"])("reports project-schema mocks through the %s binding in a package", (binding) => {
@@ -497,15 +527,17 @@ describe("React architecture guardrails", () => {
     FULL_TREE_SCAN_TIMEOUT_MS,
   );
 
-  test("lazy route import guard detects runtime imports but ignores type imports", () => {
+  test("lazy route import guard detects runtime imports, an inline-type one included, but ignores type-only clauses", () => {
     const file = join(MONOREPO_ROOT, "src", "example", "web", "src", "index.tsx");
     expect(lazyRouteImportViolations(file, `
       import type { PageProps } from "./views/Page";
+      import { type PageShape } from "./views/./Page";
       import { form } from "./views/../views/Page";
       import { extra } from "./views/Page.tsx";
       export { usePage } from "./views/Page";
       const route = lazyRouteComponent(() => import("./views/Page"), "Page");
     `)).toEqual([
+      "src/example/web/src/index.tsx imports ./views/./Page and loads it lazily",
       "src/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
       "src/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
       "src/example/web/src/index.tsx imports ./views/Page and loads it lazily",
@@ -926,7 +958,12 @@ function importViolations(packages: readonly PackageRoot[]): string[] {
   return violations;
 }
 
-function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
+/**
+ * How the guardrails follow a source file's imports into source files: an `@angee/*` specifier by
+ * the package's published entries (`exports`), a relative one by its path, then either by
+ * TypeScript's bundler resolution. Other packages are not followed.
+ */
+function angeeModuleResolver(packages: readonly PackageRoot[]) {
   const extensions = [...SOURCE_EXTENSIONS, ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
   const isSourceTarget = (target: string): boolean =>
     extensions.some((extension) => target.endsWith(extension)) && existsSync(target);
@@ -954,6 +991,28 @@ function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
     allowJs: true,
     paths: Object.fromEntries(entries.map((entry) => [entry.specifier, entry.targets])),
   };
+  /** The source files `specifier`, imported by `file`, resolves to. */
+  const targets = (specifier: string, file: string): string[] => {
+    if (!specifier.startsWith(".") && !owners.some((owner) => owner.name === angeePackageName(specifier))) {
+      return [];
+    }
+    const exported = entries.find((entry) => entry.specifier === specifier);
+    if (exported) {
+      return exported.targets.filter(isSourceTarget);
+    }
+    // Keep explicit JS sources visible when a neighboring declaration exists.
+    const explicit = resolve(dirname(file), specifier);
+    if (specifier.startsWith(".") && isSourceTarget(explicit)) {
+      return [explicit];
+    }
+    const target = ts.resolveModuleName(specifier, file, options, ts.sys).resolvedModule?.resolvedFileName;
+    return target ? [target] : [];
+  };
+  return { extensions, isSourceTarget, owners, entries, targets };
+}
+
+function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
+  const { extensions, isSourceTarget, owners, entries, targets } = angeeModuleResolver(packages);
   const graph = new Map<string, { importsVitest: boolean; targets: string[] }>();
   const violations = new Set<string>();
   const reachesVitest = (file: string, visited: Set<string>): boolean => {
@@ -964,22 +1023,7 @@ function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
       const imports = importSpecifiers(file);
       node = {
         importsVitest: imports.some((specifier) => specifier === "vitest" || specifier.startsWith("vitest/")),
-        targets: imports.flatMap((specifier) => {
-          if (!specifier.startsWith(".") && !owners.some((owner) => owner.name === angeePackageName(specifier))) {
-            return [];
-          }
-          const exported = entries.find((entry) => entry.specifier === specifier);
-          if (exported) {
-            return exported.targets.filter(isSourceTarget);
-          }
-          // Keep explicit JS sources visible when a neighboring declaration exists.
-          const explicit = resolve(dirname(file), specifier);
-          if (specifier.startsWith(".") && isSourceTarget(explicit)) {
-            return [explicit];
-          }
-          const target = ts.resolveModuleName(specifier, file, options, ts.sys).resolvedModule?.resolvedFileName;
-          return target ? [target] : [];
-        }),
+        targets: imports.flatMap((specifier) => targets(specifier, file)),
       };
       graph.set(file, node);
       if (node.importsVitest) {
@@ -1008,6 +1052,58 @@ function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
     }
   }
   return [...violations].sort();
+}
+
+/** A test runner's module: in the workshop, whose preview loads its own expect, one throws at load. */
+const TEST_RUNNER = /^(?:vitest|@vitest\/[^/]+|jest|@jest\/[^/]+|expect|@testing-library\/jest-dom)(?:\/|$)/;
+
+/**
+ * Each story whose runtime imports reach a test runner, with the chain it reaches it through. Every
+ * story file of `packages` is a root, and its imports are followed as `angeeModuleResolver` follows
+ * them, through the `./testing` entries `publishedVitestViolations` exempts too: a story loads in
+ * the workshop, where a runner throws for every story of the file.
+ */
+function storyRunnerViolations(packages: readonly PackageRoot[]): string[] {
+  const { targets } = angeeModuleResolver(packages);
+  const edges = new Map<string, readonly { specifier: string; target?: string }[]>();
+  const edgesOf = (file: string): readonly { specifier: string; target?: string }[] => {
+    let found = edges.get(file);
+    if (!found) {
+      found = sourceAnalysis(file).runtimeSpecifiers.flatMap((specifier) => TEST_RUNNER.test(specifier)
+        ? [{ specifier }]
+        : targets(specifier, file).map((target) => ({ specifier, target })));
+      edges.set(file, found);
+    }
+    return found;
+  };
+  const violations: string[] = [];
+  for (const story of packages.flatMap((pkg) => sourceFiles(pkg.root)).filter(isStoryFile).sort()) {
+    const via = new Map<string, { from: string; specifier: string } | null>([[story, null]]);
+    const queue = [story];
+    let reached: { file: string; runner: string } | undefined;
+    while (queue.length > 0 && !reached) {
+      const file = queue.shift()!;
+      for (const edge of edgesOf(file)) {
+        if (!edge.target) {
+          reached = { file, runner: edge.specifier };
+          break;
+        }
+        if (!via.has(edge.target)) {
+          via.set(edge.target, { from: file, specifier: edge.specifier });
+          queue.push(edge.target);
+        }
+      }
+    }
+    if (!reached) continue;
+    const hops: string[] = [];
+    for (let at = reached.file, hop = via.get(at); hop; at = hop.from, hop = via.get(at)) {
+      hops.unshift(`${hop.specifier} (${workspaceRelative(at)})`);
+    }
+    violations.push(hops.length > 0
+      ? `${workspaceRelative(story)} reaches ${reached.runner} through ${[...hops, reached.runner].join(" -> ")}`
+      : `${workspaceRelative(story)} imports ${reached.runner}`);
+  }
+  return violations;
 }
 
 function exportTargets(value: unknown): string[] {
@@ -1136,10 +1232,9 @@ function importSpecifiersFromSource(source: ts.SourceFile, runtimeOnly = false):
   const visit = (node: ts.Node): void => {
     let specifier: ts.Node | undefined;
     if (ts.isImportDeclaration(node)) {
-      const clause = node.importClause;
-      if (runtimeOnly && (clause?.isTypeOnly || clause && !clause.name && clause.namedBindings
-        && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length > 0
-        && clause.namedBindings.elements.every((binding) => binding.isTypeOnly))) return;
+      // Under verbatimModuleSyntax only an `import type` clause is erased: an import whose
+      // specifiers are all inline `type` still loads its module.
+      if (runtimeOnly && node.importClause?.isTypeOnly) return;
       specifier = node.moduleSpecifier;
     } else if (ts.isExportDeclaration(node)) {
       if (runtimeOnly && (node.isTypeOnly || node.exportClause && ts.isNamedExports(node.exportClause)
@@ -1218,13 +1313,9 @@ function lazyRouteImportViolations(file: string, text: string): string[] {
     ?? resolve(dirname(file), specifier).replace(/\.(?:tsx?|jsx?)$/, "");
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
-      const clause = node.importClause;
-      const named = clause?.namedBindings;
-      const typesOnly = clause?.isTypeOnly || (
-        !clause?.name && named && ts.isNamedImports(named)
-        && named.elements.length > 0 && named.elements.every((entry) => entry.isTypeOnly)
-      );
-      if (!typesOnly && node.moduleSpecifier.text.startsWith(".")) {
+      // Only a type-only CLAUSE is erased: under `verbatimModuleSyntax` an import whose specifiers are all
+      // inline types still loads its module, which is what this guard exists to stop.
+      if (!node.importClause?.isTypeOnly && node.moduleSpecifier.text.startsWith(".")) {
         eager.push({ specifier: node.moduleSpecifier.text, target: target(node.moduleSpecifier.text) });
       }
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
