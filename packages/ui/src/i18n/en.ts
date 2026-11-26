@@ -696,7 +696,7 @@ export const enUiMessages: Record<string, string> = {
   "form.saveFailed": "Save failed",
   "form.saveConflict": "Record changed",
   "form.createdEarlierTitle": "Created earlier",
-  "form.createdEarlier": "An earlier attempt to save from this form already created a record; it is in the list. Saving again creates another.",
+  "form.createdEarlier": "An earlier attempt to save from this form already created a record; find it among the existing ones before saving again.",
   "form.reloadSaved": "Reload saved record",
   "form.save": "Save",
   "form.stay": "Stay",

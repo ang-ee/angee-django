@@ -76,7 +76,7 @@ pending write and typed values.
   action documents select none.
 - The record form tells a create whose key an earlier attempt spent in its
   own words ("Created earlier": an earlier attempt from this form already
-  created a record, which is in the list; saving again creates another), with
+  created a record, to find among the existing ones before saving again), with
   nothing to undo; the save surface's `saveKeyConflict` says it is so, and a
   stale revision keeps its banner and its reload. Both form dialogs bring the
   person to a refusal, as the record form does: `MutationDialog` and the

@@ -1701,7 +1701,7 @@ test("a create whose key an earlier attempt spent is told in the form's own word
   f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   expect(await screen.findByText("Created earlier")).toBeTruthy();
-  expect(screen.getByText("An earlier attempt to save from this form already created a record; it is in the list. Saving again creates another.")).toBeTruthy();
+  expect(screen.getByText("An earlier attempt to save from this form already created a record; find it among the existing ones before saving again.")).toBeTruthy();
   expect(screen.queryByText("CREATION_KEY_CONFLICT")).toBeNull();
   expect(screen.queryByRole("button", { name: "Reload saved record" })).toBeNull();
   expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("My record");
