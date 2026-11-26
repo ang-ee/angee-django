@@ -142,7 +142,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
     under the account's lock and ``SignInLinkBackend`` redeems one.
     """
 
-    @sensitive_variables("secret", "token", "values")
+    @sensitive_variables()
     def issue(self, user: Any, address: str, *, actor: SubjectRef | None) -> LinkT:
         """Mail ``user`` a fresh link at ``address`` and store it; return the link. The token exists only in the mail.
 
@@ -217,7 +217,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         logger.info("Sent a sign-in link to user %s.", user.pk)
         return link
 
-    @sensitive_variables("token", "secret", "digest")
+    @sensitive_variables()
     def redeem(self, token: str) -> Any | None:
         """Consume ``token`` and return the person it signs in.
 

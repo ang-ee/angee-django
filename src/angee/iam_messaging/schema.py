@@ -26,7 +26,7 @@ class SignInLinkMutation:
     """The session sign-in a link opens."""
 
     @strawberry.mutation
-    @sensitive_variables("token")
+    @sensitive_variables()
     def redeem_sign_in_link(self, info: strawberry.Info, token: str) -> LoginPayload:
         """Sign in with a single-use sign-in link and bind the person to the session.
 

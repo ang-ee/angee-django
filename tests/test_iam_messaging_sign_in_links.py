@@ -27,8 +27,8 @@ from django.core.cache import caches
 from django.core.cache.backends.locmem import LocMemCache
 from django.core.exceptions import ValidationError
 from django.core.mail.backends.base import BaseEmailBackend
-from django.db import IntegrityError, connection, transaction
-from django.db.models.signals import pre_save
+from django.db import DatabaseError, IntegrityError, connection, transaction
+from django.db.models.signals import post_init, pre_save
 from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import override_settings
@@ -39,6 +39,7 @@ from rebac.schema import parse_zed
 
 import angee.iam_messaging
 from angee.base.build import merged_schemas
+from angee.base.origins import PublicOriginUnavailable
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam import schema as iam_schema
 from angee.iam.auth import ONE_ATTEMPT_MESSAGE
@@ -65,7 +66,15 @@ from tests.iam_campaign import iam_admin as iam_admin
 from tests.test_iam_account_actions import _manager
 from tests.test_iam_login_throttle import LOGIN, _refusals
 from tests.test_messaging_compose import _refused
-from tests.test_messaging_system_mail import LOCMEM, SENDER, _install
+from tests.test_messaging_system_mail import (
+    LOCMEM,
+    SENDER,
+    FailingTransport,
+    _failing,
+    _install,
+    _message_insert,
+    _reported_secret,
+)
 from tests.test_messaging_templates_render import _reading
 from tests.test_zed_extensions import _addon, _contrib_addon
 
@@ -1185,6 +1194,134 @@ def test_the_token_is_stored_only_in_its_mail_never_logged_and_held_by_no_callba
         Message._base_manager.filter(pk=message.pk).delete()
     assert _tables_holding(SECRET) == {Fragment._meta.db_table}
     assert SECRET not in caplog.text
+
+
+# ---------- error reports ----------
+
+
+def _chain(error: BaseException | None) -> list[BaseException]:
+    """``error`` and every exception a report of it chains, as Django's reporter follows them."""
+
+    chained = []
+    while error is not None:
+        chained.append(error)
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return chained
+
+
+def _reported(error: BaseException, *, below: str | None = None, address: str = "") -> tuple[list[Any], list[str]]:
+    """What Django's report of ``error`` shows of the link: each ``(function, variable)`` holding the sentinel secret
+    (from ``below`` down), and the messages of the chained exceptions that carry the secret, a link or ``address``."""
+
+    shown = _reported_secret(error, below=below, needle=SECRET)
+    needles = [SECRET, SIGN_IN_LINK_PATH + "#", *([address] if address else [])]
+    carried = [type(item).__name__ for item in _chain(error) if any(needle in str(item) for needle in needles)]
+    return shown, carried
+
+
+def _link_insert(sql: str, params: Any) -> bool:
+    return sql.startswith(f'INSERT INTO "{SignInLink._meta.db_table}"')
+
+
+def _link_read(sql: str, params: Any) -> bool:
+    return f'FROM "{SignInLink._meta.db_table}"' in sql and not sql.startswith(("INSERT", "UPDATE", "DELETE"))
+
+
+@pytest.mark.parametrize("depth", [
+    "before-the-render", "in-the-renders-refusal", "inside-the-write", "the-links-own-insert",
+])
+def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
+    deliverable, iam_admin, settings, monkeypatch, depth,
+):
+    """With ``DEBUG`` off, as a deployment's error mail runs: each depth of the send, the token minted by then."""
+
+    settings.DEBUG = False
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
+    target = _person("guest-reported")
+    failing: Any = nullcontext()
+    if depth == "before-the-render":
+        def no_origin(sender: Any, instance: Any, **kwargs: Any) -> None:
+            settings.ANGEE_PUBLIC_ORIGIN = ""  # the origin goes between the offer and the link's URL
+
+        post_init.connect(no_origin, sender=MessageTemplate, dispatch_uid="tests.iam_messaging.no_origin")
+    elif depth == "in-the-renders-refusal":
+        _override("template", SIGN_IN_LINK_TEMPLATE, source=GUARDED)
+    else:
+        failing = _failing(_message_insert if depth == "inside-the-write" else _link_insert)
+    try:
+        with failing, actor_context(iam_admin), pytest.raises(Exception) as failed:
+            target.with_actor(iam_admin).issue_sign_in_link()
+    finally:
+        post_init.disconnect(sender=MessageTemplate, dispatch_uid="tests.iam_messaging.no_origin")
+    expected = {"before-the-render": PublicOriginUnavailable, "in-the-renders-refusal": ValidationError}
+    assert isinstance(failed.value, expected.get(depth, DatabaseError))
+    assert _reported(failed.value, address=target.email) == ([], [])
+
+
+def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
+    deliverable, iam_admin, settings, monkeypatch, django_capture_on_commit_callbacks,
+):
+    """The worker's path: the transport fails, then recording it fails too; the report chains both."""
+
+    settings.DEBUG = False
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
+    target = _person("guest-delivery-report")
+    with django_capture_on_commit_callbacks(execute=True), actor_context(iam_admin):
+        target.with_actor(iam_admin).issue_sign_in_link()
+    # Only the ids: this frame is in the report, and a message's text form is its preview.
+    label, pk, key = next((row._meta.label_lower, row.pk, row.external_id) for row in _mails(target))
+    failure = ConnectionError("The transport is down.")
+    settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport",
+                                      "OPTIONS": {"failure": failure}}}
+
+    def recording(sql: str, params: Any) -> bool:
+        return failure.__traceback__ is not None and sql.startswith(f'UPDATE "{Message._meta.db_table}" ')
+
+    with _failing(recording), pytest.raises(DatabaseError) as failed:
+        deliver_message(label, pk, key)
+    assert failure in _chain(failed.value)
+    assert _reported(failed.value, address=target.email) == ([], [])
+
+
+@pytest.mark.parametrize("entry", ["the-manager", "the-backend"])
+def test_an_error_report_of_a_failing_redemption_shows_the_token_in_no_frame(
+    deliverable, iam_admin, sent, settings, monkeypatch, entry,
+):
+    """A read of the account's links fails; each entry that takes the token is marked, so nothing from it down shows
+    it (this test's own frame holds the token, so the report is read from the entry down)."""
+
+    settings.DEBUG = False
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
+    target = _person("guest-redemption-report")
+    sent(target, iam_admin)
+    with _failing(_link_read), pytest.raises(DatabaseError) as failed:
+        if entry == "the-manager":
+            SignInLink.objects.redeem(f"{target.public_id}.{SECRET}")
+        else:
+            authenticate(_at("198.51.100.80"), **sign_in_credentials(f"{target.public_id}.{SECRET}"))
+    assert _reported(failed.value, below="redeem" if entry == "the-manager" else "authenticate") == ([], [])
+
+
+def test_a_failing_redemption_through_the_mutation_answers_and_logs_no_token(
+    deliverable, iam_admin, sent, settings, monkeypatch, caplog,
+):
+    """GraphQL never hands a resolver's failure to Django's reporter: the schema logs its class, path and frames, with
+    no locals and no exception value, and answers ``INTERNAL``; neither holds the token."""
+
+    settings.DEBUG = False
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
+    target = _person("guest-mutation-report")
+    sent(target, iam_admin)
+    with _failing(_link_read), caplog.at_level(logging.ERROR, logger="angee.graphql.schema"):
+        answered = execute_schema(_schema("public"), REDEEM, {"token": f"{target.public_id}.{SECRET}"},
+                                  request=_request())
+    assert [(error.message, error.extensions) for error in answered.errors or ()] == [
+        ("An unexpected error occurred.", {"code": "INTERNAL"}),
+    ]
+    logged = "Unexpected GraphQL resolver error (DatabaseError)" in caplog.text
+    shown = SECRET in caplog.text or SECRET in str(answered.data)
+    assert logged
+    assert not shown
 
 
 # ---------- sent means recorded and queued ----------

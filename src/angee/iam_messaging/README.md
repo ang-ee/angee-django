@@ -138,15 +138,24 @@ in before continuing. The password form stays below it as the fallback.
 The token is minted in `SignInLinkManager.issue` and leaves it only inside the
 mail; nothing here logs it, puts it in a refusal or holds it in an on-commit
 callback. A host that logs `django.db.backends` at `DEBUG` logs every
-statement's parameters, so it logs each link the send writes. Angee's Sentry setup sends no frame's local variables
-(`include_local_variables=False`), so its reports never hold it. Django's own
-error reports can: `SignInLinkManager.issue` is marked `sensitive_variables`,
-but the link passes unmarked through the template's render and messaging's
-compose, so Django's debug page under `DEBUG`, or an HTML error report (an
-`AdminEmailHandler` with `include_html`), for an exception raised inside the
-send shows it in those frames. Django's plain-text error report shows no local
-variables. The mail is stored on the system channel, where the link lives until
-it signs in, expires or is retired:
+statement's parameters, so it logs each link the send writes. Angee's Sentry
+setup sends no frame's local variables (`include_local_variables=False`), so its
+reports never hold it. Django's own error reports, its debug page under `DEBUG`
+and an HTML error report (an `AdminEmailHandler` with `include_html`), show
+none either. Each entry of this addon that holds the token or the link hides
+all its locals with a bare `@sensitive_variables()` (`SignInLinkManager.issue`
+and `redeem`, `SignInLinkBackend.authenticate`, the `redeem_sign_in_link`
+mutation); Django's filter cleanses every frame below a mark the same way, the
+helpers they call (`SignInLink.url_for`, the token's parts and digests) among
+them; and the template's send and messaging's write and delivery mark their
+own. So a failure before the render, in its refusal, inside the write, in
+delivery or in a redemption shows the token in no frame. A failure inside the
+GraphQL mutation never reaches Django's reports: the schema logs its class, path
+and frames, with no locals and no exception value. Django never filters an
+exception's own message: nothing this addon raises carries the link or the
+address, but a database's or a transport's error text is its own. Django's
+plain-text error report shows no local variables. The mail is stored on the
+system channel, where the link lives until it signs in, expires or is retired:
 
 - the message's text and HTML parts, and the content-addressed text fragments
   they point to, which are indexed for search and kept after the message is
