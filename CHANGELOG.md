@@ -25,8 +25,8 @@ live in code docstrings.
   `angee-messaging-templates` and `angee-parties`, so a host that enables it
   enables them and what they require, the brand kit among it. A link is offered
   where `ANGEE_PUBLIC_ORIGIN` is set and system mail is configured
-  (`SystemChannelBackend.system_mail_configured()`: a transport mailer and a
-  default sender messaging accepts), no longer wherever a default mailer exists;
+  (`SystemChannelBackend.system_mail_configured()`, messaging's System mail), no
+  longer wherever a default mailer exists;
   a system channel missing or paused, or the template missing, is refused in band
   with nothing written (`SYSTEM_CHANNEL_MISSING`, `OUTBOUND_EMAIL_CHANNEL_MISSING`,
   `template_missing`). `sent_at` means recorded and queued: a link whose delivery
@@ -34,8 +34,8 @@ live in code docstrings.
   before it. The fragment's comment now says the action's holders read the
   recorded link on the system channel (revision 3). **Upgrade:** provision loads
   the template rows (the `install` tier of `resources load`) and syncs the
-  fragment at revision 3; links are offered once the host states
-  `MAILERS.transport` and a valid `DEFAULT_FROM_EMAIL`. No migration.
+  fragment at revision 3; links are offered once system mail is configured
+  (messaging's README, System mail). No migration.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None)` renders one effective template (the caller picks it for its

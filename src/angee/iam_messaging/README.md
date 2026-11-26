@@ -70,9 +70,9 @@ transaction commits; Django's default mailer is not on its path.
 
 A link is offered only where it can be built and its mail sent, read from
 settings alone (`SignInLink.deliverable()`): `ANGEE_PUBLIC_ORIGIN` (below) and
-system mail configured (`SystemChannelBackend.system_mail_configured()`: a
-transport mailer, `MAILERS["transport"]`, and a `DEFAULT_FROM_EMAIL` messaging's
-sender rule accepts). Otherwise no link is offered and the action refuses. What
+system mail configured, as `SystemChannelBackend.system_mail_configured()`
+answers ([messaging's System mail](../messaging/README.md#system-mail)).
+Otherwise no link is offered and the action refuses, naming what to set. What
 settings cannot tell is refused in band, with nothing written: the system
 channel's row missing (`SYSTEM_CHANNEL_MISSING`, under `channel`) or the template
 missing (`template_missing`), which mean provision's resource load has not run,

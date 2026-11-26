@@ -327,10 +327,9 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
         """Whether this deployment can build links and send their mail, read from settings alone.
 
         A public origin (``angee.base.origins.public_origin``) and system mail
-        configured (``SystemChannelBackend.system_mail_configured``: a transport
-        mailer and a default sender messaging's sender rule accepts). What
-        settings cannot tell, the system channel's row and the template's, the
-        send refuses in band with nothing written.
+        configured, as messaging's ``SystemChannelBackend.system_mail_configured``
+        answers. What settings cannot tell, the system channel's row and the
+        template's, the send refuses in band with nothing written.
         """
 
         origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
