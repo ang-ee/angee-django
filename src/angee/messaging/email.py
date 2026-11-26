@@ -408,7 +408,9 @@ def require_carried(address: str, *, key: str) -> None:
 class SystemMailer(BaseEmailBackend):
     """Django's default mailer wherever messaging is installed: it records each email on the system channel.
 
-    Each email becomes one queued message through
+    Any code that calls Django's mail API writes system mail through this mailer,
+    which consults no permission: that code's own gate is the send's only
+    authorization. Each email becomes one queued message through
     :meth:`~angee.messaging.managers.MessageManager.compose_as_system`, in the
     caller's transaction, so mail sent in a transaction that rolls back is never
     sent; it sends nothing itself. Delivery runs later through ``MAILERS["transport"]``.

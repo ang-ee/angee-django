@@ -1,9 +1,9 @@
-"""Every module that reaches the system channel's one writer is named, with the permission that decides it.
+"""Every module that calls the system channel's one writer directly is named, with the permission that decides it.
 
 ``MessageManager.compose_as_system`` writes system mail as named system work and
 consults no send right: the caller's own permission decided the send. So each
-module under ``src`` and ``examples`` that refers to it is listed in ``CALLERS``
-with that permission; a new caller adds its module and says what decides it.
+module under ``src`` and ``examples`` that refers to it is a key of ``CALLERS``,
+mapped to that permission; a new caller adds its module and says what decides it.
 
 The scan counts any reference to the name: an attribute (``manager.compose_as_system``,
 called, bound to a variable or passed on), a name imported or assigned, and the
@@ -23,9 +23,8 @@ import pytest
 ROOT = Path(__file__).parent.parent
 WRITER = "compose_as_system"
 CALLERS = {
-    # The system mailer, Django's default mailer: each email Django sends is
-    # recorded. The code that calls Django's mail API decided that send.
-    Path("src/angee/messaging/email.py"),
+    # The system mailer, Django's default mailer: each email Django sends is recorded.
+    Path("src/angee/messaging/email.py"): "the calling code's own gate (see SystemMailer)",
 }
 
 
@@ -52,10 +51,14 @@ def _callers() -> dict[Path, list[int]]:
 
 
 def test_every_caller_of_the_system_mail_writer_is_named_with_its_permission() -> None:
+    unstated = [str(path) for path, permission in CALLERS.items()
+                if not (isinstance(permission, str) and permission.strip())]
+    assert unstated == [], "State the permission that decides each listed caller's send."
     found = _callers()
     unnamed = {str(path): lines for path, lines in found.items() if path not in CALLERS}
     assert unnamed == {}, "Name each caller of compose_as_system in CALLERS, with the permission that decides it."
-    assert sorted(str(path) for path in CALLERS - set(found)) == [], "A listed caller no longer refers to the writer."
+    stale = sorted(str(path) for path in CALLERS.keys() - found.keys())
+    assert stale == [], "A listed caller no longer refers to the writer."
 
 
 @pytest.mark.parametrize(
