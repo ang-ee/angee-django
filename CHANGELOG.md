@@ -47,9 +47,9 @@ live in code docstrings.
     decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
     `decode_json` in `angee.base.serialization`: the GraphQL view answers
     Strawberry's own 400, a refused view-as preview still answers its 403, the
-    GraphQL WebSocket closes with Strawberry's 4400, and anonymous ingress
-    refuses it as `invalid_request`. Each raised an uncaught `RecursionError`
-    before.
+    GraphQL WebSocket closes with Strawberry's 4400, anonymous ingress
+    refuses it as `invalid_request`, and an agent's ACP WebSocket skips the
+    record as invalid JSON. Each raised an uncaught `RecursionError` before.
   - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
     through nested lists and expands shared references; bounding it belongs to
     that library's own release.
