@@ -7,7 +7,6 @@ import json
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
-from django.conf import DEPRECATED_EMAIL_SETTINGS
 from django.core.exceptions import ImproperlyConfigured
 from django.core.mail.handler import DEFAULT_MAILER_ALIAS, DEFAULT_MAILER_BACKEND
 from django.utils.log import DEFAULT_LOGGING
@@ -95,11 +94,6 @@ SETTINGS: _Settings = {
     "LOGGING": _error_mail_logging(),
 }
 
-_LEGACY = (
-    "The legacy email settings {names} are set. Django refuses them beside MAILERS, which angee.messaging "
-    "configures. Move them into MAILERS.transport OPTIONS where the deployment states its settings (host, "
-    "port, username, password, use_tls...), and remove them."
-)
 _OWN_DEFAULT = (
     "MAILERS[\"default\"] is this deployment's own mailer ({backend}). With angee.messaging installed, Django's "
     "default mailer is messaging's system mailer: it records every email on the system channel, and messaging "
@@ -118,16 +112,13 @@ _LOOP = (
 def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     """Make the system mailer Django's default mailer, refusing an authored mailer setting that collides with it.
 
-    Messaging owns ``MAILERS["default"]``: a deployment that states its own, a
-    ``transport`` that is the system mailer, or a legacy ``EMAIL_*`` setting
-    (which Django refuses beside ``MAILERS``) is refused at settings load with
-    the exact edit to make. Otherwise the default is contributed when the
-    deployment states none, and the mail-provider values are derived from the
-    host environment.
+    Messaging owns ``MAILERS["default"]``: a deployment that states its own, or a
+    ``transport`` that is the system mailer, is refused at settings load with the
+    exact edit to make. Otherwise the default is contributed when the deployment
+    states none, and the mail-provider values are derived from the host
+    environment. Django itself refuses legacy ``EMAIL_*`` settings beside ``MAILERS``.
     """
 
-    if authored := sorted(DEPRECATED_EMAIL_SETTINGS.intersection(namespace)):
-        raise ImproperlyConfigured(_LEGACY.format(names=", ".join(authored)))
     mailers = namespace.get("MAILERS") or {}
     default, transport = mailers.get(DEFAULT_MAILER_ALIAS), mailers.get(TRANSPORT_MAILER_ALIAS)
     if default is not None and (backend := default.get("BACKEND", DEFAULT_MAILER_BACKEND)) != SYSTEM_MAILER_BACKEND:

@@ -640,11 +640,6 @@ def test_a_stated_transport_reaches_the_settings_as_authored_beside_the_system_m
             "MAILERS:\n  transport:\n    BACKEND: angee.messaging.email.SystemMailer\n", _mailers("transport"),
             id="transport-that-records",
         ),
-        pytest.param("EMAIL_HOST: smtp.example.test\nEMAIL_PORT: 587\n", _mailers("transport"), id="legacy"),
-        pytest.param(
-            _mailers("transport") + "EMAIL_HOST: smtp.example.test\n", _mailers("transport"),
-            id="legacy-beside-mailers",
-        ),
     ],
 )
 def test_a_mailer_setting_that_collides_with_messagings_is_refused_and_the_stated_edit_starts(

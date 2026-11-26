@@ -259,11 +259,11 @@ MAILERS:
 ```
 
 Settings load refuses, naming the edit, a mailer setting that collides with the
-one messaging contributes: a deployment's own `MAILERS.default` (rename it to
-`MAILERS.transport`, or remove it when a transport is stated), a transport that
-is the system mailer, which would deliver nothing, and Django's legacy `EMAIL_*`
-settings (move them into `MAILERS.transport` `OPTIONS`), which Django refuses
-beside `MAILERS`. The host no longer consumes `EMAIL_URL` or `EMAIL_BACKEND`
+one messaging owns: a deployment's own `MAILERS.default` (rename it to
+`MAILERS.transport`, or remove it when a transport is stated), and a transport
+that is the system mailer, which would deliver nothing. Django itself refuses its
+legacy `EMAIL_*` settings beside `MAILERS`, which messaging always states: move
+them into `MAILERS.transport` `OPTIONS`. The host no longer consumes `EMAIL_URL` or `EMAIL_BACKEND`
 environment inputs; existing django-yamlconf overlays own secret values. One
 limit belongs to the settings loader: a `MAILERS` written as a Python literal in
 `settings.py` loses its raw marker once messaging contributes the default beside
@@ -278,7 +278,7 @@ it, so a `{...}` in one of its values is expanded as a settings reference;
 | its own `default` | refused: rename it to `transport` |
 | its own `default` and `transport` | refused: remove `default` |
 | `transport` as the system mailer | refused |
-| a legacy `EMAIL_*` setting | refused: move it into `MAILERS.transport` `OPTIONS` |
+| a legacy `EMAIL_*` setting | refused by Django: move it into `MAILERS.transport` `OPTIONS` |
 | `transport` as Django's locmem, console, file or dummy backend | starts; `check --deploy` reports `messaging.E004` |
 
 Delivering a recorded message marks its context, and the system mailer refuses

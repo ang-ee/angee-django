@@ -15,8 +15,9 @@ live in code docstrings.
   - **Upgrade first:** with messaging installed, start-up refuses a deployment that
     states its own `MAILERS.default` until it is renamed `MAILERS.transport`
     (keeping its `BACKEND` and `OPTIONS`; remove it instead when a transport is
-    stated), and refuses legacy `EMAIL_*` settings until they move into
-    `MAILERS.transport` `OPTIONS`; the refusal names the edit. Then provision: it
+    stated); the refusal names the edit. Django itself refuses legacy `EMAIL_*`
+    settings beside the `MAILERS` messaging states: move them into
+    `MAILERS.transport` `OPTIONS`. Then provision: it
     loads the system channel's rows and runs `rebac sync` for schema revision 30.
     A host that authors `LOGGING` names `using: transport` on its
     `AdminEmailHandler` (messaging's README gives the block). Tests that observed
