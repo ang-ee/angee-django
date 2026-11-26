@@ -10,8 +10,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import BooleanField, Exists, ExpressionWrapper, OuterRef, Q
 from django.db.models.functions import Now
-from rebac import check_permission, generic_target, system_context, to_subject_ref
+from rebac import check_permission, generic_target, system_context, to_object_ref, to_subject_ref, user_subject_type
 from rebac.actors import is_sudo
+from rebac.backends import backend
 
 from angee.base.managers import AngeeManager
 from angee.base.models.append_only import AppendOnlyQuerySet
@@ -21,6 +22,7 @@ from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.signals import mute_changes, publish_change
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
+from angee.decisions.signals import decision_asked
 from angee.provenance.evidence import readable_records
 
 if TYPE_CHECKING:
@@ -54,6 +56,58 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
         return self.with_actor(actor).with_action("act").open().filter(
             Q(assignees=identity) | Q(assignees__isnull=True),
         )
+
+    def deciders(self) -> dict[Any, list[Any]]:
+        """The active people each of these questions can be put to, keyed by primary key: who may read and answer it.
+
+        The active people who hold both ``act`` and ``read`` on the question, through
+        REBAC's reverse lookups of each: the administrator arm and every owner's
+        ``owner_eligible`` arm count, while a holder of ``act`` who may not read the
+        question (an owner arm that grants answering alone, as intake's sharers hold)
+        is left out, as are service users and inactive accounts (``active_people``).
+        Unlike :meth:`waiting_on` it has no "assigned to me or unassigned" clause, so
+        an administrator is among the deciders of a question assigned to others. Each
+        list is in primary-key order; a question nobody can be put to maps to an empty
+        list. :meth:`put_to` is the same rule read from the person's side. Two reverse
+        lookups per question, read as decisions' own named system work: it suits one
+        question or a few, not every open question at once.
+        """
+
+        holders: dict[Any, set[Any]] = {}
+        with system_context(reason="decisions.deciders"):
+            for decision in self.only("pk").order_by("pk"):
+                resource = to_object_ref(decision)
+                act, read = (
+                    {actor_user_id(subject) for subject in backend().lookup_subjects(
+                        resource=resource, action=action, subject_type=user_subject_type(),
+                    )}
+                    for action in ("act", "read")
+                )
+                holders[decision.pk] = (act & read) - {None}
+            people = get_user_model().system_queryset().active_people().filter(
+                pk__in=set().union(*holders.values()),
+            ).in_bulk()
+        return {pk: [people[identity] for identity in sorted(ids) if identity in people] for pk, ids in holders.items()}
+
+    def put_to(self, person: Any) -> Any:
+        """The open questions here that can be put to ``person``: those they hold both ``act`` and ``read`` on.
+
+        :meth:`deciders` read from the person's side, the same rule: ``person`` is one of
+        a question's deciders exactly when the question is in ``put_to(person)``, so a
+        service user, an inactive account or no person at all is put no question. Unlike
+        :meth:`waiting_on` it has no "assigned to me or unassigned" clause. Rows come
+        back in ``person``'s ``act`` scope, filtered by their ``read`` scope; a few
+        statements whatever the number of questions, which suits every open question
+        at once.
+        """
+
+        identity = actor_user_id(to_subject_ref(person)) if person is not None else None
+        if identity is None:
+            return self.none()
+        rows = self.with_actor(person)
+        if not get_user_model().system_queryset().active_people().filter(pk=identity).exists():
+            return rows.none()
+        return rows.with_action("act").open().filter(pk__in=self.model.objects.with_actor(person).values("pk"))
 
     def open_for(self, *records: Any) -> Any:
         return self.open().for_records(*records)
@@ -133,7 +187,11 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         return reminded
 
     def ask(self, request: DecisionRequest, *, actor: Any) -> Any:
-        """Admit one question after checking its participants' standing read access."""
+        """Admit one question after checking its participants' standing read access.
+
+        ``decision_asked`` fires once the question is admitted, inside this transaction
+        and outside decisions' own system context; a refused ask sends nothing.
+        """
         request = DecisionRequest.model_validate(request)
         if actor is None and not is_sudo():
             raise PermissionDenied("Actorless admission requires a named system context.")
@@ -169,29 +227,34 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         )
         readable_records(references, participants)
         targets = {generic_target(record) for record in request.records}
-        with transaction.atomic(), system_context(reason="decisions.ask"):
-            # Capture admission only after its immutable concern links exist.
-            with mute_changes():
-                decision = self.create(
-                    kind=request.kind,
-                    requester=requester,
-                    proposal=request.proposal.model_dump(mode="json"),
-                    context=request.context.model_dump(mode="json"),
-                    due_at=request.due_at,
-                    remind_after=request.remind_after,
+        with transaction.atomic():
+            with system_context(reason="decisions.ask"):
+                # Capture admission only after its immutable concern links exist.
+                with mute_changes():
+                    decision = self.create(
+                        kind=request.kind,
+                        requester=requester,
+                        proposal=request.proposal.model_dump(mode="json"),
+                        context=request.context.model_dump(mode="json"),
+                        due_at=request.due_at,
+                        remind_after=request.remind_after,
+                    )
+                decision.assignees.set(assignees)
+                link = apps.get_model("decisions", "DecisionRecord")
+                link.objects.bulk_create(
+                    [
+                        link(decision=decision, **target.lookups(link, "record"))
+                        for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
+                    ]
                 )
-            decision.assignees.set(assignees)
-            link = apps.get_model("decisions", "DecisionRecord")
-            link.objects.bulk_create(
-                [
-                    link(decision=decision, **target.lookups(link, "record"))
-                    for target in sorted(targets, key=lambda target: (target.content_type.pk, target.object_id))
-                ]
-            )
-            if assignees and not any(check_permission("act", decision, actor=person).allowed for person in assignees):
-                raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
-            publish_change(decision, action="create", update_fields=None)
-        return decision.with_actor(asking) if asking is not None else decision
+                if assignees and not any(
+                    check_permission("act", decision, actor=person).allowed for person in assignees
+                ):
+                    raise ValidationError({"assignees": "At least one assignee must be allowed to answer."})
+                publish_change(decision, action="create", update_fields=None)
+            asked = decision.with_actor(asking) if asking is not None else decision
+            decision_asked.send(sender=type(decision), decision=asked)
+        return asked
 
     def supersede(self, decision: Any, request: DecisionRequest, *, actor: Any, reason: str) -> Any:
         """Replace one open question with ``request`` in one transaction; the asking owner's system context.

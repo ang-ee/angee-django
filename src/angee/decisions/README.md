@@ -26,6 +26,28 @@ of them, such as a represented party's admitted user, unions that arm into
 concern links and nothing else; the answer's referenced records still show only to
 their own readers.
 
+An admitted question sends `decision_asked` inside the ask's transaction, after
+decisions' own system work: receivers hold only the caller's authority, a receiver
+error rolls the admission back, and a refused ask sends nothing. A supersede asks its
+replacement inside its own `decisions.supersede` system context, so that replacement's
+receivers run elevated; a receiver reads under an authority it names, never the
+ambient one. A receiver with an external effect schedules it after commit.
+`Decision.objects.deciders()` maps each question to the active people it can be put
+to, in primary-key order: those who may both answer (`act`) and read it, service
+users and inactive accounts left out. `Decision.objects.put_to(person)` is the same
+rule read from the person's side: the open questions that can be put to them. A
+person is among a question's deciders exactly when the question is put to them.
+Neither has the "assigned to me or unassigned" clause `waiting_on` has, so an
+administrator is a decider of a question assigned to others. `deciders` makes two
+reverse lookups a question; `put_to` a few statements whatever the number of
+questions. `decision.concern_labels(reader)` is the labels of the concerned records
+`reader` reads, and `decision.requester_name(reader)` the requester's name as
+`reader` reads that user; the console's `concerns_label` and a message sent to a
+person both read them for that person.
+`decision.get_absolute_url()` is the question's console path,
+`/decisions/<public id>`: the [web fragment's](web/README.md) record route, which a
+link sent outside the app joins to the public origin.
+
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 
 ```json

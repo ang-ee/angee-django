@@ -1,9 +1,11 @@
 """One question, its immutable proposal, and its final verdict."""
 
+import hashlib
 from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any, Self
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
@@ -15,12 +17,14 @@ from django.utils.text import capfirst
 from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, system_context, to_subject_ref
 from rebac.actors import is_sudo
+from rebac.errors import NoActorResolvedError
 
 from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.derived import DerivedFrom
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.permissions import actor_user_id, require_rebac_queryset
+from angee.base.permissions import actor_user_id, reader_queryset, require_rebac_queryset
+from angee.base.prefetch import ReaderBatch, ReaderMemo, prefetched
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
 from angee.decisions.contracts import DecisionContext, DecisionProposal, DecisionRecordReference, DecisionRequest
@@ -32,6 +36,12 @@ from angee.provenance.evidence import (
     readable_evidence_records,
     readable_records,
 )
+
+_CONCERN_TARGET = "_decision_concern_target"
+_UNKEPT_CONCERNS = "_decision_concerns_unkept"
+"""Where a batch read without a reader or under sudo lands: no reader's answers come from it."""
+_READER = ReaderMemo("_decisions_reader_answers")
+"""A question's context from one reader's batch read (:meth:`Decision.contexts_for`)."""
 
 
 def _user(actor: Any, *, active: bool = True) -> Any:
@@ -140,6 +150,81 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
 
     def __str__(self) -> str:
         return self.kind_label
+
+    def get_absolute_url(self) -> str:
+        """The console path that opens this question, ``/decisions/<public id>``: the decisions fragment's record route.
+
+        A path, as Django's convention has it; a link sent outside the app joins it to
+        ``angee.base.origins.public_origin``.
+        """
+        return f"/decisions/{self.public_id}"
+
+    @staticmethod
+    def _concerns_attr(reader: Any) -> str | None:
+        """Where ``reader``'s batched concern links sit on a row, keyed by their subject; ``None`` when never kept.
+
+        A batch is never kept without a reader, for a reader no subject names, or under
+        sudo, whose read bypasses every reader's policy ("Batch per reader, answer per
+        row" in ``docs/backend/guidelines.md``), so it never answers another read.
+        """
+        if reader is None or is_sudo():
+            return None
+        try:
+            subject = to_subject_ref(reader)
+        except NoActorResolvedError:
+            return None
+        # A digest of the subject, never its spelling: ``auth/anonymous:*`` spelled out would
+        # end in ``__``, which a prefetch reads as a lookup separator.
+        digest = hashlib.blake2b(f"{subject.subject_type}:{subject.subject_id}".encode(), digest_size=8).hexdigest()
+        return f"_decision_concerns_{digest}"
+
+    @classmethod
+    def concern_records_prefetch(cls, reader: Any) -> models.Prefetch:
+        """Batch the concern links ``reader`` reads, each target as ``reader`` reads it, for :meth:`concern_labels`.
+
+        The links and their targets are read through ``reader``'s own read scope, or
+        REBAC's ambient one without a reader (``reader_queryset``), the targets once per
+        referenced type (``DecisionRecord.record_targets_prefetch``).
+        """
+        return models.Prefetch(
+            "records", queryset=cls._concern_links(reader), to_attr=cls._concerns_attr(reader) or _UNKEPT_CONCERNS,
+        )
+
+    @staticmethod
+    def _concern_links(reader: Any) -> models.QuerySet[Any]:
+        """The concern links ``reader`` reads, in link order, each with its target as ``reader`` reads it."""
+        link = apps.get_model("decisions", "DecisionRecord")
+        return reader_queryset(link, reader).select_related("content_type").order_by("pk").prefetch_related(
+            link.record_targets_prefetch(reader, to_attr=_CONCERN_TARGET),
+        )
+
+    def concern_labels(self, reader: Any) -> list[str]:
+        """The labels of the records this question concerns that ``reader`` reads (a bill number, a supplier).
+
+        In link order. A record ``reader`` may not read, or whose read was revoked, is
+        left out, and so is every record of a question ``reader`` may not read. A list
+        read batches the labels with :meth:`concern_records_prefetch`; a row read another
+        way reads its own concerns the same way. Each reader's batch is kept apart on the
+        row, so a row read once answers each reader from their own read; without a
+        reader (REBAC's ambient scope) or under sudo, nothing is kept and every call reads.
+        """
+        attr = self._concerns_attr(reader)
+        if attr is None:
+            links = list(self._concern_links(reader).filter(decision_id=self.pk))
+        else:
+            links = prefetched(self, attr, lambda: type(self).concern_records_prefetch(reader))
+        return [str(target) for link in links if (target := getattr(link, _CONCERN_TARGET)) is not None]
+
+    def requester_name(self, reader: Any) -> str:
+        """The requester's name as ``reader`` reads that user, or ``""`` when there is none or ``reader`` may not.
+
+        Read through ``reader``'s scope of users, as GraphQL's ``requester`` field
+        reads it (``actor_scoped_to_one``).
+        """
+        if self.requester_id is None:
+            return ""
+        requester = reader_queryset(get_user_model(), reader).filter(pk=self.requester_id).first()
+        return requester.get_full_name() if requester is not None else ""
 
     def withdraw(self, *, actor: Any, reason: str = "") -> Self:
         """An authorized asking owner withdraws this question in a named system context.

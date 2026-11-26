@@ -68,8 +68,8 @@ EXPECTED_VERBS = {
     ),
     "decisions.Decision.manager": "ask remind_due supersede",
     "decisions.Decision.queryset": (
-        "attention_expression for_records for_records_filter held_by_requesting_records_filter open "
-        "open_expression open_for overdue overdue_expression waiting_on"
+        "attention_expression deciders for_records for_records_filter held_by_requesting_records_filter open "
+        "open_expression open_for overdue overdue_expression put_to waiting_on"
     ),
 }
 

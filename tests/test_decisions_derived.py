@@ -79,6 +79,27 @@ def test_read_and_can_act_follow_the_typed_concern(schema, concerned_question, v
         assert question.verdict == ["confirm"] and question.answered_by_id == actor.pk
 
 
+def test_an_owner_eligible_writer_is_a_decider_and_a_reader_of_the_record_is_not(concerned_question):
+    admin, writer, reader, outsider, _record, question = concerned_question
+    assert Decision.system_queryset().filter(pk=question.pk).deciders() == {question.pk: [admin, writer]}
+    put = [person for person in (admin, writer, reader, outsider) if Decision.objects.put_to(person).exists()]
+    assert put == [admin, writer]
+
+
+def test_a_holder_of_act_who_may_not_read_the_question_is_no_decider(db):
+    actor = create_user("act-without-read-decider")
+    Need = apps.get_model("intake", "Need")
+    with actor_context(actor):
+        task = Task.objects.create(title="Access request")
+        need = Need.objects.capture(target=task, body="Please review access")
+    question = Decision.system_queryset().get(pk=need.access_decision_id)
+    with system_context(reason="test.decisions.deciders_without_read"):
+        question.assignees.clear()
+    assert question.with_actor(actor).has_access("act") and not question.with_actor(actor).has_access("read")
+    assert actor not in Decision.system_queryset().filter(pk=question.pk).deciders()[question.pk]
+    assert not Decision.objects.put_to(actor).filter(pk=question.pk).exists()
+
+
 def test_decide_does_not_return_an_answer_to_an_actor_without_decision_read(schema, db):
     actor = create_user("share-without-question-read")
     Need = apps.get_model("intake", "Need")
