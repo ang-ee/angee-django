@@ -409,6 +409,12 @@ def _own_size(nodelist: NodeList) -> tuple[int, int, int]:
     )
 
 
+def _nested_too_deep(name: str) -> str:
+    """The refusal of a row whose include sits past :data:`INCLUDE_DEPTH_LIMIT`, as the tree and the gather word it."""
+
+    return f"{name}: includes nest over {INCLUDE_DEPTH_LIMIT} deep"
+
+
 def _over_caps(root_name: str, form: RowPiece, nodes: int, outputs: int, text: int) -> list[str]:
     """The tree caps a form's count passes: :data:`NODE_LIMIT`, :data:`OUTPUT_LIMIT`, :data:`TEXT_LIMIT`."""
 
@@ -1167,6 +1173,10 @@ class TemplateWalker:
                     line.count(opener) for opener in OPENERS) > OPENERS_PER_LINE), None)) is not None:
                 refuse(f"a line of {column} is over {LINE_LIMIT} characters or holds over {OPENERS_PER_LINE} "
                        f"{{{{, {{% or {{# ({line[:40]!r})")
+            elif any(opener in tag_re.sub("", text) for opener in OPENERS):
+                # A comment swallows one at render, but the Markdown pass scans each to the end of its line first.
+                refuse(f"{column} holds {{{{, {{% or {{# that opens no template code: write "
+                       "{% templatetag openvariable %} and its kin for a literal one")
         refusals.extend(f"{name}: {reason}" for reason in markup.source_refusals(row.source))
         if refusals:
             return _RowCheck(name, refusals=tuple(refusals))
@@ -1289,10 +1299,15 @@ class TemplateWalker:
         Each checked row's own size (:attr:`_RowCheck.sizes`) adds to the walk's totals, and the walk stops as soon as
         a total passes a tree cap: every row reached is in the tree at least once, so no admitted walk reaches it.
         What each row's checks read (:attr:`_RowCheck.read`) adds up too, against :data:`WALK_READ_LIMIT`.
+        A row is fetched only at an include depth the tree reaches: the root and its layout stand at 0, a row they
+        include at 1, and a target past :data:`INCLUDE_DEPTH_LIMIT` is refused in the tree's own words
+        (:func:`_nested_too_deep`) before it is read, so a chain costs queries bounded by the limit, not its length.
         """
 
         checks: dict[str, _RowCheck] = {}
         totals: dict[RowPiece, tuple[int, int, int]] = {}
+        depths: dict[str, int] = {walk.root_name: 0}
+        includers: dict[str, str] = {}
         characters = read = spans = 0
         level = [walk.root_name]
         while level:
@@ -1325,9 +1340,17 @@ class TemplateWalker:
                 walk.includes |= check.includes
                 layout = row.handler.layout_name(row)
                 for target in sorted(check.includes | ({layout} if layout else set())):
-                    if target not in walk.rows and target not in wanted:
+                    if target in walk.rows:
+                        continue
+                    depth = 0 if target == layout else depths[name] + 1
+                    if depth < depths.get(target, depth + 1):
+                        depths[target], includers[target] = depth, name
+                    if target not in wanted:
                         wanted.append(target)
             if walk.refusals or not wanted:
+                return checks
+            if too_deep := sorted({includers[target] for target in wanted if depths[target] > INCLUDE_DEPTH_LIMIT}):
+                walk.refusals.extend(_nested_too_deep(name) for name in too_deep)
                 return checks
             found = reader.named_rows(wanted, language=walk.language)
             # One query a level for what a save asks of every included key, never one a target.
@@ -1396,12 +1419,13 @@ def _date_format(expression: FilterExpression) -> str:
 
 
 def _frame(name: str, row: WalkedRow, form: RowPiece, *, top: bool, scope: Mapping[str, _Binding] | None = None,
-           loops: int = 0, includes: tuple[str, ...] = ()) -> _Frame:
+           loops: int = 0, includes: tuple[str, ...] = (),
+           guards: frozenset[tuple[str, Path]] = frozenset()) -> _Frame:
     variables = row.variables if isinstance(row.variables, dict) else {}
     leaves = frozenset(tuple(path.split(".")) for path in variables)
     return _Frame(
         name=name, row=row, form=form, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {},
-        loops=loops, includes=includes,
+        loops=loops, includes=includes, guards=guards,
     )
 
 
@@ -1654,7 +1678,7 @@ class _TreeWalker:
             self.refuse(frame, f"includes itself: {' -> '.join((*stack, target))}")
             return
         if len(stack) > INCLUDE_DEPTH_LIMIT:
-            self.refuse(frame, f"includes nest over {INCLUDE_DEPTH_LIMIT} deep")
+            self.walk.refusals.append(_nested_too_deep(frame.name))
             return
         row = self.walk.rows[target]
         arguments = row.variables if isinstance(row.variables, dict) else {}
@@ -1667,8 +1691,11 @@ class _TreeWalker:
                 self.refuse(frame, f"passes {name} to {target}, which does not declare it")
             binding = self.bind(frame, expression)
             scope[name] = _Binding(binding.kind, local=(name,), effective=binding.effective)
+        # The included row keeps the guards on the values it is passed (their effective paths), never the caller's
+        # own names, so an include inside {% if link %} reads link as optional, as the same content inline does.
+        guards = frozenset(key for key in frame.guards if key[0] == "e")
         self.nodes(
-            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack),
+            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack, guards=guards),
             self.checks[target].pieces[tree.form].nodelist,
             tree,
         )

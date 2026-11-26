@@ -172,6 +172,12 @@ class HtmlFormatHandler(MessageTemplateFormatHandler):
 MARKDOWN_BRACKETS_PER_LINE = 30
 """The most ``[`` a line of Markdown holds: markdown-it scans each link label to the end of its line."""
 
+MARKDOWN_LABEL_SCAN_LIMIT = 50_000
+"""The most characters a row's link and image labels may make the Markdown pass scan: for each ``[`` (a ``![`` among
+them), the characters after it in its paragraph, list item or heading, where markdown-it's label scan stops at the
+latest, walking it token by token. A row's cost grows with that sum, not with its brackets or its length: one ``[``
+before a paragraph dense with emphasis delimiters re-reads all of it. 50,000 is one such full paragraph."""
+
 _TEMPLATE_LINK = "\x00template-link:"
 """Marks a link whose destination is one output, in the token's ``href``."""
 
@@ -424,12 +430,27 @@ class MarkdownFormatHandler(MessageTemplateFormatHandler):
     parser: ClassVar[MarkdownIt] = _markdown()
 
     def source_refusals(self, source: str) -> list[str]:
-        """Refuse a line holding over :data:`MARKDOWN_BRACKETS_PER_LINE` ``[``."""
+        """Refuse a line holding over :data:`MARKDOWN_BRACKETS_PER_LINE` ``[``, then a row whose label scans would
+        cover over :data:`MARKDOWN_LABEL_SCAN_LIMIT` characters, found from markdown-it's block pass alone."""
 
-        return [
+        refusals = [
             f"a Markdown line holds over {MARKDOWN_BRACKETS_PER_LINE} [ (line {number})"
             for number, line in enumerate(source.split("\n"), 1) if line.count("[") > MARKDOWN_BRACKETS_PER_LINE
         ][:1]
+        if refusals or "[" not in source:
+            return refusals
+        blocks: list[MarkdownToken] = []
+        self.parser.block.parse(source, self.parser, {}, blocks)
+        scanned = 0
+        for token in blocks:
+            content, index = token.content if token.type == "inline" else "", -1
+            while (index := content.find("[", index + 1)) >= 0:
+                scanned += len(content) - index - 1
+        if scanned > MARKDOWN_LABEL_SCAN_LIMIT:
+            return [f"the [ of this Markdown row open link or image labels the Markdown pass would scan across "
+                    f"{scanned} characters, over {MARKDOWN_LABEL_SCAN_LIMIT}: put a link in a shorter paragraph, "
+                    "or write a literal [ as &#91;"]
+        return []
 
     def forms(self, row: FormedRow) -> RowForms:
         """Return the styled HTML render and the text render of one parse of ``row.source``."""
