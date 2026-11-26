@@ -122,6 +122,11 @@ export interface MessageTemplateFixtureOptions {
    * preview every row. The permission schema has no such reader today, so this one answer is the fake's.
    */
   overrideDenied?: boolean;
+  /**
+   * Once a save is answered, every preview read fails with a GraphQL error, as a server failing on the
+   * read again that the save causes; the reads before it answer as recorded.
+   */
+  failPreviewAfterSave?: boolean;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
 }
@@ -144,9 +149,11 @@ function sameObject(left: Readonly<Record<string, unknown>>, right: unknown): bo
 
 /** The schemas a story or a test mounts: the console over the fake, with the recorded metadata. */
 export function messageTemplateSchemas({
-  viewer = "admin", refuseSave = false, refuseKeep = false, overrideDenied = false, onRequest, onCall,
+  viewer = "admin", refuseSave = false, refuseKeep = false, overrideDenied = false, failPreviewAfterSave = false,
+  onRequest, onCall,
 }: MessageTemplateFixtureOptions = {}) {
   const member = viewer === "member";
+  let savedOnce = false;
   let rows: WireRow[] = RECORDED.rows
     .map((row) => (member ? { ...row, ...RECORDED.member[row.id], id: row.id } : row))
     .map((row) => (overrideDenied ? { ...row, can_override: false } : row));
@@ -184,6 +191,9 @@ export function messageTemplateSchemas({
       return Object.hasOwn(backlinks, row.id) ? { ...row, backlinks: backlinks[row.id] } : row;
     },
     message_template_preview: ({ template, brand_kit }) => {
+      if (failPreviewAfterSave && savedOnce) {
+        throw new GraphQLError(`The preview of ${String(template)} fails when read again after a save.`);
+      }
       const preview = typeof brand_kit === "string"
         ? (member ? undefined : RECORDED.previewsInKit[brand_kit]?.[String(template)])
         : previews[String(template)];
@@ -222,6 +232,7 @@ export function messageTemplateSchemas({
       if (!current) throw unrecorded(`the row ${id}`);
       const saved: WireRow = { ...current, ...(_set as Row), id };
       rows = rows.map((row) => (row.id === id ? saved : row));
+      savedOnce = true;
       return saved;
     },
     message_templates_delete: ({ id, confirm }) => {

@@ -60,7 +60,7 @@ const documents = { console: operationDocuments };
  */
 export function MessageTemplateStory({
   appearance, open, viewer = "admin", refuseSave = false, refuseKeep = false, overrideDenied = false,
-  onRequest, onCall,
+  failPreviewAfterSave = false, onRequest, onCall, queryClient,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
   /** The row whose record opens, or `new` for the create form; the library when absent. */
@@ -69,12 +69,17 @@ export function MessageTemplateStory({
   refuseSave?: boolean;
   refuseKeep?: boolean;
   overrideDenied?: boolean;
+  failPreviewAfterSave?: boolean;
   onRequest?: (request: GraphQLWireRequest) => void;
   onCall?: (call: MessageTemplateFixtureCall) => void;
+  /** A test's own query client (its retry policy, say); the fixture makes one when absent. */
+  queryClient?: RuntimeFixtureProps["queryClient"];
 }) {
   const schemas = useMemo(
-    () => messageTemplateSchemas({ viewer, refuseSave, refuseKeep, overrideDenied, onRequest, onCall }),
-    [viewer, refuseSave, refuseKeep, overrideDenied, onRequest, onCall],
+    () => messageTemplateSchemas({
+      viewer, refuseSave, refuseKeep, overrideDenied, failPreviewAfterSave, onRequest, onCall,
+    }),
+    [viewer, refuseSave, refuseKeep, overrideDenied, failPreviewAfterSave, onRequest, onCall],
   );
   const collectionPath = MESSAGE_TEMPLATE_ROUTE_HREF(MESSAGE_TEMPLATES_ROUTE);
   const initialEntry = open
@@ -82,7 +87,8 @@ export function MessageTemplateStory({
     : collectionPath;
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas}
     collectionPath={collectionPath} initialEntry={initialEntry} runtime={messageTemplateRuntime(viewer)}
-    resourceName={MESSAGE_TEMPLATE_MODEL} resourceLabel="Message templates" operationDocuments={documents}>
+    resourceName={MESSAGE_TEMPLATE_MODEL} resourceLabel="Message templates" operationDocuments={documents}
+    queryClient={queryClient}>
     <MessageTemplatesPage />
   </RoutedRuntimeFixture>;
 }

@@ -6,6 +6,7 @@ import { operationDocuments } from "@angee/gql/console/actions";
 import { RuntimeFixture, type GraphQLWireRequest } from "@angee/storybook/testing";
 import { RelatedPane } from "@angee/ui";
 import { enUiMessages as UI } from "@angee/ui/i18n/en";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 import {
   KEEP_REFUSAL, MESSAGE_TEMPLATE_RESOURCE, RECORDED, ROW, messageTemplateRecordContext, messageTemplateRuntime,
@@ -360,27 +361,47 @@ test("a template whose preview warns lists each warning in the server's words, f
   expect(bandOutline(band, warnings)).toEqual(["warnings", "saved", "message", "caveat"]);
 });
 
-test("a preview that fails to load puts its error first in the band, before anything the server said", async () => {
-  render(<MessageTemplateStory open={ROW.passwordReset} />);
+/** A query client that does not retry a refused read, as the app's own does not retry a GraphQL refusal. */
+function noRetryClient() {
+  return createUiTestProviders().createClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+test("a preview read for another kit that fails shows its error and nothing of the earlier answer", async () => {
+  render(<MessageTemplateStory open={ROW.passwordReset} queryClient={noRetryClient()} />);
   await screen.findByTitle(word("preview.frameTitle"));
-  // The recording holds Password reset's preview in the default kit only: the other kit's read fails.
+  // The recording holds Password reset's preview in the default kit only: the other kit's read fails. It is a
+  // new read, so the earlier kit's answer is not kept beside its error.
   const other = RECORDED.kits.find((kit) => kit.is_default !== true)!;
   await choose(word("preview.kit"), String(other.display_name));
   const band = screen.getByRole("region", { name: word("preview.factsRegion") });
   await waitFor(() => expect(bandOutline(band, [])[0]).toBe("error"));
+
+  expect(bandOutline(band, [])).toEqual(["error", "saved"]);
+  expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
+});
+
+test("a preview read again after a save that fails shows its error first, above the earlier answer it keeps", async () => {
+  render(<MessageTemplateStory open={ROW.passwordReset} failPreviewAfterSave queryClient={noRetryClient()} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  // The save makes the preview read the same row again, and that read fails: the earlier answer stays.
+  fireEvent.change(screen.getByLabelText(word("field.description")), { target: { value: "Sent on request." } });
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+  await screen.findByText(ui("form.updateSuccess"));
+  const band = screen.getByRole("region", { name: word("preview.factsRegion") });
+  await waitFor(() => expect(bandOutline(band, [])[0]).toBe("error"));
   const warnings = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
 
-  // Whatever of the earlier answer stays on screen under the error keeps the band's own order.
-  const outline = bandOutline(band, warnings);
-  const order = ["error", "warnings", "saved", "message", "caveat"];
-  expect(outline).toEqual(order.filter((part) => outline.includes(part)));
-  expect(outline).toContain("saved");
+  // The whole order with every part present: the error, the warnings, the saved-row line, subject and preheader,
+  // the frame caveat; the frame keeps the earlier mail.
+  expect(bandOutline(band, warnings)).toEqual(["error", "warnings", "saved", "message", "caveat"]);
+  expect(screen.getByTitle(word("preview.frameTitle"))).toBeTruthy();
 });
 
 test("the library's three flags read as facts, a word for each state and no checkbox", async () => {
   render(<MessageTemplateStory />);
   const open = (name: string) => ui("list.openRecord").replace("{label}", name);
-  await screen.findByRole("button", { name: open("Button") });
+  // In a routed list the row's opener is a link.
+  await screen.findByRole("link", { name: open("Button") });
   const headers = screen.getAllByRole("columnheader");
   const flags = [word("col.shipped"), word("col.effective"), word("col.defaultUpdated")]
     .map((label) => headers.findIndex((header) => header.textContent === label));
@@ -390,7 +411,7 @@ test("the library's three flags read as facts, a word for each state and no chec
     ["Button", ["flag.yes", "flag.yes", "flag.no"]],
     ["Notice", ["flag.no", "flag.yes", "flag.no"]],
   ] as const) {
-    const row = screen.getByRole("button", { name: open(name) }).closest("tr")!;
+    const row = screen.getByRole("link", { name: open(name) }).closest("tr")!;
     const cells = within(row).getAllByRole("cell");
     expect(flags.map((index) => cells[index]?.textContent)).toEqual(states.map(word));
     for (const index of flags) expect(within(cells[index]!).queryByRole("checkbox")).toBeNull();
