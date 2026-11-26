@@ -100,7 +100,8 @@ export function FieldDescriptorControl(props: FieldDescriptorControlProps): Reac
   if (relation && (!field.widget || field.widget === "many2one")) return <RelationFieldWidget
     value={relationValueId(props.value) || null} onChange={props.onChange} onCommit={props.onCommit}
     readOnly={props.readOnly || props.disabled} relation={relation} filters={field.filters} where={props.where}
-    selectedOption={relationSelectedOption(props.value, relation.labelField)} fieldName={field.name}
+    selectedOption={relationSelectedOption(props.value, relation.labelField)}
+    fieldName={field.name} edit={field.relationEdit}
     aria-label={ariaLabel} controlRef={props.controlRef} controlProps={props.controlProps} />;
   if (relationList) return <RelationMultiFieldWidget
     value={Array.isArray(props.value) ? props.value : []} onChange={props.onChange} onCommit={props.onCommit}

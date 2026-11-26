@@ -95,7 +95,7 @@ function GroupTab({ tab, recordId, record }: { tab: "roster" | "threads"; record
   const entry = useGroupRecordTabs().find(({ id }) => id === tab)!;
   // The tabs read only the loaded group record from the form's save surface.
   const form = { displayRecord: record } as unknown as RecordPanelContext["form"];
-  return <>{entry.render({ recordId, reload: () => undefined, focusField: () => undefined, form, active: true })}</>;
+  return <>{entry.render({ recordId, reload: () => undefined, focusField: () => undefined, fieldLabel: () => undefined, form, active: true })}</>;
 }
 
 // The transcript's keyset feed reads only for a signed-in actor.

@@ -11,7 +11,7 @@ import { createUiTestProviders } from "../../testing";
 import { defaultWidgets, type WidgetDefinition, type WidgetRenderProps } from "../../widgets";
 import type { ActionArg, FieldDescriptor } from "../page";
 import { ActionFormDialog } from "./ActionFormDialog";
-import { emptyValueForField, isFormSpecValueCompatible, refusesSeed } from "./field-values";
+import { emptyValueForField, fieldRuleErrors, isFormSpecValueCompatible, refusesSeed } from "./field-values";
 import { deserializeFormSpec, formSpecInitialValues, type FormSpecFieldDescriptor } from "./form-spec";
 import { emptyDraft } from "./form-view-model";
 import { MutationDialog } from "./MutationDialog";
@@ -35,6 +35,10 @@ describe("a field's empty value (emptyValueForField), one row of its table per l
     ["2. the datetime widget", { widget: "datetime" }, null],
     ["2. the time widget", { widget: "time" }, null],
     ["2. a datetime kind resolves the datetime widget", { kind: "datetime" }, null],
+    ["2. the percent widget with no kind", { widget: "percent" }, null],
+    ["2. the progressBar widget with no kind", { widget: "progressBar" }, null],
+    ["2. a consequence of the widget rows preceding the kinds: a boolean kind under the progressBar widget holds null", { kind: "boolean", widget: "progressBar" }, null],
+    ["1. guard: a string kind under the percent widget keeps the empty text", { kind: "string", widget: "percent" }, ""],
     ["3. the tagInput widget", { widget: "tagInput" }, []],
     ["3. a relation list", { widget: "many2many" }, []],
     ["3. the list widget", { widget: "list" }, []],
@@ -49,6 +53,8 @@ describe("a field's empty value (emptyValueForField), one row of its table per l
     ["5. an object kind", { kind: "object" }, {}],
     ["5. a boolean kind", { kind: "boolean" }, false],
     ["5. a boolean kind under the boolean widget", { kind: "boolean", widget: "boolean" }, false],
+    ["5. guard: a boolean kind under the booleanToggle widget holds false by its kind", { kind: "boolean", widget: "booleanToggle" }, false],
+    ["5. guard: a boolean kind under the booleanBadge widget holds false by its kind", { kind: "boolean", widget: "booleanBadge" }, false],
     ["5. a switch kind", { kind: "switch" }, false],
     ["5. an integer kind", { kind: "integer" }, null],
     ["5. a number kind", { kind: "number" }, null],
@@ -58,12 +64,10 @@ describe("a field's empty value (emptyValueForField), one row of its table per l
     ["6. no widget and no kind", {}, ""],
     ["6. the text widget", { widget: "text" }, ""],
     ["6. the select widget", { widget: "select" }, ""],
-    ["6. the boolean widget with no kind", { widget: "boolean" }, ""],
-    ["6. a known hole kept on purpose until the descriptor carries its declared type: the booleanToggle widget with no kind", { widget: "booleanToggle" }, ""],
-    ["6. a known hole kept on purpose until the descriptor carries its declared type: the booleanBadge widget with no kind", { widget: "booleanBadge" }, ""],
-    ["6. a known hole kept on purpose until the descriptor carries its declared type: the percent widget with no kind", { widget: "percent" }, ""],
-    ["6. a known hole kept on purpose until the descriptor carries its declared type: the progressBar widget with no kind", { widget: "progressBar" }, ""],
-    ["6. a known hole kept on purpose until the descriptor carries its declared type: the money widget with no kind", { widget: "money" }, ""],
+    ["6. guard, a known hole kept on purpose until a field's type reaches the descriptor: the boolean widget with no kind", { widget: "boolean" }, ""],
+    ["6. guard, a known hole kept on purpose until a field's type reaches the descriptor: the booleanToggle widget with no kind", { widget: "booleanToggle" }, ""],
+    ["6. guard, a known hole kept on purpose until a field's type reaches the descriptor: the booleanBadge widget with no kind", { widget: "booleanBadge" }, ""],
+    ["6. guard: the money widget with no kind keeps the empty text; the money addon's fragment registers it, and this rule does not name it until a widget can declare the kind of value it holds", { widget: "money" }, ""],
   ])("%s", (_row, descriptor, expected) => {
     expect(emptyValueForField({ name: "field", ...descriptor })).toStrictEqual(expected);
   });
@@ -257,5 +261,111 @@ describe("the record form and the three dialogs seed each emitted shape with one
     expect(await mutationDialogSeed(field)).toStrictEqual(empty);
     cleanup();
     if (ARGUMENT(field)) expect(await actionArgumentSeed(field)).toStrictEqual(empty);
+  });
+});
+
+describe("the rule check and the seed rule agree", () => {
+  // Every way a field can be declared that the seed and the check read: its widget, its kind, one
+  // bound, and whether it may be null or left out.
+  const WIDGETS = [undefined, "integer", "float", "percent", "progressBar", "money", "date", "datetime", "time", "text", "select", "switch", "json", "tagInput", "list"] as const;
+  const KINDS = [undefined, "string", "integer", "number", "boolean", "array", "object", "any", "datetime"] as const;
+  const BOUNDS: readonly Partial<FieldDescriptor>[] = [
+    {}, { minimum: 0 }, { maximum: 10 }, { minLength: 1 }, { maxLength: 5 }, { minItems: 1 }, { maxItems: 3 },
+  ];
+  const FLAGS: readonly Partial<FieldDescriptor>[] = [{}, { nullable: true }, { omittable: true }, { nullable: true, omittable: true }];
+  const shapes = WIDGETS.flatMap((widget) => KINDS.flatMap((kind) => BOUNDS.flatMap((bound) => FLAGS.map((flags) => ({
+    name: "value", ...(widget ? { widget } : {}), ...(kind ? { kind } : {}), ...bound, ...flags,
+  } as FieldDescriptor)))));
+  const label = ({ name: _name, ...shape }: FieldDescriptor) => JSON.stringify(shape);
+  /** Whether the seeding paths give this field `null` when it holds nothing. */
+  const seededNull = (shape: FieldDescriptor) => emptyValueForField(shape) === null && !refusesSeed(shape, null);
+  /** What the check reads at every depth: a presence flag, a template or a bound. */
+  const structured = (shape: FieldDescriptor) => Boolean(shape.presenceRequired || shape.omittable
+    || ["minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems"].some((bound) => shape[bound as keyof FieldDescriptor] !== undefined));
+  const failing = (cases: readonly FieldDescriptor[], verdict: (shape: FieldDescriptor) => readonly string[], expected: (shape: FieldDescriptor) => readonly string[]) =>
+    cases.filter((shape) => JSON.stringify(verdict(shape)) !== JSON.stringify(expected(shape)))
+      .map((shape) => `${label(shape)}: ${verdict(shape).join(", ") || "accepted"}, expected ${expected(shape).join(", ") || "accepted"}`);
+
+  // Presence is asked the same way whether the surface checks the constraints itself or leaves
+  // them to a schema resolver (the schema dialog and a resolver-backed action dialog).
+  describe.each([["checked", true], ["left to a schema resolver", false]] as const)("with the constraints %s", (_how, validateConstraints) => {
+    /** The rules a field fails at its own path when it holds `value`. */
+    const check = (field: FieldDescriptor, value: unknown, required = false) =>
+      fieldRuleErrors(field, { value, present: true }, { required, validateConstraints }).map((error) => error.keyword);
+    const inObject = (member: FieldDescriptor, value: unknown) => fieldRuleErrors(
+      { name: "config", kind: "object", objectTemplate: [member] },
+      { value: { [member.name]: value }, present: true }, { required: false, validateConstraints },
+    ).map((error) => `${error.path}: ${error.keyword}`);
+    const inList = (item: FieldDescriptor, value: unknown) => fieldRuleErrors(
+      { name: "limits", kind: "array", itemTemplate: item },
+      { value: [value], present: true }, { required: false, validateConstraints },
+    ).map((error) => `${error.path}: ${error.keyword}`);
+
+    test("an optional field that holds the `null` it is seeded with when it holds nothing is never refused, whatever its widget, kind, bound and flags", () => {
+      const seeded = shapes.filter(seededNull);
+      // The space holds the shape the defect was found in, and many besides.
+      expect(seeded.map(label)).toContain(JSON.stringify({ widget: "integer", minimum: 0 }));
+      expect(seeded.length).toBeGreaterThan(200);
+      expect(failing(seeded, (shape) => check(shape, null), () => [])).toEqual([]);
+    });
+
+    test("only `null` is a seed: a key that holds `undefined` is still missing", () => {
+      const seeded = shapes.filter(seededNull).filter(structured);
+      expect(seeded.length).toBeGreaterThan(150);
+      expect(failing(seeded, (shape) => check(shape, undefined), () => ["required"])).toEqual([]);
+      expect(seeded.filter((member) => !inObject(member, undefined).includes("config.value: required")).map(label)).toEqual([]);
+    });
+
+    test("a required field, and one whose presence is required, answers for a `null` as it always did: refused unless it may be null", () => {
+      // What `required` asks of a `null`, whatever seeded it: a structured field that may be null holds it
+      // as a value; any other field is missing.
+      const asked = (shape: FieldDescriptor) => structured(shape) && shape.nullable ? [] : ["required"];
+      expect(failing(shapes, (shape) => check(shape, null, true), asked)).toEqual([]);
+      const presenceRequired = shapes.map((shape) => ({ ...shape, presenceRequired: true }));
+      expect(failing(presenceRequired, (shape) => check(shape, null), (shape) => shape.nullable ? [] : ["required"])).toEqual([]);
+      // The cases a form builds itself: a required, nullable, bounded number seeded with `null`.
+      expect(check({ name: "limit", kind: "integer", nullable: true, minimum: 0 }, null, true)).toEqual([]);
+      expect(check({ name: "limit", widget: "integer", nullable: true, minimum: 0 }, null, true)).toEqual([]);
+    });
+
+    test("a member of an object field follows the same rule at its own path", () => {
+      const members = shapes.filter(structured);
+      const refused = (verdict: readonly string[]) => verdict.includes("config.value: required");
+      // Optional and holding its own seed: not refused.
+      expect(members.filter(seededNull).filter((member) => refused(inObject(member, null))).map(label)).toEqual([]);
+      expect(members.filter(seededNull).length).toBeGreaterThan(150);
+      // Required: refused unless it may be null, as before.
+      expect(members.filter((member) => refused(inObject({ ...member, required: true }, null)) === Boolean(member.nullable)).map(label)).toEqual([]);
+      // A typed member whose kind refuses `null` is never seeded with it; holding one all the same is refused.
+      expect(inObject({ name: "value", kind: "integer", minimum: 0 }, null)).toEqual(["config.value: required"]);
+    });
+
+    test("a list item that holds nothing is missing, whatever seeded it: an item has no key to leave out", () => {
+      const items = shapes.filter(structured);
+      // Not nullable: an item holding `null` is refused, the shapes a form seeds with `null` included.
+      expect(items.filter(seededNull).filter((item) => !item.nullable).length).toBeGreaterThan(80);
+      expect(items.filter((item) => !item.nullable).filter((item) => !inList(item, null).includes("limits.0: required")).map(label)).toEqual([]);
+      // Nullable: `null` is a value an item may hold.
+      expect(items.filter((item) => item.nullable).filter((item) => inList(item, null).includes("limits.0: required")).map(label)).toEqual([]);
+      expect(inList({ name: "value", widget: "integer", minimum: 0 }, 3)).toEqual([]);
+    });
+  });
+
+  test("guards: a value outside its bound is refused, and so is a `null` that is not the field's own empty value", () => {
+    const check = (field: FieldDescriptor, value: unknown) =>
+      fieldRuleErrors(field, { value, present: true }, { required: false, validateConstraints: true }).map((error) => error.keyword);
+    const limit: FieldDescriptor = { name: "limit", widget: "integer", minimum: 0 };
+    expect(check(limit, null)).toEqual([]);
+    expect(check(limit, -1)).toEqual(["minimum"]);
+    expect(check(limit, 3)).toEqual([]);
+    // A typed field whose own kind refuses `null` is not seeded with it.
+    const typed: FieldDescriptor = { name: "limit", widget: "integer", kind: "integer", minimum: 0 };
+    expect(refusesSeed(typed, null)).toBe(true);
+    expect(check(typed, null)).toEqual(["required"]);
+    // No kind, so the seed rule refuses nothing; its empty value is a text, so a `null` is not its seed.
+    const text: FieldDescriptor = { name: "code", widget: "text", minLength: 1 };
+    expect(emptyValueForField(text)).toBe("");
+    expect(refusesSeed(text, null)).toBe(false);
+    expect(check(text, null)).toEqual(["required"]);
   });
 });

@@ -135,6 +135,7 @@ export {
   formSubmitError,
   formSubmitOutcome,
   savedFormSubmitResult,
+  SURFACE_RENDERS_FAILURE,
   applyFormErrors,
   formErrorsFromForm,
   useRefusalBannerFocus,

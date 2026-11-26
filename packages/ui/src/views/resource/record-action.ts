@@ -96,7 +96,8 @@ export function useRecordActionMutation<TField extends string = string>(
   field: TField,
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
-  const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
+  // The bar toasts this verb's failure, so the data layer's own error notice is turned off.
+  const [mutate, state] = useActionOutcomeMutation<TField>(field, { ...options, errorNotification: false });
   const follow = useCreatedRecordLink(options?.linkTo);
   const t = useUiT();
   const run = React.useCallback<RecordActionRunner>(
@@ -149,7 +150,8 @@ export function useActionResultMutation<TField extends string = string>(
   field: TField,
   options: UseActionResultMutationOptions = {},
 ): [ActionResultMutation, { fetching: boolean; error: Error | null }] {
-  const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
+  // The settle owner toasts a failure, so the data layer's own error notice is turned off.
+  const [mutate, state] = useActionOutcomeMutation<TField>(field, { ...options, errorNotification: false });
   const settle = useActionResultRun();
   const run = React.useCallback<ActionResultMutation>(
     async (id, arguments_) => {

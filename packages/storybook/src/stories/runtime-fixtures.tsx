@@ -37,7 +37,7 @@ import {
 import type { IResourceItem } from "@refinedev/core";
 import { graphqlWireFetch, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 import { composeAddons } from "@angee/app";
-import { createApp, parseFlatSearch, stringifyFlatSearch, type CreateAppInput } from "@angee/app/create-app";
+import { createApp, parseFlatSearch, retryAppQuery, stringifyFlatSearch, type CreateAppInput } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import { previewThemes, previewThemeId } from "../theme-global";
@@ -49,6 +49,15 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+
+/**
+ * A story's reads fail as the app's do: a refused request (a public GraphQL answer) is not
+ * retried, where the data library's own default retries every failure three times and a story
+ * about a refusal showed its error seconds late. Used when a story brings no client of its own.
+ * Only the retry rule is the app's: the client's other defaults (how long a read stays fresh and
+ * how long it is kept) are still the data library's, not the app's.
+ */
+const FIXTURE_QUERY_CLIENT_CONFIG = { defaultOptions: { queries: { retry: retryAppQuery } } };
 
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 export { GraphQLError, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
@@ -198,7 +207,7 @@ export function RuntimeFixture({
           liveProvider={liveProvider}
           resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
           routerProvider={routed ? tanStackRouterProvider : undefined}
-          options={{ syncWithLocation, disableTelemetry: true, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
+          options={{ syncWithLocation, disableTelemetry: true, reactQuery: { clientConfig: queryClient ?? FIXTURE_QUERY_CLIENT_CONFIG } }}
         >
           <OperationDocumentsProvider documents={operationDocuments}>
             {/* As the app's layout route does: hooks outside a resource surface resolve the active schema. */}

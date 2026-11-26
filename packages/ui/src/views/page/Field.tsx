@@ -26,6 +26,12 @@ export interface FieldDescriptor extends FieldPresentation {
   relationResource?: string;
   /** Server-side filters narrowing the rows offered by a relation picker. */
   filters?: readonly CrudFilter[];
+  /**
+   * `null` declines the relation picker's inline edit of the selected record, which is
+   * otherwise offered whenever the related resource has editable fields: for a field where
+   * editing the related record is out of place (a channel chosen in a send dialog).
+   */
+  relationEdit?: null;
   widget?: string;
   /** Concrete GraphQL leaf paths selected when `name` is an object or list its widget renders itself. */
   selectionPaths?: readonly string[];

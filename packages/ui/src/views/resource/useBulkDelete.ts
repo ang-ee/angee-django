@@ -9,6 +9,7 @@ import {
 import { refineResourceName, useModelMetadata, resourceLifecycle, type Row } from "@angee/metadata";
 
 import { errorMessage, useToast } from "../../feedback";
+import { SURFACE_RENDERS_FAILURE } from "../form/validation-errors";
 import { useUiT } from "../../i18n";
 import { useDeletePreviewOperation } from "./resource-operations";
 import { useRuntimeViewAs } from "../../runtime";
@@ -80,7 +81,7 @@ export function useBulkDelete(
       if (!dataResource) {
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
-      const preview = await deletePreview.mutate({ id, confirm }, { errorNotification: false });
+      const preview = await deletePreview.mutate({ id, confirm }, SURFACE_RENDERS_FAILURE);
       if (!preview) throw new Error(t("deletePreview.emptyPreview"));
       return preview;
     },

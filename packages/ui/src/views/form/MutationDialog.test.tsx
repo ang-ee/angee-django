@@ -210,6 +210,23 @@ describe("MutationDialog", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  // A field declared by a number widget alone has no kind, so the seed rule does not leave it out and it is seeded
+  // null; a bound makes it a field the rule check reads, and the check takes that seed for the field holding nothing.
+  test.each(["integer", "float", "percent", "progressBar"])("an optional bounded field declared by the %s widget alone, left untouched, keeps the submit enabled beside a required sibling, and the dialog submits", async (widget) => {
+    const submit = vi.fn().mockResolvedValue(ok);
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={vi.fn()} title="Quota" fields={[
+        { name: "host", label: "Host", required: true },
+        { name: "limit", label: "Limit", widget, maximum: 100 },
+      ]} initialValues={{ host: "h" }} submitLabel="Save" parseValues={parseRawValues} onSubmit={submit} />
+    </AppRuntimeProvider>);
+    const button = await screen.findByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("This field is required.")).toBeNull();
+  });
+
   test("guard: a nullable field is seeded with null, not with its empty value", async () => {
     const seen = vi.fn((_values: Readonly<Record<string, unknown>>) => true);
     render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>

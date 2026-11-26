@@ -335,6 +335,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A hook that toasts a verb's failure itself (`useActionResultMutation`,
+  `useRecordChromeActionMutation`, `useRecordActionMutation`) turns the data
+  layer's own error notice off for it, so a failed request is told once.
   A record action bound with `useRecordActionMutation` is not settled there:
   its bar toasts it, and both follow a created record through one hook. A
   record action whose own `run` calls `useActionResultRun`, directly or
@@ -1382,8 +1385,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the record form's draft, every dialog's seeds and the presence control read: a
   descriptor with a declared `format` (a date, a date and time or a time carried
   as text) holds `null`, then an explicit `string` kind holds `""` whatever its
-  widget, the `integer` and `float` widgets and the date and time widgets
-  `null`; a lines editor's new cell has its own rule. A form spec's parser
+  widget, the number widgets (`NUMBER_WIDGETS`: `integer`, `float`, `percent`,
+  `progressBar`) and the date and time widgets `null`, read before the kinds,
+  so a `boolean` kind under one of them holds `null`; a lines editor's new
+  cell has its own rule. A form spec's parser
   carries the `format` from the schema
   ([deserializeFormSpec](../../packages/ui/src/views/form/form-spec.ts)), and
   the backend's form spec keeps it beside the date control it selects; a
@@ -1398,7 +1403,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Record forms and dialogs find a field's failed rules through one owner,
   [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
   structured field `required` means presence and the field's own bounds judge a
-  blank. A record form asks the fields its save can write and the record does
+  blank. The check composes the seed rule at every depth: the `null` a form
+  seeds an optional field or member with when it holds nothing is not held
+  against it for holding the key, so a form does not refuse its own seed; a
+  list item that holds nothing is always missing. A
+  record form asks the fields its save can write and the record does
   not redact, whose descriptor is neither hidden, nor read-only, nor excluded by
   its condition, whatever their widget. Its fields are its own, the fields of
   the groups it displays for the record

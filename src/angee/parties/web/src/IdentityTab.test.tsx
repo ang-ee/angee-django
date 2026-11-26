@@ -28,6 +28,7 @@ const context = (formReadOnly: boolean) => ({
   form: { formReadOnly } as RecordPanelContext["form"],
   reload: vi.fn(),
   focusField: vi.fn(),
+  fieldLabel: () => undefined,
 }) satisfies RecordPanelContext;
 
 describe("IdentityTab", () => {
