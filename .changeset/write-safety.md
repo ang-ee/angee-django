@@ -142,7 +142,7 @@ Upgrade:
   without `ModalsHost`, `useConfirm must be used under ModalsHost.`. A test or a
   story provides both through the shared providers: `createUiTestProviders`
   (`@angee/ui/testing`) and `ShellPageTestProviders` (`@angee/app/testing`)
-  render the same app shell, `AppShellTestProviders` (`@angee/ui/testing`),
+  render the same app shell, `AppShellTestProviders` (`@angee/ui/testing/shell`),
   which always provides `ModalsHost`. `ShellPageTestProviders` renders under a
   memory router by default, as every shell page renders under the app's router
   (`{ initialEntries }` places it; `onRouter` receives it), and under a router a
@@ -152,6 +152,13 @@ Upgrade:
   `createUiTestProviders` renders under one when given `router: true` (or
   `{ initialEntries }`, kept in `routers`): a component test that opens a real
   dialog passes `router`.
+- A new entry point, `@angee/ui/testing/shell`, exports `AppShellTestProviders`
+  and `AppShellTestProvidersProps`. It imports no test runner, so a story
+  bundles it as a test does, and `@angee/app/testing` takes the shell from it,
+  so that entry reaches no test runner either: a story may import its
+  `ShellPageTestProviders` and `ChatterTabsTestHost`. `@angee/ui/testing` keeps
+  `createUiTestProviders`, whose spied data providers need Vitest, and a story
+  never imports it.
 - `createMutationDialogTestDouble` sends a keyed dialog's submission its
   draft's key through the dialog's own key owner, one per double: kept through
   refusals and lost answers until an accepted answer or a spent key; it minted

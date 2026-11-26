@@ -70,6 +70,10 @@
       "types": "./src/testing.tsx",
       "import": "./src/testing.tsx"
     },
+    "./testing/shell": {
+      "types": "./src/testing-shell.tsx",
+      "import": "./src/testing-shell.tsx"
+    },
     "./lib": {
       "types": "./src/lib/index.ts",
       "import": "./src/lib/index.ts"
@@ -445,6 +449,10 @@
       "./testing": {
         "types": "./dist/testing.d.ts",
         "default": "./dist/testing.js"
+      },
+      "./testing/shell": {
+        "types": "./dist/testing-shell.d.ts",
+        "default": "./dist/testing-shell.js"
       },
       "./lib": {
         "types": "./dist/lib/index.d.ts",
