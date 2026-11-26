@@ -342,8 +342,9 @@ const TEXT_CONTRAST = 4.5;
 /**
  * The contrast text asks for on a stand-in surface instead: the bar and 1% over it. A stand-in is what the
  * defaults derive for a surface the theme's definition states no colour of its own for (the stock theme's live
- * only in its stylesheet); it can be a little lighter in light than the surface painted, stock's inset by about
- * 0.2%, and hundredth steps land text that close to the bar.
+ * only in its stylesheet); it can be a little lighter in light than the surface painted, and hundredth steps
+ * land text that close to the bar. Stock's sheet-2 stand-in is about 0.9% off its real colour and its inset
+ * about 0.2%; the inset binds, being the darkest, and the real sheet-2 is lighter than it.
  */
 const STAND_IN_CONTRAST = TEXT_CONTRAST * 1.01;
 
@@ -576,8 +577,10 @@ function relativeLuminance(hex) {
 }
 
 function contrastRatio(left, right) {
-  const first = relativeLuminance(left);
-  const second = relativeLuminance(right);
+  return luminanceContrast(relativeLuminance(left), relativeLuminance(right));
+}
+
+function luminanceContrast(first, second) {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
@@ -596,15 +599,32 @@ const TINT_STEPS = 100;
  * its own minimum.
  */
 function readableTintText(color, fills, surfaces = []) {
-  const backgrounds = [...fills.map((fill) => ({ color: fill, minimum: TEXT_CONTRAST })), ...surfaces];
-  const reach = (candidate, background) => contrastRatio(candidate, background.color) / background.minimum;
-  const worst = (candidate) => Math.min(...backgrounds.map((background) => reach(candidate, background)));
-  if (worst(color) >= 1) return color;
-  const weakest = backgrounds.reduce((least, background) => (reach(color, background) < reach(color, least) ? background : least));
-  const toward = (ink) => Array.from({ length: TINT_STEPS }, (_, index) => mixHex(color, ink, (index + 1) / TINT_STEPS));
-  const nearest = toward(readableText(weakest.color)).find((candidate) => worst(candidate) >= 1);
-  if (nearest) return nearest;
-  return [color, ...toward("#11141a"), ...toward("#ffffff")].reduce((best, candidate) => (worst(candidate) > worst(best) ? candidate : best));
+  // Each background's luminance is worked out once, and each candidate's once.
+  const backgrounds = [...fills.map((fill) => ({ color: fill, minimum: TEXT_CONTRAST })), ...surfaces]
+    .map((background) => ({ ...background, luminance: relativeLuminance(background.color) }));
+  const reach = (luminance, background) => luminanceContrast(luminance, background.luminance) / background.minimum;
+  const worst = (candidate) => {
+    const luminance = relativeLuminance(candidate);
+    return Math.min(...backgrounds.map((background) => reach(luminance, background)));
+  };
+  const own = relativeLuminance(color);
+  if (Math.min(...backgrounds.map((background) => reach(own, background))) >= 1) return color;
+  const weakest = backgrounds.reduce((least, background) => (reach(own, background) < reach(own, least) ? background : least));
+  const ink = readableText(weakest.color);
+  for (let step = 1; step <= TINT_STEPS; step += 1) {
+    const candidate = mixHex(color, ink, step / TINT_STEPS);
+    if (worst(candidate) >= 1) return candidate;
+  }
+  let best = color;
+  let bestWorst = worst(color);
+  for (const toward of ["#11141a", "#ffffff"]) {
+    for (let step = 1; step <= TINT_STEPS; step += 1) {
+      const candidate = mixHex(color, toward, step / TINT_STEPS);
+      const candidateWorst = worst(candidate);
+      if (candidateWorst > bestWorst) [best, bestWorst] = [candidate, candidateWorst];
+    }
+  }
+  return best;
 }
 
 function assertTokenLayer(layer, owner) {

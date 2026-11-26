@@ -1,5 +1,5 @@
 ---
-"@angee/ui": patch
+"@angee/ui": minor
 ---
 
 A customised theme's link, and each tone's text (`--brand-soft-text`,
