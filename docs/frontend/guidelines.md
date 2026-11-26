@@ -1348,10 +1348,15 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
   and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
-  several as a list; never join them into one text. A record form's refused
-  save brings the person to its reason: the first shown field it names takes
-  focus (`applyFormErrors` with `focus`), else the banner does, and Save stays
-  focusable while it runs.
+  several as a list; never join them into one text. A surface that asks
+  (`applyFormErrors` with `focus` and a `fieldSummary`; the record form does)
+  has a refused submit bring the person to its reasons, and `applyFormErrors`
+  decides where: with a reason no field shows (a form-level one, or one of a
+  field the form does not display) the banner takes focus and also carries
+  the line naming the refused fields, so one focused place says everything;
+  with field reasons only, the first shown field takes focus. A surface gives
+  its banner's focus through `useRefusalBannerFocus`, never an effect of its
+  own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.

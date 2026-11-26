@@ -4200,6 +4200,27 @@ describe("FormView", () => {
     expect(document.activeElement).toBe(label);
   });
 
+  test("a save the server refuses for a shown field and for a form-level reason moves focus to its banner, which also names the field", async () => {
+    sdkMocks.mutate.mockRejectedValue({ graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: { code: "VALIDATION", validationErrors: { code: ["Code is taken."] }, formErrors: ["Note is misconfigured."] },
+    }] });
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code" }]} />);
+    fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
+    // The person is in the field the server will refuse: the banner takes focus all the same.
+    const code = screen.getByLabelText("Code");
+    code.focus();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = (await screen.findByText("Note is misconfigured.")).closest<HTMLElement>('[role="alert"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(within(alert).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Note is misconfigured.", "Please fix the highlighted fields: Code.",
+    ]);
+    // The field keeps its own reason and its mark.
+    expect(screen.getByText("Code is taken.")).toBeTruthy();
+    expect(code.getAttribute("aria-invalid")).toBe("true");
+  });
+
   test("a save the server refuses for no shown field moves focus to its banner", async () => {
     refuse(["Note is misconfigured."]);
     renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);

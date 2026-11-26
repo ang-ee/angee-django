@@ -53,6 +53,22 @@ live in code docstrings.
   than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
   so a client holding the spent key starts a new request. A trigger admission
   still records the refusal on its event.
+- `@angee/ui`: **Changed API.** A refused save that carries a reason no field
+  shows brings the person to the banner. A refusal naming a shown field and
+  also carrying a form-level reason focused the field and left the banner,
+  with the form-level reason, out of view. With a reason no field shows (a
+  form-level one, or one of a field the form does not display) the banner now
+  takes focus and also carries the line naming the refused fields, which it
+  showed only without a form-level reason; with field reasons only, the first
+  shown field takes focus, as before. `applyFormErrors` decides which, for a
+  surface that passes it `focus` and a `fieldSummary` (today the record form;
+  the two dialogs pass neither yet and are unchanged). Its `focus` option,
+  added in this release as `true`, is now a function, the surface's way of
+  focusing its banner, given by the new `useRefusalBannerFocus`, exported with
+  `formErrorsFromForm`; the record form exposes the banner's props as
+  `saveBanner`. **Upgrade:** replace
+  `focus: true` with that hook's `focusBanner` and spread its `banner` on the
+  surface's `ErrorBanner`.
 - `@angee/ui`: The Links pane says it is empty when it is. A related group
   with neither rows nor a verb is left out, and the pane showed its empty
   state only when no group was eligible; a record whose eligible groups were
