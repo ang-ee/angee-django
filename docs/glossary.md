@@ -484,8 +484,9 @@ that participates in identity, communication, and relationship facts.
 
 **Handle** — a normalized contact point such as an email address or account.
 Its ingestion keys (`platform`, `value`, `external_id`) are written once: only
-the handle owner's verbs change one, and history's revert restores earlier keys;
-never a field write.
+the handle owner's verbs change one, and history's revert restores earlier keys
+unless the restored row would be a second live handle of an address; never a
+field write.
 The Handle's controller records the **control** fact (who may act through it), while
 **PartyStatement** records the **identity** fact (`aspect="handle"`, typed Handle
 member); neither fact implies the other. A **suggestion** is an asserted
@@ -497,15 +498,21 @@ full confidence. Reads follow Party authorization, with separate Handle and
 evidence gates.
 
 **Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
-for an email address, its letter case folded and its domain in one spelling; on
-any other platform, none, since the value itself is the address. A live email
-handle is unique by it.
+for an email address, the address lower-cased (not case-folded) with its domain
+in the one spelling the email backend sends it in (IDNA 2003); none for a value
+with no `@`, which is no address, nor on any other platform, where the value
+itself is the address. A live email handle is unique by it.
 
-**Person-matching key** — a handle's `normalized_value`: its value folded to find
-a person, trimmed and lower-cased on every platform, an email address's domain in
-one spelling with Gmail's dots and plus-tags dropped, a phone number in E.164. It
-is read where a person is looked up or suggested, never to decide which handle a
-message is addressed to.
+**Person-matching key** — what groups the handles of probably one person
+(`Handle.normalize_value`), stored as a handle's `normalized_value`: derived from
+its value, trimmed and lower-cased on every platform, an email address's domain
+in one spelling with Gmail's dots and plus-tags dropped, a phone number in E.164
+(else its bare digits, a fallback that names no one number). It is read where a
+person is looked up or suggested and decides which spellings or aliases a person
+may merge. Which handle an address lands on is the spelling key's, except at two
+sites still open for a ruling, where it picks the handle a provider's alias lands
+on: a directory adoption's handle that found the person, and a new claimant's
+first email.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

@@ -1131,8 +1131,11 @@ class Handle(
         punctuation still does not fork the same contact point. iMessage carries
         either kind of address, so it routes by value shape — the email rule when
         the value contains ``@``, the phone rule otherwise. It is read where a
-        person is looked up or suggested, never to decide which handle an address
-        lands on.
+        person is looked up or suggested; which handle an address lands on is the
+        spelling key's, but for two sites still open for a ruling, where it picks
+        the handle a provider's alias lands on: a directory adoption's
+        through-handle (``PartyManager._land_handles``) and a new claimant's first
+        email (``PartyManager.claimant_as_system``).
 
         The key is stored: changing what this returns for any value means
         bumping :attr:`NORMALIZATION_VERSION`, so provisioning saves the stored
@@ -1202,12 +1205,13 @@ class Handle(
 
     @staticmethod
     def email_value(address: str) -> str:
-        """Return an email address trimmed and lower-cased: the form compose and inbound mail still pass when they land
-        an address.
+        """Return an email address trimmed and lower-cased: the form compose, a channel's sender and inbound mail still
+        pass when they land an address.
 
-        The handle owner lands any letter case or domain spelling on the one
-        handle (:meth:`spelling_key_of`), so this form decides nothing; it is
-        removed with its callers.
+        Which handle an address lands on is the spelling key's
+        (:meth:`spelling_key_of`); this form still decides the spelling a handle
+        those writers create first stores as its ``value``, and the keys of
+        ``Message.reply_addresses``. It is removed with its callers.
         """
 
         return (address or "").strip().lower()

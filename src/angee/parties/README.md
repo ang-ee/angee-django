@@ -200,7 +200,8 @@ own choosing is trusted code; moving the admission to the link's own binding
 owner is open with the architect. Otherwise the contact mints its own person.
 The handle an adoption found the person by is the evidence of the directory's
 identity statement on them, restated on every later record, and the contact's
-spelling or alias of that address lands on the same handle row; a link keeps its adopted
+spelling or alias of that address lands on the same handle row (for an alias, the
+person-matching key picks it, one of the two sites still open for a ruling); a link keeps its adopted
 person if the option is turned off. Known limit of the option, open with the
 architect and pinned by a strict expected failure in the directory tests: a
 source states whole aspects, so on an adopted person a field no statement holds
@@ -307,7 +308,7 @@ Who an email address names is one verb,
 preference order, it answers the people they name, each with its basis (the
 account with that address, the live person holding it, else, whenever no live
 person holds it, the one person a current contact claim proposes it for),
-comparing handles by their normalized value. A trashed person, an organization
+comparing handles by their person-matching key. A trashed person, an organization
 and a merged-away row are nobody's answer, and a holder that is no live person
 does not stop the claims: a person minted earlier for an organization's address
 is found again by their claim. An account names only its existing person: the
@@ -344,16 +345,23 @@ punycoded), and no longer than an address may be or the handle's value holds.
 An email handle is one address whatever its letter case or domain spelling.
 `upsert` and `find_identities` land any such spelling on the one live handle,
 which keeps the spelling first written as its `value`, what a message to it is
-addressed to; its spelling key (`Handle.spelling_key_of`: the address trimmed
-and lower-cased, its domain's punycode labels read as Unicode; none for a value
-with no `@`, which is no address) is what a live email handle is unique by
-(`uq_handle_spelling_key`). A save that would keep a
+addressed to; its spelling key (`Handle.spelling_key_of`) is what a live email
+handle is unique by (`uq_handle_spelling_key`). One address, by that key, is
+every letter case of it (lower-cased, not case-folded: `Straße@` and `STRASSE@`
+are two) and every spelling of its domain that the email backend sends as one
+domain (IDNA 2003, as Django's `punycode` writes it): a punycode label and its
+Unicode, NFD and NFC, full-width letters and their ASCII, `ß` and `ss`. A label
+the standard library's `idna` codec cannot read or write stays as typed, so
+`xn--strae-oqa` (IDNA 2008's spelling of `straße`) is a domain of its own. A
+value with no `@` is no address and has no spelling key. A save that would keep a
 second live handle of an address is refused on `value` before it writes
 (`ValueOwned`, `Handle.value_owner`). A provider's alias (a Gmail dot or
-plus-tag) is a handle of its own, grouped with the others by the
-person-matching key (`Handle.normalize_value`, `normalized_value`) wherever a
-person is looked up. On other platforms, a spelling is a handle, as before. A
-label the standard library's `idna` codec cannot read stays as typed. That is
+plus-tag) is a handle of its own, grouped with the others by the person-matching
+key (`Handle.normalize_value`, stored as `normalized_value`) wherever a person is
+looked up; that key still picks the handle an alias lands on at two sites open
+for a ruling, a directory adoption's through-handle and a new claimant's first
+email (`PartyManager.claimant_as_system`). On other platforms, a spelling is a
+handle, as before. That is
 one rule, `Handle.normalize_email_domain`, for whoever compares a domain: the
 organization-domain suggestion (`PartyManager.suggest_for`) reads the handle's
 domain and `Organization.domain`, which is stored as typed, through it on both
@@ -634,7 +642,7 @@ Integration and observed links; parties binds targets in the application transac
 Identity matching (`PartyManager.reconcile_same_as`) writes normal RULE same_as
 statements on the ordered Party pair for every two live parties of one kind linked
 to one address (`PartyManager.same_person_links`). A party is linked when it holds
-a handle of that normalized value, or when a source that states its own record (a
+a handle of that person-matching key, or when a source that states its own record (a
 person, a system of record, a directory, an import, a source's claim) names one for
 it in a standing statement, a claim below review confidence included, whatever
 its evidence names (the handle, or the source's record link); a claim re-stated

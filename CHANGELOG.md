@@ -13,9 +13,13 @@ live in code docstrings.
 - `angee.parties`: **Changed behaviour.** An email handle is one address whatever
   its letter case or domain spelling. A handle has a spelling key,
   `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
-  address trimmed and lower-cased, its domain's punycode labels read as
-  Unicode; `""` on every other platform, where the value itself is the
-  address, and for a value with no `@`, which is no address), and a live
+  address trimmed and lower-cased, not case-folded, its domain in the one
+  spelling the email backend sends it in, so a punycode label and its Unicode,
+  NFD and NFC, full-width letters and their ASCII, and `ß` and `ss` are one
+  domain (`Handle.normalize_email_domain` takes each label through the
+  standard library's IDNA 2003 codec and keeps one it cannot read, such as
+  `xn--strae-oqa`, as typed); `""` on every other platform, where the value
+  itself is the address, and for a value with no `@`, which is no address), and a live
   email handle is unique by it (`uq_handle_spelling_key`;
   `ix_handle_spelling_key` serves the lookup of merged-away rows).
   `HandleManager.find_identities`, and so `find_identity`, `upsert`,
@@ -30,12 +34,14 @@ live in code docstrings.
   (`Handle.value_owner`); `upsert` and `reidentify` land where that owner is.
   `upsert` no longer writes a key on a hit, and behind a matched `external_id`
   it no longer rewrites `value` for another letter case or domain spelling of
-  the row's own address (`Handle.spells`). `Handle.normalized_value` is the
-  person-matching key, which finds and suggests a person and never decides
-  which handle an address lands on: a provider's alias (a Gmail dot or
-  plus-tag) stays a handle of its own; its outputs are unchanged but for an
-  email value whose domain carries surrounding whitespace (`a.b@ gmail.com` is
-  now `ab@gmail.com`). A person's merge of handles (`Handle.validate_merge`)
+  the row's own address (`Handle.is_spelling_of`). The person-matching key
+  (`Handle.normalize_value`, stored as `normalized_value`) finds and suggests a
+  person; a provider's alias (a Gmail dot or plus-tag) stays a handle of its
+  own, though that key still picks the handle an alias lands on at two sites
+  open for a ruling (a directory adoption's through-handle, a new claimant's
+  first email). Its outputs change only for an email value whose domain carries
+  surrounding whitespace (`a.b@ gmail.com` is now `ab@gmail.com`) and for the
+  domain spellings above. A person's merge of handles (`Handle.validate_merge`)
   compares that key as the rule computes it from each value, so a row the key
   repair has not reached compares as it will, and two phone handles whose
   numbers the rule reads only as their digits (`Handle.is_fallback_key`:
@@ -44,8 +50,12 @@ live in code docstrings.
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
-  it already did for the exact spelling. `Handle.email_value` now decides
-  nothing and is removed with its callers in a following change.
+  it already did for the exact spelling. `Handle.email_value` no longer decides
+  which handle an address lands on; it still decides the spelling a handle
+  that compose, a channel's sender or inbound mail creates first stores, and
+  the keys of `Message.reply_addresses`, and is removed with its callers in a
+  following change. `HandleManager.clean_identity` returns `None`; nothing read
+  the key it returned.
   `renormalize_handles` folds each live email handle that spells the address
   of an older one into it (`KeyRepair.folded`) and reports a fold the merge
   refuses (`KeyRepair.refused`); its log lines are "Saved the keys of N
@@ -85,9 +95,19 @@ live in code docstrings.
     is written back with the survivor's spelling on its next push. A fold the
     merge refuses (a seeded row, a row under an unfinished workflow run) is
     logged once per provision, its row left live and unkeyed and still found
-    by its exact spelling; the workflows demo's former pair of spellings, on a
-    host that loaded it, is one such row (the demo now seeds a pair of phone
-    spellings instead).
+    by its exact spelling.
+  - A host that loaded the workflows demo keeps its former pair of spellings
+    (`Directory-Contact@example.test` beside `directory-contact@example.test`;
+    the demo now seeds a pair of phone spellings instead): both rows stay in
+    the resource ledger, so the seeded-record merge guard refuses their fold,
+    and each provision logs one warning naming both handles and reports
+    `remaining` above zero. It ends when the resources owner's change for a
+    removed row's ledger entry lands; nothing here works around it.
+  - A step skipped: with no migration, every handle save fails, since the
+    column is missing; migrated but not provisioned, an exact spelling still
+    lands on its old row, but a new spelling of an old, unkeyed address makes a
+    second, keyed row of its own, which the next provision folds into the old
+    one.
   - Rollback: deploy the older code; the column's database default admits its
     inserts, which stay unkeyed until this code's next provision keys and
     folds them. Leaving for good removes the column and the constraint with a
