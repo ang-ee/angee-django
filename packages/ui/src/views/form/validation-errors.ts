@@ -240,16 +240,16 @@ export function savedFormSubmitResult<TData>(data: TData | null | undefined, mis
   return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
 }
 
-/** Decode a transport failure; contract violations remain developer errors. A lost answer
- * (`failedWriteOutcome` says `unconfirmed`: no answer says whether it was written) is marked so on
- * its result, returned or thrown alike, and reads `answerLost` when the surface gives the
- * sentence it reads there.
+/** Decode a transport failure, or word a caller's own refusal from its message; contract
+ * violations remain developer errors. A lost answer (`failedWriteOutcome` says `unconfirmed`: no
+ * answer says whether it was written) is marked so on its result, returned or thrown alike, and
+ * reads `answerLost` when the surface gives the sentence it reads there.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function formSubmitError(cause: unknown, fallback?: string, answerLost?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
-  if (failedWriteOutcome(cause) === "unconfirmed") {
+  if (typeof cause !== "string" && failedWriteOutcome(cause) === "unconfirmed") {
     const issues = answerLost === undefined ? validationErrorsFromError(cause, fallback) : { fieldErrors: {}, formErrors: [answerLost] };
     return { status: "invalid", issues, outcome: "unconfirmed" };
   }

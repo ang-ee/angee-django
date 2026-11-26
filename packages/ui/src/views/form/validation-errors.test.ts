@@ -540,6 +540,12 @@ test.each([
   expect(formSubmitOutcome(result)).toBe("unconfirmed");
 });
 
+test("a caller's own refusal worded from its message is no lost answer", () => {
+  const result = formSubmitError("Could not create.", undefined, "It may have been sent.");
+  expect(result).toEqual(invalidFormSubmit({ fieldErrors: {}, formErrors: ["Could not create."] }));
+  expect(formSubmitOutcome(result)).toBe("refused");
+});
+
 test("a creation-key conflict does not lock a draft as a stale edit does: its form error is its own type", () => {
   const { result } = renderHook(() => useForm<Record<string, unknown>>());
   act(() => { applyFormErrors(result.current, { status: "conflict", code: "CREATION_KEY_CONFLICT", message: "Created earlier." }); });
