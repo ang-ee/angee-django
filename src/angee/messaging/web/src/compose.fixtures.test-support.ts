@@ -273,11 +273,10 @@ export function composerFixture({ seat: initial = "ana", onRequest, onCall }: Co
       return operation(args, request);
     }) satisfies GraphQLWireOperation,
   ]));
-  const fixture = storySchema(observed, onRequest).public!;
   return {
     schemas: {
-      public: fixture,
-      console: { ...fixture, metadata: { angee: { resources: [MESSAGE_RESOURCE, CHANNEL_RESOURCE, PART_RESOURCE] } } },
+      ...storySchema(observed, { onRequest }),
+      ...storySchema(observed, { schema: "console", resources: [MESSAGE_RESOURCE, CHANNEL_RESOURCE, PART_RESOURCE], onRequest }),
     },
     as: (next) => { seat = next; },
     loseNextAnswer: () => { loseNext = true; },
