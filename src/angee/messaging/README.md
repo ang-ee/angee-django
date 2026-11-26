@@ -411,9 +411,11 @@ form is its preview: `Message.deliver` down, the worker's
 `run_message_delivery` down to the transport library's own frames, the release
 task's `release_held_messages` down, and the operator's `retry_delivery` and
 `acknowledge_delivery` down. Django's filter applies only with `DEBUG` off, so a
-debug page shows them all, and it never filters an exception's own message: a
-transport's or a database's error text can carry what the server echoed (an
-address, a line of the mail). An ordinary `compose`'s report
+debug page shows them all, and it never filters an exception's own message. A
+transport's error never leaves the delivery task: when recording its failure fails
+too, that failure is raised on its own and the transport's error is logged by its
+types alone. What is still not filtered is a database error's own text, and a
+caller's own frames above the system mailer. An ordinary `compose`'s report
 therefore shows hidden frames below the writer, while `compose`'s own frame is
 not marked. Frames above the system mailer are the caller's: Django's
 `send_mail` holds the message it was given, so a caller that mails a credential

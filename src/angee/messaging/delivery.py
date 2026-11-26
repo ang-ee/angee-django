@@ -49,6 +49,26 @@ def queue_message_delivery(message: Any) -> bool:
     return True
 
 
+def _record_failed_delivery(model: Any, pk: Any, *, token: str, claim: Any, error: Exception) -> str:
+    """Record ``error`` as the delivery's settlement; called outside any handler of it.
+
+    A transport's exception can quote the mail (a server's reply echoing a recipient, a line or a
+    link), so it never leaves the delivery task: when recording the settlement fails as well, that
+    failure is raised on its own, with no context, and the transport's error is logged by its type
+    alone. Without that second failure nothing is logged here.
+    """
+
+    try:
+        return model.objects.record_delivery(pk, token=token, claim=claim, error=error)
+    except Exception as settlement:
+        failed = settlement
+    kinds = type(error).__name__ + (f" ({type(error.__cause__).__name__})" if error.__cause__ is not None else "")
+    logger.error(
+        "Recording a failed delivery failed (%s); the delivery had failed with %s.", type(failed).__name__, kinds,
+    )
+    raise failed from None
+
+
 # The worker's path to the transport holds the message, its parts and the built email, the
 # transport library's own frames included: an error report (DEBUG off) hides every local from here down.
 @sensitive_variables()
@@ -68,7 +88,7 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
         if not acquired:
             return {"ok": True, "skipped": True, "reason": "delivery-already-running"}
         message = model.objects.claim_delivery(pk, token=external_id)
-        backend = None
+        backend: Any = None
         if message is None:
             uncertain = model.objects.sudo(reason="messaging.delivery.reconcile").filter(
                 pk=pk, external_id=external_id, status="uncertain",
@@ -80,6 +100,7 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                 return {"ok": True, "delivered": False, "status": "uncertain"}
         reconciling = message.delivery_needs_reconciliation
         try:
+            refusal: Exception | None = None
             try:
                 channel = message.transport_channel(reason="messaging.delivery.channel")
                 backend = channel.backend
@@ -89,9 +110,9 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                     DeliveryUncertain("The prior delivery still needs reconciliation.") if reconciling
                     else IntegrationError(safe_integration_failure(error).message)
                 )
-                result = model.objects.record_delivery(
-                    pk, token=external_id, claim=message.delivery_claim, error=refusal,
-                )
+            if refusal is not None:
+                result = _record_failed_delivery(model, pk, token=external_id, claim=message.delivery_claim,
+                                                 error=refusal)
                 return {"ok": False, "delivered": False, "status": result}
             unready: IntegrationError | None = None
             try:
@@ -124,6 +145,7 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                         contention=not reconciling,
                     )
                 else:
+                    failure: Exception | None = None
                     try:
                         outcome = backend.deliver(message)
                         if outcome is False:
@@ -131,9 +153,10 @@ def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[st
                         if not isinstance(outcome, DeliveryOutcome):
                             raise TypeError("ChannelBackend.deliver must return DeliveryOutcome.")
                     except Exception as error:
-                        result = model.objects.record_delivery(
-                            pk, token=external_id, claim=message.delivery_claim, error=error,
-                        )
+                        failure = error
+                    if failure is not None:
+                        result = _record_failed_delivery(model, pk, token=external_id, claim=message.delivery_claim,
+                                                         error=failure)
                     else:
                         result = model.objects.record_delivery(
                             pk, token=external_id, claim=message.delivery_claim, outcome=outcome,

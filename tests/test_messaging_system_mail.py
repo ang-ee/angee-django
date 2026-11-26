@@ -833,73 +833,87 @@ def _lost(message: Any) -> None:
         Message._base_manager.filter(pk=message.pk).update(delivery_lease_until=timezone.now() - timedelta(hours=1))
 
 
+def _delivery_logged(caplog: Any) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name == "angee.messaging.delivery"]
+
+
+def _chained(error: BaseException | None) -> list[BaseException]:
+    """``error`` and every exception chained to it, suppressed context included."""
+
+    chain: list[BaseException] = []
+    while error is not None:
+        chain.append(error)
+        error = error.__cause__ or error.__context__
+    return chain
+
+
 def test_an_error_report_of_a_failing_transport_shows_none_of_the_system_mail(
-    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, caplog: Any,
 ) -> None:
     """The worker's path from the claim to the transport: the transport fails, then recording it fails too.
 
-    The report chains both: the recording's frames, the worker's, the backend's and the transport's. None
-    of them shows the mail, and this transport's own exception carries none of it, so neither does its
-    message; an exception that does carry some shows it (the known-limit test below).
+    The recording's failure leaves the task on its own, with no context: the transport's error is not chained
+    and is logged by its types alone. No frame of the report shows the mail.
     """
 
     settings.DEBUG = False
-    failure = ConnectionError("The transport is down.")
     settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport",
-                                      "OPTIONS": {"failure": failure}}}
+                                      "OPTIONS": {"failure": ConnectionError("The transport is down.")}}}
     label, pk, token = (lambda message: (message._meta.label_lower, message.pk, message.external_id))(
         _queued_system_mail(monkeypatch),
     )
-    table = Message._meta.db_table
+    caplog.set_level(logging.ERROR, logger="angee.messaging.delivery")
 
     def recording(sql: str, params: Any) -> bool:
-        return failure.__traceback__ is not None and sql.startswith(f'UPDATE "{table}" ')
+        raised = settings.MAILERS["transport"]["OPTIONS"]["failure"].__traceback__ is not None
+        return raised and sql.startswith(f'UPDATE "{Message._meta.db_table}" ')
 
     with _failing(recording), pytest.raises(DatabaseError) as failed:
         deliver_message(label, pk, token)
-    chained, error = [], failed.value
-    while error is not None:
-        chained.append(error)
-        error = error.__cause__ or error.__context__
-    assert failure in chained
     assert _reported_secret(failed.value) == []
-    assert [str(error) for error in chained if "SECRET-7f3a" in str(error)] == []
+    assert [type(error) for error in _chained(failed.value)] == [DatabaseError]
+    assert _delivery_logged(caplog) == [
+        "Recording a failed delivery failed (DatabaseError); the delivery had failed with "
+        "DeliveryUncertain (ConnectionError).",
+    ]
 
 
-
-def test_a_known_limit_an_error_report_shows_what_a_transport_exception_itself_carries(
-    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+def test_a_transport_error_never_leaves_the_task_when_recording_its_failure_fails(
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, caplog: Any,
 ) -> None:
-    """Not a guarantee: Django filters frames, never an exception's own text.
+    """A server's refusal that quotes the recipient and a link in the mail stays inside the delivery task.
 
-    An SMTP refusal carries the recipient it refused (a server can echo a line of the mail as well), and a
-    report of a failed recording chains it: its text shows there, while no frame shows it.
+    Recording that failure fails too: the recording's failure is raised on its own, and neither the recipient
+    nor the link is in any chained exception's message, any frame of the report or the log, which names the
+    errors' types alone.
     """
 
     settings.DEBUG = False
     settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport", "OPTIONS": {
-        "failure": smtplib.SMTPRecipientsRefused({"reader@example.test": (550, b"5.1.1 No such user")}),
+        "failure": smtplib.SMTPDataError(554, f"Refused for <reader@example.test>: {SECRET}".encode()),
     }}}
     label, pk, token = (lambda message: (message._meta.label_lower, message.pk, message.external_id))(
         _queued_system_mail(monkeypatch),
     )
-    table = Message._meta.db_table
+    caplog.set_level(logging.ERROR, logger="angee.messaging.delivery")
 
     def recording(sql: str, params: Any) -> bool:
         raised = settings.MAILERS["transport"]["OPTIONS"]["failure"].__traceback__ is not None
-        return raised and sql.startswith(f'UPDATE "{table}" ')
+        return raised and sql.startswith(f'UPDATE "{Message._meta.db_table}" ')
 
     with _failing(recording), pytest.raises(DatabaseError) as failed:
         deliver_message(label, pk, token)
-    in_frames = _reported_secret(failed.value, needle="reader@example.test")
+    in_frames = [*_reported_secret(failed.value, needle="reader@example.test"), *_reported_secret(failed.value)]
     assert in_frames == []
-    chained, error = [], failed.value
-    while error is not None:
-        chained.append(error)
-        error = error.__cause__ or error.__context__
-    assert [type(error) for error in chained if "reader@example.test" in str(error)] == [
-        smtplib.SMTPRecipientsRefused,
+    chained = _chained(failed.value)
+    assert [type(error) for error in chained] == [DatabaseError]
+    logged = _delivery_logged(caplog)
+    assert logged == [
+        "Recording a failed delivery failed (DatabaseError); the delivery had failed with "
+        "IntegrationError (SMTPDataError).",
     ]
+    quoted = [text for text in (*map(str, chained), *logged) if "reader@example.test" in text or "SECRET-7f3a" in text]
+    assert quoted == []
 
 
 def test_an_error_report_of_a_failing_reservation_hides_every_frame_from_deliver_down(
