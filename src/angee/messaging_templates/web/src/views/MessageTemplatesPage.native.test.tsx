@@ -164,7 +164,13 @@ test("Override on a shipped default sends its id and lands on the deployment's o
   expect(screen.queryByRole("button", { name: word("action.override") })).toBeNull();
 });
 
-test("Keep override sends the override's id, and the default-updated warning goes", async () => {
+/** The toasts a person sees, one element each, in the toast library's viewport (named Notifications by it). */
+function shownToasts(): HTMLElement[] {
+  return [...screen.getByRole("region", { name: "Notifications" })
+    .querySelectorAll<HTMLElement>("[role=dialog], [role=alertdialog]")];
+}
+
+test("Keep override sends the override's id, toasts the server's message once, and the default-updated warning goes", async () => {
   const calls: MessageTemplateFixtureCall[] = [];
   render(<MessageTemplateStory open={ROW.recordCard} onCall={(call) => calls.push(call)} />);
   await screen.findByText(word("notice.defaultUpdated"));
@@ -174,6 +180,8 @@ test("Keep override sends the override's id, and the default-updated warning goe
   await waitFor(() => expect(screen.queryByText(word("notice.defaultUpdated"), { exact: false })).toBeNull());
   expect(await screen.findByText(word("notice.live"), { exact: false })).toBeTruthy();
   expect(screen.queryByRole("button", { name: word("action.keepOverride") })).toBeNull();
+  // By now the verb has settled and the row has been read again: one toast, the server's message.
+  expect(shownToasts().map((toast) => toast.textContent)).toEqual([RECORDED.keep[ROW.recordCard]!.result.message]);
 });
 
 test("a reader who may preview a shipped default but whom the server does not admit to Override is offered neither", async () => {
@@ -199,14 +207,13 @@ test("a refused Keep override says why under the verb's name, in the server's wo
   fireEvent.click(await screen.findByRole("button", { name: word("action.keepOverride") }));
 
   // The action bar toasts the refusal once, titled with the verb, its body the server's reason; the toast is
-  // also announced in a live region, so its words are on the page more than once. The reason names this row,
-  // which another session deleted since it opened; nothing says it overrides no default.
+  // also announced in a live region, so its words are on the page more than once.
   const reasons = Object.values(KEEP_REFUSAL.validation_errors ?? {}).flat().map(String);
   expect(reasons.length).toBeGreaterThan(0);
   for (const reason of reasons) {
-    expect(reason).toContain(ROW.recordCard);
     expect((await screen.findAllByText(reason, { exact: false })).length).toBeGreaterThan(0);
   }
+  expect(shownToasts()).toHaveLength(1);
   expect(screen.getAllByText(word("action.keepOverride")).length).toBeGreaterThan(1);
   // The server's summary gives way to its reasons: no second toast says it.
   expect(screen.queryByText(KEEP_REFUSAL.message, { exact: false })).toBeNull();
@@ -241,6 +248,8 @@ test("a save the server refuses shows its row-wide reasons in the Save failed ba
   for (const words of refusal.error.extensions.validationErrors?.layout ?? []) {
     await expectFieldError(within(form).getByLabelText(word("field.layout")), words);
   }
+  // The refused save brings the person to the field it refused.
+  await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
   expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([refusal.set]);
 });
 
