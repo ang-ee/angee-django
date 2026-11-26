@@ -15,6 +15,7 @@ import type { RecordThreadConversationChrome } from "./RecordThreadConversation"
 const mocks = vi.hoisted(() => ({
   threadData: undefined as unknown,
   threadError: null as unknown,
+  threadRefetch: vi.fn(),
   recipientData: { colleagues: [] as unknown[] } as unknown,
   mutateCalls: [] as Array<{ op: string; vars: Record<string, unknown> }>,
   failOps: new Set<string>(),
@@ -165,11 +166,12 @@ beforeEach(() => {
   mocks.recipientData = { colleagues: [] };
   mocks.threadData = threadPayload([message()]);
   mocks.threadError = null;
+  mocks.threadRefetch.mockReset();
   mocks.useAuthoredQuery.mockReset();
   mocks.useAuthoredQuery.mockImplementation((document: unknown) => {
     const op = operationName(document);
     if (op === "MessagingRecordThread") {
-      return { data: mocks.threadData, fetching: false, error: mocks.threadError, refetch: vi.fn() };
+      return { data: mocks.threadData, fetching: false, error: mocks.threadError, refetch: mocks.threadRefetch };
     }
     if (op === "MessagingRecipientUsers") {
       return { data: mocks.recipientData, fetching: false, error: null, refetch: vi.fn() };
@@ -580,7 +582,10 @@ describe("RecordThreadConversation", () => {
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello" } });
     await send("The thread is closed.");
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Refused hello, edited" } });
+    expect(mocks.threadRefetch).not.toHaveBeenCalled();
     await send("An earlier version of this message was already posted.");
+    // The earlier version is shown: the thread is read again.
+    expect(mocks.threadRefetch).toHaveBeenCalled();
     await send("You may not post here.");
     const keys = mocks.mutateCalls.filter((call) => call.op === "MessagingPostRecordMessage").map((call) => call.vars.idempotencyKey);
     expect(keys).toHaveLength(3);

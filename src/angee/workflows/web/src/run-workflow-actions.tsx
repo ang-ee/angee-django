@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useAuthoredQuery } from "@angee/refine";
+import { AuthoredEnvelopeError, failedWriteOutcome, useAuthoredQuery } from "@angee/refine";
 import {
   DropdownMenu, RecordActionBar, parseFormSpec, useActionOutcomeMutation, useActionResultRun, useIdempotencyKeys,
   useAppRuntime, useRecordChromeContext, type ActionDescriptor, type ActionFormContext,
@@ -37,9 +37,17 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
       // Starting one workflow on one record is one draft: every attempt until a run starts carries its key.
       const scope = `workflows.start:${workflow.id}:${chrome.resource}:${chrome.recordId}`;
       const startWith = async (values: Record<string, unknown>, requestKey: string | undefined) => {
-        const outcome = await start(workflow.id, {
-          subject: { model: chrome.resource, id: chrome.recordId }, input: values, request_key: requestKey,
-        });
+        let outcome;
+        try {
+          outcome = await start(workflow.id, {
+            subject: { model: chrome.resource, id: chrome.recordId }, input: values, request_key: requestKey,
+          });
+        } catch (cause) {
+          if (failedWriteOutcome(cause) !== "conflict") throw cause;
+          // An earlier attempt started a run with other input under this draft's key. Still a conflict, so
+          // the draft ends and the next attempt is a new one, in this action's words.
+          throw new AuthoredEnvelopeError(t("action.startedEarlier"), "CREATION_KEY_CONFLICT");
+        }
         // The dialog's schema fields live inside the mutation's JSON input envelope.
         if (outcome?.validationErrors) return { ...outcome, validationErrors: Object.fromEntries(
           Object.entries(outcome.validationErrors).map(([path, messages]) =>
@@ -56,7 +64,7 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
           await settle(() => keys.send(scope, (key) => startWith({}, key), (outcome) => outcome?.ok === true));
         } }),
       }];
-    }), [workflows.data, chrome.resource, chrome.recordId, keys, start, settle, widgets]);
+    }), [workflows.data, chrome.resource, chrome.recordId, keys, start, settle, t, widgets]);
   if (!chrome.record || !actions.length) return null;
   return <DropdownMenu.SubmenuRoot>
     <DropdownMenu.SubmenuTrigger disabled={chrome.actionsBlocked}>{t("action.runWorkflow")}</DropdownMenu.SubmenuTrigger>

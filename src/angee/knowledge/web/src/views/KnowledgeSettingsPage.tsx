@@ -1,10 +1,10 @@
 import { useCallback, type ReactElement } from "react";
 
-import { extractActionOutcome, failedWriteOutcome } from "@angee/refine";
+import { AuthoredEnvelopeError, extractActionOutcome, failedWriteOutcome } from "@angee/refine";
 
 import {
   Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
-  useAuthoredResourceMutation, useIdempotencyKeys, type ActionDescriptor, type ActionFormContext } from "@angee/ui";
+  useAuthoredResourceMutation, type ActionDescriptor, type ActionFormContext } from "@angee/ui";
 import { KnowledgeCreateVaultFrom, PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
@@ -20,7 +20,6 @@ const cloneScope = (context: ActionFormContext) => `knowledge.vault-from-templat
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
-  const keys = useIdempotencyKeys();
   const [createFrom] = useAuthoredResourceMutation(KnowledgeCreateVaultFrom, {
     invalidateModels: CLONE_MODELS,
     shouldInvalidate: (data) => data?.create_vault_from.ok === true,
@@ -38,12 +37,12 @@ export function KnowledgeSettingsPage(): ReactElement {
         return extractActionOutcome(data, "create_vault_from");
       } catch (cause) {
         if (failedWriteOutcome(cause) !== "conflict") throw cause;
-        // An earlier attempt created a vault under this draft's key: the next one is a new draft.
-        keys.restart(cloneScope(context));
-        return { ok: false, message: t("vault.clonedEarlier") };
+        // An earlier attempt created a vault under this draft's key. Still a conflict, so the dialog's
+        // draft ends and the next attempt is a new one, in this action's words.
+        throw new AuthoredEnvelopeError(t("vault.clonedEarlier"), "CREATION_KEY_CONFLICT");
       }
     },
-    [createFrom, keys, t],
+    [createFrom, t],
   );
   return (
     <SettingsShell maxWidth="1100" gap="6">

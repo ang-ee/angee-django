@@ -10,7 +10,7 @@ import {
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { failedWriteOutcome, invalidateAuthoredQueries, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
+import { invalidateAuthoredQueries, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -586,68 +586,62 @@ export function useFormViewSave({
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
       const keyed = isCreate && Boolean(submitOwner || dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"));
-      try {
-        // One keyed write per attempt, lines included: the draft's key goes with it.
-        const write = async (idempotencyKey: string | null): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
-          if (submitOwner) {
-            return customSubmit.mutateAsync({
-              data,
-              lines,
-              submitted,
-              baseline: (form.formState.defaultValues ?? {}) as FormValues,
-              idempotencyKey,
-            });
-          } else {
-            const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
-            const rootArguments: MutationRootArguments = {};
-            if (!isCreate && (useSave ? saveRevision : updateRevision)) {
-              const revision = editBasisRecordRef.current?.revision;
-              if (typeof revision !== "number" || !Number.isInteger(revision)) {
-                throw new Error(t("form.revisionUnavailable"));
-              }
-              rootArguments.expected_revision = revision;
+      // One keyed write per attempt, lines included: the draft's key goes with it.
+      const write = async (idempotencyKey: string | null): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
+        if (submitOwner) {
+          return customSubmit.mutateAsync({
+            data,
+            lines,
+            submitted,
+            baseline: (form.formState.defaultValues ?? {}) as FormValues,
+            idempotencyKey,
+          });
+        } else {
+          const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
+          const rootArguments: MutationRootArguments = {};
+          if (!isCreate && (useSave ? saveRevision : updateRevision)) {
+            const revision = editBasisRecordRef.current?.revision;
+            if (typeof revision !== "number" || !Number.isInteger(revision)) {
+              throw new Error(t("form.revisionUnavailable"));
             }
-            if (isCreate && idempotencyKey) {
-              rootArguments.idempotency_key = idempotencyKey;
-            }
-            let saved: Row | null;
-            if (useSave) {
-              saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
-              if (saved) await invalidateResource();
-            } else {
-              const mutationMeta = Object.keys(rootArguments).length
-                ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
-              const response = isCreate
-                ? await create.mutateAsync({
-                    ...mutationMeta,
-                    values: lines?.hasChanges && linesField
-                      ? { ...data, [linesField]: { data: lines.payload } }
-                      : data,
-                  })
-                : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
-              saved = response?.data ?? null;
-            }
-            return savedFormSubmitResult(saved, t("form.genericSaveError"));
+            rootArguments.expected_revision = revision;
           }
-        };
-        // A refused create keeps the draft and its key; an accepted one ends it.
-        const result = keyed ? await idempotencyKeys.send(createScope, write, (answer) => answer.status === "ok") : await write(null);
-        if (result.status === "ok") {
-          // Started, not awaited: the form shows its own record, which the write's answer carries. A read
-          // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
-          // answers must not hold the confirmation back or keep Save from the next write; its failure is
-          // its own query's to report.
-          void Promise.all([
-            ...dependentInvalidations.map((target) => invalidate(target)),
-            ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
-          ]).catch(() => undefined);
+          if (isCreate && idempotencyKey) {
+            rootArguments.idempotency_key = idempotencyKey;
+          }
+          let saved: Row | null;
+          if (useSave) {
+            saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
+            if (saved) await invalidateResource();
+          } else {
+            const mutationMeta = Object.keys(rootArguments).length
+              ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
+            const response = isCreate
+              ? await create.mutateAsync({
+                  ...mutationMeta,
+                  values: lines?.hasChanges && linesField
+                    ? { ...data, [linesField]: { data: lines.payload } }
+                    : data,
+                })
+              : await update.mutateAsync({ id: id as BaseKey, values: data, ...mutationMeta });
+            saved = response?.data ?? null;
+          }
+          return savedFormSubmitResult(saved, t("form.genericSaveError"));
         }
-        return result;
-      } catch (error) {
-        // The key is spent on a record an earlier attempt created: the form shows the conflict, and its next attempt is a new draft.
-        if (keyed && failedWriteOutcome(error) === "conflict") idempotencyKeys.restart(createScope);
-        throw error;
+      };
+      // A refused create keeps the draft and its key; an accepted one ends it.
+      const result = keyed ? await idempotencyKeys.send(createScope, write, (answer) => answer.status === "ok") : await write(null);
+      if (result.status === "ok") {
+        // Started, not awaited: the form shows its own record, which the write's answer carries. A read
+        // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
+        // answers must not hold the confirmation back or keep Save from the next write; its failure is
+        // its own query's to report.
+        void Promise.all([
+          ...dependentInvalidations.map((target) => invalidate(target)),
+          ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
+        ]).catch(() => undefined);
       }
+      return result;
     },
     [
       customSubmit.mutateAsync,

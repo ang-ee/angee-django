@@ -74,7 +74,6 @@ describe("useIdempotencyKeys", () => {
     ["a forbidden answer", answered(403, [{ code: "FORBIDDEN" }]), "denied", false],
     ["a sign-in answer", answered(200, [{ code: "UNAUTHENTICATED" }]), "denied", false],
     ["a preview's refusal", answered(200, [{ code: "VIEW_AS_READ_ONLY" }]), "denied", false],
-    ["a spent key", answered(200, [{ code: "CREATION_KEY_CONFLICT" }]), "conflict", false],
   ])("%s keeps the draft's key, and says what it told", async (_name, failure, outcome, uncertain) => {
     const keys = keysUnderRuntime();
     const first = await send(keys.current, "chatter:task-1", failure);
@@ -118,7 +117,24 @@ describe("useIdempotencyKeys", () => {
     expect(keys.state("compose")).toEqual({ outcome: "refused", uncertain: true });
   });
 
-  test("a draft given up with nothing possibly written ends; one given up after a lost attempt keeps its key; a restart always ends it", async () => {
+  test.each([
+    ["the server's answer", answered(200, [{ code: "CREATION_KEY_CONFLICT" }])],
+    ["an in-band answer", new AuthoredEnvelopeError("An earlier attempt already created it.", "CREATION_KEY_CONFLICT")],
+  ])("a spent key (%s) says so until the draft's next send, which starts a new draft with a new key", async (_name, conflict) => {
+    const keys = keysUnderRuntime();
+    // A lost create that was written, an edit sent under its key (conflict), then the next send.
+    const lost = await send(keys.current, "dialog:create", new TypeError("Failed to fetch"));
+    expect(await send(keys.current, "dialog:create", conflict)).toBe(lost);
+    expect(keys.state("dialog:create")).toEqual({ outcome: "conflict", uncertain: true });
+    const next = await send(keys.current, "dialog:create", new TypeError("Failed to fetch"));
+    expect(next).not.toBe(lost);
+    // The new draft is its own: lost too, it keeps its key through a dismissal, until accepted.
+    act(() => { keys.current.discard("dialog:create"); });
+    expect(await send(keys.current, "dialog:create", { ok: true })).toBe(next);
+    expect(keys.state("dialog:create")).toBeNull();
+  });
+
+  test("a draft given up with nothing possibly written ends; one given up after a lost attempt keeps its key", async () => {
     const keys = keysUnderRuntime();
     const refused = await send(keys.current, "dialog:a", answered(200, [{ code: "VALIDATION" }]));
     act(() => { keys.current.discard("dialog:a"); });
@@ -126,14 +142,29 @@ describe("useIdempotencyKeys", () => {
     const lost = await send(keys.current, "dialog:b", new TypeError("Failed to fetch"));
     act(() => { keys.current.discard("dialog:b"); });
     expect(await send(keys.current, "dialog:b", new TypeError("Failed to fetch"))).toBe(lost);
-    act(() => { keys.current.restart("dialog:b"); });
-    expect(await send(keys.current, "dialog:b", { ok: true })).not.toBe(lost);
+  });
+
+  test("a draft with a send on its way may be written: it is neither given up nor dropped until answered", async () => {
+    const keys = keysUnderRuntime();
+    let answer!: (error: Error) => void;
+    let carried = "";
+    let inFlight!: Promise<unknown>;
+    act(() => {
+      inFlight = keys.current.send("box:pending", (key) => {
+        carried = key;
+        return new Promise((_resolve, reject) => { answer = reject; });
+      }).catch(() => undefined);
+    });
+    act(() => { keys.current.discard("box:pending"); });
+    for (let n = 0; n <= 100; n += 1) await send(keys.current, `refused-${n}`, answered(200, [{ code: "VALIDATION" }]));
+    await act(async () => { answer(new TypeError("Failed to fetch")); await inFlight; });
+    expect(await send(keys.current, "box:pending", { ok: true })).toBe(carried);
   });
 
   test("the key is minted at the draft's first attempt: a draft never sent holds none", async () => {
     const keys = keysUnderRuntime();
     expect(keys.state("form:new")).toBeNull();
-    act(() => { keys.current.discard("form:new"); keys.current.restart("form:new"); });
+    act(() => { keys.current.discard("form:new"); });
     const first = await send(keys.current, "form:new", new TypeError("Failed to fetch"));
     expect(first).toEqual(expect.any(String));
   });

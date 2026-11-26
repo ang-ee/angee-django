@@ -116,6 +116,19 @@ test("a refused input stays in the dialog and retries with the same request key"
   expect(mocks.start.mock.calls[1]?.[1].request_key).toBe(mocks.start.mock.calls[0]?.[1].request_key);
 });
 
+test("a request key spent on an earlier start with other input says so, and the next attempt is a new request", async () => {
+  mocks.start.mockRejectedValueOnce({ response: { errors: [{ message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] } });
+  mount(); await openWorkflows();
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Review" }));
+  const dialog = await screen.findByRole("dialog", { name: "Review" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Reason" }), { target: { value: "Check record" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
+  expect(await within(dialog).findByText("An earlier attempt already started this workflow on this record.")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
+  await waitFor(() => expect(mocks.start).toHaveBeenCalledTimes(2));
+  expect(mocks.start.mock.calls[1]?.[1].request_key).not.toBe(mocks.start.mock.calls[0]?.[1].request_key);
+});
+
 test("relation annotations render the standard record picker", async () => {
   const relation: Workflows = { workflow: [{ id: "wfl_source", name: "Use source", published: { input_schema: {
     type: "object", properties: { source: { type: "string", title: "Source", relation: { resource: "notes.Note" } } }, required: ["source"],

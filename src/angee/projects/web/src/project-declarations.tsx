@@ -90,7 +90,6 @@ export function useProjectFormDeclaration(
       } catch (cause) {
         if (failedWriteOutcome(cause) !== "conflict") throw cause;
         // An earlier attempt created a project under this draft's key: the next one is a new draft.
-        keys.restart(scope);
         return { ok: false, message: t("project.createdEarlier") };
       }
     });

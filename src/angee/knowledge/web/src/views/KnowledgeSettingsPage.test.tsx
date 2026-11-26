@@ -2,7 +2,7 @@
 
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { boundedGraphQLTransportError } from "@angee/refine";
+import { AuthoredEnvelopeError, boundedGraphQLTransportError, failedWriteOutcome } from "@angee/refine";
 import type { ActionDescriptor } from "@angee/ui";
 import type { AuthoredMutationOptions } from "@angee/refine";
 import type { DocumentType } from "@angee/gql/console";
@@ -73,11 +73,14 @@ test("the clone dialog of one template is one draft: it declares its scope, and 
     { template: "vlt_template", name: "Copy", owned: true, idempotency_key: "draft-key" }, { errorNotification: false });
 });
 
-test("an earlier attempt that already created the vault says so, rather than failing", async () => {
+test("an earlier attempt that already created the vault says so, and stays the conflict the dialog's draft ends on", async () => {
   mocks.mutation.mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
     message: "Already created.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }));
   render(<KnowledgeSettingsPage />, { wrapper: AppRuntime });
-  expect(await submit("Copy")).toEqual({ ok: false, message: "An earlier attempt already created a vault from this template." });
+  const refusal = await submit("Copy").catch((error: unknown) => error);
+  expect(refusal).toBeInstanceOf(AuthoredEnvelopeError);
+  expect(refusal).toMatchObject({ message: "An earlier attempt already created a vault from this template.", code: "CREATION_KEY_CONFLICT" });
+  expect(failedWriteOutcome(refusal)).toBe("conflict");
 });
 
 test("successful clones invalidate metadata-canonical model names", () => {

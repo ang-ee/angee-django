@@ -403,8 +403,9 @@ export function RecordThreadConversation({
         return true;
       } catch (cause) {
         if (failedWriteOutcome(cause) === "conflict") {
-          // An earlier version of this post was written under the draft's key: the next send is a new post.
-          keys.restart(postScope);
+          // An earlier version of this post was written under the draft's key: show it; the next send is a new post.
+          setWindow({ scope, latest: true });
+          void threadQuery.refetch();
           setError(t("error.postedEarlier"));
           return false;
         }
@@ -417,7 +418,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, keys, postScope, postMessage, scope, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, keys, postScope, postMessage, scope, t, threadQuery],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {

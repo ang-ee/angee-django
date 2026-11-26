@@ -179,7 +179,10 @@ test("a keyed insert refused with a validation error keeps its key for the corre
   const submit = lastChildSource().createAction!.submit;
   const context = { record: null, selectedIds: [] };
   await expect(submit({ body: "Refused draft" }, context)).rejects.toThrow("Fix the highlighted fields.");
+  expect(sdk.refetch).not.toHaveBeenCalled();
   expect(await submit({ body: "Corrected draft" }, context)).toEqual({ ok: false, message: "An earlier version of this note was already saved." });
+  // The earlier version is shown: the notes are read again.
+  expect(sdk.refetch).toHaveBeenCalledOnce();
   await submit({ body: "Corrected draft" }, context);
   const [refused, corrected, afterConflict] = sdk.createNote.mock.calls.map(([variables]) => variables.idempotency_key);
   expect(corrected).toBe(refused);

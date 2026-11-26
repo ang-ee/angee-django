@@ -40,7 +40,6 @@ export {
   createAngeeHasuraDataProvider,
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
-  hasGraphQLAnswer,
   isPublicGraphQLErrorCode,
   publicGraphQLError,
   publicGraphQLErrorsFromUnknown,

@@ -1695,7 +1695,7 @@ test("a new record is one draft: a refused create keeps its key for the correcte
   expect(afterDiscard).not.toBe(refused);
 });
 
-test("a create whose answer was lost keeps its key when the form is discarded, or left and returned to: the record may exist", async () => {
+test("a create whose answer was lost keeps its key when the form is discarded, or left and returned to: the record may exist, and the identical retry replays to it", async () => {
   const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
   edit("title", "Lost");
   edit("deadline", "2026-09-28");
@@ -1713,6 +1713,8 @@ test("a create whose answer was lost keeps its key when the form is discarded, o
   const keys = f.update.mock.calls.filter(([call]) => call.meta?.gqlVariables?.idempotency_key).map(([call]) => call.meta?.gqlVariables?.idempotency_key);
   expect(keys).toHaveLength(3);
   expect(new Set(keys).size).toBe(1);
+  // The server answers the same key with the same content with the record it created: the form lands on it.
+  expect(f.onSaved.mock.lastCall?.[0]).toMatchObject({ id: "note-1", title: "Lost" });
 });
 
 test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and receives corrected retry values without native insert capabilities", async (owner) => {

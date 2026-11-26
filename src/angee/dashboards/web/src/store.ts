@@ -1,6 +1,6 @@
 import * as React from "react";
 import type { DocumentType } from "@angee/gql/console";
-import { useAuthoredMutation, useAuthoredQuery, type AuthoredMutateOptions } from "@angee/refine";
+import { AuthoredEnvelopeError, useAuthoredMutation, useAuthoredQuery, type AuthoredMutateOptions } from "@angee/refine";
 import { jsonValueFromUnknown, type JsonValue } from "@angee/ui";
 import {
   parseDashboardSnapshot,
@@ -57,18 +57,24 @@ function capabilities(payload: FullPayload): DashboardCapabilities {
   };
 }
 
-function payloadError(payload: ErrorPayload | null | undefined): Error | null {
+/**
+ * The server's in-band refusal as the envelope error its readers classify (`failedWriteOutcome`):
+ * a conflict with a current revision is a stale one, and a keyed create's conflict without one is
+ * its spent idempotency key; every other refusal is the server's answer, with no code.
+ */
+function payloadError(payload: ErrorPayload | null | undefined, keyed = false): Error | null {
   if (!payload) return new Error("The dashboard API returned no result.");
   if (payload.status === "ready" || payload.status === "absent") return null;
   if (payload.status === "conflict") {
     const suffix = payload.current_revision == null ? "" : ` Current revision: ${payload.current_revision}.`;
-    return new Error(`${payload.message ?? "The dashboard changed since it was loaded."}${suffix}`);
+    const code = payload.current_revision != null ? "STALE_REVISION" : keyed ? "CREATION_KEY_CONFLICT" : null;
+    return new AuthoredEnvelopeError(`${payload.message ?? "The dashboard changed since it was loaded."}${suffix}`, code);
   }
-  return new Error(payload.message ?? "The dashboard operation failed.");
+  return new AuthoredEnvelopeError(payload.message ?? "The dashboard operation failed.", null);
 }
 
-function saveResult(payload: FullPayload | null | undefined): DashboardSaveResult {
-  const error = payloadError(payload);
+function saveResult(payload: FullPayload | null | undefined, keyed = false): DashboardSaveResult {
+  const error = payloadError(payload, keyed);
   if (error) throw error;
   if (!payload?.id || payload.revision == null || payload.snapshot == null) {
     throw new Error("The dashboard API returned an incomplete snapshot.");
@@ -125,7 +131,7 @@ function useCreatePersonal() {
       description: input.description ?? "",
       idempotencyKey: input.idempotencyKey,
     }, options);
-    return saveResult(result?.create_personal_dashboard);
+    return saveResult(result?.create_personal_dashboard, true);
   }, [create]);
 }
 
@@ -166,7 +172,7 @@ function useDashboard(target: DashboardTarget) {
         idempotencyKey: input.idempotencyKey,
         snapshot: dashboardSnapshotInput(input.snapshot),
       });
-      return saveResult(result?.duplicate_dashboard);
+      return saveResult(result?.duplicate_dashboard, true);
     }, [duplicateMutation]),
   };
 }
