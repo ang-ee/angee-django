@@ -5057,6 +5057,28 @@
      }
     ]
    }
+  },
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "sample": [],
+    "variables": []
+   },
+   "result": {
+    "rendered": null,
+    "warnings": [
+     {
+      "code": "SAVE_REFUSED",
+      "detail": "Give an object.",
+      "field": "variables"
+     },
+     {
+      "code": "SAVE_REFUSED",
+      "detail": "Give an object.",
+      "field": "sample"
+     }
+    ]
+   }
   }
  ],
  "unsavedPreviewsLayoutGated": [

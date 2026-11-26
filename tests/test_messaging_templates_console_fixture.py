@@ -8,9 +8,10 @@ them and what a member reads differently, the brand kits, and, for the rows the
 stories open, their backlinks, previews and delete previews and what Override, Keep
 override, the insert and a refused save answer, each with what it changed in the
 library, what Keep override answers on an override another session deleted, two saves
-the server keeps with what a reload then reads, and three previews of unsaved edits: one
-that renders, one that saves but does not render with its sample, and the refused save's
-own, which a deployment that lets nobody write a layout answers as a failed query instead.
+the server keeps with what a reload then reads, and four previews of unsaved edits: one
+that renders, one that saves but does not render with its sample, the refused save's
+own, which a deployment that lets nobody write a layout answers as a failed query instead,
+and one refused in the same words under two columns.
 The checks the console relies on are asserted as they are recorded: a pasted source
 with carriage returns saves as newlines and leaves "Default updated" as it was, and an
 override whose default changed still says so after a save and a reload.
@@ -231,13 +232,15 @@ _BY_PK = f"query($id: String!) {{ message_templates_by_pk(id: $id) {{ {_ROW} }} 
 _SAVED_AT = "2026-11-24T09:00:00+00:00"
 _REFUSED_SET = {"format": "html", "layout": ""}
 """An edit Save refuses for two reasons at once: a template with no layout, in HTML with no plain-text form."""
-_UNSAVED = (
+_UNSAVED: tuple[dict[str, Any], ...] = (
     {"subject": "Your new {{ brand.name }} password"},
     {"sample": {"person": {"first_name": "Ana"}}},
     _REFUSED_SET,
+    {"variables": [], "sample": []},
 )
 """The edits previewed unsaved on the password reset: a subject that renders, a sample without the reset link, which
-saves but does not render (``RENDER_ERROR``), and the refused save's own (``SAVE_REFUSED``)."""
+saves but does not render (``RENDER_ERROR``), the refused save's own (``SAVE_REFUSED``), and two lists where objects
+belong, refused in the same words under two columns."""
 
 
 def _alias(kind: str, key: str, language: str, shipped: bool) -> str:
