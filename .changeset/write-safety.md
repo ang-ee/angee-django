@@ -48,9 +48,10 @@ pending write and typed values.
   (`record.create:<provider>:<resource>`, or `record.edit:…:<id>`), and a
   relation field's dialog its `relation:<field>` slot (`fieldName` on
   `RelationPicker`, `RelationFieldWidget` and `RelationMultiFieldWidget`;
-  every form passes it), so a create form opened from another form, down any
-  chain, or from another relation field to the same resource, never shares its
-  draft.
+  every form passes it, and a lines editor `<lines>.<row>.<column>`, naming
+  the row by its id or client key), so a create form opened from another form,
+  down any chain, or from another relation field or row to the same resource,
+  never shares its draft.
 - `MutationDialog` with `idempotencyScope` (`KeyedMutationDialogProps`) calls
   its submission with the draft's key as a required `string` third argument;
   without one (`MutationDialogProps`, as before) it is called with none.

@@ -2,15 +2,17 @@
 
 import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
-import type { DataResourceFieldMetadata, DataResourceMetadata } from "@angee/metadata";
+import type { DataResourceFieldMetadata, DataResourceLinesMetadata, DataResourceMetadata } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type { ReactNode } from "react";
+import { useForm } from "react-hook-form";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
+import { EditableLines } from "../form/EditableLines";
 import { FormView } from "../form/FormView";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { RelationMultiFieldWidget } from "./RelationMultiFieldWidget";
@@ -285,3 +287,62 @@ test("a quick create on a keyed root sends its draft's key through the create ro
   expect(keys[1]).toBe(keys[0]);
   expect(keys[2]).not.toBe(keys[0]);
 });
+
+test("two relation fields' quick creates keep their drafts apart: a lost one is retried under its own key after the other field's", async () => {
+  const { create, Wrapper } = harness([...resources, label]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const relation = { resource: "labels.Label", labelField: "name", canCreate: true };
+  render(<Wrapper>
+    <RelationMultiFieldWidget value={[]} onChange={vi.fn()} fieldName="labels" relation={relation} aria-label="Labels" />
+    <RelationMultiFieldWidget value={[]} onChange={vi.fn()} fieldName="flags" relation={relation} aria-label="Flags" />
+  </Wrapper>);
+  const quick = async (field: string, query: string, count: number) => {
+    fireEvent.input(screen.getByRole("combobox", { name: field }), { target: { value: query }, inputType: "insertText" });
+    fireEvent.click(await screen.findByRole("option", { name: `Create “${query}”` }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+  };
+  await quick("Labels", "Urgent", 1);
+  await quick("Flags", "Later", 2);
+  await quick("Labels", "Urgent", 3);
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys[1]).not.toBe(keys[0]);
+  expect(keys[2]).toBe(keys[0]);
+});
+
+test("rows of one lines editor keep their create drafts apart: a lost create from one row is retried under its own key after another row creates", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  create.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const lines = {
+    field: "lines", modelLabel: "demo.Line",
+    fields: [{
+      name: "node", kind: "relation", scalar: "ID", relationModelLabel: "tree.Node", relationObject: true, readable: true,
+      filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false,
+    }],
+  } satisfies DataResourceLinesMetadata;
+  function Lines(): ReactNode {
+    const form = useForm<Record<string, unknown>>({ defaultValues: { lines: [{ id: "one", node: null }, { id: "two", node: null }] } });
+    return <EditableLines control={form.control} setValue={form.setValue} name="lines" lines={lines} />;
+  }
+  render(<Wrapper><Lines /></Wrapper>);
+  const createFrom = async (row: number, query: string, count: number) => {
+    fireEvent.click(screen.getAllByRole("combobox", { name: "Node" })[row]!);
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: query } });
+    fireEvent.click(await screen.findByText(`Create “${query}”`));
+    const dialog = await screen.findByRole("dialog", { name: "New node" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+    return dialog;
+  };
+  // Row one's create loses its answer and the person closes it; row two creates something else.
+  const lost = await createFrom(0, "Alpha", 1);
+  fireEvent.click(within(lost).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  await createFrom(1, "Beta", 2);
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "New node" })).toBeNull());
+  await createFrom(0, "Alpha", 3);
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys[0]).toEqual(expect.any(String));
+  expect(keys[1]).not.toBe(keys[0]);
+  // Row one's retry carries its own key: the server replays what it may have written.
+  expect(keys[2]).toBe(keys[0]);
+}, 20_000);
