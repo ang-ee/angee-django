@@ -268,7 +268,19 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         an empty selection with its coded reason.
         """
 
-        return self.filter(
+        return self.filter(self.outbound_email_rule(backend_class=backend_class))
+
+    def outbound_email_rule(self, *, backend_class: str | None = None) -> models.Q:
+        """:meth:`outbound_email` as a condition, for an expression that decides it per row.
+
+        It reads the backend registry and settings, never a row, so it builds on
+        any selection of this model, an empty one included. It does not check the
+        channel's sender, which lives in its config or the settings, beyond SQL:
+        that is checked when a message is sent (the backend's ``outbound_sender``),
+        so a channel this admits can still refuse a message under ``channel``.
+        """
+
+        return models.Q(
             backend_class__in=self._outbound_email_backends(backend_class), lifecycle=IntegrationLifecycle.CONNECTED,
         )
 
@@ -3168,6 +3180,16 @@ _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     """Owns idempotent ingest, outgoing messages (:meth:`compose`), insert deltas and state-change recounts."""
 
+    @staticmethod
+    def recipient_limit() -> int:
+        """The most addresses one composed message takes across ``to``, ``cc`` and ``bcc`` together.
+
+        The deployment's ``ANGEE_MESSAGING_MAX_RECIPIENTS``: :meth:`compose`
+        refuses more, and the console reads it to state the bound.
+        """
+
+        return int(settings.ANGEE_MESSAGING_MAX_RECIPIENTS)
+
     def compose(
         self,
         *,
@@ -3197,7 +3219,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         It runs as its actor and refuses an elevated call. Its shape is checked
         first, reading nothing: its anchor, and at most
-        ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses across ``to``, ``cc`` and
+        :meth:`recipient_limit` addresses across ``to``, ``cc`` and
         ``bcc`` and ``ANGEE_MESSAGING_MAX_ATTACHMENTS`` attachments, each refused
         (``too_many``) under the argument that crosses it. Who may write it is
         decided next: :meth:`Message.require_reply` for an answer, else
@@ -3228,7 +3250,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )})
         if parent is None and channel is None:
             raise ValidationError({"channel": ValidationError("Choose the channel to send from.", code="required")})
-        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        _require_at_most(self.recipient_limit(), "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
         _require_at_most(settings.ANGEE_MESSAGING_MAX_ATTACHMENTS, "attachments", (("attachments", attachments),))
         values = dict(local or {})
         intent = {
@@ -3333,10 +3355,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         write stores, a control character, or an encoded-word opener, which a mail
         library decodes into another address or name. The handle owner then decides
         whether the address can be one and can be stored on a handle
-        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
-        nothing, so a caller can ask it before expensive work, and ``compose``
-        lands exactly what it returns. The refusal is ``invalid``, naming the
-        entry as typed.
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). The
+        address is returned as typed: the handle owner lands any letter case or
+        domain spelling of a stored address on its handle, and a handle compose
+        creates first keeps the typed spelling. It reads nothing, so a caller can
+        ask it before expensive work, and ``compose`` lands exactly what it
+        returns. The refusal is ``invalid``, naming the entry as typed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3351,7 +3375,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})
-        address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
         return name, address
 
@@ -3539,7 +3562,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             elif email:
                 sender_address = outgoing.channel.outbound_sender()
             if sender_address is not None:
-                sender_address = (sender_address[0], handle_model.email_value(sender_address[1]))
                 _require_landable(handle_model, (("channel", sender_address[1]),))
             if admit is not None:
                 admit()
@@ -3595,10 +3617,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``HandleManager.find_identities``); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
         only a handle that has none and never renames a shared one. Those writes
-        take the handles in one order, by their identity key, so two composes
-        naming the same addresses in different orders take their row locks in the
-        same order and do not deadlock each other; another writer that takes the
-        same handles in its own order still can.
+        take the handles in one order, by their spelling key
+        (``Handle.spelling_key_of``), so two composes naming the same addresses in
+        different orders or spellings take their row locks in the same order and
+        do not deadlock each other; another writer that takes the same handles in
+        its own order still can. Spellings of one address keep the order given, so
+        a new address is stored as it was first given.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3606,7 +3630,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         found = handle_model.objects.find_identities(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+        for addressee in sorted(recipients, key=lambda each: handle_model.spelling_key_of(email, each.address)):
             if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
                 found[(email, addressee.address)] = handle_model.objects.upsert(
                     platform=email, value=addressee.address, display_name=addressee.name,
@@ -3742,7 +3766,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             self._set_reconciliation_horizon(row, now=moment)
         row.metadata = {**(row.metadata or {}), "local": {
             **row.local_metadata,
-            "delivery_attempts": int(row.local_metadata.get("delivery_attempts", 0)) + 1,
+            "delivery_attempts": row.delivery_attempts + 1,
             "delivery_error": "Delivery may have succeeded; reconcile or acknowledge before retrying.",
         }}
         row.save(update_fields=(
@@ -3838,7 +3862,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
                 result = "retry"
             else:
-                attempts = int(local.get("delivery_attempts", 0)) + (0 if reconciling else 1)
+                attempts = row.delivery_attempts + (0 if reconciling else 1)
                 local["delivery_attempts"] = attempts
                 if error is not None and uncertain_error:
                     if row.delivery_claim is None:

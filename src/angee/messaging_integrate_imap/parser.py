@@ -116,7 +116,8 @@ def parse_message(
     """Parse one raw RFC 822 message into a :class:`ParsedMessage`.
 
     ``internal_date`` is the server receipt time (the IMAP INTERNALDATE) and the
-    fallback when the Date header is missing or malformed. ``own_addresses``
+    fallback when the Date header is missing or malformed. ``own_addresses``,
+    the account's addresses by spelling key (``Handle.spelling_key_of``),
     classifies direction (an owned From is outbound; owned From *and* only owned
     recipients is internal). ``truncated_bytes`` marks a header-only fetch of an
     oversized message: the size lands in metadata and the body stays empty rather
@@ -329,6 +330,17 @@ def _references(message: EmailMessage) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _parsed_address(address: str) -> str:
+    """Return an address in the form this parser emits: trimmed and lower-cased.
+
+    Every stored ``ParsedMessage.sync_hash`` covers the addresses in this form,
+    so changing it would change the hash of every message already synced; the
+    handle owner lands it on the handle any spelling of the address names.
+    """
+
+    return address.strip().lower()
+
+
 def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
     """Return the first parsed address from ``headers``, or ``None``."""
 
@@ -336,7 +348,7 @@ def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
         if address:
             return ParsedHandle(
                 platform=_EMAIL_PLATFORM,
-                value=Handle.email_value(address),
+                value=_parsed_address(address),
                 display_name=name.strip(),
             )
     return None
@@ -350,7 +362,7 @@ def _recipients(message: EmailMessage) -> tuple[ParsedRecipient, ...]:
     for header, role in _RECIPIENT_HEADERS:
         values = [str(value) for value in message.get_all(header, ())]
         for name, address in getaddresses(values):
-            cleaned = Handle.email_value(address)
+            cleaned = _parsed_address(address)
             if not cleaned or (cleaned, role) in seen:
                 continue
             seen.add((cleaned, role))
@@ -372,16 +384,19 @@ def _direction(
     recipients: tuple[ParsedRecipient, ...],
     own_addresses: frozenset[str],
 ) -> str:
-    """Classify direction from the account's own addresses.
+    """Classify direction from the account's own addresses, which ``own_addresses`` holds by spelling key.
 
     The string vocabulary is the neutral seam contract
     (:class:`~angee.messaging.backends.ParsedMessage`); without a sender or any
     own-address knowledge everything is inbound.
     """
 
-    if sender is None or sender.value not in own_addresses:
+    def own(value: str) -> bool:
+        return Handle.spelling_key_of(_EMAIL_PLATFORM, value) in own_addresses
+
+    if sender is None or not own(sender.value):
         return "inbound"
-    if recipients and all(recipient.handle.value in own_addresses for recipient in recipients):
+    if recipients and all(own(recipient.handle.value) for recipient in recipients):
         return "internal"
     return "outbound"
 
