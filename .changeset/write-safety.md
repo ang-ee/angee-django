@@ -23,18 +23,29 @@ pending write and typed values.
   keeps `response.errors` only when the server's response held a GraphQL errors
   list: a network failure, a cancelled request or a gateway's own page carries
   none.
+- `failedWriteOutcome(error)` (`@angee/refine`) says what a failed write's
+  error tells: `not-sent`, `unconfirmed`, `refused`, `denied` or `conflict`.
 - `DialogForm` takes `pending`, refusing every dismissal (Escape, the backdrop,
-  Close) while a submission runs, and `dirty`, asking before a dismissal
-  discards typed values with the shared unsaved-changes question. Its `footer`
-  may be a function of `dismiss`, the dialog's own dismissal, for a Cancel.
+  Close, Cancel) while a submission runs: the dialog is `aria-busy`, Close and
+  a footer Cancel stay focusable (`aria-disabled`) with their reason as their
+  description, and a refused Escape or backdrop press is announced. Given
+  `dirty` (true or false) it guards its work from the moment it opens: a
+  dismissal of typed values asks first, with the shared unsaved-changes
+  question, and a route move asks while it holds typed values or a running
+  submission (while a submission runs the question says it is still sending).
+  `holdsWork`, read live, lets an owner say it holds nothing, as after an
+  accepted submit that moves on. Its `footer` may be a function of
+  `{ dismiss, dismissRefusal }`, for a Cancel.
 - Every `MutationDialog` and every typed-args `ActionFormDialog` (a record or
-  row action with `args`) now behaves so: Escape, the backdrop and Close do
-  nothing while it sends, and its answer shows; Cancel, Escape, the backdrop
-  and Close ask first when values were typed; the close after an accepted
-  submit asks nothing. A `MutationDialog` also asks before a route move while
-  it holds typed values or a running submission, and a submission accepted
-  after the dialog went away still toasts its message (only `onSubmitted` and
-  the close are skipped).
+  row action with `args`) now behaves so, and neither asks after an accepted
+  submit whose `onSubmitted` or `onSucceeded` navigates. An answer that lands
+  after the dialog went away is still reported (`useLateAnswerReport`): an
+  accepted one toasts its message, a refused one its reasons, a lost one that
+  it may not have been sent. A `trigger`-owned `MutationDialog` given no
+  trigger while open stays open until it closes.
+- The unsaved-changes guard's question says a submission is still sending when
+  one runs (`pendingNow`), and the guard says at mount when it renders outside
+  the router.
 - `MessageActions` shows its actions where the primary pointer is coarse
   (`pointer-coarse:opacity-100`), as touch never hovers.
 - `useUnsavedChangesNavigationGuard` takes `leaves(move)`, which says whether a
@@ -44,14 +55,16 @@ pending write and typed values.
 Upgrade:
 
 - `allowSearchChanges: true` becomes `leaves: pathnameChanges`.
-- A dialog holding typed values asks through `ModalsHost`, and a
-  `MutationDialog` holding typed values or a running submission guards route
-  moves through the router, as every app page provides both. A test that types
-  into a real dialog renders it under `ModalsHost`; one that types into or
-  submits a real `MutationDialog` renders it under a router too
-  (`RouterContextProvider` with a memory history).
+- An open `MutationDialog` or typed-args `ActionFormDialog` renders under the
+  app's router and `ModalsHost`, as every app page provides both, and says so as
+  it opens when one is missing. `createUiTestProviders` (`@angee/ui/testing`)
+  now always provides `ModalsHost`, and `router: true` (or
+  `{ initialEntries }`) renders under a memory router kept in `routers`: a test
+  that opens a real dialog passes `router`.
 - A test that dismissed a dialog mid-submission finds it open; one that
-  dismissed it with typed values finds the unsaved-changes question.
+  dismissed it with typed values finds the unsaved-changes question; one that
+  read Cancel's `disabled` while it sends finds `aria-disabled="true"`. A
+  `DialogForm` footer function takes `{ dismiss, dismissRefusal }`.
 - Code that told an envelope refusal from other errors by `instanceof Error`
   alone still works; one that read `response.errors` on a gateway failure finds
   it absent.

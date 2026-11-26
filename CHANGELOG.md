@@ -24,15 +24,18 @@ live in code docstrings.
   server's answer, and a bounded transport error keeps `response.errors` only
   then. `DialogForm` takes `pending` (no dismissal while a submission runs) and
   `dirty` (a dismissal asks first, with the shared unsaved-changes question),
-  and its `footer` may take `dismiss`; `ActionFormDialog` drops its own guard
-  for it, and every `MutationDialog` and typed-args action dialog behaves so.
-  A `MutationDialog` also asks before a route move while it holds typed values
-  or a running submission, and still toasts a submission accepted after it went
-  away. `MessageActions` shows on a coarse pointer. The unsaved-changes guard
-  takes `leaves` in place of `allowSearchChanges`. **Upgrade:**
-  `allowSearchChanges: true` becomes `leaves: pathnameChanges`; a test that
-  types into a real dialog renders it under `ModalsHost`, and one that types
-  into or submits a real `MutationDialog` under a router as well.
+  and it asks before a route move while it holds either (saying it is still
+  sending while it is), with `holdsWork` saying no once an accepted submit
+  moves on; Close and Cancel stay focusable and say why while it sends.
+  `ActionFormDialog` drops its own guard for it, and every `MutationDialog` and
+  typed-args action dialog behaves so. An answer that lands after a dialog went
+  away is still reported (`useLateAnswerReport`, reading refine's
+  `failedWriteOutcome`). `MessageActions` shows on a coarse pointer. The
+  unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`; an
+  open form dialog renders under the router and `ModalsHost` and says so when
+  one is missing; `createUiTestProviders` provides `ModalsHost` and takes
+  `router`.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
