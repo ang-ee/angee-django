@@ -1653,10 +1653,40 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             published.definition.validate_input(self.admission_input(None, occurrence=first))
         return first
 
+    def rule_fields(self) -> tuple[str, ...]:
+        """Name the fields that state this trigger's rule: its record scope and condition, or its schedule.
+
+        Changing one disables an enabled trigger (:meth:`clean`); ``workflow`` is never changed.
+        """
+        return (
+            "condition", "source", "model_label", "recurrence", "recurrence_start", "recurrence_zone",
+            *self.source_class.scope_fields,
+        )
+
+    def changes_rule_of(self, stored: Trigger) -> bool:
+        """Whether this trigger states a rule other than ``stored``'s, the row as committed.
+
+        ``model_label`` is compared as :meth:`clean` stores it, so a caller may ask
+        before cleaning: a resource load keeps the activation of a trigger whose
+        rule it re-applies unchanged.
+        """
+        for name in self.rule_fields():
+            field = self._meta.get_field(name)
+            if not isinstance(field, models.Field):
+                raise ImproperlyConfigured(f"Trigger configuration {name!r} must be a forward field.")
+            value = self._stored_model_label() if name == "model_label" else getattr(self, field.attname)
+            if value != getattr(stored, field.attname):
+                return True
+        return False
+
+    def _stored_model_label(self) -> str:
+        """Return ``model_label`` as it is stored: blank for a fixed source, else Django's canonical label."""
+        return "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
+
     def clean(self) -> None:
         """Validate authoring and require disabling before changing an enabled rule."""
         super().clean()
-        self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
+        self.model_label = self._stored_model_label()
         self.validate_configuration()
         previous = type(self).system_queryset().filter(pk=self.pk).first() if self.pk else None
         # Engine-owned activation facts come from the stored row, never from a stale instance.
@@ -1667,20 +1697,10 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
             raise ValidationError("A trigger's workflow cannot be changed.")
         if self.enabled and (previous is None or not previous.enabled):
             raise ValidationError("Enable triggers through the manager action.")
-        fields = (
-            "condition", "source", "model_label", "recurrence", "recurrence_start", "recurrence_zone",
-            *self.source_class.scope_fields,
-        )
-        if previous is not None:
-            for name in fields:
-                field = self._meta.get_field(name)
-                if not isinstance(field, models.Field):
-                    raise ImproperlyConfigured(f"Trigger configuration {name!r} must be a forward field.")
-                if getattr(self, field.attname) != getattr(previous, field.attname):
-                    if previous.enabled and self.enabled:
-                        raise ValidationError("Disable the trigger before editing its rule.")
-                    self.disabled_reason = "Trigger configuration changed; enable it again."
-                    break
+        if previous is not None and self.changes_rule_of(previous):
+            if previous.enabled and self.enabled:
+                raise ValidationError("Disable the trigger before editing its rule.")
+            self.disabled_reason = "Trigger configuration changed; enable it again."
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate native saves as well as resource writes."""

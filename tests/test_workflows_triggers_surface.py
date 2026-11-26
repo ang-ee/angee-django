@@ -1,5 +1,9 @@
 """Trigger authoring, activation and ledger reads use the framework resource owners."""
 
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+
 import pytest
 import yaml
 from django.apps import apps
@@ -26,7 +30,8 @@ from angee.workflows.testing.drivers import load_workflow
 from angee.workflows.testing.models import Trigger, TriggerEvent
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 from angee.workflows_messaging.sources import MessageIngested
-from tests.conftest import Vault, Vendor, addon_schema, create_user, make_addon, vault_for
+from tests.conftest import Vault, Vendor, addon_schema, create_user, make_addon, vault_for, write_addon_package
+from tests.test_workflows_triggers import capture
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.workflow_steps import document
 
@@ -496,3 +501,122 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     assert replaced.updated == 1
     trigger = Trigger.system_queryset().get(pk=trigger.pk)
     assert not trigger.enabled
+
+
+def test_a_trigger_compares_its_rule_with_the_model_label_as_it_is_stored(trigger_surface) -> None:
+    """A caller may ask before cleaning: Django's lowercase label spelling is the same rule."""
+    _schema, workflow, editor, _viewer, _starter = trigger_surface
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    stored = Trigger.system_queryset().get(pk=trigger.pk)
+    assert stored.model_label == "knowledge.Vault"
+
+    trigger.model_label = "knowledge.vault"
+    assert not trigger.changes_rule_of(stored)
+    trigger.condition = {"name": {"_eq": "Ready"}}
+    assert trigger.changes_rule_of(stored)
+
+
+class InstalledTriggers:
+    """An addon shipping a subjectless workflow, then a record source and a schedule in one trigger entry."""
+
+    WORKFLOW = "install/000_workflows.workflow.yaml"
+    TRIGGERS = "install/100_workflows.trigger.yaml"
+
+    def __init__(self, path: Path) -> None:
+        (path / "resources" / "install").mkdir(parents=True)
+        self.path = path
+        self.owner = make_addon(path=path, resources={"install": self.entries(())})
+        (path / "resources" / self.WORKFLOW).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": {
+            "key": "installed-triggers", "name": "Installed triggers", "draft": document("entry"),
+        }}]}))
+
+    def entries(self, create_only: tuple[str, ...]) -> list[dict[str, Any]]:
+        triggers: dict[str, Any] = {"path": self.TRIGGERS, "depends_on": self.WORKFLOW}
+        if create_only:
+            triggers["create_only"] = list(create_only)
+        return [{"path": self.WORKFLOW}, triggers]
+
+    def load(self, *, create_only: tuple[str, ...] = (), condition: dict[str, Any] | None = None) -> Any:
+        """Declare both trigger rows, the record source with ``condition``, and load the install tier."""
+
+        write_addon_package(self.owner, resources={"install": self.entries(create_only)})
+        workflow = f"{self.owner.name}.graph"
+        (self.path / "resources" / self.TRIGGERS).write_text(yaml.safe_dump({"rows": [
+            {"xref": "record", "fields": {
+                "workflow": workflow, "source": "record_changed", "model_label": "knowledge.vault",
+                "condition": condition or {},
+            }},
+            {"xref": "schedule", "fields": {
+                "workflow": workflow, "source": "schedule", "recurrence": "FREQ=HOURLY",
+                "recurrence_start": "2026-01-01 00:30:00",
+            }},
+        ]}))
+        return Resource.objects.load_addons((self.owner,), tiers=[Resource.Tier.INSTALL])
+
+    def triggers(self) -> tuple[Any, Any]:
+        """The record source and the schedule."""
+
+        return Trigger.system_queryset().get(source="record_changed"), Trigger.system_queryset().get(source="schedule")
+
+
+def activation(trigger: Any, actor: Any) -> dict[str, Any]:
+    """What an operator's enablement holds: the flag and reason, its grant, its schedule cursor, its pending work."""
+
+    stored = Trigger.system_queryset().get(pk=trigger.pk)
+    pending = TriggerEvent.system_queryset().filter(trigger=stored).pending()
+    return {
+        "enabled": stored.enabled, "disabled_reason": stored.disabled_reason, "enabled_at": stored.enabled_at,
+        "next_occurrence_at": stored.next_occurrence_at,
+        "grants": [
+            (row.resource_type, row.resource_id, row.relation) for row in stored.granted_relationships(actor=actor)
+        ],
+        "pending": list(pending.values_list("pk", flat=True)),
+    }
+
+
+def test_a_reapplied_trigger_row_without_a_rule_change_keeps_its_activation(
+    execution, trigger_resource_schema, tmp_path: Path,
+) -> None:
+    """An entry newly gaining create_only on a column each row states re-applies both: each stays enabled."""
+
+    admin, _sent = execution
+    release = InstalledTriggers(tmp_path)
+    assert release.load().created == 3
+    record, schedule = release.triggers()
+    for trigger in (record, schedule):
+        Trigger.objects.enable(trigger, actor=admin)
+    cursor = Trigger.system_queryset().get(pk=schedule.pk).next_occurrence_at
+    assert cursor is not None
+    missed = cursor - timedelta(hours=2)
+    Trigger.system_queryset().filter(pk=schedule.pk).update(next_occurrence_at=missed, enabled_at=missed)
+    assert Trigger.objects.record_occurrences() == 2
+    capture(vault_for(admin, name="Ready"))
+    before = {trigger.pk: activation(trigger, admin) for trigger in (record, schedule)}
+    assert [(state["enabled"], bool(state["pending"])) for state in before.values()] == [(True, True), (True, True)]
+    assert before[record.pk]["grants"] and before[schedule.pk]["next_occurrence_at"]
+
+    assert release.load(create_only=("condition", "recurrence")).updated == 2
+
+    assert {trigger.pk: activation(trigger, admin) for trigger in (record, schedule)} == before
+
+
+def test_a_reapplied_rule_change_disables_with_its_reason_and_a_later_unchanged_row_keeps_it(
+    execution, trigger_resource_schema, tmp_path: Path,
+) -> None:
+    admin, _sent = execution
+    release = InstalledTriggers(tmp_path)
+    release.load()
+    record, _schedule = release.triggers()
+    Trigger.objects.enable(record, actor=admin)
+    ready = {"name": {"_eq": "Ready"}}
+
+    assert release.load(condition=ready).updated == 1
+    changed = activation(record, admin)
+    assert not changed["enabled"]
+    assert changed["disabled_reason"] == "Trigger configuration changed; enable it again."
+    assert not changed["grants"]
+
+    assert release.load(create_only=("condition",), condition=ready).updated == 1
+    assert activation(record, admin) == changed

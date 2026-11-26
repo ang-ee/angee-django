@@ -1,4 +1,4 @@
-"""Real row-lock races between source saves and durable admission."""
+"""Real row-lock races between source saves, durable admission, operator verbs and resource loads."""
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
@@ -14,6 +14,7 @@ from tests.lock_waits import submit, wait_for_lock
 from tests.test_workflows_triggers import capture
 from tests.test_workflows_triggers import trigger_resource_schema as trigger_resource_schema
 from tests.test_workflows_triggers import trigger_setup as trigger_setup
+from tests.test_workflows_triggers_surface import InstalledTriggers
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -205,3 +206,26 @@ def test_admission_holds_its_grant_while_other_triggers_enable(trigger_setup, mo
         disabled.result(timeout=10)
     assert event.started_run.run_as_id == workflow.user_id
     assert grant.exists()  # The other enabled trigger still contributes this tuple.
+
+
+@pytest.mark.parametrize("verb", ["enable", "disable"])
+def test_a_load_reapplying_a_trigger_waits_for_an_operators_verb_and_keeps_its_outcome(
+    execution, trigger_resource_schema, tmp_path, verb,
+):
+    """The load locks the trigger's workflow, then the trigger, before any import, as the verbs do."""
+    admin, _sent = execution
+    release = InstalledTriggers(tmp_path)
+    release.load()
+    record, _schedule = release.triggers()
+    if verb == "disable":
+        Trigger.objects.enable(record, actor=admin)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic():
+            getattr(Trigger.objects, verb)(record, actor=admin)
+            loading, pid = submit(pool, lambda: release.load(create_only=("condition",)))
+            wait_for_lock(pid, loading)
+        assert loading.result(timeout=30).updated == 1
+
+    stored = Trigger.system_queryset().get(pk=record.pk)
+    assert (stored.enabled, bool(stored.granted_targets)) == (verb == "enable",) * 2

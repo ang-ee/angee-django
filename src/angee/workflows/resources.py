@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from django.apps import apps
@@ -131,7 +131,29 @@ class WorkflowDefinitionResource(AngeeResource):
 
 
 class TriggerResource(AngeeResource):
-    """Install declarations disabled; enabling grants the workflow principal."""
+    """Install declarations disabled; enabling grants the workflow principal.
+
+    A re-applied row keeps the trigger's activation unless it changes the rule
+    (``Trigger.changes_rule_of``), which disables it with its reason.
+    """
+
+    @classmethod
+    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]]) -> None:
+        """Lock each re-applied trigger's workflow, then the trigger, as ``Trigger.save`` and its verbs do.
+
+        An operator's enable or disable then finishes before the load reads the
+        activation it keeps, or waits for the load.
+        """
+        batches = [(group.dataset, resource) for group, resource in loaded_groups if isinstance(resource, cls)]
+        resolved, _ = cls.resolve_existing(batches)
+        triggers: list[Any] = [found.instance for found in resolved.values() if found.instance is not None]
+        if not triggers:
+            return
+        model: Any = batches[0][1]._meta.model
+        for workflow_id in sorted({trigger.workflow_id for trigger in triggers}):
+            model.objects.lock_grants(workflow_id)
+        rows = model.system_queryset().filter(pk__in=[trigger.pk for trigger in triggers]).order_by("pk")
+        list(rows.lock_if_supported(no_key=True))
 
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
         """Treat activation as operator state, never declaration input."""
@@ -139,7 +161,10 @@ class TriggerResource(AngeeResource):
         super().before_import_row(row, **kwargs)
 
     def before_save_instance(self, instance: Any, row: Mapping[str, Any], **kwargs: Any) -> None:
-        """Clear activation even when replacing a previously enabled declaration."""
-        instance.enabled = False
-        instance.disabled_reason = ""
+        """Install a new declaration disabled; keep a re-applied one's activation unless its rule changes."""
+        stored = None if instance._state.adding else type(instance).system_queryset().get(pk=instance.pk)
+        if stored is not None and not instance.changes_rule_of(stored):
+            instance.enabled, instance.disabled_reason = stored.enabled, stored.disabled_reason
+        else:
+            instance.enabled, instance.disabled_reason = False, ""
         super().before_save_instance(instance, row, **kwargs)
