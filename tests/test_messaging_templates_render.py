@@ -2660,6 +2660,31 @@ CHAIN_QUERIES = {"saving 5": 24, "saving 900": 24, "judge": 3, "member insert": 
 system work, 499 on the render-side judge and 5,572 on a member's insert."""
 
 
+def test_an_include_inside_a_condition_keeps_the_condition(plain: Any, kit: Any) -> None:
+    """An include inside {% if link %} read link through a fresh frame without the caller's guard, so link became
+    required: the included row now keeps the guards on the values it is passed, as the same content inline does, and a
+    value it reads unguarded is still required."""
+
+    del plain
+    _row("part", "linked", format="html", source='<a href="{{ link|url }}">Open</a>', text_source="{{ link|url }}",
+         variables={"link": "x"})
+    _row("part", "both", format="html", source="{{ link|url }} {{ other }}", text_source="{{ other }}",
+         variables={"link": "x", "other": "x"})
+    inline = _mail('{% if link %}<a href="{{ link|url }}">Open</a>{% endif %}', {"link": "x"}, format="html",
+                   text_source="{% if link %}{{ link|url }}{% endif %}", key="tests.inline")
+    included = _mail('{% if link %}{% include "parts/linked" with link=link only %}{% endif %}', {"link": "x"},
+                     format="html", text_source="x", key="tests.included", sample={})
+    for template in (inline, included):
+        assert _walk(template).required == set(), template.key
+        for values in ({"link": "https://example.test/"}, {"link": None}, {}):
+            _render(template, values, kit)
+    with system_context(reason="tests.messaging_templates.render.guard"):
+        assert included.preview(kit=kit).rendered is not None
+    leaking = _mail('{% if link %}{% include "parts/both" with link=link other=other only %}{% endif %}',
+                    {"link": "x", "other": "x"}, format="html", text_source="x", key="tests.leaking")
+    assert _walk(leaking).required == {("other",)}
+
+
 def test_a_chain_at_the_include_depth_renders(plain: Any, kit: Any) -> None:
     """A template including a chain exactly INCLUDE_DEPTH_LIMIT deep is admitted and renders every link."""
 

@@ -1419,12 +1419,13 @@ def _date_format(expression: FilterExpression) -> str:
 
 
 def _frame(name: str, row: WalkedRow, form: RowPiece, *, top: bool, scope: Mapping[str, _Binding] | None = None,
-           loops: int = 0, includes: tuple[str, ...] = ()) -> _Frame:
+           loops: int = 0, includes: tuple[str, ...] = (),
+           guards: frozenset[tuple[str, Path]] = frozenset()) -> _Frame:
     variables = row.variables if isinstance(row.variables, dict) else {}
     leaves = frozenset(tuple(path.split(".")) for path in variables)
     return _Frame(
         name=name, row=row, form=form, declared=_prefixes(leaves), leaves=leaves, top=top, scope=scope or {},
-        loops=loops, includes=includes,
+        loops=loops, includes=includes, guards=guards,
     )
 
 
@@ -1690,8 +1691,11 @@ class _TreeWalker:
                 self.refuse(frame, f"passes {name} to {target}, which does not declare it")
             binding = self.bind(frame, expression)
             scope[name] = _Binding(binding.kind, local=(name,), effective=binding.effective)
+        # The included row keeps the guards on the values it is passed (their effective paths), never the caller's
+        # own names, so an include inside {% if link %} reads link as optional, as the same content inline does.
+        guards = frozenset(key for key in frame.guards if key[0] == "e")
         self.nodes(
-            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack),
+            _frame(target, row, tree.form, top=False, scope=scope, loops=frame.loops, includes=stack, guards=guards),
             self.checks[target].pieces[tree.form].nodelist,
             tree,
         )
