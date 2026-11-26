@@ -430,8 +430,9 @@ class SystemMailer(BaseEmailBackend):
         super().__init__(**kwargs)
         self.fail_silently = fail_silently
 
-    # The recorded bodies stay out of error reports: system mail carries credentials.
-    @sensitive_variables("recorded", "arguments")
+    # System mail carries credentials: an error report (DEBUG off) hides every local from here down,
+    # ``_system_mail``'s included.
+    @sensitive_variables()
     def send_messages(self, email_messages: Any) -> int:
         """Record each email with a recipient as one queued system message; return how many were recorded."""
 
@@ -459,7 +460,6 @@ _DROPPED_HEADERS = frozenset({"date", "message-id"})
 """Headers an email may carry that system mail drops: compose mints the Message-ID, and delivery dates the mail."""
 
 
-@sensitive_variables("text", "html", "body", "alternatives", "content")
 def _system_mail(email: EmailMessage) -> dict[str, Any]:
     """Return ``email`` as :meth:`compose_as_system` arguments, reading nothing; refuse what it cannot carry.
 

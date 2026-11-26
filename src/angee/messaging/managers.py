@@ -3262,9 +3262,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
 
-    # The mail's text stays out of error reports, system mail carrying credentials. Django's
-    # filter applies these names to the undecorated frames below, ``_validate_outgoing``'s too.
-    @sensitive_variables("text", "html", "outgoing")
+    # System mail carries credentials: an error report (Django's filter, with DEBUG off) hides
+    # every local of this frame and of every frame below it, down to the ORM's and the SQL's.
+    @sensitive_variables()
     def compose_as_system(
         self,
         *,
@@ -3473,8 +3473,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             scheduled_at=scheduled_at,
         )
 
-    # Its frame holds the text in ``outgoing`` and the written row, whose str is its preview.
-    @sensitive_variables("outgoing", "message")
+    # A mail's text travels below the writer under the ORM's names too (rows, defaults, SQL
+    # params), so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def _write_outgoing(
         self,
         outgoing: _Outgoing,

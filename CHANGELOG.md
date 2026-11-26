@@ -53,8 +53,9 @@ live in code docstrings.
     `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
     recipient rule, which reads nothing. `carries_address(address)`
     (`angee.messaging.email`) is the one rule for what the transport can carry,
-    and `require_carried(address, key=...)` its refusal. The system write keeps
-    the mail's text out of Django's error reports. `ChannelBackend.system_only` (read
+    and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
+    error report hides every local of the system write's frames, and of the
+    shared writer's frames for any mail. `ChannelBackend.system_only` (read
     through `Channel.system_only`) declares a backend that serves the system
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging

@@ -373,9 +373,16 @@ takes, plus `carries_address`: a sender whose part before the `@` is outside
 ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
 `Message.objects.clean_system_recipient(entry, key=...)`, which
 `compose_as_system` applies to each recipient and a caller asks before offering
-a send; both read nothing. The system write's frames keep the mail's text out
-of Django's error reports (`sensitive_variables`), down to the ORM's own frames,
-which hold the written rows.
+a send; both read nothing.
+
+An error report hides every local of every frame of the system write, from the
+system mailer and `compose_as_system` down to the ORM's and the SQL's, and of
+the shared writer `_write_outgoing` down for any mail (`sensitive_variables`);
+Django's filter applies only with `DEBUG` off, so a debug page shows them all.
+An ordinary `compose`'s report therefore shows hidden frames below the writer,
+while `compose`'s own frame is not marked. Frames above the system mailer are
+the caller's: Django's `send_mail` holds the message it was given, so a caller
+that mails a credential through Django's mail API marks its own frame.
 
 The system mailer carries what a Django email can mean on the system channel:
 `to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.
