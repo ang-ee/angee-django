@@ -347,8 +347,16 @@ def _dedupe(addresses: Any) -> list[str]:
 
 
 def _bare_address(address: str) -> str:
+    """Return which address one written mailbox names: its spelling key (``Handle.spelling_key_of``), else as written.
+
+    One address in any letter case or domain spelling is one mailbox; ``casefold()``
+    would join ``ß`` and ``ss`` in a part before the ``@``, which can be two.
+    """
+
     parsed = getaddresses([address])
-    return parsed[0][1].strip().casefold() if parsed else ""
+    bare = parsed[0][1].strip() if parsed else ""
+    handle_model = apps.get_model("parties", "Handle")
+    return handle_model.spelling_key_of(handle_model.Platform.EMAIL, bare) or bare
 
 
 def _rfc_message_id(external_id: str) -> str:
