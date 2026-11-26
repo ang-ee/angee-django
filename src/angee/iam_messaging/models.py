@@ -19,7 +19,6 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.validators import validate_email
 from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -45,6 +44,9 @@ SIGN_IN_LINK_UNAVAILABLE_MESSAGE = (
     "This deployment cannot send sign-in links: it has no public web address to link to, or no system mail."
 )
 """Refusal of the sign-in link action where :meth:`SignInLink.deliverable` is false; its remedy is the README's."""
+
+SIGN_IN_LINK_NO_ADDRESS_MESSAGE = "This account has no valid email address to send a sign-in link to."
+"""Refusal of an account whose address system mail cannot be sent to (messaging's ``clean_system_recipient``)."""
 
 SIGN_IN_LINK_TEMPLATE = "iam_messaging.sign_in_link"
 """The key of the message template a sign-in link is mailed with; this addon ships it in English and Spanish."""
@@ -88,8 +90,10 @@ class UserSignInLinks(Composable, extends="iam.User"):
         """Mail an active, unprotected person a single-use sign-in link, as system mail.
 
         Permission and eligibility are checked on the locked row, as for every
-        account action (``User.lock_for_account_action``), and the account needs a
-        valid email address: the link goes to ``email`` only. Then
+        account action (``User.lock_for_account_action``), and the account's
+        ``email`` must be an address system mail can be sent to, as messaging's
+        ``Message.objects.clean_system_recipient`` decides; the account's own
+        refusal (:data:`SIGN_IN_LINK_NO_ADDRESS_MESSAGE`) names no address. Then
         :meth:`SignInLinkManager.issue` records the link and its mail together,
         in this transaction, or refuses with nothing written. The action never
         shows the link.
@@ -98,12 +102,13 @@ class UserSignInLinks(Composable, extends="iam.User"):
         account: Any = self  # Composed into iam.User, which owns the lock and the actor.
         with transaction.atomic():
             user = account.lock_for_account_action(ISSUE_SIGN_IN_LINK, expected_revision=None)
+            messages = cast(Any, apps.get_model("messaging", "Message")).objects
             try:
-                validate_email(user.email)
+                address = messages.clean_system_recipient(user.email)[1]
             except ValidationError:
-                raise ValidationError("This account has no valid email address to send a sign-in link to.") from None
+                raise ValidationError(SIGN_IN_LINK_NO_ADDRESS_MESSAGE) from None
             links = cast(Any, apps.get_model("iam_messaging", "SignInLink")).objects
-            links.issue(user, actor=account.effective_actor(strict=True)[0])
+            links.issue(user, address, actor=account.effective_actor(strict=True)[0])
 
 
 def _token_parts(token: str) -> tuple[str, str]:
@@ -131,11 +136,12 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
     """
 
     @sensitive_variables("secret", "token", "values")
-    def issue(self, user: Any, *, actor: SubjectRef | None) -> LinkT:
-        """Mail ``user`` a fresh link and store it; return the link. The token exists only in the mail.
+    def issue(self, user: Any, address: str, *, actor: SubjectRef | None) -> LinkT:
+        """Mail ``user`` a fresh link at ``address`` and store it; return the link. The token exists only in the mail.
 
-        The caller holds ``user``'s row lock, has admitted the issue and checked
-        the address. In order, each refusal before anything is written: a link
+        The caller holds ``user``'s row lock, has admitted the issue and gives
+        the account's address as messaging's ``clean_system_recipient`` returns
+        it. In order, each refusal before anything is written: a link
         within ``ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`` seconds of the
         account's previous one; no row for :data:`SIGN_IN_LINK_TEMPLATE`
         (``template_missing``), looked up for the recipient's person with
@@ -184,7 +190,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         }
         with transaction.atomic():
             with actor_context(actor) if actor is not None else nullcontext():
-                templates.send_as_system(template, reason=reason, to=user.email, values=values)
+                templates.send_as_system(template, reason=reason, to=address, values=values)
             link.sent_at = timezone.now()
             with system_context(reason="iam_messaging.sign_in_link.issue"):
                 if actor is not None:

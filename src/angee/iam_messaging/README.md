@@ -16,8 +16,10 @@ The action runs under IAM's `lock_for_account_action`: it locks the row and chec
 the `issue_sign_in_link` permission, which this addon's fragment declares on
 `auth/user` (platform admins) and unions into IAM's `active_account_granted`
 and `nonstaff_account_granted`. It refuses what IAM's actions refuse (protected,
-service, the actor's own account), inactive accounts, any account without a
-valid email and a deployment that cannot deliver the link. It also refuses a
+service, the actor's own account), inactive accounts, any account whose email
+system mail cannot be sent to (messaging's `Message.objects.clean_system_recipient`:
+one address the handle owner lands, which the transport can carry; the refusal
+names no address) and a deployment that cannot deliver the link. It also refuses a
 second link within `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN` seconds (60 by
 default). Then, in the action's transaction (`SignInLinkManager.issue`), it
 mails the link ([The mail](#the-mail)) and stores a `SignInLink` row with a

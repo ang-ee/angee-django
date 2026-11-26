@@ -48,6 +48,7 @@ from angee.iam_messaging.auth import sign_in_credentials
 from angee.iam_messaging.autoconfig import SETTINGS as LINK_SETTINGS
 from angee.iam_messaging.models import (
     ISSUE_SIGN_IN_LINK,
+    SIGN_IN_LINK_NO_ADDRESS_MESSAGE,
     SIGN_IN_LINK_PATH,
     SIGN_IN_LINK_TEMPLATE,
     SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE,
@@ -354,15 +355,19 @@ def test_issue_requires_the_permission_and_an_actor_or_the_system(
         ({"kind": "service"}, "Only person accounts"),
         ({"email": ""}, "no valid email address"),
         ({"email": "not-an-address"}, "no valid email address"),
-        # The transport carries no address whose part before the @ is outside ASCII; the account's own address
-        # check refuses it first, so system mail's cannot_carry is never reached from here.
+        # Messaging's system mail rule decides, before anything is sent, and the account's refusal names no address:
+        # the transport carries no address whose part before the @ is outside ASCII (cannot_carry) ...
         ({"email": "jörg@example.com"}, "no valid email address"),
+        # ... and refuses a quoted local part with a space, which Django's own validator admits (invalid).
+        ({"email": '"a b"@example.com'}, "no valid email address"),
     ],
 )
 def test_issue_refuses_ineligible_accounts_and_sends_nothing(deliverable, iam_admin, attrs, refusal):
     target = User.objects.create_user("ineligible", **{"email": "ineligible@example.com", **attrs})
-    with actor_context(iam_admin), pytest.raises(ValidationError, match=refusal):
+    with actor_context(iam_admin), pytest.raises(ValidationError, match=refusal) as refused:
         target.with_actor(iam_admin).issue_sign_in_link()
+    if "email" in attrs:  # the account's own words, which name no address
+        assert refused.value.messages == [SIGN_IN_LINK_NO_ADDRESS_MESSAGE]
     with system_context(reason=READ):
         assert not SignInLink._base_manager.exists() and not Message._base_manager.exists()
 
@@ -947,7 +952,7 @@ def test_a_link_whose_insert_fails_after_its_mail_leaves_no_mail_and_nothing_que
             django_capture_on_commit_callbacks(execute=True) as callbacks,
             pytest.raises(IntegrityError, match="insert failed"),
         ):
-            SignInLink.objects.issue(target, actor=None)
+            SignInLink.objects.issue(target, target.email, actor=None)
     finally:
         pre_save.disconnect(sender=SignInLink, dispatch_uid="tests.iam_messaging.refuse_link")
     assert callbacks == [] and _mails(target) == []
