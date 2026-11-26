@@ -1801,6 +1801,9 @@ class Message(
 
         return queue_message_delivery(self)
 
+    # The operator's verbs hold the row, whose str is its preview: an error report (DEBUG off)
+    # hides every local from here down, the manager's resolution and Django's save included.
+    @sensitive_variables()
     def acknowledge_delivery(self, *, actor: Any, expected_revision: int) -> Any:
         """Confirm an uncertain provider effect as sent without making another call."""
 
@@ -1808,6 +1811,7 @@ class Message(
             self, actor=actor, expected_revision=expected_revision, retry=False,
         )
 
+    @sensitive_variables()
     def retry_delivery(self, *, actor: Any, expected_revision: int) -> Any:
         """Retry FAILED, or explicitly accept repeat-effect risk for UNCERTAIN."""
 

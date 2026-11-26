@@ -55,7 +55,8 @@ live in code docstrings.
     (`angee.messaging.email`) is the one rule for what the transport can carry,
     and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
     error report hides every local of the system write's frames, and of the
-    shared writer's and the delivery path's frames for any mail. `ChannelBackend.system_only` (read
+    shared writer's, the delivery path's and the operator's retry and
+    acknowledge frames for any mail; an exception's own text is not filtered. `ChannelBackend.system_only` (read
     through `Channel.system_only`) declares a backend that serves the system
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
@@ -82,7 +83,8 @@ live in code docstrings.
     system message, administrators included, and none of messaging's own arms
     writes a system thread, so a group or project binding of one is refused;
     nobody retries or acknowledges a system mail whose delivery failed or is
-    uncertain either (the release task sends a lost one again).
+    uncertain either (the release task sends a lost one again): it stays so,
+    and the feature that sent it sends a new one.
     Without any verb, a `reader` or `editor` tuple written directly and the
     source-identity rule's principal read system mail, and another addon's arm on
     the thread's `read_granted`, `chatter_read` or `write` holds whenever a system
