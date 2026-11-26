@@ -37,9 +37,11 @@ live in code docstrings.
   longer Django's `validate_email`: an administrator sees the account's own
   refusal for an address outside ASCII before the @ (as before) and now also for
   one messaging refuses that Django admits (a quoted local part with an escaped space),
-  which used to be offered and refused at the send in messaging's words. Every
-  entry holding the token hides its locals from an error report (bare
-  `sensitive_variables`). The addon now requires `angee-messaging`,
+  which used to be offered and refused at the send in messaging's words.
+  `SignInLinkManager.issue` and `redeem` and the backend's `authenticate` hide
+  their locals from an error report (bare `sensitive_variables`); the mutations
+  carry no mark, since the schema logs their unexpected errors with no
+  traceback. The addon now requires `angee-messaging`,
   `angee-messaging-templates` and `angee-parties`, so a host that enables it
   enables them and what they require, the brand kit among it. A link is offered
   where base's `configured_public_origin()` gives an origin and
