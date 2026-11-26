@@ -3199,6 +3199,32 @@ def test_the_console_refuses_what_no_column_can_store(plain: Any) -> None:
 _INSERT = "mutation($object: message_templates_insert_input!) { insert_message_templates_one(object: $object) { id } }"
 
 
+def test_the_console_stores_a_carriage_return_as_a_newline(plain: Any, kit: Any) -> None:
+    """The console validates a throwaway instance and saves another, so clean()'s newlines were lost: every writer now
+    stores a carriage return as a newline, the content hash describes what is stored, and the row renders."""
+
+    del plain
+    schema = addon_schema(messaging_templates_schema.schemas, "console")
+    admin = create_platform_admin("messaging-templates-crlf")
+    written = {"source": "<p>a</p>\r\n<p>b</p>", "text_source": "a\r\nb", "subject": "Hi\r\nthere",
+               "preheader": "pre\rheader"}
+    inserted = {"kind": "template", "key": "tests.crlf", "language": "en", "name": "n", "format": "html",
+                "layout": "plain", **written}
+    result = execute_schema(schema, _INSERT, {"object": inserted}, user=admin)
+    assert result.errors is None, result.errors
+    with system_context(reason="tests.messaging_templates.render.crlf"):
+        row = MessageTemplate.objects.get(key="tests.crlf")
+        assert not any("\r" in getattr(row, column) for column in written), [getattr(row, c) for c in written]
+        assert row.content_hash == row.compute_content_hash()
+        assert row.preview(kit=kit).rendered is not None
+    assert _render(row, {}, kit).subject == "Hi there"
+    result = execute_schema(schema, _UPDATE, {"id": public_id_of(row), "set": {"source": "<p>c</p>\r\n"}}, user=admin)
+    assert result.errors is None, result.errors
+    with system_context(reason="tests.messaging_templates.render.crlf"):
+        row.refresh_from_db()
+    assert row.source == "<p>c</p>\n" and row.content_hash == row.compute_content_hash()
+
+
 def test_the_walk_runs_in_clean_after_the_permission_is_decided(
     plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

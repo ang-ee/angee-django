@@ -49,7 +49,7 @@ live in code docstrings.
     userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
     `sms:` or `webcal:` link); the one character set, `utf-8`; no control
     character in a row's text, a carriage return written as a newline by
-    `clean()`, and none in a value, which drops them with the bidirectional
+    every save, and none in a value, which drops them with the bidirectional
     overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
     holding outputs and notes, no tag; end tags held to the element list; link
     attributes on the elements they link on; at most ten operators in a

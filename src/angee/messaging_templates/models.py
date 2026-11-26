@@ -775,10 +775,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if not self._readable():
             return
         super().clean()
-        for column in TEXT_COLUMNS:
-            text = getattr(self, column)
-            if isinstance(text, str) and "\r" in text:
-                setattr(self, column, text.replace("\r\n", "\n").replace("\r", "\n"))
+        self._write_newlines()
         errors: dict[str, str] = {}
         stored_layout, stored_hash = (None, None) if self._state.adding else (
             type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
@@ -956,6 +953,14 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             return None
         return UNRESOLVED_DELETE_MESSAGE % {"kind": MessageTemplateKind(self.kind).label.lower()}
 
+    def _write_newlines(self) -> None:
+        """Write a carriage return in :data:`TEXT_COLUMNS` as a newline, so pasted text has one content hash."""
+
+        for column in TEXT_COLUMNS:
+            text = getattr(self, column)
+            if isinstance(text, str) and "\r" in text:
+                setattr(self, column, text.replace("\r\n", "\n").replace("\r", "\n"))
+
     def compute_content_hash(self) -> str:
         """Return the fingerprint of what this row is and renders now: ``sha256:`` and the canonical digest of
         :data:`CONTENT_HASH_FIELDS`, which :meth:`save` stores as ``content_hash``."""
@@ -968,14 +973,17 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Save the row, deriving ``content_hash`` and stamping a new override's ``baseline_hash``.
 
-        A save that writes a column of :data:`CONTENT_HASH_FIELDS` writes the hash
-        with it, ``update_fields`` included, since a resource reload saves only the
-        columns its row states. A non-baseline row inserted with no
+        Every writer's text has its carriage returns written as newlines first, as
+        :meth:`clean` does, since a writer may validate one instance and save
+        another. A save that writes a column of :data:`CONTENT_HASH_FIELDS` writes
+        the hash with it, ``update_fields`` included, since a resource reload saves
+        only the columns its row states. A non-baseline row inserted with no
         ``baseline_hash`` where its baseline exists takes the baseline's
         ``content_hash``; one that holds a hash already, as a history revert
         restores it, keeps it.
         """
 
+        self._write_newlines()
         update_fields = kwargs.get("update_fields")
         if update_fields is None or not set(CONTENT_HASH_FIELDS).isdisjoint(update_fields):
             self.content_hash = self.compute_content_hash()
