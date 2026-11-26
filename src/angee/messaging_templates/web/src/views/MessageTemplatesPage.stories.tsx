@@ -29,7 +29,7 @@ export const ShippedDefault = { render: (_args: unknown, { globals }: StoryConte
 export const Override = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.quote} /> };
 /** An override whose shipped default changed: the warning, Keep override and Delete. Keep it: the warning goes. */
 export const DefaultUpdated = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.recordCard} /> };
-/** Every save is refused as the console refused a template set to HTML with no layout: choose HTML in Format, empty Layout and save. The banner holds the row's reason; the layout's sits under Layout. */
+/** Starts saved; every save is refused as the recorded one: choose HTML in Format, clear Layout, then Save, and the banner holds the row's reason, names Layout and takes focus. */
 export const RefusedSave = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} refuseSave="layout" /> };
 /**
  * New: the name, kind, key and language, nothing else. The recorded inserts: Template, example.announcement, en,
@@ -39,19 +39,11 @@ export const RefusedSave = { render: (_args: unknown, { globals }: StoryContext)
  * under Key.
  */
 export const NewMessageTemplate = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open="new" /> };
-/** A template whose preview warns: a missing preheader and a value nothing reads, first in the band above the frame, which keeps most of the pane and scrolls the mail. */
+/** Password reset, its preheader and unused-value warnings first in the band; to preview unsaved edits, change Subject, choose HTML and clear Layout, or paste [] into Sample values and Variables, then wait. */
 export const PreviewWarnings = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
 /** A template whose sample no longer renders: that it does not render, then each reason as the server words it; no frame. */
 export const PreviewRenderError = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.invoiceSent} /> };
-/** Password reset with an unsaved Subject: paste `Your new {{ brand.name }} password` into Subject. Once the edit settles the Preview says it shows your unsaved edits and renders "Your new Angee password"; Discard, or Save, and it shows the saved row again. */
-export const PreviewUnsavedEdits = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
-/** Password reset with unsaved sample values that leave out the reset link: in Sample values, replace the sample with `{"person": {"first_name": "Ana"}}`, then open Preview (today the form asks whether to leave without saving, and leaving keeps the edits; it stops asking once a record tab no longer counts as leaving). It says these edits would save but do not render with these sample values, and gives the server's reason; no frame. */
-export const PreviewUnsavedUnrendered = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
-/** Password reset with edits Save would refuse: choose HTML in Format and empty Layout. The Preview says Save would refuse these edits and lists the server's two reasons; choose the layout's and Layout takes focus. */
-export const PreviewUnsavedRefused = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
-/** Password reset with lists where objects belong: in Sample values replace the sample with `[]`, and in Variables replace the variables with `[]`, then open Preview (today the form asks whether to leave without saving, and leaving keeps the edits). Save would refuse both in the same words, "Give an object.", each titled by its field's label, Variables and Sample; choose one and its field takes focus. */
-export const PreviewUnsavedSameWords = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} /> };
-/** The same edit where the deployment lets nobody write a layout: choose HTML in Format and empty Layout. The server refuses the preview itself, and the band shows its refusal under the unsaved-edits caption; no frame. */
+/** Starts saved, in a deployment that lets nobody write a layout: choose HTML in Format, clear Layout, then wait, and the server refuses the preview itself, said in the band; no frame. */
 export const PreviewUnsavedDenied = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.passwordReset} layoutGated /> };
 /** The deployment's own Arabic template: the frame's document, its subject, preheader and plain text read right to left. */
 export const RightToLeft = { render: (_args: unknown, { globals }: StoryContext) => <MessageTemplateStory appearance={storyAppearance(globals)} open={ROW.welcomeArabic} /> };
