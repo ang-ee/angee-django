@@ -497,8 +497,11 @@ def _patch_rows() -> dict[str, Any]:
     }
 
 
-_NARROWED = {"preview only": "write", "layout gated": "write__layout"}
-"""The administrators a deployment narrows: one whose ``write`` admits nobody, one whose ``write__layout`` does."""
+_NARROWED = {
+    "preview only": "write", "layout gated": "write__layout", "sample gated": "write__sample",
+    "format gated": "write__format",
+}
+"""The administrators a deployment narrows: one whose ``write`` admits nobody, others one column's field gate."""
 
 
 @pytest.mark.parametrize(("caller", "state", "patch", "answer"), [
@@ -515,6 +518,10 @@ _NARROWED = {"preview only": "write", "layout gated": "write__layout"}
     pytest.param("preview only", "own row", {}, "denied", id="preview-only-own-empty-patch"),
     pytest.param("layout gated", "own row", {"layout": "letter"}, "denied", id="layout-gated-own-layout"),
     pytest.param("layout gated", "own row", _EDIT, "renders", id="layout-gated-own-patched"),
+    pytest.param("layout gated", "own row", {"layout": "base"}, "renders", id="layout-gated-own-current-layout"),
+    pytest.param("layout gated", "own row", {**_EDIT, "layout": "letter"}, "denied", id="layout-gated-own-two-columns"),
+    pytest.param("sample gated", "own row", {"sample": {}}, "renders", id="sample-gated-own-equal-object"),
+    pytest.param("format gated", "own row", {"format": "MARKDOWN"}, "renders", id="format-gated-own-member-name"),
     pytest.param("member", "own row", None, "denied", id="member-own"),
     pytest.param("member", "own row", {"source": ("{{ x }}" * 7_143)[:50_000]}, "denied", id="member-own-patched"),
     pytest.param("signed out", "own row", None, "signed out", id="signed-out-own"),
@@ -525,27 +532,26 @@ def test_who_may_preview_a_patch(
     answer: str,
 ) -> None:
     """``preview`` admits the read, and a patch, empty or not, also asks ``write`` and what the save's gates ask of the
-    columns it edits: so a shipped default, which only a load writes, a role granted ``preview`` alone and a column a
-    deployment's field gate closes render the saved row only, and a signed-in caller's patch is admitted exactly where
-    the update of it is. All are decided before any row is cleaned or walked."""
+    columns it changes: so a shipped default, which only a load writes, a role granted ``preview`` alone and a column a
+    deployment's field gate closes render the saved row only, a column resent as it is stored asks no gate, and a
+    signed-in caller's patch is admitted exactly where the update of it is. All are decided before any row is cleaned
+    or walked."""
 
     del library
     rows = _patch_rows()
-    users = {"administrator": create_platform_admin("messaging-templates-console-patcher"),
-             "preview only": create_platform_admin("messaging-templates-console-viewer"),
-             "layout gated": create_platform_admin("messaging-templates-console-gated"),
-             "member": create_user("messaging-templates-console-unpatched"), "signed out": AnonymousUser()}
+    user = (create_user("messaging-templates-console-unpatched") if caller == "member" else AnonymousUser()
+            if caller == "signed out" else create_platform_admin("messaging-templates-console-patcher"))
     checked: list[str] = []
     cleaned: list[Any] = []
     _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     _recording(monkeypatch, MessageTemplate, "full_clean", lambda row, *args, **kwargs: cleaned.append(row.pk))
     variables = {"id": public_id_of(rows[state])}
     with _narrowed(_NARROWED[caller]) if caller in _NARROWED else nullcontext():
-        result = execute_schema(_schema(), _PATCHED, {**variables, "patch": patch}, user=users[caller])
+        result = execute_schema(_schema(), _PATCHED, {**variables, "patch": patch}, user=user)
         work = (list(checked), list(cleaned))
         if patch is not None and caller != "signed out":  # a signed-out update finds no row; the preview says why
             with transaction.atomic():
-                updated = execute_schema(_schema(), _UPDATE, {**variables, "set": patch}, user=users[caller])
+                updated = execute_schema(_schema(), _UPDATE, {**variables, "set": patch}, user=user)
                 transaction.set_rollback(True)
             assert [(error.extensions or {}).get("code") for error in updated.errors or ()] == (
                 [] if answer == "renders" else ["PERMISSION_DENIED"]), updated.errors

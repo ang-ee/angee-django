@@ -1209,10 +1209,14 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         """This row with ``patch``'s native values over its :attr:`edited_fields`, for :meth:`preview`; never saved.
 
         Refused before anything is copied: a key outside :attr:`edited_fields`
-        (``ValueError``), and a column the save's own gates refuse the reader,
-        a deployment's ``write__<field>`` among them (``PermissionDenied``,
-        :func:`~angee.base.permissions.require_save_allowed` on this row, as the
-        update's save decides). ``copy`` keeps the primary key and the saved
+        (``ValueError``), and a column the patch changes that the save's own
+        gates refuse the reader, a deployment's ``write__<field>`` among them
+        (``PermissionDenied``, :func:`~angee.base.permissions.require_save_allowed`
+        on this row). As the update's save, it asks only the columns whose value
+        differs from the loaded row's, by Python equality on native values, so
+        a column resent as it is stored, a JSON value as a new equal object or
+        the format as the value its console member name decodes to, asks
+        nothing. ``copy`` keeps the primary key and the saved
         state, so Django's unique checks leave this row out. It does not keep
         REBAC's state of this row (its pinned actor, its loaded values, its
         field-deny mode), which is why the gates are asked of this row: the copy
@@ -1222,8 +1226,8 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
 
         if unknown := sorted(set(patch) - set(self.edited_fields)):
             raise ValueError(f"A patch edits {', '.join(self.edited_fields)}, never {', '.join(unknown)}.")
-        if patch:
-            require_save_allowed(self, update_fields=list(patch))
+        if changed := [name for name, value in patch.items() if value != getattr(self, name)]:
+            require_save_allowed(self, update_fields=changed)
         row = copy(self)
         for name, value in patch.items():
             setattr(row, name, value)
