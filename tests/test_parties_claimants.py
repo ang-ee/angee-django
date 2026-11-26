@@ -420,16 +420,31 @@ def test_another_spelling_of_the_address_is_the_same_address(source: Source) -> 
 def test_a_claim_on_any_row_of_the_address_finds_the_person_and_that_row_is_the_one_they_carry(
     owner: Any, source: Source,
 ) -> None:
-    """Two spellings can be two rows: the person is found by the row their claim names, not only the oldest."""
+    """Two aliases are two rows: the person is found by the row their claim names, not only the oldest."""
 
-    older, newer = _row(owner, "Ada@Example.test"), _row(owner, ADDRESS)
+    older, newer = _row(owner, "ada.example@gmail.com"), _row(owner, "adaexample@gmail.com")
     ada = _person(owner, "Ada Example")
     _claimed_for(ada, newer, source.record())
 
-    found = source.given(email="ADA@example.test")
+    found = source.given(email="Ada.Example+crm@gmail.com")
 
     assert (found.person.pk, found.email.pk) == (ada.pk, newer.pk)
     assert not _standing(handle=older)
+
+
+def test_another_letter_case_of_the_address_is_its_one_row_and_the_claim_on_it_finds_the_person(
+    owner: Any, source: Source,
+) -> None:
+    """A letter case is no row of its own: the source's spelling lands on the row the claim names."""
+
+    stored = _row(owner, "Ada@Example.test")
+    assert _row(owner, ADDRESS).pk == stored.pk
+    ada = _person(owner, "Ada Example")
+    _claimed_for(ada, stored, source.record())
+
+    found = source.given(email="ADA@example.test")
+
+    assert (found.person.pk, found.email.pk, found.email.value) == (ada.pk, stored.pk, "Ada@Example.test")
 
 
 def test_a_new_persons_number_is_made_and_claimed_beside_the_address(source: Source) -> None:

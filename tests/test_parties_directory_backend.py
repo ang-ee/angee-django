@@ -848,22 +848,24 @@ def test_a_platform_admin_owner_adopts_only_once_the_platform_admins_are_granted
 
 
 @pytest.mark.usefixtures("adoption")
-def test_an_adoption_through_another_spelling_lands_on_the_handle_that_found_the_person(pull: Pull) -> None:
-    """The contact spells the address differently: its claim lands on the existing row, never a second one."""
+def test_an_adoption_through_an_alias_lands_on_the_handle_that_found_the_person(pull: Pull) -> None:
+    """The contact gives an alias of the address: its claim lands on the existing row, never a second one."""
 
-    person, handle = _existing(pull.directory.owner, email="Ada@Example.COM")
+    contact = replace(_ADA, emails=(("ada.lovelace@gmail.com", "home", True),))
+    pull.source.put("ada", contact)
+    person, handle = _existing(pull.directory.owner, email="adalovelace@gmail.com")
 
     pull.sync()
 
     ada = pull.link("ada")
     assert ada.target_object_id == str(person.pk)
-    spellings = Handle.objects.filter(platform="email", normalized_value="ada@example.com")
-    assert list(spellings.values_list("pk", flat=True)) == [handle.pk]
-    assert _handle_claims(person.pk, "Ada@Example.COM") == [(ada.pk, "asserted"), (None, "asserted")]
-    pull.source.put("ada", replace(_ADA, notes="Edited at the source."))
+    aliases = Handle.objects.filter(platform="email", normalized_value="adalovelace@gmail.com")
+    assert list(aliases.values_list("pk", flat=True)) == [handle.pk]
+    assert _handle_claims(person.pk, "adalovelace@gmail.com") == [(ada.pk, "asserted"), (None, "asserted")]
+    pull.source.put("ada", replace(contact, notes="Edited at the source."))
     assert pull.sync().count == 1
-    assert list(spellings.values_list("pk", flat=True)) == [handle.pk]
-    assert _handle_claims(person.pk, "Ada@Example.COM") == [(ada.pk, "asserted"), (None, "asserted")]
+    assert list(aliases.values_list("pk", flat=True)) == [handle.pk]
+    assert _handle_claims(person.pk, "adalovelace@gmail.com") == [(ada.pk, "asserted"), (None, "asserted")]
 
 
 def test_a_page_locks_every_spelling_of_its_contacts_addresses_and_the_people_they_name_first(
@@ -1850,11 +1852,12 @@ _HOLDING_REFUSAL = "This address cannot be given to this party."
 
 
 def test_confirming_a_claim_spelled_otherwise_needs_write_on_the_holder_of_the_address(pull: Pull) -> None:
-    """The contact's spelling is a row of its own that nobody holds; the address is still its holder's."""
+    """The contact's alias is a row of its own that nobody holds; the address is still its holder's."""
 
-    person, handle = _existing(_user("someone-else"), email="Ada@Example.COM")
+    pull.source.put("ada", replace(_ADA, emails=(("ada.lovelace@gmail.com", "home", True),)))
+    person, handle = _existing(_user("someone-else"), email="adalovelace@gmail.com")
     pull.sync()
-    claim = _claim(pull, "ada", "ada@example.com")
+    claim = _claim(pull, "ada", "adalovelace@gmail.com")
     assert claim.handle_id != handle.pk
 
     with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
@@ -1863,6 +1866,23 @@ def test_confirming_a_claim_spelled_otherwise_needs_write_on_the_holder_of_the_a
     assert Handle.objects.get(pk=claim.handle_id).party_id is None
     handle.refresh_from_db()
     assert handle.party_id == person.pk
+
+
+def test_a_claim_in_another_letter_case_lands_on_the_holders_row_and_confirming_it_needs_write_on_the_holder(
+    pull: Pull,
+) -> None:
+    """Another letter case is the holder's own handle: the contact claims that row, and the address stays theirs."""
+
+    person, handle = _existing(_user("someone-else"), email="Ada@Example.COM")
+    pull.sync()
+    claim = _claim(pull, "ada", "ada@example.com")
+    assert claim.handle_id == handle.pk
+
+    with pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        claim.with_actor(pull.directory.owner).confirm()
+
+    handle.refresh_from_db()
+    assert (handle.party_id, handle.value) == (person.pk, "Ada@Example.COM")
 
 
 def test_confirming_a_claim_needs_write_on_a_trashed_holder_of_the_address(pull: Pull) -> None:
@@ -1934,9 +1954,33 @@ def test_taking_control_of_an_address_someone_else_holds_leaves_a_claim_unless_i
 def test_reverting_a_dismissal_needs_write_on_whoever_holds_the_address_now(pull: Pull) -> None:
     """The restored confirmation would make the contact's person hold an address someone else holds since.
 
-    The holder holds another spelling, so nothing wrote the dismissed handle row
-    after the dismissal and history can replay it.
+    The holder holds an alias of the address, so nothing wrote the dismissed handle
+    row after the dismissal and history can replay it.
     """
+
+    pull.source.put("ada", replace(_ADA, emails=(("ada.lovelace@gmail.com", "home", True),)))
+    pull.sync()
+    owner = pull.directory.owner
+    with actor_context(owner), changeset(fresh=True):
+        confirmed = _claim(pull, "ada", "adalovelace@gmail.com").with_actor(owner).confirm()
+    with actor_context(owner), changeset(fresh=True):
+        confirmed.with_actor(owner).dismiss()
+    dismissal = Party.statements.model.history.filter(id=confirmed.pk).latest("history_id").changeset
+    person, handle = _existing(_user("someone-else"), email="adalovelace@gmail.com")
+
+    with actor_context(owner), pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+        dismissal.with_actor(owner).revert()
+
+    assert Party.statements.model._base_manager.get(pk=confirmed.pk).is_dismissed
+    assert Handle.objects.get(pk=confirmed.handle_id).party_id is None
+    handle.refresh_from_db()
+    assert handle.party_id == person.pk
+
+
+def test_reverting_a_dismissal_after_someone_took_the_address_in_another_letter_case_is_a_later_write(
+    pull: Pull,
+) -> None:
+    """Another letter case is the dismissed row itself: its holder's statement wrote it since, so history refuses."""
 
     pull.sync()
     owner = pull.directory.owner
@@ -1946,14 +1990,14 @@ def test_reverting_a_dismissal_needs_write_on_whoever_holds_the_address_now(pull
         confirmed.with_actor(owner).dismiss()
     dismissal = Party.statements.model.history.filter(id=confirmed.pk).latest("history_id").changeset
     person, handle = _existing(_user("someone-else"), email="Ada@Example.COM")
+    assert handle.pk == confirmed.handle_id
 
-    with actor_context(owner), pytest.raises(PermissionDenied, match=_HOLDING_REFUSAL):
+    with actor_context(owner), pytest.raises(ValidationError, match="a later write prevents revert"):
         dismissal.with_actor(owner).revert()
 
     assert Party.statements.model._base_manager.get(pk=confirmed.pk).is_dismissed
-    assert Handle.objects.get(pk=confirmed.handle_id).party_id is None
     handle.refresh_from_db()
-    assert handle.party_id == person.pk
+    assert (handle.party_id, handle.value) == (person.pk, "ada@example.com")
 
 
 def test_a_directorys_contact_reader_reads_no_handle_its_contact_only_claims(pull: Pull) -> None:

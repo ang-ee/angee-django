@@ -8,7 +8,7 @@ import { USER_DIRECTORY_FILTER, USER_LIST_PRESET_IDS, USER_MODEL } from "../user
 /**
  * The managed people list: the viewer's people directory, so it lists every
  * account for people managers and no one for anyone else. Columns come from
- * `iam.users#columns`; account verbs (deactivate, rename, give or reset access)
+ * `iam.users#columns`; account actions (deactivate, rename, give or reset access)
  * are the `iam.User#actions-menu` children, each offered by the row's
  * server-projected `account_actions`. Administrators also edit identity fields
  * here; password is write-only.

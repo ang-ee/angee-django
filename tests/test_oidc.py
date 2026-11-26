@@ -35,6 +35,7 @@ from strawberry_django_aggregates import AggregateOp, compute_aggregation
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.iam import schema as iam_schema
+from angee.iam.auth import SESSION_BACKEND
 from angee.iam_integrate_oidc import identity
 from angee.iam_integrate_oidc import schema as oidc_schema
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
@@ -1334,7 +1335,7 @@ def test_userinfo_claims_merge_into_link_and_login_claims(db: None) -> None:
     assert link_result.next_path == "/link-next"
     assert expected_claims.items() <= link_result.account.identity_claims.items()
     assert login_result.user.pk == link_user.pk
-    assert login_result.user.backend == identity.SESSION_AUTH_BACKEND
+    assert login_result.user.backend == SESSION_BACKEND
     assert expected_claims.items() <= login_result.claims.items()
     assert login_result.next_path == "/login-next"
     # The verified login establishes the user's own party: a controlled handle + confirmed self-link.

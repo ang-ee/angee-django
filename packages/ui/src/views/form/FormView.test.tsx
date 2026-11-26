@@ -883,8 +883,11 @@ describe("FormView", () => {
       const [tab, setTab] = useState("pane");
       return <FormView resource="notes.Note" id="note-1" defaultRecordTab={selection === "default" ? "pane" : undefined}
         recordTab={selection === "controlled" ? tab : undefined} onRecordTabChange={setTab}
-        recordTabs={[{ id: "activity", label: "Activity", render: ({ focusField }) =>
-          <button type="button" onClick={() => focusField("location", selection === "default" ? { recordTabId: "missing" } : undefined)}>Reveal location</button> }]}>
+        recordTabs={[{ id: "activity", label: "Activity", render: ({ focusField, fieldLabel }) => <>
+          <button type="button" onClick={() => focusField("location", selection === "default" ? { recordTabId: "missing" } : undefined)}>Reveal location</button>
+          {/* A pane names a field as the form does: by its label; none for a field the form does not hold. */}
+          <output aria-label="Labels">{JSON.stringify([fieldLabel("location"), fieldLabel("absent") ?? null])}</output>
+        </> }]}>
         <Field name="title" title />
         <Group label="Details"><Field name="wordCount" /></Group>
         <Group label="Schedule"><Field name="location" label="Location" /></Group>
@@ -898,6 +901,7 @@ describe("FormView", () => {
     expect(screen.getAllByRole("tablist")).toHaveLength(1);
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
     const reveal = await screen.findByRole("button", { name: "Reveal location" });
+    expect(screen.getByRole("status", { name: "Labels" }).textContent).toBe(JSON.stringify(["Location", null]));
     fireEvent.click(reveal);
     const location = screen.getByLabelText("Location");
     await waitFor(() => expect(document.activeElement).toBe(location));
@@ -2827,6 +2831,19 @@ describe("FormView", () => {
     expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
   });
 
+  test("a create leaves out an untouched percent or progress bar field its metadata does not know: it holds null, which a create leaves out, where it held and sent an empty text", async () => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={[
+      { name: "label", label: "Label" },
+      { name: "share", label: "Share", widget: "percent" },
+      { name: "progress", label: "Progress", widget: "progressBar" },
+    ]} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
+  });
+
   test("guard: a create leaves an untouched optional member out of what it saves", async () => {
     sdkMocks.mutate.mockClear();
     renderWithProviders(<FormView resource="OAuthClient" fields={deserializeFormSpec({ type: "object", properties: {
@@ -2849,6 +2866,53 @@ describe("FormView", () => {
     } }, defaultWidgets)} />);
     await screen.findByText("Left empty");
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+  });
+
+  // The create draft seeds a field declared by a number widget alone with null (it has no kind for the seed rule
+  // to read) and a bound makes it a field the rule check reads; the check takes that seed for the field holding
+  // nothing.
+  test.each(["integer", "float", "percent", "progressBar"])("a create with an untouched optional bounded field declared by the %s widget alone is sent, the field left out", async (widget) => {
+    sdkMocks.mutate.mockClear();
+    renderWithProviders(<FormView resource="OAuthClient" fields={[
+      { name: "label", label: "Label" },
+      { name: "limit", label: "Limit", widget, maximum: 100 },
+    ]} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Label" }), { target: { value: "Second" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data).toStrictEqual({ label: "Second" });
+  });
+
+  test("an edit of a record that lacks an optional bounded member declared by a number widget alone is saved, the member sent as null as the same member without a bound is", async () => {
+    sdkMocks.mutate.mockClear();
+    sdkMocks.record = { id: "note-1", title: "First", config: { name: "a" } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={[
+      { name: "config.name", label: "Name" },
+      { name: "config.limit", label: "Limit", widget: "integer", minimum: 0 },
+      { name: "config.count", label: "Count", widget: "integer" },
+    ]} />);
+    const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    await waitFor(() => expect(name.value).toBe("a"));
+    fireEvent.change(name, { target: { value: "b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data.config).toStrictEqual({ name: "b", limit: null, count: null });
+  });
+
+  test("an edit that writes its object sends a percent or progress bar member holding the empty text, a stored value no control writes, as null, as it sends a cleared number", async () => {
+    const members = [
+      { name: "config.name", label: "Name" },
+      { name: "config.share", label: "Share", widget: "percent" },
+      { name: "config.progress", label: "Progress", widget: "progressBar" },
+    ];
+    sdkMocks.record = { id: "note-1", title: "First", config: { name: "a", share: "", progress: "" } };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={members} />);
+    const name = await screen.findByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    await waitFor(() => expect(name.value).toBe("a"));
+    fireEvent.change(name, { target: { value: "b" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate.mock.calls[0]![0].data.config).toStrictEqual({ name: "b", share: null, progress: null });
   });
 
   test("a date carried as text that the record lacks is sent as null when an edit writes its object", async () => {
@@ -4199,6 +4263,27 @@ describe("FormView", () => {
     expect(document.activeElement).toBe(label);
   });
 
+  test("a save the server refuses for a shown field and for a form-level reason moves focus to its banner, which also names the field", async () => {
+    sdkMocks.mutate.mockRejectedValue({ graphQLErrors: [{
+      message: "Validation failed.",
+      extensions: { code: "VALIDATION", validationErrors: { code: ["Code is taken."] }, formErrors: ["Note is misconfigured."] },
+    }] });
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code" }]} />);
+    fireEvent.change(await screen.findByLabelText("Label"), { target: { value: "Second" } });
+    // The person is in the field the server will refuse: the banner takes focus all the same.
+    const code = screen.getByLabelText("Code");
+    code.focus();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const alert = (await screen.findByText("Note is misconfigured.")).closest<HTMLElement>('[role="alert"]')!;
+    await waitFor(() => expect(document.activeElement).toBe(alert));
+    expect(within(alert).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Note is misconfigured.", "Please fix the highlighted fields: Code.",
+    ]);
+    // The field keeps its own reason and its mark.
+    expect(screen.getByText("Code is taken.")).toBeTruthy();
+    expect(code.getAttribute("aria-invalid")).toBe("true");
+  });
+
   test("a save the server refuses for no shown field moves focus to its banner", async () => {
     refuse(["Note is misconfigured."]);
     renderWithProviders(<FormView resource="notes.Note" fields={[labelField, { name: "code", label: "Code", hidden: true }]} />);
@@ -4422,6 +4507,23 @@ describe("FormView", () => {
     expect(sdkMocks.mutate).toHaveBeenCalledWith({
       data: { authorizeEndpoint: "/manual", id: "client-1" },
     });
+  });
+
+  test("a group that holds only hidden fields shows no heading and no pane, and its values are still sent", async () => {
+    renderWithProviders(<FormView resource="notes.Note" fields={[labelField]} defaultValues={{ secret: "kept", token: "kept too" }}
+      groups={[
+        { label: "Coded", fields: [{ name: "code", label: "Code" }], actions: [] },
+        { label: "Internal", fields: [{ name: "secret", label: "Secret", hidden: true }], actions: [] },
+        { label: "Tokens", pane: "tokens", fields: [{ name: "token", label: "Token", hidden: true }], actions: [] },
+      ]} />);
+    // The group beside them is the awaited effect: the sheet has rendered its sections.
+    expect(await screen.findByText("Coded")).toBeTruthy();
+    expect(screen.queryByText("Internal")).toBeNull();
+    expect(screen.queryByText("Tokens")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Label"), { target: { value: "First" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(sdkMocks.mutate).toHaveBeenCalledTimes(1));
+    expect(sdkMocks.mutate).toHaveBeenCalledWith({ data: { code: "", label: "First", secret: "kept", token: "kept too" } });
   });
 
   test("submits fields declared through the groups prop", async () => {

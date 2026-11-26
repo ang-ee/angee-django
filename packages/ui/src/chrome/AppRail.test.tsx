@@ -63,7 +63,7 @@ const menuItems: readonly ChromeMenuItem[] = [
 describe("AppRail intermediate navigation", () => {
   test("a selected app can start collapsed without writing preferences, and still expand on request", async () => {
     media.large = true;
-    const { preferences } = renderRail({ confined: true, railExpanded: false });
+    const { preferences } = await renderRail({ confined: true, railExpanded: false });
     const toggle = await screen.findByRole("button", { name: "Expand app navigation" });
     expect(preferences()["chrome.rail"]).toBeUndefined();
     fireEvent.click(toggle);
@@ -73,14 +73,14 @@ describe("AppRail intermediate navigation", () => {
 
   test.each([false, true])("a saved expansion choice %s overrides the selected app's default", async (expanded) => {
     media.large = true;
-    renderRail({ railExpanded: !expanded, preferences: { "chrome.rail": { expanded } } });
+    await renderRail({ railExpanded: !expanded, preferences: { "chrome.rail": { expanded } } });
     expect(await screen.findAllByRole("button", { name: expanded ? "Collapse app navigation" : "Expand app navigation" }))
       .toHaveLength(expanded ? 2 : 1);
   });
 
   test("a collapsed app default does not collapse its temporary navigation drawer", async () => {
     media.large = false;
-    renderRail({ railExpanded: false, presentation: "drawer" });
+    await renderRail({ railExpanded: false, presentation: "drawer" });
     expect((await screen.findByRole("navigation", { name: "Primary navigation" })).closest("aside")?.style.width).toBe("100%");
     expect(screen.getByRole("link", { name: "Desk" })).toBeTruthy();
   });
@@ -122,7 +122,7 @@ describe("AppRail intermediate navigation", () => {
 
   test("the top collapse toggle shares the footer control and disappears in icon mode", async () => {
     media.large = true;
-    renderRail();
+    await renderRail();
     const toggles = await screen.findAllByRole("button", { name: "Collapse app navigation" });
     expect(toggles).toHaveLength(2);
     expect(toggles[0]!.parentElement?.textContent).toContain("Apps");
@@ -143,7 +143,7 @@ describe("AppRail intermediate navigation", () => {
     ["brand", "Projects", true],
   ])("icon-only %s tooltip supplements the link's accessible name", async (_kind, label, confined) => {
     media.large = false;
-    renderRail({ confined });
+    await renderRail({ confined });
     const link = await screen.findByRole("link", { name: label });
     fireEvent.mouseEnter(link);
     const tooltipText = (content: string, element: Element | null) => Boolean(element?.closest("[data-base-ui-portal]")) && content.startsWith(label);
@@ -156,7 +156,7 @@ describe("AppRail intermediate navigation", () => {
 
   test("expanded sub-app, shortcut and Settings links have no supplementary name tooltips; app roots keep only their hint", async () => {
     media.large = true;
-    renderRail();
+    await renderRail();
     for (const label of ["Desk", "Saved project", "Settings"]) {
       const link = await screen.findByRole("link", { name: label });
       expect(link.hasAttribute("data-base-ui-tooltip-trigger")).toBe(false);
@@ -174,7 +174,7 @@ describe("AppRail intermediate navigation", () => {
     ["Projects", "projects", true, false],
   ])("icon tooltips retain %s and hints before developer description %s (confined: %s, default: %s)", async (label, id, confined, defaultApp) => {
     media.large = false;
-    renderRail({ confined, preferences: {
+    await renderRail({ confined, preferences: {
       developerMode: true, "chrome.rail": { defaultItemId: defaultApp ? "projects" : null },
     } });
     const link = await screen.findByRole("link", { name: label });
@@ -377,7 +377,7 @@ describe("AppRail intermediate navigation", () => {
 describe("AppRail order, default app and chooser", () => {
   test.each([false, true])("dragging a root reorders the shared rail order without navigating (expanded: %s)", async (expanded) => {
     media.large = expanded;
-    const { preferences, router } = renderRail();
+    const { preferences, router } = await renderRail();
     const notes = await screen.findByRole("link", { name: "Notes" });
     layOutRailRows();
     dragRailLink(notes, -40);
@@ -389,7 +389,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test.each([false, true])("long press sets the default app without navigating or toggling (expanded: %s)", async (expanded) => {
     media.large = expanded;
-    const { preferences, router } = renderRail();
+    const { preferences, router } = await renderRail();
     const notes = await screen.findByRole("link", { name: "Notes" });
     expect(notes.querySelector(".bg-success")).toBeNull();
     longPressRailLink(notes);
@@ -403,7 +403,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test.each([false, true])("Alt+Arrow moves a root through the shared rail order (expanded: %s)", async (expanded) => {
     media.large = expanded;
-    const { preferences } = renderRail();
+    const { preferences } = await renderRail();
     const projects = await screen.findByRole("link", { name: "Projects" });
     fireEvent.keyDown(projects, { key: "ArrowDown" });
     fireEvent.keyDown(projects, { key: "ArrowUp", altKey: true });
@@ -415,7 +415,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test("a dragged tree root carries its open panel, and the icon rail shows the new order", async () => {
     media.large = true;
-    const { preferences } = renderRail();
+    const { preferences } = await renderRail();
     const projects = await screen.findByRole("link", { name: "Projects" });
     layOutRailRows();
     dragRailLink(projects, 80);
@@ -431,7 +431,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test("tree sub-apps and disclosures stay plain links and buttons", async () => {
     media.large = true;
-    const { preferences } = renderRail();
+    const { preferences } = await renderRail();
     const desk = await screen.findByRole("link", { name: "Desk" });
     longPressRailLink(desk);
     fireEvent.keyDown(desk, { key: "ArrowDown", altKey: true });
@@ -443,7 +443,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test.each(["settings", "flat", "drawer"] as const)("the %s tree is not sortable", async (kind) => {
     media.large = kind !== "drawer";
-    const { preferences, router } = renderRail({ confined: kind === "flat", presentation: kind === "drawer" ? "drawer" : "rail" });
+    const { preferences, router } = await renderRail({ confined: kind === "flat", presentation: kind === "drawer" ? "drawer" : "rail" });
     if (kind === "settings") await router.navigate({ to: "/settings" });
     const link = await screen.findByRole("link", { name: { settings: "Platform", flat: "Desk", drawer: "Notes" }[kind] });
     longPressRailLink(link);
@@ -455,7 +455,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test("developer-mode hidden roots move with the order but never become the default", async () => {
     media.large = true;
-    const { preferences } = renderRail({
+    const { preferences } = await renderRail({
       menuItems: [...menuItems, { id: "archive", label: "Archive", hidden: true, to: "/archive" }],
       preferences: { developerMode: true },
     });
@@ -475,7 +475,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test("opening the app chooser expands a collapsed desktop rail and never collapses it", async () => {
     media.large = true;
-    const { preferences } = renderRail({ preferences: { "chrome.rail": { order: [], defaultItemId: null, expanded: false } } });
+    const { preferences } = await renderRail({ preferences: { "chrome.rail": { order: [], defaultItemId: null, expanded: false } } });
     expect(await screen.findByRole("button", { name: "Expand app navigation" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Switch app" }));
     expect(await screen.findByRole("dialog", { name: "Switch app" })).toBeTruthy();
@@ -491,7 +491,7 @@ describe("AppRail order, default app and chooser", () => {
 
   test.each(["rail", "drawer"] as const)("opening the app chooser leaves a %s that cannot expand alone", async (presentation) => {
     media.large = false;
-    const { preferences } = renderRail({ presentation });
+    const { preferences } = await renderRail({ presentation });
     fireEvent.click(await screen.findByRole("button", { name: "Switch app" }));
     expect(await screen.findByRole("dialog", { name: "Switch app" })).toBeTruthy();
     expect(preferences()["chrome.rail"]).toBeUndefined();
@@ -542,7 +542,7 @@ function longPressRailLink(link: HTMLElement): void {
   fireEvent.pointerUp(link, { ...pointer, clientY: 10 });
 }
 
-function renderRail({ confined = false, preferences: initialPreferences = {}, menuItems: items = menuItems, presentation, railExpanded }: {
+async function renderRail({ confined = false, preferences: initialPreferences = {}, menuItems: items = menuItems, presentation, railExpanded }: {
   confined?: boolean;
   preferences?: Record<string, unknown>;
   menuItems?: readonly ChromeMenuItem[];
@@ -566,6 +566,9 @@ function renderRail({ confined = false, preferences: initialPreferences = {}, me
   const router = createRouter({ routeTree: root.addChildren(["/projects", "/settings"].map((path) =>
     createRoute({ getParentRoute: () => root, path }))),
     history: createMemoryHistory({ initialEntries: ["/projects"] }) });
+  // A loaded route mounts inside render's act, so each tooltip trigger's hover
+  // listener, which Base UI attaches in an effect, is wired before a test hovers.
+  await router.load();
   render(<Provider><RouterProvider router={router} /></Provider>);
   return { preferences: () => saved.current, router };
 }

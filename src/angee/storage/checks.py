@@ -14,4 +14,8 @@ cannot delete it; fragments widen their ``*_granted`` arms instead.
 ``inherit_visibility`` admits only the drive's sharers to restore inheritance.
 """
 
-check_derived_permissions = partial(check_sealed_permissions, "storage", DERIVED_PERMISSIONS, "storage.E001")
+check_derived_permissions = partial(
+    check_sealed_permissions, "storage", DERIVED_PERMISSIONS, "storage.E001",
+    "Union the fragment's arm into an extension point the sealed expression composes, "
+    "or grant the need through the fragment's own record's read.",
+)

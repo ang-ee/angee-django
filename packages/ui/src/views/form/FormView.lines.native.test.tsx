@@ -883,6 +883,33 @@ test("a relation cell commits its group when a record is picked, and the pick is
   expect(f.surface().history.canUndo).toBe(false);
 });
 
+test("a relation cell offers inline edit of its picked record, and an authored line field declines it with `relationEdit: null`", async () => {
+  const related: DataResourceFieldMetadata = {
+    ...lineField("related", "ID"), kind: "relation", scalar: null, relationModelLabel: renderedResource.modelLabel,
+  };
+  const withRelation = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: { ...renderedResource.linesResource!, fields: [...renderedResource.linesResource!.fields!, related] },
+  });
+  const pick = async () => {
+    fireEvent.click(screen.getAllByRole("combobox", { name: /^Related/ })[0]!);
+    await act(async () => { fireEvent.click(await screen.findByRole("option", { name: "doc-2" })); });
+  };
+
+  const offered = await fixture({ publicView: true, resourceMetadata: withRelation });
+  offered.provider.getList.mockResolvedValue({ data: [{ id: "doc-2" }], total: 1 });
+  await pick();
+  expect(formLines(offered)[0]).toMatchObject({ related: "doc-2" });
+  expect(screen.getAllByRole("button", { name: "Edit record" }).length).toBeGreaterThan(0);
+  cleanup();
+
+  const declined = await fixture({ publicView: true, resourceMetadata: withRelation, formProps: { lineFields: [{ name: "related", relationEdit: null }] } });
+  declined.provider.getList.mockResolvedValue({ data: [{ id: "doc-2" }], total: 1 });
+  await pick();
+  expect(formLines(declined)[0]).toMatchObject({ related: "doc-2" });
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
+});
+
 const previewWidget: WidgetDefinition = {
   read: ({ value }: WidgetRenderProps) => <span>{String(value)}</span>,
   edit: ({ value, row, onChange, onRowChange, onCommit }: WidgetRenderProps) => {

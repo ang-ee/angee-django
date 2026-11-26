@@ -33,7 +33,7 @@ function PaneState() {
   return <output>{activeTab}:{collapsed ? "collapsed" : "expanded"}</output>;
 }
 
-function renderMarks(history = true) {
+async function renderMarks(history = true) {
   const root = createRootRoute();
   const route = createRoute({
     getParentRoute: () => root,
@@ -57,13 +57,16 @@ function renderMarks(history = true) {
     routeTree: root.addChildren([route]),
     history: createMemoryHistory({ initialEntries: ["/records/doc_7"] }),
   });
+  // A loaded route mounts inside render's act, so the tooltip trigger's hover
+  // listener, which Base UI attaches in an effect, is wired before a test hovers.
+  await router.load();
   render(<RouterProvider router={router} />);
   return router;
 }
 
 test("a field's source mark reveals its exact changeset without routing a statement shadow model", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  const router = renderMarks();
+  const router = await renderMarks();
   const mark = await screen.findByRole("button", { name: "Source: Reference" });
   fireEvent.click(mark);
   await waitFor(() => expect(router.state.location.search).toMatchObject({
@@ -77,16 +80,16 @@ test("a field's source mark reveals its exact changeset without routing a statem
 test("a historical statement without a changeset retains its source tooltip without a broken action", async () => {
   response.changesetId = null;
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  renderMarks();
+  await renderMarks();
   const mark = await screen.findByLabelText("Source: Reference");
-  expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
   fireEvent.mouseEnter(mark.parentElement!);
-  expect(screen.getByText("Imported source")).toBeTruthy();
+  expect(await screen.findByText("Imported source")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
   expect(warn.mock.calls.flat().join("\n")).not.toContain("example.DocumentStatement");
 });
 
 test("a statement subject without native history keeps its origin without opening a missing pane", async () => {
-  const router = renderMarks(false);
+  const router = await renderMarks(false);
   const mark = await screen.findByLabelText("Source: Reference");
   expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
   const trigger = mark.parentElement!;

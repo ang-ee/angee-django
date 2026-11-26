@@ -2,7 +2,7 @@
 
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { createElement } from "react";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { useForm } from "react-hook-form";
 import { boundedGraphQLTransportError } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
@@ -25,6 +25,7 @@ import {
   messagesForDottedPath,
   serverErrorsFromForm,
   useDottedPathFieldErrors,
+  useRefusalBannerFocus,
   validationErrorMap,
   validationErrorMessages,
   validationErrorsFromError,
@@ -520,4 +521,104 @@ test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" 
     }
   }).toThrow(/FormSubmitResult contract/);
   expect(result.current.getFieldState("root.server").error).toBeUndefined();
+});
+
+describe("where a refusal brings the person (applyFormErrors with `focus`)", () => {
+  type Issues = { fieldErrors: Record<string, string[]>; formErrors: string[] };
+  /** Apply a refusal to a form that shows `label` and `code`, in that order, and report what was asked. */
+  function refuse(issues: Issues, ask = true) {
+    const setError = vi.fn();
+    const focus = vi.fn();
+    applyFormErrors({ setError } as never, { status: "invalid", issues }, {
+      fieldNames: ["label", "code"],
+      fieldSummary: (errors) => `Fix: ${Object.keys(errors).join(", ")}`,
+      fallback: "Save failed.",
+      ...(ask ? { focus } : {}),
+    });
+    const banner = setError.mock.calls.find(([name]) => name === "root.server")?.[1] as { types: { server: string[] } } | undefined;
+    return {
+      fieldFocused: setError.mock.calls.filter(([, , options]) => (options as { shouldFocus?: boolean } | undefined)?.shouldFocus).map(([name]) => name),
+      bannerAsked: focus.mock.calls.length,
+      banner: banner?.types.server ?? [],
+    };
+  }
+
+  test("field reasons only: the first refused field in the form's order takes focus, and the banner is not asked", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."], label: ["Too long."] }, formErrors: [] }))
+      .toEqual({ fieldFocused: ["label"], bannerAsked: 0, banner: ["Fix: code, label"] });
+  });
+
+  test("a form-level reason beside a field reason: the banner is asked, carries the line naming the field, and no field takes focus", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."] }, formErrors: ["The note is misconfigured."] }))
+      .toEqual({ fieldFocused: [], bannerAsked: 1, banner: ["The note is misconfigured.", "Fix: code"] });
+  });
+
+  test("a reason of a field the form does not show counts as one no field shows", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."], secret: ["Refused."] }, formErrors: [] }))
+      .toEqual({ fieldFocused: [], bannerAsked: 1, banner: ["Fix: code", "secret: Refused."] });
+  });
+
+  test("a failure that names nothing: the banner is asked and holds the fallback", () => {
+    expect(refuse({ fieldErrors: {}, formErrors: [] })).toEqual({ fieldFocused: [], bannerAsked: 1, banner: ["Save failed."] });
+  });
+
+  test("an owner that does not ask moves no focus, whatever the refusal holds", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."] }, formErrors: [] }, false)).toMatchObject({ fieldFocused: [], bannerAsked: 0 });
+    expect(refuse({ fieldErrors: { code: ["Taken."] }, formErrors: ["The note is misconfigured."] }, false)).toMatchObject({ fieldFocused: [], bannerAsked: 0 });
+  });
+});
+
+describe("useRefusalBannerFocus", () => {
+  afterEach(() => { cleanup(); document.body.replaceChildren(); });
+  /** A banner element and a refused field in the document, and the hook over a list of messages. */
+  function mount() {
+    const banner = document.body.appendChild(document.createElement("div"));
+    banner.tabIndex = -1;
+    const field = document.body.appendChild(document.createElement("input"));
+    field.setAttribute("aria-invalid", "true");
+    const other = document.body.appendChild(document.createElement("button"));
+    const hook = renderHook(({ messages }: { messages: readonly string[] }) => {
+      const focus = useRefusalBannerFocus(messages);
+      focus.banner.ref.current = banner;
+      return focus;
+    }, { initialProps: { messages: [] as readonly string[] } });
+    return { banner, field, other, hook };
+  }
+
+  test("asked by the refusal's owner, the banner takes focus when the new list lands, also from a refused field", () => {
+    const { banner, field, hook } = mount();
+    field.focus();
+    hook.result.current.focusBanner();
+    expect(document.activeElement).toBe(field);
+    hook.rerender({ messages: ["The note is misconfigured."] });
+    expect(document.activeElement).toBe(banner);
+  });
+
+  test("not asked, the banner leaves focus in a refused field, and takes it from anywhere else", () => {
+    const { banner, field, other, hook } = mount();
+    field.focus();
+    hook.rerender({ messages: ["Fix: code"] });
+    expect(document.activeElement).toBe(field);
+    other.focus();
+    hook.rerender({ messages: ["Fix: code, label"] });
+    expect(document.activeElement).toBe(banner);
+  });
+
+  test("asking is spent by one list: a later list that is not asked for leaves a refused field its focus", () => {
+    const { banner, field, hook } = mount();
+    hook.result.current.focusBanner();
+    hook.rerender({ messages: ["The note is misconfigured."] });
+    expect(document.activeElement).toBe(banner);
+    field.focus();
+    hook.rerender({ messages: ["Fix: code"] });
+    expect(document.activeElement).toBe(field);
+  });
+
+  test("no list, no focus", () => {
+    const { other, hook } = mount();
+    other.focus();
+    hook.result.current.focusBanner();
+    hook.rerender({ messages: [] });
+    expect(document.activeElement).toBe(other);
+  });
 });

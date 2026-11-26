@@ -9,7 +9,7 @@ export const enBrandkitMessages: Record<string, string> = {
   "col.name": "Name",
   "col.default": "Default",
   "form.kit": "Kit",
-  "form.colorsHint": "Light values. Themes and mail derive their dark values from them.",
+  "form.colorsHint": "Light values. Mail, and themes that take the brand kit, derive their dark values from them.",
   "form.contrast": "Readability in mail",
   "form.contrastHint": "Checked against the saved colours; save to check new ones.",
   "form.fonts": "Fonts",
