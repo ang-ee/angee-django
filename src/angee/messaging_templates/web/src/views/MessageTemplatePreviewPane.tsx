@@ -5,7 +5,6 @@ import type { MessageTemplateTextDirection, Message_Templates_Set_Input } from "
 import { useAuthoredQuery } from "@angee/refine";
 import {
   EmptyState,
-  ErrorBanner,
   LoadingPanel,
   MessageHtmlFrame,
   MetaGrid,
@@ -113,10 +112,11 @@ function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | nu
  * say that instead; a saved row that does not render says so. A refusal under a
  * field is titled by the label the form shows for it, and takes the person to that
  * field when they choose it, never by itself, since they are editing elsewhere. What
- * the server says of the render, warnings and refusals alike, is about edits not yet
- * submitted or the saved row, never the answer to a submit: it is announced politely
- * as it changes, in one live region where warnings show and one where reasons show,
- * each present before anything arrives in it, and no issue is an alert.
+ * the server says of the render, a read it refuses, warnings and refusals alike, is
+ * about edits not yet submitted or the saved row, never the answer to a submit: it is
+ * announced politely as it changes, in one live region in the band, for a refused
+ * read and the warnings, and one where reasons show, each in the pane from its first
+ * render, before anything arrives in it, and nothing is an alert.
  * The HTML is only ever in the framework's sandboxed message frame, which runs no
  * script, has no same origin and loads remote images only when asked; the frame's
  * own body styles sit under the mail, so a mail client may space and size it
@@ -132,7 +132,8 @@ function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | nu
  * server says of the render take at most part of the height and scroll within it;
  * the body takes the rest, and the frame or the plain text scrolls the whole mail
  * within it. Each region that scrolls can be reached and scrolled from the keyboard.
- * The warnings lead that band, so they are seen whole before anything else in it.
+ * A refused read, then the warnings, lead that band, so they are seen whole before
+ * anything else in it.
  * The subject, the preheader and the plain text read in the direction the server
  * rendered the mail in, as its frame does, whatever their first letter.
  */
@@ -186,7 +187,13 @@ export function MessageTemplatePreviewPane({
   const standIn = cn(busy && "pointer-events-none opacity-50");
   // Nothing renders: the pane shows why, in the body, in place of the mail.
   const refused = result !== undefined && rendered === null;
-  const warnings = rendered === null ? [] : issues;
+  // What the band says first: a read the server refused, then the warnings of a row that renders.
+  const told: RecordIssue[] = [
+    ...(preview.error
+      ? [{ id: "preview-error", tone: "danger" as const, message: errorMessage(preview.error, t("preview.loadError")) }]
+      : []),
+    ...(rendered === null ? [] : issues),
+  ];
   const framed = rendered !== null && format === "html";
   const dir = rendered ? TEXT_DIRECTION[rendered.direction] : undefined;
 
@@ -202,11 +209,10 @@ export function MessageTemplatePreviewPane({
   // What the server warns about first, then whether this is the saved row or the unsaved edits and the rest of what
   // it says of the render, above the body: never more than part of the pane, scrolling within it.
   const facts = [
-    preview.error ? <ErrorBanner key="error" description={errorMessage(preview.error, t("preview.loadError"))} /> : null,
-    // A polite region that stays in the band, so a warning an edit brings is announced as it arrives. While it holds
-    // none it is out of flow: its empty block then takes no row of the band and no gap.
-    <div key="warnings" className={cn(warnings.length === 0 && "sr-only")}>
-      <RecordIssues items={warnings} onFocusField={focusField} fieldLabel={fieldLabel} polite />
+    // A polite region that stays in the band, so a refused read or a warning an edit brings is announced as it
+    // arrives. While it holds none it is out of flow: its empty block then takes no row of the band and no gap.
+    <div key="told" className={cn(told.length === 0 && "sr-only")}>
+      <RecordIssues items={told} onFocusField={focusField} fieldLabel={fieldLabel} polite />
     </div>,
     <p key="caption" className={textRoleVariants({ role: "meta" })}>
       {patch === null ? t("preview.saved") : t("preview.unsaved")}

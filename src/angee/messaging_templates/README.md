@@ -423,8 +423,9 @@ moment) and says so; with no such edits, after Discard or Save, it shows the sav
 row again at once. Edits Save would refuse are titled so, each refusal in Save's
 words, and one under a column is titled by the form's label for that field and
 takes the person there when chosen; edits Save would keep that the sample cannot
-render say that. What the pane says of the render is announced politely as it
-changes, never as an alert: it is never the answer to a save. The pane says it is
+render say that. What the pane says of the render, a read the server refuses
+included, is announced politely as it changes, never as an alert: it is never the
+answer to a save. The pane says it is
 busy, and dims what it shows, until the preview on screen is the one for the kit
 and the edits now chosen. It shows a mail's subject, preheader and plain text in
 the direction the mail is rendered in. The HTML shows only in the

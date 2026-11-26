@@ -426,16 +426,21 @@ test("a left-to-right mail's subject, preheader and plain text say so, from the 
 
 /** What each of the band's children is, in its order: by the one fact of the pane each shows. */
 function bandOutline(band: HTMLElement, warnings: readonly string[]): string[] {
-  // The warnings' polite region stays in the band with nothing in it, out of flow: it shows nothing to outline.
-  return [...band.children].filter((child) => child.textContent !== "").map((child) => {
+  return [...band.children].flatMap((child): string[] => {
     const text = child.textContent ?? "";
-    if (warnings.length && warnings.every((detail) => text.includes(detail))) return "warnings";
-    if (text === word("preview.saved")) return "saved";
-    if (text === word("preview.unsaved")) return "unsaved";
-    if (text.includes(word("preview.subject")) && text.includes(word("preview.preheader"))) return "message";
-    if (text === word("preview.fidelity")) return "caveat";
-    if (child.querySelector("[role=alert]") || child.getAttribute("role") === "alert") return "error";
-    return `unknown: ${text}`;
+    // The band's polite region, item by item: a refused read ("error"), then the warnings, all of them ("warnings").
+    // With nothing in it, it is out of flow and shows nothing to outline.
+    if (child.querySelector("[aria-live=polite]")) {
+      const kinds = [...child.querySelectorAll("li")].map((item) =>
+        warnings.some((detail) => item.textContent?.includes(detail)) ? "warnings" : "error");
+      if (kinds.includes("warnings") && !warnings.every((detail) => text.includes(detail))) return ["some warnings"];
+      return kinds.filter((kind, index) => kinds.indexOf(kind) === index);
+    }
+    if (text === word("preview.saved")) return ["saved"];
+    if (text === word("preview.unsaved")) return ["unsaved"];
+    if (text.includes(word("preview.subject")) && text.includes(word("preview.preheader"))) return ["message"];
+    if (text === word("preview.fidelity")) return ["caveat"];
+    return [`unknown: ${text}`];
   });
 }
 
@@ -1024,8 +1029,11 @@ test("edits the server refuses to preview at all show its refusal, with no frame
   fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
   pause();
 
+  // The refused read is told in the band's polite region, ahead of anything else there, and is no alert.
   const refusal = await within(factsBand()).findByText(denied.error.message, { exact: false });
-  expect(refusal.closest("[role=alert]")).not.toBeNull();
+  const [told] = politeRegions();
+  expect(told!.contains(refusal)).toBe(true);
+  expect(told!.querySelectorAll("[role=alert], [role=status]")).toHaveLength(0);
   expect(bandOutline(factsBand(), [])).toEqual(["error", "unsaved"]);
   await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
   expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
