@@ -54,6 +54,25 @@ reduction, Django's ``JSONField``, JSON Schema validation) far inside Python's
 recursion limit.
 """
 
+MAX_JSON_DOCUMENT_DEPTH = 128
+"""How many arrays and objects may enclose a member of a JSON document ``decode_json`` accepts.
+
+A document is the whole body, message or record an entry point decodes, and
+it holds the values ``MAX_JSON_DEPTH`` bounds inside the containers of its
+envelope. The deepest envelope encloses such a value in 7: a
+graphql-transport-ws message's object, payload and variables, then the
+deepest input path to a ``JSON`` field in the composed schemas, a line's field
+in a nested insert (the ``object``, its relation, the relation's ``data``
+array, the line). A GraphQL HTTP body, whose view accepts no batch, encloses
+one in 6; an ACP record its view context in 4 (the record, ``params``,
+``_meta``, ``angee``); an anonymous ingress body its fields in 1. So 71 is
+the least bound that admits every value the value bound admits. The rest
+leaves an envelope room to grow, as a nested insert inside a nested insert
+would, and keeps the recursive walks a decoded document meets before any
+value bound (graphql-core's input coercion, strawberry-django-hasura's input
+reduction) far inside Python's recursion limit.
+"""
+
 MAX_JSON_MEMBERS = 1_000_000
 """How many members a JSON value Angee accepts may hold, as an expanding walk counts them.
 
@@ -136,17 +155,23 @@ def json_bound_violation(
 
 
 def decode_json(data: str | bytes, **options: Any) -> Any:
-    """``json.loads`` ``data``, refusing a document nested past the decoder's stack as malformed.
+    """``json.loads`` ``data``, refusing a document nested past ``MAX_JSON_DOCUMENT_DEPTH`` as malformed.
 
-    CPython's decoder raises ``RecursionError`` for such a document; this
-    raises ``json.JSONDecodeError`` instead, so a caller that answers a
-    malformed body as a client error answers this one the same way.
+    Such a document raises ``json.JSONDecodeError``, so a caller that answers a
+    malformed body as a client error answers this one the same way, on every
+    machine. A document too deep for the decoder's own stack is refused the
+    same way, where CPython's decoder raises ``RecursionError``: its limit
+    follows the thread's stack, which can be too small for the document bound.
     """
 
     try:
-        return json.loads(data, **options)
+        value = json.loads(data, **options)
     except RecursionError:
         raise json.JSONDecodeError("JSON nests too deeply to decode", "", 0) from None
+    violation = json_bound_violation(value, depth=MAX_JSON_DOCUMENT_DEPTH, members=None)
+    if violation:
+        raise json.JSONDecodeError(f"JSON {violation}", "", 0)
+    return value
 
 
 def json_equal(left: Any, right: Any) -> bool:

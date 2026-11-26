@@ -15,6 +15,6 @@ class AngeeGraphQLWSConsumer(
     """GraphQL WebSocket consumer with REBAC-owned actor setup."""
 
     def decode_json(self, data: str | bytes) -> object:
-        """Decode through ``decode_json``, so a message past the decoder's stack is one Strawberry cannot parse."""
+        """Decode through ``decode_json``, so a message past ``MAX_JSON_DOCUMENT_DEPTH`` is not JSON to Strawberry."""
 
         return decode_json(data)
