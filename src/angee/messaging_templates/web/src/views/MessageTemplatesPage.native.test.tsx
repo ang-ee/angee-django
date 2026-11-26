@@ -426,7 +426,8 @@ test("a left-to-right mail's subject, preheader and plain text say so, from the 
 
 /** What each of the band's children is, in its order: by the one fact of the pane each shows. */
 function bandOutline(band: HTMLElement, warnings: readonly string[]): string[] {
-  return [...band.children].map((child) => {
+  // The warnings' polite region stays in the band with nothing in it, out of flow: it shows nothing to outline.
+  return [...band.children].filter((child) => child.textContent !== "").map((child) => {
     const text = child.textContent ?? "";
     if (warnings.length && warnings.every((detail) => text.includes(detail))) return "warnings";
     if (text === word("preview.saved")) return "saved";
@@ -660,6 +661,20 @@ function standsIn(): boolean {
   return states[0]!;
 }
 
+/** The pane's two polite regions: the warnings' in the band, and the reasons' at the end of the pane's column. */
+function politeRegions(): [HTMLElement | null, HTMLElement | null] {
+  return [
+    factsBand().querySelector<HTMLElement>("[aria-live=polite]"),
+    busyPane().lastElementChild?.querySelector<HTMLElement>("[aria-live=polite]") ?? null,
+  ];
+}
+
+/** The text of what describes a control (`aria-describedby`). */
+function describedBy(control: HTMLElement): string {
+  return (control.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+}
+
 /** Let the open form's edits settle, as a pause after the last keystroke does. */
 function pause(): void {
   act(() => { vi.advanceTimersByTime(PREVIEW_PAUSE_MS); });
@@ -879,6 +894,9 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   await choose(word("field.format"), "HTML");
   const layout = within(form).getByLabelText<HTMLInputElement>(word("field.layout"));
   const source = within(form).getByLabelText<HTMLTextAreaElement>(word("field.source"));
+  // Before anything is refused, the reasons' polite region is already in the pane, empty.
+  const [, reasonsRegion] = politeRegions();
+  expect(reasonsRegion!.textContent).toBe("");
   fireEvent.change(layout, { target: { value: "" } });
   // The person moves on to Source while the edit settles.
   act(() => source.focus());
@@ -889,18 +907,74 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   expect(edit.result.warnings.map((warning) => [warning.code, warning.field])).toEqual([
     ["SAVE_REFUSED", "layout"], ["SAVE_REFUSED", null],
   ]);
+  // The refusals arrive in that same region, announced politely: none is an alert or a status of its own.
+  expect(reasonsRegion!.isConnected && body.contains(reasonsRegion!)).toBe(true);
+  expect(reasonsRegion!.querySelectorAll("[role=alert], [role=status]")).toHaveLength(0);
   for (const warning of edit.result.warnings) {
-    const words = within(body).getByText(warning.detail);
-    expect(words.closest("[role=alert]")).not.toBeNull();
+    const words = within(reasonsRegion!).getByText(warning.detail);
     // A refusal under a column is a control that takes the person to that field; one of the whole row is not.
     expect(words.closest("button") !== null).toBe(warning.field !== null);
   }
+  // The one under Layout is titled by the form's label for it, which also describes its control.
+  const control = within(body).getByRole("button", { name: edit.result.warnings[0]!.detail });
+  expect(describedBy(control)).toBe(word("field.layout"));
   // The refusals arrived while the person was in Source, and left them there.
   expect(document.activeElement).toBe(source);
   fireEvent.click(within(body).getByRole("button", { name: edit.result.warnings[0]!.detail }));
   await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
   expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();
   expect(screen.queryByText(word("preview.refused"))).toBeNull();
+});
+
+test("the same words refused under two fields read apart, each titled by the form's label for its field", async () => {
+  const requests: GraphQLWireRequest[] = [];
+  const edit = unsavedPreview("variables");
+  expect(edit.result.warnings.map((warning) => [warning.detail, warning.field])).toEqual([
+    ["Give an object.", "variables"], ["Give an object.", "sample"],
+  ]);
+  render(<MessageTemplateStory open={ROW.passwordReset} onRequest={(request) => requests.push(request)} />);
+  const form = await recordForm();
+  await screen.findByTitle(word("preview.frameTitle"));
+  // Lists where objects belong: in Sample values, in its own pane, and in Variables, in the sheet.
+  fireEvent.click(await screen.findByRole("tab", { name: word("form.sample") }));
+  pasteInto(await screen.findByRole("textbox", { name: word("field.sample") }), "[]");
+  pasteInto(within(form).getByRole("textbox", { name: word("field.variables") }), "[]");
+  fireEvent.click(screen.getByRole("tab", { name: word("tab.preview") }));
+  // Today's prompt on a record tab switch, as in the sample test above; leaving keeps the edits.
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+
+  await waitFor(() => expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset, patch: edit.patch }));
+  expect(await screen.findByText(word("preview.unsavedRefused"))).toBeTruthy();
+  const [, reasons] = politeRegions();
+  // Two refusals, one key each, each titled by its field's label, which also describes the control that goes there.
+  const controls = within(reasons!).getAllByRole("button", { name: "Give an object." });
+  expect(controls.map(describedBy)).toEqual([word("field.variables"), word("field.sample")]);
+  for (const label of [word("field.variables"), word("field.sample")]) {
+    expect(within(reasons!).getByText(label)).toBeTruthy();
+  }
+});
+
+test("the warnings' and the reasons' polite regions stay in the pane, taking no room while they hold nothing", async () => {
+  render(<MessageTemplateStory open={ROW.conditionalInclude} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  const [warnings, reasons] = politeRegions();
+  expect([warnings?.textContent, reasons?.textContent]).toEqual(["", ""]);
+  // The band is a grid spaced by gaps: its empty region is out of flow, so it takes no row and no gap.
+  expect(warnings!.parentElement!.className).toContain("sr-only");
+  // The pane's column spaces nothing, and the reasons' region sits in it, after the body.
+  expect(busyPane().className).not.toMatch(/(^|\s)gap-/);
+  expect(reasons!.parentElement).toBe(busyPane().lastElementChild);
+  cleanup();
+
+  // A row that warns shows its warnings in the band's region, in flow, announced politely: none an alert or a status.
+  render(<MessageTemplateStory open={ROW.passwordReset} />);
+  await screen.findByTitle(word("preview.frameTitle"));
+  const [shown] = politeRegions();
+  for (const warning of RECORDED.previews[ROW.passwordReset]!.warnings) {
+    expect(await within(shown!).findByText(warning.detail)).toBeTruthy();
+  }
+  expect(shown!.parentElement!.className).not.toContain("sr-only");
+  expect(shown!.querySelectorAll("[role=alert], [role=status]")).toHaveLength(0);
 });
 
 test("edits the server refuses to preview at all show its refusal, with no frame, and the pane stops being busy", async () => {

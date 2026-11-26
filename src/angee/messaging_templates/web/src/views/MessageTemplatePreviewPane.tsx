@@ -53,6 +53,8 @@ export interface MessageTemplatePreviewPaneProps {
   form: RecordPanelContext["form"];
   /** Bring the person to a field of the record form, as a refusal naming it offers. */
   focusField: RecordPanelContext["focusField"];
+  /** The label the record form shows for a field, which a refusal under that field is titled by. */
+  fieldLabel: RecordPanelContext["fieldLabel"];
 }
 
 /**
@@ -108,9 +110,13 @@ function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | nu
  * and its caption says so; it reads them once they settle, and shows the saved row
  * again as soon as the form holds none. Edits Save would refuse are titled so,
  * each refusal in Save's words; edits Save would keep that the sample cannot render
- * say that instead; a saved row that does not render says so. A refusal that names
- * a field takes the person to it when they choose it, never by itself, since they
- * are editing elsewhere; each one is announced by the shared alert it is shown in.
+ * say that instead; a saved row that does not render says so. A refusal under a
+ * field is titled by the label the form shows for it, and takes the person to that
+ * field when they choose it, never by itself, since they are editing elsewhere. What
+ * the server says of the render, warnings and refusals alike, is about edits not yet
+ * submitted or the saved row, never the answer to a submit: it is announced politely
+ * as it changes, in one live region where warnings show and one where reasons show,
+ * each present before anything arrives in it, and no issue is an alert.
  * The HTML is only ever in the framework's sandboxed message frame, which runs no
  * script, has no same origin and loads remote images only when asked; the frame's
  * own body styles sit under the mail, so a mail client may space and size it
@@ -131,7 +137,7 @@ function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | nu
  * rendered the mail in, as its frame does, whatever their first letter.
  */
 export function MessageTemplatePreviewPane({
-  template, active, carriesMessageFields, form, focusField,
+  template, active, carriesMessageFields, form, focusField, fieldLabel,
 }: MessageTemplatePreviewPaneProps): React.ReactElement {
   const t = useMessagingTemplatesT();
   const [kit, setKit] = React.useState("");
@@ -178,6 +184,9 @@ export function MessageTemplatePreviewPane({
   // keeping its previous rows is.
   const busy = settling || preview.isFetching || preview.isPlaceholderData;
   const standIn = cn(busy && "pointer-events-none opacity-50");
+  // Nothing renders: the pane shows why, in the body, in place of the mail.
+  const refused = result !== undefined && rendered === null;
+  const warnings = rendered === null ? [] : issues;
   const framed = rendered !== null && format === "html";
   const dir = rendered ? TEXT_DIRECTION[rendered.direction] : undefined;
 
@@ -194,7 +203,11 @@ export function MessageTemplatePreviewPane({
   // it says of the render, above the body: never more than part of the pane, scrolling within it.
   const facts = [
     preview.error ? <ErrorBanner key="error" description={errorMessage(preview.error, t("preview.loadError"))} /> : null,
-    rendered ? <RecordIssues key="warnings" items={issues} onFocusField={focusField} /> : null,
+    // A polite region that stays in the band, so a warning an edit brings is announced as it arrives. While it holds
+    // none it is out of flow: its empty block then takes no row of the band and no gap.
+    <div key="warnings" className={cn(warnings.length === 0 && "sr-only")}>
+      <RecordIssues items={warnings} onFocusField={focusField} fieldLabel={fieldLabel} polite />
+    </div>,
     <p key="caption" className={textRoleVariants({ role: "meta" })}>
       {patch === null ? t("preview.saved") : t("preview.unsaved")}
     </p>,
@@ -215,20 +228,25 @@ export function MessageTemplatePreviewPane({
     framed ? <p key="fidelity" className={textRoleVariants({ role: "caption" })}>{t("preview.fidelity")}</p> : null,
   ].filter((node) => node !== null);
 
+  // Why nothing renders: the state first and the server's reasons under it, both at the top of what the pane is
+  // given. The reasons' polite region stays in the pane while it renders too, as an empty block in the pane's column,
+  // which spaces nothing, so the reasons an edit brings are announced as they arrive.
+  const reasons = (
+    <div {...(refused ? {
+      tabIndex: 0, role: "region",
+      "aria-label": saveRefused ? t("preview.unsavedRefusedRegion") : t("preview.refusedRegion"),
+    } : {})} className={refused ? cn("grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4", standIn) : undefined}>
+      {refused ? <EmptyState icon="triangle-alert" className="min-h-0 p-6" title={saveRefused
+        ? t("preview.unsavedRefused") : patch === null ? t("preview.refused") : t("preview.unsavedUnrendered")} /> : null}
+      <RecordIssues items={refused ? issues : []} onFocusField={focusField} fieldLabel={fieldLabel} polite />
+    </div>
+  );
+
   let body: React.ReactNode;
   if (!result) {
     body = preview.error ? null : <LoadingPanel density="inline" />;
   } else if (!rendered) {
-    // The state first and the server's reasons under it, both at the top of what the pane is given.
-    body = (
-      <div tabIndex={0} role="region"
-        aria-label={saveRefused ? t("preview.unsavedRefusedRegion") : t("preview.refusedRegion")}
-        className={cn("grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4", standIn)}>
-        <EmptyState icon="triangle-alert" className="min-h-0 p-6" title={saveRefused ? t("preview.unsavedRefused")
-          : patch === null ? t("preview.refused") : t("preview.unsavedUnrendered")} />
-        <RecordIssues items={issues} onFocusField={focusField} />
-      </div>
-    );
+    body = null; // `reasons` shows it
   } else if (format === "text") {
     body = (
       <div lang={rendered.language} dir={dir} tabIndex={0} role="region" aria-label={t("preview.text")}
@@ -255,6 +273,7 @@ export function MessageTemplatePreviewPane({
         </div>
       ) : null}
       {body}
+      {reasons}
     </div>
   );
 }

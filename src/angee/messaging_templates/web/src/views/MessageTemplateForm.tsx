@@ -79,10 +79,10 @@ function MessageTemplateForm({
       presentation: "full-bleed",
       visibleWhen: (record) => holdsPermission(record, "preview"),
       // The pane's toolbar row is the shared pane toolbar's, as every pane's is; the strip names the tab.
-      render: ({ recordId, active, form, focusField }) => (
+      render: ({ recordId, active, form, focusField, fieldLabel }) => (
         <PaneToolbarHost>
           <MessageTemplatePreviewPane template={recordId} active={active} form={form} focusField={focusField}
-            carriesMessageFields={carriesMessageFields(form.displayRecord ?? {})} />
+            fieldLabel={fieldLabel} carriesMessageFields={carriesMessageFields(form.displayRecord ?? {})} />
         </PaneToolbarHost>
       ),
     },
