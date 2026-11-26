@@ -610,6 +610,12 @@ activate a theme.
 
 **Appearance** — the effective presentation and the user or host settings that
 select it: a theme, a color-scheme preference and that theme's supported options.
+The host's options may come at run time from one installed **host appearance**
+source ([host and user precedence](frontend/appearance.md#host-and-user-precedence)).
+
+**Brand kit** — a deployment's brand facts, one `angee.brandkit` row per kit; once
+any exists, exactly one is the **default kit**. A theme owns structure and applies a
+kit (see the [brand kit README](../src/angee/brandkit/README.md)).
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.

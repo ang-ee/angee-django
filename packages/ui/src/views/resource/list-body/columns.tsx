@@ -1,5 +1,5 @@
 import * as React from "react";
-import { type CellContext, type Column as TableColumn, type ColumnDef, type Row as TableRow } from "@tanstack/react-table";
+import { type CellContext, type Column as TableColumn, type ColumnDef, type Row as TableRow, type Table as TableModel } from "@tanstack/react-table";
 import { resourceOrderFieldForPath, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { Glyph } from "../../../chrome/Glyph";
 import { DefinitionPair } from "../../../fragments/DefinitionPair";
@@ -7,7 +7,7 @@ import { useUiT, type UiTranslate } from "../../../i18n";
 import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ColumnDescriptor } from "../../page";
-import { cellContent, columnLabelText, groupFieldLabel, readPath } from "./cell-utils";
+import { breaksTies, cellContent, columnLabelText, groupFieldLabel, headerSort, readPath } from "./cell-utils";
 import { groupLabel, tableGroupAxes } from "./grouping";
 import { queryForColumns } from "../resource-query";
 export interface BuildColumnsOptions {
@@ -79,10 +79,10 @@ function displayColumns<TRow extends Row>(
             options.metadata?.resource,
           ) !== null),
     sortDescFirst: false,
-    header: ({ column: tableColumn }) => {
+    header: ({ column: tableColumn, table }) => {
       const label = column.header ?? column.field;
       return (
-        <SortHeader column={column} tableColumn={tableColumn}>
+        <SortHeader column={column} tableColumn={tableColumn} table={table}>
           {column.headerVisuallyHidden ? (
             <span className="sr-only">{label}</span>
           ) : (
@@ -179,23 +179,24 @@ function resolvedCellContent<TRow extends Row>(
 function SortHeader<TRow extends Row>({
   column,
   tableColumn,
+  table,
   children,
 }: {
   column: ColumnDescriptor<TRow>;
   tableColumn: TableColumn<TRow>;
+  table: TableModel<TRow>;
   children: React.ReactNode;
 }): React.ReactElement {
   const t = useUiT();
   if (!tableColumn.getCanSort()) return <>{children}</>;
-  const sort = tableColumn.getIsSorted();
-  const active = Boolean(sort);
-  const iconName = !active
+  const sort = headerSort(tableColumn, table);
+  const iconName = !sort
     ? "arrow-up-down"
     : sort === "asc"
       ? "arrow-up"
       : "arrow-down";
   const label = columnLabelText(column);
-  const sortKey = !active
+  const sortKey = !sort
     ? "list.sortNotSorted"
     : sort === "asc"
       ? "list.sortAscending"
@@ -205,7 +206,12 @@ function SortHeader<TRow extends Row>({
       type="button"
       className="inline-flex min-w-0 items-center gap-1 rounded-6 text-left outline-none hover:text-fg focus-visible:focus-ring"
       aria-label={t(sortKey, { label })}
-      onClick={tableColumn.getToggleSortingHandler()}
+      // Decided from the table's live state when pressed, since a list re-shows its last settled
+      // headers while a read is in flight: a tie-breaker sorts in its first direction, every
+      // other press is the table's toggle (`headerSort`).
+      onClick={(event) => breaksTies(tableColumn, table)
+        ? table.setSorting([{ id: tableColumn.id, desc: tableColumn.getFirstSortDir() === "desc" }])
+        : tableColumn.getToggleSortingHandler()?.(event)}
     >
       <span className="truncate">{children}</span>
       <Glyph name={iconName} className="size-3 text-fg-subtle" />

@@ -17,7 +17,7 @@
     "dev": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook dev -p \"${STORYBOOK_PORT:-6006}\"",
     "build": "NODE_OPTIONS=\"${NODE_OPTIONS:+$NODE_OPTIONS }--disable-warning=DEP0205\" storybook build -o storybook-static",
     "typecheck": "tsc --noEmit",
-    "test": "node --test scripts/*.test.mjs",
+    "test": "node --test scripts/*.test.mjs && vitest run",
     "catalog:generate": "node scripts/catalog.mjs",
     "catalog:check": "node --test scripts/catalog.test.mjs"
   },
@@ -46,12 +46,15 @@
     "@storybook/react-vite": "^10.4.6",
     "@tailwindcss/vite": "^4.3.1",
     "@tanstack/react-router": "^1.170.41",
+    "@testing-library/react": "^16.1.0",
     "@types/node": "^26.0.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "happy-dom": "^20.10.6",
     "storybook": "^10.4.6",
     "tailwindcss": "^4.3.1",
     "typescript": "^6.0.3",
-    "vite": "^8.1.0"
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9"
   }
 }

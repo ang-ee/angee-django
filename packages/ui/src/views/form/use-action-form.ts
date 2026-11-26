@@ -31,8 +31,12 @@ export interface UseActionFormOptions<TValues extends FieldValues, TData = unkno
   onSuccess?: (values: TSubmitValues, data: TData) => void;
   /** Toast the successful result's message. Default true. */
   toastSuccess?: boolean;
-  /** Unclaimed issue paths also appear in the form-level summary. */
-  fieldNames?: Iterable<string>;
+  /**
+   * The fields the form shows, in its order (`applyFormErrors`'s `fieldNames`): a refusal's reason
+   * under any other path also shows in the form-level messages, as `path: reason`. Fields that
+   * follow the values give a function, read with the form's values when the answer lands.
+   */
+  fieldNames?: Iterable<string> | ((values: TValues) => Iterable<string>);
   genericErrorMessage?: string;
   /** What a lost answer reads, for a keyed submit (`formSubmitError`'s `answerLost`). */
   answerLost?: string;
@@ -92,7 +96,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
       await handleSubmit(async (collected) => {
         if (preview.current.viewAs || preview.current.pending) return;
         if (validateEditors()) return;
-        const { submit, onSuccess, toastSuccess = true, fieldNames, genericErrorMessage, answerLost, fieldSummary } = optionsRef.current;
+        const { submit, onSuccess, toastSuccess = true, fieldNames = [], genericErrorMessage, answerLost, fieldSummary } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
         let thrown: LateAnswer | undefined;
         const result = await Promise.resolve().then(() => submit(collected, SURFACE_RENDERS_FAILURE))
@@ -106,7 +110,8 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
         }
         // A refusal brings the person to it: the banner, which then also names the refused fields, or
         // the first refused field (`applyFormErrors` decides).
-        if (applyFormErrors(form, result, { fieldNames: fieldNames ?? [], fallback, focus: focusBanner, ...(fieldSummary ? { fieldSummary } : {}) })) return;
+        const shown = typeof fieldNames === "function" ? fieldNames(form.getValues()) : fieldNames;
+        if (applyFormErrors(form, result, { fieldNames: shown, fallback, focus: focusBanner, ...(fieldSummary ? { fieldSummary } : {}) })) return;
         if (toastSuccess && result.message) toast.success({ title: result.message });
         succeeded = true;
         onSuccess?.(collected, result.data);

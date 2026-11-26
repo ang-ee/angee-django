@@ -251,7 +251,8 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual({ title: "asc" }));
   expect(f.view.state.filter).toEqual({ title: { iContains: "kept" } });
   expect(JSON.stringify(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where)).toContain('"_ilike":"%kept%"');
-  expect(screen.getByRole("columnheader", { name: "Title" }).getAttribute("aria-sort")).toBe("ascending");
+  // Title is a grouping column here: a group's records share it, so its header shows no sort.
+  expect(screen.getByRole("columnheader", { name: "Title" }).getAttribute("aria-sort")).toBe("none");
 });
 
 

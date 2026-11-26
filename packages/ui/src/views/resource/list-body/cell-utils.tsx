@@ -1,7 +1,8 @@
 import * as React from "react";
-import { flexRender, type Cell as TableCellModel, type Column as TableColumn, type ColumnDef } from "@tanstack/react-table";
+import { flexRender, type Cell as TableCellModel, type Column as TableColumn, type ColumnDef, type RowData, type SortDirection, type SortingState, type Table as TableModel } from "@tanstack/react-table";
 import type { AggregateBucket, AggregateMeasureOperator } from "@angee/refine";
 import type {
+  GroupAxis,
   ModelMetadata,
   Row,
 } from "@angee/metadata";
@@ -88,11 +89,58 @@ export function tableColumnLabel<TRow extends Row>(
   return columnMeta(column.columnDef).label ?? column.id;
 }
 
-export function ariaSortForColumn<TRow extends Row>(
+declare module "@tanstack/react-table" {
+  interface TableMeta<TData extends RowData> {
+    /**
+     * The list's group axes (`useResourceViewTableState`): which sort keys a group's records share.
+     * A table of your own that renders `ListHeaderCell` sets it for the same answer.
+     */
+    groupAxes?: readonly GroupAxis[];
+  }
+}
+
+/** The keys the rows visibly follow, in order: the table's sorting without the keys a group axis shares. */
+function followedSorting<TRow extends Row>(table: TableModel<TRow>): SortingState {
+  const axes = table.options.meta?.groupAxes ?? [];
+  return table.getState().sorting.filter(({ id }) => !axes.some((axis) => axis.shares(id)));
+}
+
+/**
+ * The sort a column's header shows; its `aria-sort` and its sort button read it. The
+ * table's sorting holds the list's whole order, which a browser-sorted list sorts its rows
+ * by, but the rows visibly follow only the keys no group axis of the list shares
+ * (`GroupAxis.shares`): a group's records share the value of the field grouped by its whole
+ * value (a `Date` grouped by day or a finer unit included) and a grouped relation's members. A header shows
+ * the direction of the first key the rows follow; every other header shows none, a later
+ * key's (it only breaks ties, `breaksTies`) and a shared key's. A grouping column's key
+ * orders the groups in the browser; a server's groups read keeps its own group order.
+ *
+ * A press on a column that only breaks ties sorts it in its first direction
+ * (`getFirstSortDir`), where the table's toggle would turn it to its next direction or keep
+ * it behind the key the rows follow. Every other press is the table's own single-sort toggle
+ * (`enableMultiSort: false`), a grouping column's too. A press sets a fresh single-key
+ * order, so every other key goes, a grouping key's included (groups made in the browser then
+ * lose its order: the table orders them by the pressed column's value on each group, a text
+ * column by each group's first record), except in the toggle's own case: a press on the order's last
+ * key, unless it only breaks ties, flips or removes that key in place and keeps the keys
+ * ahead of it, where the list's state holds several keys. A list whose state lives in the
+ * URL keeps only the first of them (`model/search.ts`), as a saved view does
+ * (`model/favorites.ts`).
+ */
+export function headerSort<TRow extends Row>(
   column: TableColumn<TRow, unknown>,
-): React.AriaAttributes["aria-sort"] {
-  const sort = column.getIsSorted();
-  return sort === "asc" ? "ascending" : sort === "desc" ? "descending" : "none";
+  table: TableModel<TRow>,
+): false | SortDirection {
+  const [followed] = followedSorting(table);
+  return followed?.id === column.id ? (followed.desc ? "desc" : "asc") : false;
+}
+
+/** Whether a column only breaks ties: a later key of the order the rows follow (`headerSort`). */
+export function breaksTies<TRow extends Row>(
+  column: TableColumn<TRow, unknown>,
+  table: TableModel<TRow>,
+): boolean {
+  return followedSorting(table).slice(1).some(({ id }) => id === column.id);
 }
 
 export function rowActionLabelForTableColumn<TRow extends Row>(
