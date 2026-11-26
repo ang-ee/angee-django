@@ -1798,14 +1798,18 @@ open fresh evaluator scopes for authorization and change-feed reads.
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
-- **A `JSON` input nests at most `MAX_JSON_INPUT_DEPTH` levels.** Every schema
+- **A `JSON` input keeps Angee's JSON bounds.** Every schema
   [`GraphQLSchemas`](../../src/angee/graphql/schema.py) builds maps Strawberry's
-  `JSON` scalar to `JSON_SCALAR`, which bounds how many arrays and objects may
-  enclose a member of a `JSON` argument or input field, variable or literal. A
-  deeper value is refused as `BAD_USER_INPUT` while the request is coerced, so
-  no resolver, permission check or query runs for it. A domain bound stays with
-  its owner: `GraphQLSchemas.resource_filter` bounds a stored resource condition
-  with the same `nests_deeper_than` walk.
+  `JSON` scalar to `JSON_SCALAR`, which holds a `JSON` argument or input field,
+  variable or literal, to `MAX_JSON_DEPTH` and `MAX_JSON_MEMBERS`
+  ([`json_bound_violation`](../../src/angee/base/serialization.py)): how many
+  arrays and objects may enclose a member, and how many members it holds as an
+  expanding walk counts them, a repeated reference counted each time. A value
+  past either is refused as `BAD_USER_INPUT` while the request is coerced, so
+  no resolver, permission check or query runs for it. `validation_issues`
+  applies the same bounds before a JSON Schema keyword walks a value. A domain
+  bound stays with its owner: `GraphQLSchemas.resource_filter` bounds a stored
+  resource condition's depth with the same walk.
 - **Delete previews are generated with the resource's delete surface.**
   [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
   `<resource>_delete(id, confirm)` and its metadata when `delete=True`.

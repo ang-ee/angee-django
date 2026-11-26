@@ -42,6 +42,7 @@ from angee.base.addons import addon_contribution, addon_facts, is_angee_addon, o
 from angee.base.exceptions import DomainError, classify_error, validation_error
 from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
+from angee.base.serialization import json_bound_violation
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -60,9 +61,11 @@ from graphql import (
     GraphQLObjectType,
     GraphQLSchema,
     Undefined,
+    ValueNode,
     assert_input_type,
     coerce_input_value,
     validate_input_value,
+    value_from_ast_untyped,
 )
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -93,54 +96,30 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 _NON_ROOT_KEYS = {"types", "extensions", "type_extensions", "input_extensions"}
 _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _NON_ROOT_KEYS}
 
-MAX_JSON_INPUT_DEPTH = 64
-"""How many arrays and objects may enclose a member of a ``JSON`` input value.
+def _bounded_json(value: Any, node: ValueNode | None = None) -> Any:
+    """Return a ``JSON`` input value unchanged once it is within Angee's JSON bounds."""
 
-The deepest values addons accept sit well inside it: a dashboard snapshot
-whose widget filter uses all ten of its logical levels nests 28, a web form
-definition with panels at their three-deep cap 14. The bound keeps the
-recursive walks a saved value meets (strawberry-django-hasura's input
-reduction, Django's ``JSONField``, JSON Schema validation) far inside Python's
-recursion limit.
-"""
-
-
-def nests_deeper_than(value: Any, depth: int) -> bool:
-    """Return whether a member of the JSON ``value`` sits in more than ``depth`` arrays or objects.
-
-    An explicit stack walks the value and stops at the first member past
-    ``depth``, so a value of any nesting is measured without recursion.
-    """
-
-    pending = [(value, 0)]
-    while pending:
-        node, level = pending.pop()
-        if level > depth:
-            return True
-        if isinstance(node, dict):
-            pending.extend((child, level + 1) for child in node.values())
-        elif isinstance(node, list):
-            pending.extend((child, level + 1) for child in node)
-    return False
-
-
-def _parse_json_input(value: Any) -> Any:
-    """Return a ``JSON`` input value unchanged once its nesting is within bound."""
-
-    if nests_deeper_than(value, MAX_JSON_INPUT_DEPTH):
-        raise GraphQLError(
-            f"JSON input nests deeper than {MAX_JSON_INPUT_DEPTH} levels.",
-            extensions={"code": "BAD_USER_INPUT"},
-        )
+    violation = json_bound_violation(value)
+    if violation:
+        raise GraphQLError(f"JSON input {violation}.", node, extensions={"code": "BAD_USER_INPUT"})
     return value
 
 
-JSON_SCALAR: ScalarDefinition = replace(DEFAULT_SCALAR_REGISTRY[JSON], parse_value=_parse_json_input)
-"""Strawberry's ``JSON`` scalar, its input bounded by ``MAX_JSON_INPUT_DEPTH``.
+def _parse_json_literal(node: ValueNode, variables: dict[str, Any] | None = None) -> Any:
+    """Bound a ``JSON`` literal, the variables it embeds included, and locate a refusal at it."""
+
+    return _bounded_json(value_from_ast_untyped(node, variables), node)
+
+
+JSON_SCALAR: ScalarDefinition = replace(
+    DEFAULT_SCALAR_REGISTRY[JSON], parse_value=_bounded_json, parse_literal=_parse_json_literal,
+)
+"""Strawberry's ``JSON`` scalar, its input held to ``MAX_JSON_DEPTH`` and ``MAX_JSON_MEMBERS``.
 
 Every schema ``GraphQLSchemas`` builds maps ``strawberry.scalars.JSON`` to it.
-A variable or literal nested deeper is refused as ``BAD_USER_INPUT`` while the
-request is coerced, so no resolver, permission check or query runs for it.
+A variable or literal past either bound (``angee.base.serialization``) is
+refused as ``BAD_USER_INPUT`` while the request is coerced, so no resolver,
+permission check or query runs for it; a literal's refusal names its location.
 Output serialization and the printed SDL stay Strawberry's own.
 """
 
@@ -452,7 +431,7 @@ class GraphQLSchemas:
         extensions, scalar coercion, public IDs and expression aliases are the
         same ones used by its GraphQL list field; callers supply their own scope.
         """
-        if nests_deeper_than(value, max_depth):
+        if json_bound_violation(value, depth=max_depth, members=None):
             raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
         for name in sorted(self.names(), key=lambda name: (name != "console", name)):
             for surface in self.parts[name].query:

@@ -10,22 +10,42 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.graphql`: **Changed behaviour.** A `JSON` input value, sent as a
-  variable or a literal, nests at most 64 arrays and objects deep
-  (`MAX_JSON_INPUT_DEPTH` in `angee.graphql.schema`). Every schema
-  `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to `JSON_SCALAR`,
-  which refuses a deeper value as `BAD_USER_INPUT` while the request is
-  coerced, before any resolver, permission check or query runs. A caller who
-  was not signed in could fail a save with an `INTERNAL` error, before its
-  permission check, by sending a value nested about a thousand levels deep:
-  strawberry-django-hasura's input reduction recursed through nested arrays,
-  and Django's `JSONField` check through nested objects, deeper still. The
-  deepest value an addon accepts, a dashboard snapshot whose widget filter uses
-  all ten of its logical levels, nests 28. Output and the printed SDL are
-  unchanged, and a resource condition keeps its own bound of 12, measured by
-  the same walk (`nests_deeper_than`). Follow-up: strawberry-django-hasura's
-  `input_to_dict` still recurses through nested lists; bounding it belongs to
-  that library's own release.
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - `validation_issues` refuses a value past either bound under `__all__`
+    before a JSON Schema keyword walks it, so a public web form submission
+    whose answers nest too deeply is refused as `invalid_submission`.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    resource condition keeps its own depth bound of 12, measured by the same
+    walk.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
 - `angee.appearance_integrate`: **Changed behaviour.** Website appearance
   analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
   signed-in contract states. It refused only a request with no actor at all, so

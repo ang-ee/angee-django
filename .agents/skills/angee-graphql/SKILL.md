@@ -22,7 +22,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 |---|---|---|
 | `<addon>/schema.py` | Strawberry types, resources, authored roots, the `schemas` mapping | `src/angee/tags/schema.py`, `src/angee/money/schema.py`, `examples/src/example/notes/schema.py` |
 | `<addon>/pyproject.toml` `[tool.angee.graphql] schema` | Only a non-default schema module reference; default is `schema.py` | `src/angee/graphql/schema.py` (`_raw_schemas`) |
-| `src/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS`, merge/build per name and finalized metadata `GraphQLSchemas`, error sanitizer `AngeeSchema`, the `JSON` input bound `JSON_SCALAR` (`MAX_JSON_INPUT_DEPTH`) | `SchemaParts`, `schema_parts_for` |
+| `src/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS`, merge/build per name and finalized metadata `GraphQLSchemas`, error sanitizer `AngeeSchema`, the `JSON` input scalar `JSON_SCALAR` (bounds `json_bound_violation` in `src/angee/base/serialization.py`) | `SchemaParts`, `schema_parts_for` |
 | `src/angee/graphql/data/hasura.py` | `hasura_model_resource`, `AngeeHasuraWriteBackend`, `HasuraLines`, `public_pk_decoder`, `declared_hasura_resource_fields` | `_check_writable_relations_decoded`, the writable-relation decode guard |
 | `src/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource` (computed, read-only rows) | `_ROLE_RESOURCE`, `_GRANT_RESOURCE` in `src/angee/iam/schema.py` |
 | `src/angee/graphql/actions.py` | `ActionResult`, `action_guard`, `authorized_action_target`, `authorized_permission_target`, `resolve_action_target` | `snooze_task` in `src/angee/work/schema.py` |

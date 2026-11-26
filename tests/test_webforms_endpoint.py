@@ -18,6 +18,7 @@ from django.test import RequestFactory, override_settings
 from django.urls import resolve
 from rebac import system_context
 
+from angee.base.serialization import MAX_JSON_DEPTH
 from angee.webforms import views
 from angee.webforms.testing.models import Form, FormAlias, FormVersion, Response
 from angee.webforms.urls import PUBLIC_PREFIX
@@ -176,6 +177,31 @@ def test_a_refused_submission_names_what_it_refuses_and_keeps_nothing(
     body = json.loads(response.content)
     assert (response.status_code, body["error"], set(body["fields"])) == (400, "invalid_submission", {field})
     assert kept(form) == []
+
+
+def test_answers_nested_past_the_json_bound_are_refused_before_the_schema_compares_them() -> None:
+    """Two deep answers to a checkbox question would recurse through the schema's ``uniqueItems`` comparison."""
+
+    with system_context(reason="webforms tests setup"):
+        made = Form.objects.create(name="Colours")
+        version = FormVersion.objects.create(
+            form=made, languages=["en"], default_language="en", personal_questions=[],
+            definition={"elements": [{"type": "checkbox", "name": "colours", "choices": [
+                {"value": "red"}, {"value": "blue"},
+            ]}]},
+        )
+        version.publish()
+        FormAlias.objects.create(form=made, slug="colours", language="en")
+    deep: Any = "red"
+    for _ in range(1_000):
+        deep = [deep]
+
+    response = submit(envelope(answers={"colours": [deep, deep]}), alias="colours")
+
+    body = json.loads(response.content)
+    assert (response.status_code, body["error"]) == (400, "invalid_submission")
+    assert body["fields"] == {"__all__": [f"The value nests deeper than {MAX_JSON_DEPTH} levels."]}
+    assert kept(made) == []
 
 
 def test_answers_to_a_version_the_form_no_longer_serves_are_told_to_reload(form: Any) -> None:

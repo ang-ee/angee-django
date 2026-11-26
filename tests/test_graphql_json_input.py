@@ -1,9 +1,7 @@
-"""A ``JSON`` input nests at most ``MAX_JSON_INPUT_DEPTH`` levels, refused as bad input before execution."""
+"""A ``JSON`` input keeps Angee's JSON bounds, refused as bad input before execution."""
 
 from __future__ import annotations
 
-import inspect
-import sys
 from contextlib import ExitStack
 from typing import Any
 
@@ -13,10 +11,12 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test.utils import CaptureQueriesContext
+from graphql import build_schema, print_type
 from rebac import system_context
 from strawberry.scalars import JSON
 
-from angee.graphql.schema import MAX_JSON_INPUT_DEPTH, GraphQLSchemas, nests_deeper_than
+from angee.base.serialization import MAX_JSON_DEPTH, MAX_JSON_MEMBERS
+from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import execute_schema
 from angee.webforms import schema as webforms_schema
 from angee.webforms.testing.models import Form, FormVersion
@@ -56,7 +56,7 @@ def literal(levels: int) -> str:
 
 
 def statements(document: str, variables: dict[str, Any]) -> tuple[Any, int]:
-    """Save a version anonymously and count the SQL every configured database captured."""
+    """Run a document anonymously on the web forms console and count the SQL every database captured."""
 
     with ExitStack() as stack:
         captures = [stack.enter_context(CaptureQueriesContext(connection)) for connection in connections.all()]
@@ -71,72 +71,114 @@ class EchoQuery:
         return value
 
 
+def echo_schema() -> Any:
+    return addon_schema({"public": {"query": [EchoQuery]}}, "public")
+
+
+@pytest.fixture
+def form() -> Any:
+    with system_context(reason="json input tests setup"):
+        return Form.objects.create(name="Feedback")
+
+
+def stored_versions(form: Any) -> bool:
+    with system_context(reason="json input tests read"):
+        return FormVersion._base_manager.filter(form=form).exists()
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("nested", [nested_list, nested_object])
-def test_a_deep_json_input_is_refused_before_any_permission_check_or_query(nested: Any) -> None:
+def test_a_deep_json_input_is_refused_before_any_permission_check_or_query(form: Any, nested: Any) -> None:
     """2,000 levels fail as bad input with no SQL; at the bound, the actor-scoped read of the form refuses."""
 
-    with system_context(reason="json input tests setup"):
-        form = Form.objects.create(name="Feedback")
-
     refused, refused_statements = statements(SAVE_VERSION, {"form": form.sqid, "definition": nested(2000)})
-    admitted, admitted_statements = statements(
-        SAVE_VERSION, {"form": form.sqid, "definition": nested(MAX_JSON_INPUT_DEPTH)},
-    )
+    admitted, admitted_statements = statements(SAVE_VERSION, {"form": form.sqid, "definition": nested(MAX_JSON_DEPTH)})
 
     assert refused.data is None
     assert refused.errors is not None
     assert [error.extensions for error in refused.errors] == [{"code": "BAD_USER_INPUT"}]
-    assert f"nests deeper than {MAX_JSON_INPUT_DEPTH} levels" in refused.errors[0].message
+    assert f"nests deeper than {MAX_JSON_DEPTH} levels" in refused.errors[0].message
     assert refused_statements == 0
     assert admitted.errors is not None
     assert admitted.errors[0].extensions["code"] == "VALIDATION"
     assert admitted.errors[0].extensions["validationErrors"].keys() == {"form"}
     assert admitted_statements > 0
-    with system_context(reason="json input tests read"):
-        assert not FormVersion._base_manager.filter(form=form).exists()
+    assert not stored_versions(form)
+
+
+@pytest.mark.django_db
+def test_a_variable_repeated_inside_a_literal_counts_each_time_and_is_refused_before_any_query(form: Any) -> None:
+    """References to one variable expand the value a later walk meets, so each counts against the member bound."""
+
+    shared = [{"value": f"c{index}", "text": "Choice"} for index in range(20_000)]
+    document = SAVE_VERSION.replace(
+        "definition: $definition", "definition: [%s]" % ", ".join(["$definition"] * 4_000),
+    )
+
+    refused, refused_statements = statements(document, {"form": form.sqid, "definition": shared})
+
+    assert refused.data is None
+    assert refused.errors is not None
+    assert [error.extensions for error in refused.errors] == [{"code": "BAD_USER_INPUT"}]
+    assert f"holds more than {MAX_JSON_MEMBERS} members" in refused.errors[0].message
+    assert refused_statements == 0
+    assert not stored_versions(form)
 
 
 @pytest.mark.parametrize("nested", [nested_list, nested_object])
-def test_a_json_variable_at_the_bound_reaches_the_resolver_unchanged(nested: Any) -> None:
-    schema = addon_schema({"public": {"query": [EchoQuery]}}, "public")
+def test_a_json_variable_at_the_depth_bound_reaches_the_resolver_unchanged(nested: Any) -> None:
     document = "query Echo($value: JSON!) { echo(value: $value) }"
 
-    kept = schema.execute_sync(document, variable_values={"value": nested(MAX_JSON_INPUT_DEPTH)})
-    refused = schema.execute_sync(document, variable_values={"value": nested(MAX_JSON_INPUT_DEPTH + 1)})
+    kept = echo_schema().execute_sync(document, variable_values={"value": nested(MAX_JSON_DEPTH)})
+    refused = echo_schema().execute_sync(document, variable_values={"value": nested(MAX_JSON_DEPTH + 1)})
 
     assert kept.errors is None
-    assert kept.data == {"echo": nested(MAX_JSON_INPUT_DEPTH)}
+    assert kept.data == {"echo": nested(MAX_JSON_DEPTH)}
     assert refused.data is None
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
 
 
-def test_a_json_literal_meets_the_same_bound() -> None:
-    schema = addon_schema({"public": {"query": [EchoQuery]}}, "public")
+def test_a_json_variable_at_the_member_bound_is_kept_and_one_past_it_refused() -> None:
+    document = "query Echo($value: JSON!) { echo(value: $value) }"
 
-    kept = schema.execute_sync("{ echo(value: %s) }" % literal(MAX_JSON_INPUT_DEPTH))
-    refused = schema.execute_sync("{ echo(value: %s) }" % literal(MAX_JSON_INPUT_DEPTH + 1))
+    kept = echo_schema().execute_sync(document, variable_values={"value": [0] * MAX_JSON_MEMBERS})
+    refused = echo_schema().execute_sync(document, variable_values={"value": [0] * (MAX_JSON_MEMBERS + 1)})
 
     assert kept.errors is None
-    assert kept.data == {"echo": nested_list(MAX_JSON_INPUT_DEPTH)}
+    assert refused.errors is not None
+    assert refused.errors[0].formatted == {
+        "message": f"Variable '$value' has invalid value: JSON input holds more than {MAX_JSON_MEMBERS} members.",
+        "locations": [{"line": 1, "column": 12}],
+        "extensions": {"code": "BAD_USER_INPUT"},
+    }
+
+
+def test_a_json_literal_meets_the_same_bound_and_its_refusal_names_where_it_is() -> None:
+    kept = echo_schema().execute_sync("{ echo(value: %s) }" % literal(MAX_JSON_DEPTH))
+    refused = echo_schema().execute_sync("{ echo(value: %s) }" % literal(MAX_JSON_DEPTH + 1))
+
+    assert kept.errors is None
+    assert kept.data == {"echo": nested_list(MAX_JSON_DEPTH)}
     assert refused.data is None
     assert refused.errors is not None
-    assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
+    assert refused.errors[0].formatted == {
+        "message": f"JSON input nests deeper than {MAX_JSON_DEPTH} levels.",
+        "locations": [{"line": 1, "column": 15}],
+        "extensions": {"code": "BAD_USER_INPUT"},
+    }
 
 
-def test_nesting_is_measured_without_recursion() -> None:
-    """With almost no frames left, a value at the bound and one far past it are both measured."""
+def test_the_json_scalar_prints_as_strawberrys_own() -> None:
+    """The bound replaces how the scalar reads input; its name, description and specification stay Strawberry's."""
 
-    values = (nested_list(MAX_JSON_INPUT_DEPTH), nested_object(100_000))
-    limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(len(inspect.stack(0)) + 20)
-    try:
-        measured = [nests_deeper_than(value, MAX_JSON_INPUT_DEPTH) for value in values]
-    finally:
-        sys.setrecursionlimit(limit)
+    def printed_json(sdl: str) -> str:
+        return print_type(build_schema(sdl).get_type("JSON"))
 
-    assert measured == [False, True]
+    stock = printed_json(strawberry.Schema(query=EchoQuery).as_str())
+
+    assert printed_json(echo_schema().as_str()) == stock
+    assert "scalar JSON @specifiedBy" in stock
 
 
 def test_resource_conditions_keep_their_own_nesting_bound() -> None:
