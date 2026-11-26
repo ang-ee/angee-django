@@ -575,9 +575,16 @@ _REFUSED_PATCHES = {
     "name": {"name": "n" * 201},
     "constraint": {"format": "html"},
     "layout and constraint": {"format": "html", "layout": ""},
+    "variable path": {"variables": {"a" * 201: "x"}},
+    "variable description": {"variables": {"name": "d" * 1_001}},
+    "include depth": {"source": '{% include "parts/deep1" only %}'},
 }
 """Patches a save refuses: the walk, two columns that are not objects (one message for both), a column's own
-validator, a check constraint, and the layout with a constraint at once."""
+validator, a check constraint, the layout with a constraint at once, the two author limits on what a row declares,
+and a walk past the include depth."""
+
+_REFUSED_FIELDS = {"variable path": {"variables"}, "variable description": {"variables"}, "include depth": {None}}
+"""The column each limit's refusal names: the author limits ``variables``, the walk's depth the row as a whole."""
 
 
 @pytest.mark.parametrize("name", list(_REFUSED_PATCHES))
@@ -588,6 +595,8 @@ def test_a_patch_is_refused_as_its_save_is(library: dict[str, Any], name: str) -
 
     del library
     admin = create_platform_admin("messaging-templates-console-refused")
+    for depth in range(1, 6):  # parts/deep1 includes deep2 and so on: deep4 sits past the include depth
+        _row("part", f"deep{depth}", source=f'{{% include "parts/deep{depth + 1}" only %}}' if depth < 5 else "Deep.")
     row = _row("template", "tests.refused")
     patch = _REFUSED_PATCHES[name]
     with transaction.atomic():
@@ -603,6 +612,7 @@ def test_a_patch_is_refused_as_its_save_is(library: dict[str, Any], name: str) -
     assert {warning["code"] for warning in warnings} == {"SAVE_REFUSED"}
     assert len(warnings) == len(refused)
     assert {(warning["field"], warning["detail"]) for warning in warnings} == refused
+    assert name not in _REFUSED_FIELDS or {warning["field"] for warning in warnings} == _REFUSED_FIELDS[name]
     assert {warning["detail"] for warning in warnings} == {*error.extensions["formErrors"], *(
         message for messages in error.extensions["validationErrors"].values() for message in messages)}
 
@@ -699,8 +709,8 @@ def test_a_preview_reads_a_fixed_number_of_statements_with_a_patch_or_without(li
                         admin)
     assert saved.data["message_template_preview"]["rendered"] is not None
     assert "More." in patched.data["message_template_preview"]["rendered"]["plain_text"]
-    saved.assert_ceiling(statements=31, repeated=21)
-    patched.assert_ceiling(statements=155, repeated=71)  # 40 of them the save's gates, rehearsed on the row
+    saved.assert_ceiling(statements=39, repeated=28)
+    patched.assert_ceiling(statements=164, repeated=78)  # 41 of them the save's gates, rehearsed on the row
 
 
 # ---------- creating the deployment's own row ----------
