@@ -236,11 +236,12 @@ export function MessageTemplatePreviewPane({
 
   // Why nothing renders: the state first and the server's reasons under it, both at the top of what the pane is
   // given. The reasons' polite region stays in the pane while it renders too, as an empty block in the pane's column,
-  // which spaces nothing, so the reasons an edit brings are announced as they arrive.
+  // which spaces nothing, so the reasons an edit brings are announced as they arrive. Its holder keeps one role
+  // throughout, so nothing above the live region changes role when they arrive: a region, named and a keyboard
+  // stop, so its reasons can be scrolled to, only while it holds them (a region with no name is no landmark).
   const reasons = (
-    <div {...(refused ? {
-      tabIndex: 0, role: "region",
-      "aria-label": saveRefused ? t("preview.unsavedRefusedRegion") : t("preview.refusedRegion"),
+    <div role="region" {...(refused ? {
+      tabIndex: 0, "aria-label": saveRefused ? t("preview.unsavedRefusedRegion") : t("preview.refusedRegion"),
     } : {})} className={refused ? cn("grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4", standIn) : undefined}>
       {refused ? <EmptyState icon="triangle-alert" className="min-h-0 p-6" title={saveRefused
         ? t("preview.unsavedRefused") : patch === null ? t("preview.refused") : t("preview.unsavedUnrendered")} /> : null}

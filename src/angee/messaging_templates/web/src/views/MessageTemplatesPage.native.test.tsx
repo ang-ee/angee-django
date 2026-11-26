@@ -899,11 +899,14 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   await choose(word("field.format"), "HTML");
   const layout = within(form).getByLabelText<HTMLInputElement>(word("field.layout"));
   const source = within(form).getByLabelText<HTMLTextAreaElement>(word("field.source"));
-  // Before anything is refused, the reasons' polite region is already in the pane, empty; the band's region
-  // holds the saved row's warnings.
+  // Before anything is refused, the reasons' polite region is already in the pane, empty, in a holder that is a
+  // region already, with no name and no keyboard stop; the band's region holds the saved row's warnings.
   const [toldRegion, reasonsRegion] = politeRegions();
+  const holder = reasonsRegion!.parentElement!;
   const saved = RECORDED.previews[ROW.passwordReset]!.warnings.map((warning) => warning.detail);
   expect(reasonsRegion!.textContent).toBe("");
+  expect([holder.getAttribute("role"), holder.hasAttribute("aria-label"), holder.hasAttribute("tabindex")])
+    .toEqual(["region", false, false]);
   for (const detail of saved) expect(within(toldRegion!).getByText(detail)).toBeTruthy();
   expect(toldRegion!.parentElement!.className).not.toContain("sr-only");
   fireEvent.change(layout, { target: { value: "" } });
@@ -916,9 +919,11 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   expect(edit.result.warnings.map((warning) => [warning.code, warning.field])).toEqual([
     ["SAVE_REFUSED", "layout"], ["SAVE_REFUSED", null],
   ]);
-  // The refusals arrive in that same region, announced politely: none is an alert or a status of its own. The band's
-  // region is the same node, empty and out of flow.
+  // The refusals arrive in that same region, announced politely: none is an alert or a status of its own. Its holder
+  // is the same region, now named and a keyboard stop; the band's region is the same node, empty and out of flow.
   expect(reasonsRegion!.isConnected && body.contains(reasonsRegion!)).toBe(true);
+  expect(body).toBe(holder);
+  expect([holder.getAttribute("role"), holder.getAttribute("tabindex")]).toEqual(["region", "0"]);
   expect(politeRegions()[0]).toBe(toldRegion);
   expect(toldRegion!.textContent).toBe("");
   expect(toldRegion!.parentElement!.className).toContain("sr-only");
@@ -939,7 +944,7 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   expect(screen.queryByText(word("preview.refused"))).toBeNull();
 
   // Discard: the saved row's warnings again in the band's same region, in flow; the reasons' region the same node,
-  // empty.
+  // empty, in the same unnamed holder.
   fireEvent.click(screen.getByRole("button", { name: ui("form.discard") }));
   for (const detail of saved) expect(await within(toldRegion!).findByText(detail)).toBeTruthy();
   const [toldAfter, reasonsAfter] = politeRegions();
@@ -947,6 +952,8 @@ test("edits Save would refuse are titled so, each refusal announced in Save's wo
   expect(reasonsAfter).toBe(reasonsRegion);
   expect(toldRegion!.parentElement!.className).not.toContain("sr-only");
   expect(reasonsRegion!.textContent).toBe("");
+  expect([holder.getAttribute("role"), holder.hasAttribute("aria-label"), holder.hasAttribute("tabindex")])
+    .toEqual(["region", false, false]);
 });
 
 test("the same words refused under two fields read apart, each titled by the form's label for its field", async () => {
