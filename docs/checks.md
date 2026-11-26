@@ -656,7 +656,8 @@ env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile 
 ```
 
 Refresh the PostgreSQL map from a green push run on `main`, never from a local
-run, whose host load would become the map's. The
+run, whose host load would become the map's; a run a newer push cancelled lacks
+some groups' artifacts, so take the newest green one. The
 [refresh](../scripts/postgres_durations.py) fetches the run's six
 `postgres-durations-<group>` artifacts with `gh run download`, or reads a
 directory of them, and merges their measured entries into the map: a measured

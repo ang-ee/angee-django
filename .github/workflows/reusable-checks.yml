@@ -329,8 +329,8 @@ jobs:
           echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.select.result }}" = success
-          # The shards are skipped where select turned them off: the caller turned the
-          # pull-request lanes off, or the changed paths reach no Python test.
+          # The shards are skipped where select turned them off: the changed paths reach
+          # no Python test.
           test "${{ needs.uv-shard.result }}" = success || {
             test "${{ needs.select.outputs.sqlite }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
