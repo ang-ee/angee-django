@@ -353,12 +353,14 @@ def _aliased(value: Any, ids: dict[str, str]) -> Any:
     """``value`` with every public id it holds, as a key, a value or a part of a value, replaced by its alias.
 
     One substitution over all the ids at once, the longest first in the alternation, so an id that is a
-    prefix of another never matches inside it and nothing is substituted inside an alias already written.
+    prefix of another never matches inside it and nothing is substituted inside an alias already written;
+    an id matches only where no further id character follows, so ``auth/user:1`` leaves ``auth/user:12`` whole.
     """
 
     if not ids:
         return value
-    pattern = re.compile("|".join(re.escape(id_) for id_ in sorted(ids, key=len, reverse=True)))
+    alternation = "|".join(re.escape(id_) for id_ in sorted(ids, key=len, reverse=True))
+    pattern = re.compile(f"(?:{alternation})(?![0-9A-Za-z_-])")
 
     def alias(text: str) -> str:
         return pattern.sub(lambda match: ids[match.group(0)], text)
@@ -564,6 +566,15 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
         ],
         "unsavedPreviewsLayoutGated": layout_gated,
     }, ids)
+
+
+def test_an_alias_never_rewrites_the_start_of_a_longer_id() -> None:
+    """An id is replaced where it ends, never as the start of a longer id that has no alias of its own."""
+
+    ids = {"auth/user:1": "auth/user:admin", "mtl_a": "mtl_alias"}
+    assert _aliased({"auth/user:1": ["auth/user:12 and auth/user:1.", "mtl_ab", "mtl_a-b"]}, ids) == {
+        "auth/user:admin": ["auth/user:12 and auth/user:admin.", "mtl_ab", "mtl_a-b"],
+    }
 
 
 def test_the_console_fixture_is_what_the_server_says(db: None) -> None:
