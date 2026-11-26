@@ -872,16 +872,21 @@ def test_a_literal_nul_is_refused_by_rule_1_before_anything_reads_it(
     """A NUL forged the checks' placeholders: it hid a value from the style check and raised IndexError."""
 
     del plain
+    stores_nul = connection.vendor != "postgresql"  # PostgreSQL's text columns refuse a NUL: no write stores one
     for source in ('<p style="color:{{ brand.light.text }}">x</p><p style="\x000{{ name }}">y</p>',
                    '<p title="\x009\x00">x</p>'):
         row = _unsaved(format="html", source=source, text_source="x", variables={"name": "x"})
         assert any(R.NO_CONTROL.message in refusal for refusal in _refusals(row)), source
+        if not stores_nul:
+            continue
         saved = _mail(source, {"name": "x"}, format="html", text_source="x", key="tests.nul")
         with pytest.raises(ValidationError, match="no control character"):
             _render(saved, {"name": "x"}, kit)
         with system_context(reason="tests.messaging_templates.render.nul"):
             assert saved.preview(kit=kit).rendered is None
             saved.delete()
+    if not stores_nul:
+        return
     _row("layout", "shipped", is_baseline=True)
     shipped = _row("part", "said", format="html", source="<b>Said.</b>", text_source="Said.", is_baseline=True)
     template = _row("template", "tests.said", source='{% include "parts/said" only %}', layout="shipped",
@@ -1717,7 +1722,7 @@ def test_written_past_clean_fails_the_render_before_it_renders(plain: Any, kit: 
         TemplateWarningCode.RENDER_ERROR]
     fine = _mail("Fine.", key="tests.fine")
     with system_context(reason="tests.messaging_templates.render.seed"):
-        BrandKit.objects.filter(pk=kit.pk).update(brand="not a colour")
+        BrandKit.objects.filter(pk=kit.pk).update(brand="#zzzzzz")  # seven characters, as PostgreSQL's column holds
         stale = BrandKit.objects.get(pk=kit.pk)
     with pytest.raises(ValidationError):
         _render(fine, {}, stale)
@@ -1951,7 +1956,8 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
     """A value no mail can encode is refused in prepare(), never returned in a subject or raised from preview."""
 
     del plain
-    template = _mail("Hello {{ name }}.", {"name": "x"}, subject="Hi {{ name }}", sample={"name": "a\ud800b"})
+    template = _mail("Hello {{ name }}.", {"name": "x"}, subject="Hi {{ name }}")
+    template.sample = {"name": "a\ud800b"}  # unsaved: PostgreSQL's jsonb refuses a lone surrogate
     with pytest.raises(ValidationError, match="lone surrogate") as caught:
         _render(template, {"name": "a\ud800b"}, kit)
     assert {item.code for item in caught.value.error_list} == {"invalid_values"}
