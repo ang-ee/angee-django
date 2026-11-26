@@ -29,6 +29,7 @@ from rebac import (
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
+from simple_history.utils import get_history_manager_for_model
 
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import AngeeDataModel
@@ -75,7 +76,7 @@ query History($model: String!, $id: ID!, $limit: Int, $offset: Int, $selected: I
 
 REVERT = """
 mutation Revert($model: String!, $id: ID!, $changeset: ID!) {
-  revert_changeset(model: $model, id: $id, changeset: $changeset) { ok message id }
+  revert_changeset(model: $model, id: $id, changeset: $changeset) { ok message code validation_errors id }
 }
 """
 
@@ -254,7 +255,9 @@ def test_revert_restores_the_record_through_write_and_records_a_revert_changeset
     assert page.title == "Final title"
 
     reverted = result_data(execute_schema(schema, REVERT, variables, user=owner))["revert_changeset"]
-    assert reverted == {"ok": True, "message": "Changeset reverted.", "id": reverted["id"]}
+    assert reverted == {
+        "ok": True, "message": "Changeset reverted.", "code": None, "validation_errors": None, "id": reverted["id"],
+    }
     page.refresh_from_db()
     assert page.title == "Draft title"
     history = _history(schema, owner, "knowledge.Page", page)
@@ -283,6 +286,70 @@ def test_revert_refuses_a_changeset_that_did_not_touch_the_record() -> None:
 
     assert refused["ok"] is False
     assert "complete write boundary" in refused["message"]
+
+
+LATER_CHANGE = "A later change to this record prevents this revert."
+UNRECORDED = "The state before this change is no longer recorded, so it cannot be reverted."
+
+
+def _revert(schema: Any, user: Any, record: Any, entry: dict[str, Any], model: str = "knowledge.Page") -> Any:
+    variables = {"model": model, "id": public_id_of(record), "changeset": entry["id"]}
+    return result_data(execute_schema(schema, REVERT, variables, user=user))["revert_changeset"]
+
+
+def test_history_never_offers_a_revert_a_later_change_prevents_and_the_verb_refuses_it_in_plain_words() -> None:
+    """The latest change reverts; an earlier one is not offered, and a stale request names no internal identifier."""
+
+    owner = create_user("revert-later-change")
+    _vault, page = _titled_page(owner)
+    with actor_context(owner), changeset(fresh=True, change_reason="Retitle"):
+        page.title = "Later title"
+        page.save(update_fields=("title",))
+    schema = _schema()
+    retitle, rename, _draft = _history(schema, owner, "knowledge.Page", page)["entries"]
+
+    assert _revert(schema, owner, page, rename) == {
+        "ok": False, "message": LATER_CHANGE, "code": "later_change", "validation_errors": None, "id": None,
+    }
+    assert (retitle["can_revert"], rename["can_revert"]) == (True, False)
+    page.refresh_from_db()
+    assert page.title == "Later title"
+
+
+def test_history_never_offers_a_revert_whose_earlier_state_is_no_longer_recorded() -> None:
+    owner = create_user("revert-unrecorded")
+    _vault, page = _titled_page(owner)
+    with system_context(reason="tests.history.pruned_creation"):
+        get_history_manager_for_model(Page).filter(id=page.pk, history_type="+").delete()
+    schema = _schema()
+    [rename] = _history(schema, owner, "knowledge.Page", page)["entries"]
+
+    assert _revert(schema, owner, page, rename) == {
+        "ok": False, "message": UNRECORDED, "code": "earlier_state_unavailable", "validation_errors": None, "id": None,
+    }
+    assert rename["can_revert"] is False
+    page.refresh_from_db()
+    assert page.title == "Final title"
+
+
+def test_a_revert_refuses_a_boundary_another_record_shares_before_a_later_change() -> None:
+    owner = create_user("revert-boundary-first")
+    _vault, page = _titled_page(owner)
+    _other_vault, other = _titled_page(owner, vault_name="Other boundary")
+    with actor_context(owner), changeset(fresh=True, change_reason="Joint edit"):
+        for record in (page, other):
+            record.title = "Joint edit"
+            record.save(update_fields=("title",))
+    with actor_context(owner), changeset(fresh=True, change_reason="Later edit"):
+        page.title = "Later edit"
+        page.save(update_fields=("title",))
+    schema = _schema()
+    joint = _history(schema, owner, "knowledge.Page", page)["entries"][1]
+
+    refused = _revert(schema, owner, page, joint)
+
+    assert refused["message"] == "This changeset must be reverted from the owner of its complete write boundary."
+    assert (refused["ok"], refused["code"]) == (False, None)
 
 
 @pytest.fixture

@@ -1267,7 +1267,9 @@ document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
 `HistoryMixin.admitted_reverts(changesets)` owns complete-boundary admission;
 `Changeset.revertable(record, actor=...)` then checks the record's declared
-`history_revert_permission`. An entry may revert from that record only when its
+`history_revert_permission`, less what `ModelHistory.revert_blockers` refuses for a
+later change or an unavailable earlier state, the one rule the revert verb asks too.
+An entry may revert from that record only when its
 complete write boundary belongs to the document, or it is the record's
 operational merge.
 Changes spanning independent documents require their wider owner. Native FK

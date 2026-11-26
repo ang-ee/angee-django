@@ -10,6 +10,22 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.provenance`: **Changed behaviour.** A record's Activity history no longer
+  offers a revert the verb refuses for a later change to a row the changeset wrote, or
+  for an earlier state no longer recorded: `ModelHistory.revert_blockers` is the one
+  rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert` and
+  `Changeset.revertable`) for a whole page in three statements per touched table, and
+  by the verb under its row locks. `revert_changeset` refuses a changeset whose complete
+  write boundary is not the record's first, with its message as before, then the
+  verb's refusal in band, now worded for a person and naming no model label or primary
+  key: "A later change to this record prevents this revert." (code `later_change`) or
+  "The state before this change is no longer recorded, so it cannot be reverted."
+  (code `earlier_state_unavailable`); the label and changeset go to the
+  `angee.provenance.contrib.angee.history` logger. The list still offers a revert the
+  verb refuses for its other reasons: a row the reader may not revert, a statement's
+  own write check, a missing retained row or MTI parent, restoration order.
+  **Upgrade:** code matching the old messages ("a later write prevents revert", "the
+  pre-boundary state is unavailable") matches the new words or the codes.
 - `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
   resource adapter names the columns its owner verb applies on every changed row in
   `AngeeResource.never_create_only`, a mapping of each column to why, which adds to

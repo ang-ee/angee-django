@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
-from django.db.models import F, Q
+from django.db.models import Exists, F, OuterRef, Q
 from django.db.models.fields.reverse_related import ManyToOneRel
+from django.db.models.functions import Cast
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -35,11 +38,20 @@ from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import candidate_relationships
+from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.history import BASELINE_REASON, UNLOADED
 from angee.provenance.history import HistoryMixin as CaptureHistoryMixin
 from angee.provenance.history import ModelHistory as CaptureHistory
 from angee.provenance.querysets import model_history
+
+logger = logging.getLogger(__name__)
+
+_REVERT_REFUSALS = {
+    "later_change": "A later change to this record prevents this revert.",
+    "earlier_state_unavailable": "The state before this change is no longer recorded, so it cannot be reverted.",
+}
+"""What the revert verb tells a person for each code :meth:`ModelHistory.revert_blockers` returns."""
 
 
 class HistoryDocumentMixin(models.Model):
@@ -117,17 +129,98 @@ class ModelHistory(CaptureHistory):
 
         return concrete_child_models(model)
 
+    def revert_blockers(self, model: Any, changesets: Iterable[Any]) -> dict[Any, str]:
+        """Map each changeset whose revert this table refuses to why: ``later_change`` or ``earlier_state_unavailable``.
+
+        A later write, including an unattributed one, after the last version a
+        changeset wrote of a row refuses it; a baseline is the state before the
+        write that recorded it, never a later write. So does a first version that is
+        no creation and has no earlier state: no earlier version in the table, nor a
+        version of a tracked MTI descendant's history dated no later, which carries
+        the inherited columns (a ``Person`` created through its child records its
+        ``Party`` state there). A merge that left its survivor unchanged is refused
+        when the survivor has no recorded state, or a write dated after the merge.
+        A changeset refused both ways reports its later change. Three statements
+        answer any number of changesets, whatever they hold, so a history page's
+        cost does not grow with its entries. The list asks it to offer a revert; the
+        verb asks it again under its row locks and stays the final judge.
+        """
+
+        page = {changeset.pk: changeset for changeset in changesets}
+        if not page:
+            return {}
+        history = model.history
+        key = model._meta.pk.attname
+        written = history.filter(changeset_id__in=list(page))
+        same_row = {key: OuterRef(key)}
+        later = written.filter(
+            ~Exists(
+                history.filter(**same_row, changeset_id=OuterRef("changeset_id"), history_id__gt=OuterRef("history_id"))
+            ),
+            Exists(
+                history.filter(**same_row, history_id__gt=OuterRef("history_id"))
+                .exclude(history_change_reason=BASELINE_REASON)
+            ),
+        )
+        carriers = self.carriers(model)[1:]
+        unrecorded = written.exclude(history_type="+").filter(
+            ~Exists(history.filter(**same_row, history_id__lt=OuterRef("history_id"))),
+            *(
+                ~Exists(
+                    get_history_manager_for_model(table)
+                    .filter(**{table._meta.pk.attname: OuterRef(key)}, history_date__lte=OuterRef("history_date"))
+                    .exclude(changeset_id=OuterRef("changeset_id"))
+                )
+                for table in carriers
+            ),
+        )
+        blockers = dict.fromkeys(unrecorded.values_list("changeset_id", flat=True), "earlier_state_unavailable")
+        # An unchanged merge survivor has no new snapshot. Its touched owner and
+        # origin still define a boundary, without an artificial stamp-only save.
+        changeset_type = changeset_model()
+        survivor = Cast(OuterRef("origin_object_id"), output_field=model._meta.pk)
+        survivor_versions = {key: survivor}
+        merges = changeset_type._base_manager.filter(
+            pk__in=list(page),
+            activity=changeset_type.Activity.MERGE,
+            origin_content_type__in=list(ContentType.objects.get_for_models(*concrete_lineage(model)).values()),
+        ).values_list(
+            "pk",
+            Exists(history.filter(changeset_id=OuterRef("pk"), **survivor_versions)),
+            Exists(model._base_manager.filter(pk=survivor)),
+            Exists(history.filter(**survivor_versions)),
+            Exists(
+                history.filter(**survivor_versions, history_date__gt=OuterRef("recorded_at"))
+                .exclude(history_change_reason=BASELINE_REASON)
+            ),
+            *(
+                Exists(get_history_manager_for_model(table).filter(**{table._meta.pk.attname: survivor}))
+                for table in carriers
+            ),
+        )
+        for pk, wrote, standing, versioned, rewritten, *carried in merges:
+            if wrote or not standing:
+                continue
+            if not versioned and not any(carried):
+                blockers[pk] = "earlier_state_unavailable"
+            elif rewritten:
+                blockers[pk] = "later_change"
+        blockers.update(dict.fromkeys(later.values_list("changeset_id", flat=True), "later_change"))
+        return blockers
+
     def changeset_states(self, model: Any, changeset: Any) -> Iterable[tuple[Any, Any, Any]]:
         """Yield first, last and pre-boundary versions; sequence IDs break date ties.
 
-        A later write, including an unattributed one, refuses the whole revert. A
-        baseline is the state before the write that recorded it, never a later
-        write. The pre-boundary state is the latest earlier version in the table
-        or a tracked MTI descendant's history, whose versions carry the inherited
-        columns (a ``Person`` created through its child records its ``Party``
-        state there). The caller holds the operational row locks throughout restoration.
+        A changeset :meth:`revert_blockers` refuses raises its refusal first, in
+        words for a person; the model label and changeset are logged, never
+        returned. The pre-boundary state is the latest earlier version in the table
+        or a tracked MTI descendant's history. The caller holds the operational row
+        locks throughout restoration.
         """
 
+        if (code := self.revert_blockers(model, (changeset,)).get(changeset.pk)) is not None:
+            logger.info("Revert of changeset %s refused on %s: %s", changeset.pk, model._meta.label, code)
+            raise ValidationError(_REVERT_REFUSALS[code], code=code)
         history = model.history
         key = model._meta.pk.attname
         rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
@@ -136,30 +229,18 @@ class ModelHistory(CaptureHistory):
             seen.add(pk)
             versions = list(grouped)
             first, last = versions[0], versions[-1]
-            timeline = history.filter(**{key: pk}).exclude(history_change_reason=BASELINE_REASON)
-            if timeline.filter(history_id__gt=last.history_id).exists():
-                raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
             own = history.filter(**{key: pk}, history_id__lt=first.history_id).order_by("-history_id").first()
             carried = self.carried_version(model, pk, before=first.history_date, changeset=changeset)
             previous = max((v for v in (own, carried) if v is not None), key=lambda v: v.history_date, default=None)
-            if previous is None and first.history_type != "+":
-                raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
             yield first, last, previous
-        # An unchanged merge survivor has no new snapshot. Its touched owner and
-        # origin still define a boundary, without an artificial stamp-only save.
         origin = changeset.record_ref
         if changeset.activity == "merge" and origin.model_label.lower() in {
             table._meta.label_lower for table in concrete_lineage(model)
         }:
             pk = model._meta.pk.to_python(origin.object_id)
             if pk not in seen and model._base_manager.filter(pk=pk).exists():
-                timeline = history.filter(**{key: pk})
-                boundary = timeline.order_by("-history_id").first() or self.carried_version(model, pk)
-                if boundary is None:
-                    raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
-                later = timeline.filter(history_date__gt=changeset.recorded_at)
-                if later.exclude(history_change_reason=BASELINE_REASON).exists():
-                    raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
+                latest = history.filter(**{key: pk}).order_by("-history_id").first()
+                boundary = latest or self.carried_version(model, pk)
                 yield boundary, boundary, boundary
 
     def carried_version(self, model: Any, pk: Any, *, before: Any = None, changeset: Any = None) -> Any:
@@ -524,16 +605,32 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
         return frozenset(admitted)
 
     def revertable_changesets(self, changesets: Iterable[Any], *, actor: Any = None) -> frozenset[Any]:
-        """Return admitted page keys when the reader may replay this record."""
+        """Return admitted page keys when the reader may replay this record, less those a table's blockers refuse.
 
-        admitted = self.admitted_reverts(changesets)
+        Each touched table answers once for the page (``ModelHistory.revert_blockers``),
+        so the list never offers a revert the verb refuses for a later change or an
+        unavailable earlier state. The verb's other refusals stay its own.
+        """
+
+        page = tuple(changesets)
+        admitted = self.admitted_reverts(page)
         if not admitted:
             return admitted
         if not isinstance(self, RebacMixin):
             raise ImproperlyConfigured("History replay admission requires RebacMixin.")
         if actor is not None:
             self.with_actor(actor)
-        return admitted if self.has_access(self.history_revert_permission) else frozenset()
+        if not self.has_access(self.history_revert_permission):
+            return frozenset()
+        offered = {changeset.pk: changeset for changeset in page if changeset.pk in admitted}
+        blocked: set[Any] = set()
+        for label in sorted({label for changeset in offered.values() for label in changeset.touched}):
+            model = apps.get_model(label)
+            history = model_history(model)
+            if isinstance(history, ModelHistory):
+                touching = [changeset for changeset in offered.values() if label in changeset.touched]
+                blocked.update(history.revert_blockers(model, touching))
+        return admitted - blocked
 
     class Meta:
         abstract = True

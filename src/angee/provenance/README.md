@@ -109,8 +109,16 @@ versions of the same row join the entry. A page holds at most 100 changesets.
 
 `revert_changeset(model, id, changeset)` is the `ActionResult` verb behind an
 Activity history entry's Revert: the record's `history_revert_permission` is the one
-admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with
-`history: true`, the fact [`web/`](web/) uses to read entries.
+admission rule and `Changeset.revert()` restores. It refuses a changeset whose complete
+write boundary is not the record's first, then the verb's own refusals in band. An entry's
+`can_revert` is false for a changeset `ModelHistory.revert_blockers` refuses: a later
+change to a row it wrote (`later_change`, "A later change to this record prevents this
+revert.") or an earlier state no longer recorded (`earlier_state_unavailable`). Those
+refusals name no model or key; the verb logs them. The list does not ask the verb's other
+refusals (each row's revert permission, a statement's own write check, a missing retained
+row or MTI parent, restoration order), which the verb still refuses in band. Resource
+metadata marks a model that keeps history with `history: true`, the fact [`web/`](web/)
+uses to read entries.
 
 [`web/`](web/) contributes the `provenance.change` Timeline kind and the history drill-in, visible on every
 saved record whose resource keeps history, and exports `RecordHistoryTimeline`

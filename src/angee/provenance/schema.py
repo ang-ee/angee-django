@@ -682,7 +682,8 @@ class HistoryMutation:
             tracked.history_revert_permission,
         )
         target = require_instance_for_id(Changeset, changeset, queryset=Changeset._base_manager.all())
-        if not target.revertable(record, actor=current_actor()):
+        # The boundary refusal answers first; the verb then refuses a later change or a lost earlier state in band.
+        if target.pk not in record.admitted_reverts((target,)):
             raise ValidationError("This changeset must be reverted from the owner of its complete write boundary.")
         reverted = target.revert()
         return ActionResult(ok=True, message="Changeset reverted.", id=PublicID(public_id_of(reverted)))

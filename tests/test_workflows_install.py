@@ -583,3 +583,26 @@ def test_a_refused_release_never_serves_staffs_draft_to_a_run_as_the_workflow_pr
     assert Trigger.objects.drain() == 1
     with system_context(reason="tests.workflows.release runs"):
         assert list(WorkflowRun.system_queryset().values_list("version_id", flat=True)) == [released]
+
+
+def test_a_staff_save_after_a_release_load_takes_the_loads_revert_off_the_workflows_history(
+    db: None, tmp_path: Path, django_capture_on_commit_callbacks,
+) -> None:
+    """A later write refuses reverting the load, so its history no longer offers it; staff's own save reverts."""
+
+    staff = create_platform_admin("workflow-history-staff")
+    release = Release(tmp_path)
+    release.load()
+    release.save_staff_draft(STAFF_DRAFT, staff)
+    with django_capture_on_commit_callbacks(execute=True):
+        release.load(draft=document("entry", "released_next"))
+    with django_capture_on_commit_callbacks(execute=True):
+        release.save_staff_draft(document("entry", "staff_after_release"), staff)
+    workflow = release.workflow()
+    with system_context(reason="tests.workflows.history"):
+        *_, load, save = dict.fromkeys(version.changeset for version in workflow.history.order_by("history_id"))
+    assert (load.change_reason, save.change_reason) == ("resources.load", "Staff draft")
+
+    with actor_context(staff):
+        assert workflow.revertable_changesets((load, save), actor=staff) == {save.pk}
+        assert not load.revertable(workflow, actor=staff)
