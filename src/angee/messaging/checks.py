@@ -32,15 +32,22 @@ SEALED = {
     "messaging/thread": ("share", "delete", "annotate"),
     "messaging/message": ("write", "delete", "annotate"),
 }
-"""The permissions that subtract the system channel's seal, which fragments never extend.
+"""The permissions kept closed to other addons' fragments: each applies the system channel's seal or ``& read``.
 
-On the system channel (backend ``system``) each admits administrators alone; a
-system thread's ``share`` and a system message's ``write`` admit nobody, so no verb
-grants on either; their deletes keep the administrator arm. An arm unioned into
-one would reach system mail past the seal. Fragments widen
-``integrate/integration#read`` and ``#write`` instead, which the channel's seal
-subtracts. The thread's ``write``, which fragments extend, subtracts the seal from
-its own arms, administrators' included, and so is not sealed here.
+The composer appends a fragment's arm outside the owner's expression, so an arm on
+one of these would escape its subtraction of ``sealed`` or its intersection with
+``read`` and reach system mail. On the system channel (backend ``system``) the
+channel's permissions admit administrators alone; a system thread's ``share`` and a
+system message's ``write`` admit nobody, so no verb grants on either; their deletes
+keep the administrator arm; each ``annotate`` is its grant ``& read``. Fragments
+widen ``integrate/integration#read`` and ``#write`` instead, which the channel's
+seal subtracts.
+
+The thread's ``write`` is the known open one: fragments extend it, so it is not
+sealed here, and their arms, composed in after its subtraction, hold on a system
+thread that carries what they key on. A thread's ``read_granted`` and
+``chatter_read`` are not sealed on system threads either, so widening them reaches
+system mail as well (messaging's README, System mail).
 """
 
 check_messaging_seals = partial(

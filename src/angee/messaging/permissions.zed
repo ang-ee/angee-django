@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 32
+// @rebac_schema_revision: 33
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -55,21 +55,23 @@ definition messaging/thread {
     permission chatter_read = nil
     // The inbox lists no record chatter, where `chatter_read` holds for nobody,
     // so its read leaves the chatter arms out of the statement. Overrides that must
-    // govern both reads target `read_granted`. Nobody shares a system thread (on the
-    // system channel) and none of these `write` arms, administrators' included, writes
-    // it, so no verb shares or binds it; administrators keep its delete. Its reads are
-    // not subtracted, as the inbox's planned reads cannot afford it, so a `reader` or
-    // `editor` tuple written directly and the source-identity rule's principal read
-    // it. Fragments' arms on `read_granted`, `chatter_read` and `write` (appended after
-    // the seal) hold whenever a system thread carries what they key on.
+    // govern both reads target `read_granted`. A system thread's (on the system
+    // channel) reads are not subtracted, as the inbox's planned reads cannot afford
+    // it: a `reader` or `editor` tuple written directly, the source-identity rule's
+    // principal, and fragments' arms on `read_granted` and `chatter_read` read it,
+    // the arms whenever it carries what they key on.
     permission read_inbox = read_granted
     permission read = read_granted + chatter_read
+    // Nobody shares a system thread and none of these `write` arms, administrators'
+    // included, writes it, so no verb shares or binds it; administrators keep its
+    // delete. Fragments' `write` arms are appended after the seal and hold whenever a
+    // system thread carries what they key on.
     permission write  = (channel->write + owner + editor + identity_source + admin->member) - channel->sealed
+    permission share  = (owner + editor + admin->member) - channel->sealed
+    permission delete = ((owner + channel->delete) - channel->sealed) + admin->member
     // Messages inherit the authority, then apply their own read gate.
     permission annotate_granted = write + channel->annotate
     permission annotate = annotate_granted & read
-    permission share  = (owner + editor + admin->member) - channel->sealed
-    permission delete = ((owner + channel->delete) - channel->sealed) + admin->member
     permission transfer = owner + admin->member
     permission write__owner = transfer
 }
