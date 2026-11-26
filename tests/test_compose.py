@@ -686,6 +686,8 @@ def test_database_pool_follows_authored_settings_and_native_environment(tmp_path
     database = _configured_namespace(tmp_path)["DATABASES"]["default"]
     assert database["OPTIONS"]["pool"] == {"min_size": 0, "max_size": 3, "timeout": 7.0}
     assert "CONN_MAX_AGE" not in database and "CONN_HEALTH_CHECKS" not in database
+    monkeypatch.setenv("DATABASE_URL", "postgis://user:password@localhost:5432/db")
+    assert _configured_namespace(tmp_path)["DATABASES"]["default"]["OPTIONS"]["pool"]["max_size"] == 3
     monkeypatch.setenv("DATABASE_URL", "postgres://user:password@localhost:5432/db?conn_max_age=600")
     with pytest.raises(ImproperlyConfigured, match="ANGEE_DB_POOL.*DATABASE_URL CONN_MAX_AGE"):
         _configured_namespace(tmp_path)
