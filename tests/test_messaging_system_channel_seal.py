@@ -1,4 +1,4 @@
-"""Administrators alone read, send on, write, annotate and delete the system channel, and no fragment unseals it."""
+"""Administrators alone read, write, annotate and delete the system channel; nobody sends on it or unseals it."""
 
 from __future__ import annotations
 
@@ -129,11 +129,14 @@ def sealed(db: None, settings: Any) -> SimpleNamespace:
     return SimpleNamespace(seats=seats, rows=rows, other=other)
 
 
-def test_administrators_alone_read_send_on_and_write_the_system_channel(sealed: SimpleNamespace) -> None:
+def test_administrators_alone_read_and_write_the_system_channel_and_nobody_sends_on_it(
+    sealed: SimpleNamespace,
+) -> None:
     """The decision table: every path that opens an ordinary channel is closed on the system channel.
 
     The control channel, bound to the same seats by the same acts, proves each seat's path is open,
-    so no refused cell on the system channel passes for want of a grant.
+    so no refused cell on the system channel passes for want of a grant. Administrators read, write and
+    trash on it; nobody holds its ``reply``, administrators included.
     """
 
     seats = sealed.seats
@@ -141,6 +144,7 @@ def test_administrators_alone_read_send_on_and_write_the_system_channel(sealed: 
     def cells(name: str) -> list[tuple[Any, str, Any, bool]]:
         channel, thread, message, part = sealed.rows[name]
         allowed_on = {"admin"} | (set(_BOUND_SEATS) if name == "control" else set())
+        gaps = _CONTROL_GAPS if name == "control" else {("admin", "reply")}
         targets = (
             *((channel, action) for action in _CHECKED),
             (thread, "read"), (message, "read"), (message, "read_inbox"), (part, "read"),
@@ -148,7 +152,7 @@ def test_administrators_alone_read_send_on_and_write_the_system_channel(sealed: 
             (message, "delete"),
         )
         return [
-            (getattr(seats, seat), action, target, seat in allowed_on and (seat, action) not in _CONTROL_GAPS)
+            (getattr(seats, seat), action, target, seat in allowed_on and (seat, action) not in gaps)
             for seat in ("admin", *_BOUND_SEATS, *_UNBOUND_SEATS)
             for target, action in targets
         ]
@@ -175,31 +179,31 @@ def test_a_system_message_is_never_trashed_through_a_records_moderation(sealed: 
     assert not message.can_trash(moderate_access=True)
 
 
-def test_nobody_sends_from_the_system_channel_by_choice_yet_an_administrator_may_compose_on_it(
-    sealed: SimpleNamespace,
-) -> None:
-    """The system channel is system-only, so no seat is given it to send from; ``compose`` decides ``reply``.
+def test_nobody_sends_on_the_system_channel_as_a_person_administrators_included(sealed: SimpleNamespace) -> None:
+    """No seat is offered the system channel to send from, and every seat's send on it is refused.
 
-    No seat, administrators included, finds it on the sending selection
-    (``ChannelQuerySet.outbound_email``). ``compose`` decides ``reply`` on the channel,
-    which administrators alone hold there, so an administrator's
-    ``compose(channel=system_channel())`` is admitted and every other seat's is refused.
+    ``compose`` and ``Message.require_reply`` decide ``reply`` on the channel, which nobody holds
+    there, so the channels offered are exactly the channels a send admits. The framework writes the
+    channel as named system work (``compose_as_system``); the administrator sends on the control.
     """
 
     seats = sealed.seats
-    system = Channel.objects.system_channel()
+    system, mail = Channel.objects.system_channel(), sealed.rows["system"][2]
     for seat in ("admin", *_BOUND_SEATS, *_UNBOUND_SEATS):
+        if seat == "anonymous":
+            continue
         actor = getattr(seats, seat)
-        if seat != "anonymous":
-            sendable = set(Channel.objects.with_actor(actor).outbound_email())
-            assert system not in sendable, seat
-        if seat == "admin":
-            composed = Message.objects.compose(channel=system, to=["test-send@example.test"], text="Test.", actor=actor)
-            assert composed.channel_id == system.pk
-        elif seat != "anonymous":
-            with pytest.raises(PermissionDenied):
-                Message.objects.compose(channel=system, to=["test-send@example.test"], text="Test.", actor=actor)
-    assert sealed.rows["control"][0] in set(Channel.objects.with_actor(seats.admin).outbound_email())
+        assert system not in set(Channel.objects.with_actor(actor).outbound_email()), seat
+        with pytest.raises(PermissionDenied):
+            Message.objects.compose(channel=system, to=["test-send@example.test"], text="Test.", actor=actor)
+        with pytest.raises(PermissionDenied):
+            mail.require_reply(actor)
+    with system_context(reason="tests.messaging.seal.sent"):
+        assert list(Message._base_manager.filter(channel=system).values_list("pk", flat=True)) == [mail.pk]
+    control = sealed.rows["control"][0]
+    assert control in set(Channel.objects.with_actor(seats.admin).outbound_email())
+    composed = Message.objects.compose(channel=control, to=["test-send@example.test"], text="Test.", actor=seats.admin)
+    assert composed.channel_id == control.pk
 
 
 def test_system_threads_show_in_administrators_inbox_lists_and_nobody_elses(sealed: SimpleNamespace) -> None:
