@@ -6,26 +6,30 @@ import copy
 import email.policy
 import logging
 import logging.config
-from collections.abc import Iterator
+import smtplib
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from email import message_from_bytes
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from anymail.message import AnymailMessage
+from django.apps import apps
 from django.core import mail
 from django.core.checks import Tags, run_checks
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, send_mail
 from django.core.mail.backends.base import BaseEmailBackend
-from django.db import transaction
+from django.db import DatabaseError, connection, transaction
 from django.db.models.signals import post_save
 from django.template.defaultfilters import pprint
 from django.test import override_settings
+from django.utils import timezone
 from django.utils.log import AdminEmailHandler, configure_logging
 from django.views.debug import ExceptionReporter
-from rebac import actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.jobs.enqueue import celery_app
@@ -36,7 +40,7 @@ from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
-from tests.conftest import Vendor
+from tests.conftest import Vendor, create_platform_admin, make_integration
 from tests.messaging_campaign import make_user
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
@@ -562,16 +566,25 @@ def test_messagings_own_logging_is_not_reported(settings: Any) -> None:
 
 
 SECRET = "https://example.test/sign-in#token=SECRET-7f3a"
-"""A credential in a system mail's text, as a sign-in link carries one."""
+"""A credential in a system mail's subject, text and HTML, as a sign-in link or a one-time code carries one."""
 
 
-def _reported_secret(error: BaseException) -> list[tuple[str, str]]:
-    """Each ``(function, variable)`` of an error report that shows ``SECRET``, as Django's reporter renders it."""
+def _reported_secret(
+    error: BaseException, *, below: str | None = None, needle: str = "SECRET-7f3a",
+) -> list[tuple[str, str]]:
+    """Each ``(function, variable)`` of an error report that shows ``needle``, as Django's reporter renders it.
 
-    reporter = ExceptionReporter(None, type(error), error, error.__traceback__)
+    With ``below``, only the frames from that function's down.
+    """
+
+    frames = ExceptionReporter(None, type(error), error, error.__traceback__).get_traceback_frames()
+    if below is not None:
+        functions = [frame["function"] for frame in frames]
+        assert below in functions
+        frames = frames[functions.index(below):]
     return sorted({
-        (frame["function"], name) for frame in reporter.get_traceback_frames() for name, value in frame["vars"]
-        if "SECRET-7f3a" in pprint(value)
+        (frame["function"], name) for frame in frames for name, value in frame["vars"]
+        if needle in pprint(value)
     })
 
 
@@ -581,8 +594,8 @@ def test_an_error_report_of_an_email_the_system_mailer_refuses_shows_none_of_its
     """Refused while the mailer reads it: the reported frames hold the body under the mailer's marked names."""
 
     settings.DEBUG = False
-    email = EmailMultiAlternatives("Sign in", SECRET, None, ["reader@example.test"])
-    email.attach_alternative(SECRET, "text/calendar")
+    email = EmailMultiAlternatives(f"Sign in: {SECRET}", SECRET, None, ["reader@example.test"])
+    email.attach_alternative(f"<p>{SECRET}</p>", "text/calendar")
     with pytest.raises(ValueError) as refused:
         email.send()
     assert _reported_secret(refused.value) == []
@@ -598,8 +611,10 @@ def test_an_error_report_of_system_mail_with_no_system_channel_shows_none_of_its
     settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
     settings.DEFAULT_FROM_EMAIL = SENDER
     monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    email = EmailMultiAlternatives(f"Sign in: {SECRET}", SECRET, None, ["reader@example.test"])
+    email.attach_alternative(f"<p>{SECRET}</p>", "text/html")
     with pytest.raises(SystemChannelMissing) as missing:
-        EmailMessage("Sign in", SECRET, None, ["reader@example.test"]).send()
+        email.send()
     assert _reported_secret(missing.value) == []
 
 
@@ -609,7 +624,7 @@ def test_an_error_report_of_system_mail_its_arguments_refuse_shows_none_of_its_t
     settings.DEBUG = False
     with pytest.raises(ValidationError) as refused:
         Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["reader@example.test"],
-                                          subject="Two\nlines", text=SECRET)
+                                          subject=f"Sign in:\n{SECRET}", text=SECRET, html=f"<p>{SECRET}</p>")
     assert _reported_secret(refused.value) == []
 
 
@@ -628,10 +643,270 @@ def test_an_error_report_of_a_system_mail_write_that_fails_shows_none_of_its_tex
     try:
         with pytest.raises(RuntimeError) as failed:
             Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["failing@example.test"],
-                                              subject="Sign in", text=SECRET)
+                                              subject=f"Sign in: {SECRET}", text=SECRET, html=f"<p>{SECRET}</p>")
     finally:
         post_save.disconnect(fail, sender=Handle)
     assert _reported_secret(failed.value) == []
+
+
+
+def _flat(params: Any) -> list[Any]:
+    """A statement's parameters, one batch's rows flattened."""
+
+    return [value for row in params for value in (row if isinstance(row, list | tuple) else (row,))] if params else []
+
+
+@contextmanager
+def _failing(statement: Callable[[str, Any], bool]) -> Iterator[None]:
+    """Fail each statement ``statement`` matches with a database error, before the database runs it."""
+
+    def execute(run: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        if statement(sql, params):
+            raise DatabaseError("The statement failed.")
+        return run(sql, params, many, context)
+
+    with connection.execute_wrapper(execute):
+        yield
+
+
+def _body_fragment_insert(sql: str, params: Any) -> bool:
+    table = apps.get_model("messaging", "Fragment")._meta.db_table
+    return sql.startswith(f'INSERT INTO "{table}"') and any(
+        isinstance(value, str) and value.startswith("Body ") for value in _flat(params)
+    )
+
+
+def _message_insert(sql: str, params: Any) -> bool:
+    return sql.startswith(f'INSERT INTO "{Message._meta.db_table}" ')
+
+
+def _delivery_reservation(sql: str, params: Any) -> bool:
+    return sql.startswith(f'UPDATE "{Message._meta.db_table}" ') and "delivery_lease_until" in sql
+
+
+_STATEMENTS = [
+    pytest.param(_body_fragment_insert, id="body-fragment-insert"),
+    pytest.param(_message_insert, id="message-insert"),
+    pytest.param(_delivery_reservation, id="delivery-reservation"),
+]
+
+
+@pytest.mark.parametrize("statement", _STATEMENTS)
+def test_an_error_report_of_a_failing_statement_in_the_system_mail_write_shows_none_of_the_mail(
+    system_channel: Any, settings: Any, statement: Callable[[str, Any], bool],
+) -> None:
+    """A real statement fails inside the write: no frame, the ORM's and the SQL's included, shows the mail."""
+
+    settings.DEBUG = False
+    with _failing(statement), pytest.raises(DatabaseError) as failed:
+        Message.objects.compose_as_system(reason="tests.messaging.system_mail.report", to=["reader@example.test"],
+                                          subject=f"Sign in: {SECRET}", text=f"Body {SECRET}", html=f"<p>{SECRET}</p>")
+    assert _reported_secret(failed.value) == []
+
+
+@pytest.mark.parametrize("statement", _STATEMENTS)
+def test_an_error_report_of_a_failing_compose_hides_every_frame_below_the_shared_writer(
+    db: None, settings: Any, monkeypatch: pytest.MonkeyPatch, statement: Callable[[str, Any], bool],
+) -> None:
+    """A person's own mail: ``compose``'s frame is not marked; from the writer down, nothing shows."""
+
+    del db
+    settings.DEBUG = False
+    settings.MAILERS = {"transport": LOCMEM}
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    desk = make_integration("report-desk", model=Channel, backend_class="email",
+                            config={"from_email": "Desk <desk@example.test>"})
+    with _failing(statement), pytest.raises(DatabaseError) as failed:
+        Message.objects.compose(channel=desk, to=["reader@example.test"], subject=f"Sign in: {SECRET}",
+                                text=f"Body {SECRET}", html=f"<p>{SECRET}</p>", actor=desk.owner, queued=True)
+    assert ("compose", "text") in _reported_secret(failed.value)
+    assert _reported_secret(failed.value, below="_write_outgoing") == []
+
+
+
+class FailingTransport(BaseEmailBackend):
+    """A transport that fails each send with the failure its options name."""
+
+    def __init__(self, *, failure: BaseException, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.failure = failure
+
+    def send_messages(self, email_messages: Any) -> int:
+        raise self.failure
+
+
+def _queued_system_mail(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """One system mail, queued, its subject, text and HTML carrying ``SECRET``; nothing reaches a broker."""
+
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    return Message.objects.compose_as_system(
+        reason="tests.messaging.system_mail.report", to=["reader@example.test"], subject=f"Sign in: {SECRET}",
+        text=f"Body {SECRET}", html=f"<p>{SECRET}</p>",
+    )
+
+
+def _lost(message: Any) -> None:
+    """Expire the message's dispatch lease, as a lost broker submission leaves it: due to be sent again."""
+
+    with system_context(reason="tests.messaging.system_mail.lost"):
+        Message._base_manager.filter(pk=message.pk).update(delivery_lease_until=timezone.now() - timedelta(hours=1))
+
+
+def test_an_error_report_of_a_failing_transport_shows_none_of_the_system_mail(
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worker's path from the claim to the transport: the transport fails, then recording it fails too.
+
+    The report chains both: the recording's frames, the worker's, the backend's and the transport's. None
+    of them shows the mail, and this transport's own exception carries none of it, so neither does its
+    message; an exception that does carry some shows it (the known-limit test below).
+    """
+
+    settings.DEBUG = False
+    failure = ConnectionError("The transport is down.")
+    settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport",
+                                      "OPTIONS": {"failure": failure}}}
+    label, pk, token = (lambda message: (message._meta.label_lower, message.pk, message.external_id))(
+        _queued_system_mail(monkeypatch),
+    )
+    table = Message._meta.db_table
+
+    def recording(sql: str, params: Any) -> bool:
+        return failure.__traceback__ is not None and sql.startswith(f'UPDATE "{table}" ')
+
+    with _failing(recording), pytest.raises(DatabaseError) as failed:
+        deliver_message(label, pk, token)
+    chained, error = [], failed.value
+    while error is not None:
+        chained.append(error)
+        error = error.__cause__ or error.__context__
+    assert failure in chained
+    assert _reported_secret(failed.value) == []
+    assert [str(error) for error in chained if "SECRET-7f3a" in str(error)] == []
+
+
+
+def test_a_known_limit_an_error_report_shows_what_a_transport_exception_itself_carries(
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not a guarantee: Django filters frames, never an exception's own text.
+
+    An SMTP refusal carries the recipient it refused (a server can echo a line of the mail as well), and a
+    report of a failed recording chains it: its text shows there, while no frame shows it.
+    """
+
+    settings.DEBUG = False
+    settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport", "OPTIONS": {
+        "failure": smtplib.SMTPRecipientsRefused({"reader@example.test": (550, b"5.1.1 No such user")}),
+    }}}
+    label, pk, token = (lambda message: (message._meta.label_lower, message.pk, message.external_id))(
+        _queued_system_mail(monkeypatch),
+    )
+    table = Message._meta.db_table
+
+    def recording(sql: str, params: Any) -> bool:
+        raised = settings.MAILERS["transport"]["OPTIONS"]["failure"].__traceback__ is not None
+        return raised and sql.startswith(f'UPDATE "{table}" ')
+
+    with _failing(recording), pytest.raises(DatabaseError) as failed:
+        deliver_message(label, pk, token)
+    in_frames = _reported_secret(failed.value, needle="reader@example.test")
+    assert in_frames == []
+    chained, error = [], failed.value
+    while error is not None:
+        chained.append(error)
+        error = error.__cause__ or error.__context__
+    assert [type(error) for error in chained if "reader@example.test" in str(error)] == [
+        smtplib.SMTPRecipientsRefused,
+    ]
+
+
+def test_an_error_report_of_a_failing_reservation_hides_every_frame_from_deliver_down(
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Message.deliver`` holds the row, whose str is its preview; its caller's frame is the caller's."""
+
+    settings.DEBUG = False
+    message = _queued_system_mail(monkeypatch)
+    _lost(message)
+    with system_context(reason="tests.messaging.system_mail.report"):
+        row = Message._base_manager.get(pk=message.pk)
+    with _failing(_delivery_reservation), pytest.raises(DatabaseError) as failed:
+        row.deliver()
+    assert _reported_secret(failed.value, below="deliver") == []
+
+
+def test_an_error_report_of_a_failing_release_shows_none_of_the_system_mail(
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The release task sends a lost system mail again; its frame holds the rows it sends."""
+
+    settings.DEBUG = False
+    message = _queued_system_mail(monkeypatch)
+    _lost(message)
+    with _failing(_delivery_reservation), pytest.raises(DatabaseError) as failed:
+        Message.objects.release_held_messages()
+    assert _reported_secret(failed.value, below="release_held_messages") == []
+
+
+
+
+def _acknowledgement(sql: str, params: Any) -> bool:
+    return sql.startswith(f'UPDATE "{Message._meta.db_table}" ') and "acknowledged_by" in sql
+
+
+def _retried_reservation(sql: str, params: Any) -> bool:
+    return _delivery_reservation(sql, params) and "acknowledged_by" not in sql
+
+
+@pytest.mark.parametrize(
+    ("verb", "status", "statement"),
+    [
+        pytest.param("retry_delivery", "failed", _retried_reservation, id="retry-failed"),
+        pytest.param("acknowledge_delivery", "uncertain", _acknowledgement, id="acknowledge-uncertain"),
+    ],
+)
+def test_an_error_report_of_a_failing_operator_verb_hides_every_frame_from_the_verb_down(
+    db: None, settings: Any, monkeypatch: pytest.MonkeyPatch, verb: str, status: str,
+    statement: Callable[[str, Any], bool],
+) -> None:
+    """An operator retries or acknowledges an ordinary mail and a statement fails: nothing shows from the verb down."""
+
+    del db
+    settings.DEBUG = False
+    settings.MAILERS = {"transport": LOCMEM}
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: None)
+    desk = make_integration("operator-desk", model=Channel, backend_class="email",
+                            config={"from_email": "Desk <desk@example.test>"})
+    sent = Message.objects.compose(channel=desk, to=["reader@example.test"], subject=f"Sign in: {SECRET}",
+                                   text=f"Body {SECRET}", html=f"<p>{SECRET}</p>", actor=desk.owner, queued=True)
+    with system_context(reason="tests.messaging.system_mail.operator"):
+        Message._base_manager.filter(pk=sent.pk).update(
+            status=status, delivery_possibly_accepted=True, delivery_lease_until=None, delivery_claim=None,
+        )
+        revision = Message._base_manager.get(pk=sent.pk).revision
+    with _failing(statement), pytest.raises(DatabaseError) as failed:
+        getattr(sent, verb)(actor=desk.owner, expected_revision=revision)
+    assert _reported_secret(failed.value, below=verb) == []
+
+
+@pytest.mark.parametrize("retry", [True, False], ids=["retry", "acknowledge"])
+def test_nobody_retries_or_acknowledges_a_system_mail_whose_delivery_is_uncertain(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch, retry: bool,
+) -> None:
+    """Both write the message, whose seal admits nobody, administrators included; the release sends a lost one."""
+
+    admin = create_platform_admin("delivery-admin")
+    message = _queued_system_mail(monkeypatch)
+    with system_context(reason="tests.messaging.system_mail.uncertain"):
+        Message._base_manager.filter(pk=message.pk).update(
+            status="uncertain", delivery_possibly_accepted=True, delivery_lease_until=None, delivery_claim=None,
+        )
+        revision = Message._base_manager.get(pk=message.pk).revision
+    with pytest.raises(PermissionDenied), transaction.atomic():
+        Message.objects.resolve_uncertain_delivery(message, actor=admin, expected_revision=revision, retry=retry)
+    with system_context(reason="tests.messaging.system_mail.uncertain"):
+        assert Message._base_manager.get(pk=message.pk).status == "uncertain"
 
 
 class UnconfiguredSystemBackend(SystemChannelBackend):

@@ -15,6 +15,7 @@ from typing import Any
 
 from django.apps import apps
 from django.db import transaction
+from django.views.decorators.debug import sensitive_variables
 from rebac import system_context
 
 from angee.base.locks import record_lock_key, task_lock
@@ -48,6 +49,9 @@ def queue_message_delivery(message: Any) -> bool:
     return True
 
 
+# The worker's path to the transport holds the message, its parts and the built email, the
+# transport library's own frames included: an error report (DEBUG off) hides every local from here down.
+@sensitive_variables()
 def run_message_delivery(model_label: str, pk: Any, external_id: str) -> dict[str, Any]:
     """Publish under the message lock and the transport's declared delivery lock.
 
