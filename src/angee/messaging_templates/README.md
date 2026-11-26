@@ -260,30 +260,27 @@ that retries sends again. In order:
    the render then refuses with one of the codes above;
 4. messaging's `Message.objects.compose_as_system`, under the same reason,
    outside that context, in the caller's own context and transaction, with the
-   rendered subject, plain text and HTML; it refuses as its docstring says.
+   rendered subject, plain text and HTML; it refuses as its docstring says, an
+   address the transport cannot carry among it (`cannot_carry`, under `to`).
 
-No message row is written before a refusal, with one exception compose does not
-refuse up front: an address whose part before the `@` is outside ASCII is
-recorded and queued, and its delivery fails. The audit rows commit or roll back
-with the caller's transaction, and `reason` is recorded in them alone, never on
-the message. Each call records one message with its own Message-ID and hands it
+The render comes before every one of compose's refusals, so only a render
+refusal leaves the render's audit row. No message row is written before a
+refusal. The audit rows commit or roll back with the caller's transaction, and
+`reason` is recorded in them alone, never on the message. Each call records one message with its own Message-ID and hands it
 to delivery once, when the outermost transaction commits; the message is
 returned unbound, with the causing actor, if any, as its `created_by`, which
 grants nothing.
 
-**What a send stores, and who reads it.** Both this verb and the test send below
+**What the caller's values become.** Both this verb and the test send below
 store, on the system channel: a new thread titled with the rendered subject,
 kept in the thread's history; the message, whose preview is the first 280
-characters of its text; its title, text and HTML parts, which point to
+characters of its text; and its title, text and HTML parts, which point to
 content-addressed text fragments that carry a search vector and that nothing
-deletes, so they outlive the message; and one `to` recipient on the address's
-handle. A handle it creates, the recipient's or the system sender's, has no
-creator, and its history is a changeset of its own under messaging's non-user
-attribution (`messaging/system:outgoing`) that names no user. Whoever reads the
-system channel reads all of it: administrators alone,
-under messaging's seal on the channel. A value that is a credential, such as a
-sign-in link, is readable by them until it expires, and deleting the message does
-not remove its fragments.
+deletes, so they outlive the message. Who reads system mail, and how its
+handles are recorded, is messaging's ([System mail](../messaging/README.md#system-mail)):
+a value that is a credential, such as a sign-in link, is readable by those
+readers until it expires, and deleting the message does not remove its
+fragments.
 
 ### A test send
 
@@ -307,9 +304,10 @@ alone, as a preview is, and it is a user's request, so its render runs as
 It stores what any send stores (above), with `actor` as `created_by` and the
 thread titled `[Test] <subject>`; the recipient is the administrator's existing
 handle for the address when there is one. The mail holds the row's sample values
-and the administrator's address. Administrators alone read the system channel
-and they already read every sample and account address, so a test discloses
-nothing new; their inbox lists its thread.
+and the administrator's address. Its readers are the system channel's
+([System mail](../messaging/README.md#system-mail)); through every verb those
+are administrators, who already read every sample and account address, and
+their inbox lists its thread.
 
 ## Shipped defaults, overrides and reset
 

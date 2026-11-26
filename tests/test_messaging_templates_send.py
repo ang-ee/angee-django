@@ -235,21 +235,29 @@ def _paused(channel: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    ("state", "to", "key", "code"),
+    ("state", "to", "key", "code", "looked_up"),
     [
-        pytest.param(None, "not an address", "to", "invalid", id="address"),
-        pytest.param(None, "Two <a@example.test>, b@example.test", "to", "invalid", id="two-addresses"),
-        pytest.param("unconfigured", ADDRESS, "channel", "OUTBOUND_EMAIL_NOT_CONFIGURED", id="unconfigured"),
-        pytest.param("uncarried sender", ADDRESS, "channel", "cannot_carry", id="sender-the-transport-cannot-carry"),
-        pytest.param("paused", ADDRESS, "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="paused"),
-        pytest.param("missing", ADDRESS, "channel", "SYSTEM_CHANNEL_MISSING", id="missing"),
+        pytest.param(None, "not an address", "to", "invalid", False, id="address"),
+        pytest.param(None, "Two <a@example.test>, b@example.test", "to", "invalid", False, id="two-addresses"),
+        pytest.param(None, "rëader@example.test", "to", "cannot_carry", False,
+                     id="recipient-the-transport-cannot-carry"),
+        pytest.param("unconfigured", ADDRESS, "channel", "OUTBOUND_EMAIL_NOT_CONFIGURED", False, id="unconfigured"),
+        pytest.param("uncarried sender", ADDRESS, "channel", "cannot_carry", False,
+                     id="sender-the-transport-cannot-carry"),
+        pytest.param("missing", ADDRESS, "channel", "SYSTEM_CHANNEL_MISSING", True, id="missing"),
+        pytest.param("paused", ADDRESS, "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", True, id="paused"),
     ],
 )
 def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_nothing_written(
     mailing: None, plain: Any, settings: Any, sent: list[str], django_capture_on_commit_callbacks: Any,
-    state: str | None, to: str, key: str, code: str,
+    state: str | None, to: str, key: str, code: str, looked_up: bool,
 ) -> None:
-    """Nothing written, and nothing handed to delivery: the on-commit callbacks run, and none was registered."""
+    """Nothing written, and nothing handed to delivery: the on-commit callbacks run, and none was registered.
+
+    In ``compose_as_system``'s own order, after the render: its argument checks and an address the transport cannot
+    carry, then system mail not configured, from settings, none of which reads the system channel; then, after the
+    lookup's own audit row, the missing channel and a channel not connected. The render's audit row comes first.
+    """
 
     del mailing, plain
     if state != "missing":
@@ -260,10 +268,13 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
         settings.MAILERS = {}
     if state == "uncarried sender":
         settings.DEFAULT_FROM_EMAIL = "Angee <nöreply@example.test>"
-    row = _greeting()
+    row, audits = _greeting(), _audits()
     with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError, key=key, code=code):
         _send(row, {"name": "Ana", "title": "Welcome"}, to=to)
     assert (callbacks, sent) == ([], [])
+    reasons = [reason for _, reason in _audits()[len(audits):]]
+    assert reasons[0] == REASON, reasons
+    assert ("messaging.system_channel" in reasons) is looked_up, reasons
 
 
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:

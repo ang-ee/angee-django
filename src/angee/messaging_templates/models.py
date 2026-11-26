@@ -692,25 +692,22 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         :meth:`~angee.messaging.managers.MessageManager.compose_as_system` under
         the same reason, outside that context, in the caller's own context and
         transaction, with the rendered subject, plain text and HTML, which
-        refuses as its docstring says. No message row is written before a
-        refusal, with one exception compose does not refuse up front: an address
-        whose part before the ``@`` is outside ASCII is recorded and queued, and
-        its delivery fails. The audit rows commit or roll back with the caller's
-        transaction, and ``reason`` is recorded in them alone, never on the
-        message. Each call records one message and hands it to delivery once,
+        refuses as its docstring says (an address the transport cannot carry
+        among it). The render comes before every one of compose's refusals, so
+        only a render refusal leaves the render's audit row. No message row is
+        written before a refusal. The audit rows commit or roll back with the
+        caller's transaction, and ``reason`` is recorded in them alone, never on
+        the message. Each call records one message and hands it to delivery once,
         when the outermost transaction commits; it is returned unbound.
 
-        What a send stores, on the system channel, for whoever reads that channel
-        (administrators, under messaging's seal): a new thread titled with the
-        rendered subject, kept in the thread's history; the message, whose preview
-        is the first 280 characters of the text; its title, text and HTML parts,
-        which point to content-addressed text fragments that carry a search vector
-        and that nothing deletes, so they outlive the message; one ``to``
-        recipient on the address's handle. A handle it creates, the recipient's
-        or the system sender's, has no creator, and its history is a changeset of
-        its own under messaging's non-user attribution (``messaging/system:outgoing``)
-        that names no user. A value that is a credential, such as a
-        sign-in link, is readable by the system channel's readers until it
+        What the caller's values become, on the system channel: a new thread
+        titled with the rendered subject, kept in the thread's history; the
+        message, whose preview is the first 280 characters of the text; its
+        title, text and HTML parts, which point to content-addressed text
+        fragments that carry a search vector and that nothing deletes, so they
+        outlive the message. Who reads system mail, and how its handles are
+        recorded, is messaging's (its README, "System mail"): a value that is a
+        credential, such as a sign-in link, is readable by those readers until it
         expires, and deleting the message does not remove its fragments.
         """
 
@@ -737,12 +734,12 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         permission audit row; then ``compose_as_system``, under the reason
         ``messaging_templates.message_template.send_test``, with the rendered
         subject after :data:`TEST_SUBJECT_PREFIX`, which refuses as its docstring
-        says. No message row is written before a refusal, with the exception
-        :meth:`send_as_system` names. It stores what :meth:`send_as_system`
-        stores, with ``actor`` as the message's ``created_by``. Administrators
-        alone read the system channel, and they read samples and account
-        addresses already, so a test send discloses nothing new; ``actor``'s
-        existing handle for the address receives it, as compose finds one.
+        says. No message row is written before a refusal. It stores what
+        :meth:`send_as_system` stores, with ``actor`` as the message's
+        ``created_by``, for the system channel's readers (messaging's README,
+        "System mail"); through every verb those are administrators, who read
+        samples and account addresses already. ``actor``'s existing handle for
+        the address receives it, as compose finds one.
         """
 
         with actor_context(actor):

@@ -25,13 +25,12 @@ live in code docstrings.
     README's recipe). A blank `reason` is a `ValueError`; then
     `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;
     a row that is not what renders, `not_effective`), the render's codes, and what
-    `compose_as_system` refuses, as its docstring says; no message row is written
-    before a refusal, except for an address the transport cannot carry, which is
-    recorded and fails at delivery. Entering the system context writes its
-    permission audit row at once, even when the render then refuses. What a send
-    stores (the thread's title, the preview, the parts and their
-    content-addressed fragments, which outlive the message) is read by whoever
-    reads the system channel.
+    `compose_as_system` refuses, as its docstring says, an address the transport
+    cannot carry among it; no message row is written before a refusal. Entering
+    the system context writes its permission audit row at once, even when the
+    render then refuses. What a send stores (the thread's title, the preview, the
+    parts and their content-addressed fragments, which outlive the message) is
+    read by the system channel's readers, whom messaging's README names.
   - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
     kit=None)` sends a row with its `sample` to `actor`'s own account address on
     the system channel, the subject after `[Test] ` (`TEST_SUBJECT_PREFIX`). It
@@ -43,8 +42,8 @@ live in code docstrings.
     the message (a signed-out caller gets the session's error, a caller who may
     not preview the row `PERMISSION_DENIED`, the rest in band with its code), and
     `MessageTemplateType.can_send_test`, what it asks first, riding the list's
-    statement. A test's thread and message are the system channel's, which only
-    administrators read. **Upgrade:** regenerate the console schema and its
+    statement. A test's thread and message are the system channel's, read as
+    messaging's README says. **Upgrade:** regenerate the console schema and its
     codegen.
   - **Shipped rows.** The `signature` part ships in Spanish too
     (`part.signature.es`: "El equipo de {{ brand.name }}"), so every shipped part
