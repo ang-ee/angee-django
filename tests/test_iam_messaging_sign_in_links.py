@@ -22,7 +22,8 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.core.mail.backends.base import BaseEmailBackend
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
+from django.db.models.signals import pre_save
 from django.http import HttpResponse
 from django.test import RequestFactory
 from django.test.utils import override_settings
@@ -918,6 +919,30 @@ def test_deleting_the_mail_leaves_the_link_working_and_only_a_newer_link_retires
     assert _mails(target) == []
     assert _redeem(first) is None
     assert _redeem(second) == target
+
+
+def test_a_link_whose_insert_fails_after_its_mail_leaves_no_mail_and_nothing_queued(
+    deliverable, django_capture_on_commit_callbacks,
+):
+    """``issue`` is atomic itself: a caller outside the action's transaction never gets a mail without its link."""
+
+    target = _person("guest-unsaved")
+
+    def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
+        raise IntegrityError("the link's insert failed")
+
+    pre_save.connect(refuse, sender=SignInLink, dispatch_uid="tests.iam_messaging.refuse_link")
+    try:
+        with (
+            django_capture_on_commit_callbacks(execute=True) as callbacks,
+            pytest.raises(IntegrityError, match="insert failed"),
+        ):
+            SignInLink.objects.issue(target, actor=None)
+    finally:
+        pre_save.disconnect(sender=SignInLink, dispatch_uid="tests.iam_messaging.refuse_link")
+    assert callbacks == [] and _mails(target) == []
+    with system_context(reason=READ):
+        assert not SignInLink._base_manager.filter(user=target).exists()
 
 
 # ---------- what is refused, before anything is written ----------

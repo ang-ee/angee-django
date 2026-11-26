@@ -147,7 +147,9 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         person's first name, and records it on messaging's system channel,
         queued for delivery when the outermost transaction commits. Only then is
         the row saved, its ``sent_at`` stamped: recorded and queued, which makes
-        it the account's current link at once. The token is ``<user public
+        it the account's current link at once. The send and the save are one
+        atomic block of their own, so the mail and its link commit together or
+        not at all, whether or not the caller holds a transaction. The token is ``<user public
         id>.<secret>``; the row keeps the secret's keyed digest and the account
         digest (:meth:`SignInLink.token_digest`, :meth:`SignInLink.account_digest`).
         The send runs as ``actor``, so the link and its mail record one causing
@@ -181,13 +183,14 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
             "expires_at": link.expires_at,
             "person": {"first_name": user.first_name},
         }
-        with actor_context(actor) if actor is not None else nullcontext():
-            templates.send_as_system(template, reason=reason, to=user.email, values=values)
-        link.sent_at = timezone.now()
-        with system_context(reason="iam_messaging.sign_in_link.issue"):
-            if actor is not None:
-                link.with_actor(actor)
-            link.save()
+        with transaction.atomic():
+            with actor_context(actor) if actor is not None else nullcontext():
+                templates.send_as_system(template, reason=reason, to=user.email, values=values)
+            link.sent_at = timezone.now()
+            with system_context(reason="iam_messaging.sign_in_link.issue"):
+                if actor is not None:
+                    link.with_actor(actor)
+                link.save()
         logger.info("Sent a sign-in link to user %s.", user.pk)
         return link
 
