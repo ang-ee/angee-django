@@ -6,12 +6,14 @@ from typing import Any
 import pytest
 import strawberry
 from django.core.cache import cache
-from rebac import SubjectRef, actor_context, anonymous_actor
+from rebac import MissingActorError, SubjectRef, actor_context, anonymous_actor
 
 from angee.appearance_integrate import analyser
+from angee.appearance_integrate import schema as appearance_schema
 from angee.appearance_integrate.schema import AppearanceIntegrateQuery
 from angee.base.cache import increment_window
 from angee.graphql.testing.documents import execute_schema
+from tests.conftest import addon_schema
 
 _FACTS: dict[str, object] = {
     "final_url": "https://example.com", "title": "Example", "site_name": "Example",
@@ -73,16 +75,18 @@ def test_analysis_cache_failure_keeps_graphql_error_contract(
 def test_analysis_requires_actor_before_outbound_work(analysis: list[str]) -> None:
     """The same admission rule protects direct service and GraphQL callers."""
 
-    with pytest.raises(analyser.AppearanceAnalysisError) as refused:
+    with pytest.raises(MissingActorError):
         analyser.analyse_for_actor("https://example.com")
-    assert refused.value.code == "UNAUTHENTICATED"
     assert analysis == []
 
 
 def test_anonymous_caller_is_refused_before_the_rate_window_and_outbound_work(
     analysis: list[str], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unauthenticated caller holds REBAC's shared anonymous actor, which is refused like no actor."""
+    """An unauthenticated caller holds REBAC's shared anonymous actor, which is refused like no actor.
+
+    The served console schema answers the refusal as every missing actor is answered.
+    """
 
     windows: list[str] = []
 
@@ -93,13 +97,17 @@ def test_anonymous_caller_is_refused_before_the_rate_window_and_outbound_work(
     monkeypatch.setattr(analyser, "increment_window", spend)
     schema = strawberry.Schema(query=AppearanceIntegrateQuery)
     document = '{ analyseAppearance(url: "https://example.com") { title } }'
-    with actor_context(anonymous_actor()), pytest.raises(analyser.AppearanceAnalysisError) as refused:
+    with actor_context(anonymous_actor()), pytest.raises(MissingActorError):
         analyser.analyse_for_actor("https://example.com")
-    served = execute_schema(schema, document)
+    served = execute_schema(
+        addon_schema(appearance_schema.schemas, "console"),
+        '{ analyse_appearance(url: "https://example.com") { title } }',
+    )
 
-    assert refused.value.code == "UNAUTHENTICATED"
     assert served.errors is not None
-    assert served.errors[0].extensions == {"code": "UNAUTHENTICATED"}
+    assert [(error.message, error.extensions) for error in served.errors] == [
+        ("Authentication required.", {"code": "UNAUTHENTICATED"}),
+    ]
     assert (windows, analysis) == ([], [])
 
     actor = SubjectRef.of("test/actor", "one")

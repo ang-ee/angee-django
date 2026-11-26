@@ -58,7 +58,10 @@ live in code docstrings.
   signed-in contract states. It refused only a request with no actor at all, so
   the anonymous actor REBAC gives an unauthenticated request was admitted: it
   could make the server fetch outside URLs, and every anonymous caller spent
-  one shared rate window. It now spends neither the rate window nor a request.
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
