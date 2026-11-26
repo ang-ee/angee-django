@@ -71,6 +71,19 @@ const preview: RuntimeViewAs = {
   viewablePeople: [], enter: () => undefined, exit: () => undefined,
 };
 
+test("a bound field marks the stored record's unregistered implementation key; the same name under a scope does not", async () => {
+  const backend = { name: "backend", kind: "enum" as const, values: [{ value: "LOCAL", description: "Local" }], readable: true,
+    filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false };
+  const resourceMetadata = { ...resource, fields: [...(resource.fields ?? []), backend], implFields: ["backend"] };
+  for (const [scope, marked] of [["", true], ["config", false]] as const) {
+    cleanup();
+    await fixture({ resourceMetadata, record: { backend: null, config: { backend: null } }, mountedFields: [],
+      boundFields: [{ field: { name: "backend", label: "Backend", widget: "select", options: [{ value: "LOCAL", label: "Local" }] }, scope }] });
+    expect(await screen.findByText("Backend")).toBeTruthy();
+    expect(Boolean(screen.queryByLabelText("Not registered: Backend"))).toBe(marked);
+  }
+});
+
 test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {
   const submit = vi.fn(async () => ({ status: "ok" as const, data: { id: "created" } }));
   const f = await fixture({ preview, publicView: true, id: null, submit });

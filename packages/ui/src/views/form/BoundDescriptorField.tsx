@@ -98,7 +98,7 @@ export function BoundDescriptorField({
   const fieldReadOnly = readOnly || surface.fieldReadOnly({ ...resolved, name });
 
   return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
-    field={isUnregisteredImplementationField(modelMetadata, surface.displayRecord, name, bound.value) ? resolved.name : null}
+    field={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value) ? resolved.name : null}
     readOnly={fieldReadOnly}
   ><LabeledDescriptorField
     field={resolved}

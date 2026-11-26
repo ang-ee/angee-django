@@ -1,5 +1,6 @@
 import type { ModelMetadata, Row } from "@angee/metadata";
 
+import { fieldIsRedacted } from "../form/form-view-model";
 import { optionToken } from "../../widgets/types";
 
 /** A row's implementation tokens (its `ImplClassField` values), which select `impl` children and variants. */
@@ -30,7 +31,8 @@ export function isUnregisteredImplementation(
  * stored row reads null there for an implementation key the registry no longer names
  * ({@link isUnregisteredImplementation}), and the form's `value` for it is still empty. A create
  * form has no stored row, so it never marks one; picking a registered implementation clears the mark
- * until the draft is discarded. A nested path is never one of `implFields`, so it is never marked.
+ * until the draft is discarded. A nested path is never one of `implFields`, so it is never marked,
+ * and a column the record redacts reads null for that reason alone, so it is not marked either.
  */
 export function isUnregisteredImplementationField(
   model: ModelMetadata | null | undefined,
@@ -38,5 +40,6 @@ export function isUnregisteredImplementationField(
   path: string,
   value: unknown,
 ): boolean {
-  return stored != null && (value == null || value === "") && isUnregisteredImplementation(model, path, stored[path]);
+  return stored != null && (value == null || value === "") && !fieldIsRedacted(stored, path)
+    && isUnregisteredImplementation(model, path, stored[path]);
 }

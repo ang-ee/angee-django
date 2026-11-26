@@ -196,6 +196,8 @@ export interface UseFormViewSaveProps {
 export interface FormViewSaveSurface {
   form: FormViewForm;
   history: FormHistory;
+  /** The metadata of the form's own model, whose fields and row the form saves. */
+  modelMetadata: ModelMetadata | null;
   /**
    * The form's draft scope (`useDraftScope`): the new record it creates, or the record it edits,
    * under the scope of the surface hosting it. The form names it to the drafts below it.
@@ -1060,6 +1062,7 @@ export function useFormViewSave({
   return {
     form: { ...form, registerFieldValidation },
     history,
+    modelMetadata,
     draftScope,
     displayRecord,
     loading,
