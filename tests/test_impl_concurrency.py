@@ -65,10 +65,12 @@ def test_a_stale_rename_never_writes_a_retired_key_back_over_a_key_committed_sin
         assert Plain.objects.filter(pk=row.pk).values_list("adapter", "label").get() == ("refined", "renamed by stale")
 
 
-def _retired_bridge(slug: str) -> Any:
+def _retired_bridge(slug: str, config: dict[str, Any] | None = None) -> Any:
     bridge = make_integration(slug, model=VcsBridge, backend_class="stub")
     store_column(VcsBridge, bridge.pk, "backend_class", "retired")
     with system_context(reason="test.impl.concurrency.load"):
+        if config is not None:
+            VcsBridge._base_manager.filter(pk=bridge.pk).update(config=config)
         return VcsBridge._base_manager.get(pk=bridge.pk), VcsBridge._base_manager.get(pk=bridge.pk)
 
 
@@ -126,3 +128,27 @@ def test_a_repair_and_a_stale_rename_at_once_both_land() -> None:
     with system_context(reason="test.impl.concurrency.check"):
         stored = VcsBridge._base_manager.values_list("backend_class", "display_name").get(pk=repairer.pk)
     assert stored == ("stub", "Renamed while repaired")
+
+
+
+def test_a_stale_rename_racing_a_repair_that_reshaped_the_config_writes_its_loaded_config_back() -> None:
+    """Pinned limit: the stale save checks its config before the repair commits, then writes the whole row it loaded."""
+
+    repairer, stale = _retired_bridge("stale-config-race", config={"local_root": "/srv/team"})
+
+    def rename() -> None:
+        stale.display_name = "Renamed while repaired"
+        stale.save()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic(), system_context(reason="test.impl.concurrency.reshape"):
+            repairer.backend_class = "local"
+            repairer.save()
+            renamed = pool.submit(_in_thread(rename))
+            time.sleep(1)
+            assert not renamed.done()
+        renamed.result(timeout=30)
+
+    with system_context(reason="test.impl.concurrency.check"):
+        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config").get(pk=repairer.pk)
+    assert stored == ("local", "Renamed while repaired", {"local_root": "/srv/team"})

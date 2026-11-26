@@ -390,8 +390,8 @@ class ImplDefaultsMixin(models.Model):
         dropped = sorted(set(stored or {}) - set(carried))
         if dropped:
             raise ValidationError({config_field.name: (
-                f"Choosing this {field.verbose_name} drops {', '.join(dropped)} from the configuration: "
-                "send the configuration to save."
+                f"The chosen {field.verbose_name} does not use {' and '.join(dropped)} in the configuration. "
+                f"Save the configuration with it to remove {'it' if len(dropped) == 1 else 'them'}."
             )})
         config_field.save_form_data(self, carried)
 

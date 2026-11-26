@@ -1769,7 +1769,8 @@ def test_a_create_only_selector_moves_off_a_key_not_registered_once_carrying_its
         with pytest.raises(ValidationError) as dropped, transaction.atomic():
             row.save()
         assert dropped.value.message_dict == {"config": [
-            "Choosing this backend class drops retired_option from the configuration: send the configuration to save.",
+            "The chosen backend class does not use retired_option in the configuration. "
+            "Save the configuration with it to remove it.",
         ]}
         row = VcsBridge._base_manager.get(pk=dropping.pk)
         row.backend_class = "local"
@@ -1839,6 +1840,41 @@ def test_each_create_only_selector_is_repaired_once_then_create_only(
         with pytest.raises(ValidationError), transaction.atomic():
             again.save()
     assert model._base_manager.values_list(field.attname, flat=True).get(pk=row.pk) == first
+
+
+@pytest.mark.django_db
+def test_a_repair_saved_with_update_fields_naming_only_the_selector_leaves_the_stored_config_unreshaped() -> None:
+    """Pinned limit: the key moves; the config is not written, so it is not reshaped, checked or refused for a drop."""
+
+    bridge = _retired_bridge("repair-update-fields")
+    stored = {"local_root": "/srv/team", "retired_option": True}
+    with system_context(reason="test.impl.repair.update_fields"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config=stored)
+        row = VcsBridge._base_manager.get(pk=bridge.pk)
+        row.backend_class = "local"
+        row.save(update_fields=["backend_class"])
+        assert VcsBridge._base_manager.values_list("backend_class", "config").get(pk=bridge.pk) == ("local", stored)
+
+
+@pytest.mark.django_db
+def test_a_stale_rename_after_a_repair_that_reshaped_the_config_is_refused_under_the_config() -> None:
+    """Pinned limit: a row loaded before a repair holds its loaded key, so its config must still be the stored one."""
+
+    bridge = _retired_bridge("stale-after-repair")
+    with system_context(reason="test.impl.repair.stale"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        repairer = VcsBridge._base_manager.get(pk=bridge.pk)
+        stale = VcsBridge._base_manager.get(pk=bridge.pk)
+        repairer.backend_class = "local"
+        repairer.save()
+        stale.display_name = "Renamed after the repair"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stale.save()
+        assert refused.value.message_dict == {
+            "config": ["The configuration cannot change while the backend class is not registered."],
+        }
+        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config__local_org")
+        assert stored.get(pk=bridge.pk) == ("local", bridge.display_name, "local")
 
 
 @pytest.mark.django_db

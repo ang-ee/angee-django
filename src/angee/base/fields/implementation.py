@@ -53,7 +53,12 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     key (``ImplDefaultsMixin.save``): the config its implementations own is
     carried over (``ImplBase.carried_config``), the new key is written only
     while the row still holds the old one, and afterwards the selector is
-    create-only again. ``check --database`` (``angee.E052``) names such rows.
+    create-only again. A repair that would drop a stored config key the new
+    implementation does not use is refused unless the config is sent with it.
+    A person meets that refusal as well as code does: a record form's edit
+    sends only the fields that changed, and a create-only preset seeds nothing
+    outside a create, so choosing the key alone sends the selector alone; its
+    words are a person's. ``check --database`` (``angee.E052``) names such rows.
 
     Reads forgive and writes do not: a lookup matches what a person or a URL
     may spell (``" local "``, the member's name ``"LOCAL"``), while a write
