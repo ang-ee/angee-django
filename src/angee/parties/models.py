@@ -1104,6 +1104,18 @@ class Handle(
             labels.append(label)
         return ".".join(labels)
 
+    @staticmethod
+    def email_value(address: str) -> str:
+        """Return the form an email address is stored in as a handle's ``value``: trimmed and lower-cased.
+
+        Every writer that lands an email address on a handle passes it in this
+        form, so one address lands on one handle whoever writes it. The handle
+        owner stores what it is given; :meth:`normalize_value` keeps the
+        comparison key.
+        """
+
+        return (address or "").strip().lower()
+
     # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
     """The longest an email address may be (RFC 3696 section 3): the bound Django's ``EmailValidator`` applies."""

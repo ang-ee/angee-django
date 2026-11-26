@@ -76,6 +76,18 @@ class OutboundEmailChannelMissing(DomainError, ValidationError):
         )
 
 
+class SystemChannelMissing(DomainError, ValidationError):
+    """The system channel's install row is absent: resources never loaded, or the row deleted until the next load."""
+
+    code = "SYSTEM_CHANNEL_MISSING"
+
+    def __init__(self) -> None:
+        ValidationError.__init__(self, {"channel": ValidationError(
+            "The system channel is not installed. Run `manage.py resources load` (provision runs it).",
+            code=self.code,
+        )})
+
+
 class DeliveryUncertain(IntegrationError):
     """A provider may have accepted an effect; retry needs reconciliation or acknowledgement.
 
@@ -331,6 +343,13 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     """
 
     registry_setting = "ANGEE_CHANNEL_BACKEND_CLASSES"
+    offered: ClassVar[bool] = True
+    """Whether people choose a channel on this protocol to send from or to watch.
+
+    A channel whose backend is not offered (the system channel's) is never
+    selected for outbound email (``ChannelQuerySet.outbound_email``) and never
+    accepted as a workflow trigger's source.
+    """
     delivery_visibility_delay: ClassVar[timedelta] = timedelta()
     """Minimum age of a possibly accepted claim before reconciliation; feeds extend it."""
     source_kind: ClassVar[SourceKind | None] = None

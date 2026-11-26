@@ -1,7 +1,7 @@
 // Authorization schema for the messaging addon.
 // @rebac_package: messaging
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 27
+// @rebac_schema_revision: 30
 
 // Threads without a channel carry transferable ownership; dependent rows inherit
 // access from their thread, message or channel. Creation attribution grants no access.
@@ -13,13 +13,20 @@ definition messaging/channel {
     relation reader: auth/user | auth/group#member
     relation annotator: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
+    // The system channel (backend `system`) records the framework's own mail, live
+    // sign-in links among it: administrators alone read, send on, write, annotate or
+    // delete it, whatever was granted, bound or transferred. Arrow-only through
+    // `system_kind`, as messaging/message#conceal: never check `system_seal` directly.
+    relation system_kind: messaging/channel // rebac:const={"target_id":"system","filters":{"backend_class":"system"}}
+    permission system_seal = authenticated + anonymous
+    permission sealed = system_kind->system_seal
 
     permission create = admin->member
-    permission read   = integration->read + reader + replier + admin->member
-    permission reply  = replier + integration->write + admin->member
-    permission write  = integration->write + admin->member
-    permission annotate = annotator + write
-    permission delete = integration->write + admin->member
+    permission read   = ((integration->read + reader + replier) - sealed) + admin->member
+    permission reply  = ((replier + integration->write) - sealed) + admin->member
+    permission write  = (integration->write - sealed) + admin->member
+    permission annotate = ((annotator + integration->write) - sealed) + admin->member
+    permission delete = (integration->write - sealed) + admin->member
     permission write__owner = integration->transfer
 }
 
@@ -78,7 +85,9 @@ definition messaging/message {
     permission withheld = trashed->conceal
     relation identity_role: provenance/role // rebac:const=messaging_identity_source
     permission identity_source = identity_role->effective_member
-    permission create = authenticated
+    // Every message is written as system work (compose, chatter posts, ingest);
+    // creating one directly is for the channel's managers and admins.
+    permission create = channel->write + admin->member
     // Ordinary message grants; fragments union theirs here. The thread arm follows
     // the read purpose: generic reads take the thread's `read`, inbox reads its
     // `read_inbox`. Both withhold a trashed message alike.
@@ -156,13 +165,15 @@ definition messaging/thread_notification {
     permission delete = user + admin->member
 }
 
+// A message's parts decide what is delivered: they are created and changed
+// through the message.
 definition messaging/part {
     relation message: messaging/message // rebac:field=message
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member
     relation admin: angee/role // rebac:const=admin
 
-    permission create = authenticated
+    permission create = message->write + admin->member
     // A part listed within inbox messages is read through the message action the
     // inbox reads, so the listing authorizes each message once. Direct part grants
     // stay on `read`: they never admit a part of an unreadable message here.

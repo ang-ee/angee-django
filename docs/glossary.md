@@ -44,7 +44,8 @@ built on top of the framework and its reusable addons.
 selection, emits concrete models, and publishes and verifies artifacts supplied
 by capability integrations. It also owns explicit database preparation and
 readiness for the verified composition. Permission, resource and web semantics
-stay with those integrations. See [The Composer](composer.md).
+stay with those integrations. Not **Compose (a message)**. See
+[The Composer](composer.md).
 
 **Project settings** — the authored Python module selected by Django's
 `DJANGO_SETTINGS_MODULE`, with optional terse `settings.yaml` loaded through
@@ -378,6 +379,13 @@ a sender is read; the message's source keeps its `From` header. See
 addresses, the message's `Recipient` rows, one per handle and envelope role
 (`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**Compose (a message)** — write one outgoing message through
+`MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
+hand-off, decided for the caller by read on the message it answers and `reply` on
+its channel, or by `reply` on the channel and post on the record it is sent on.
+Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
 **Workflow version** — an immutable published definition, including the

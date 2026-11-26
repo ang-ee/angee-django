@@ -48,21 +48,51 @@ with envelope ingestion; absent the exact precondition, changing an explicit
 source thread remains refused. Historical ingestion suppresses live message
 events while retaining native content history and counter updates.
 
-`Message.objects.compose_reply(parent, *, body, sender, actor, ...)` writes a reply
-on its parent's thread and channel under the channel's `reply` grant; the reply's
-`parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
-complete envelope: `to` recipients naming the parent's `Reply-To` addresses
-when it carries any (`Message.reply_addresses`, the one reader of that header),
-else the handle it was sent from (RFC 5322 §3.6.2); the
-subject `Re: <thread title>` (the title is the normalized subject, so prefixes
-never stack); and a Message-ID minted as Django mints one, stored bare as its
-external id like a received email's. A parent with neither is refused. The
-email transport renders that id as `Message-ID` and the parent's as `In-Reply-To`
-and `References`, so an answer threads back onto the conversation through
-`In-Reply-To`, through `References` when a provider rewrote the reply's
-Message-ID, or through its subject; a retained header part never renders a second
-copy of these. A reply of any other kind keeps a client token for its transport's
-provider id and writes no envelope.
+An outgoing message is written by
+[`MessageManager.compose`](managers.py) alone: its row, parts, recipients,
+sender, thread and delivery hand-off. Callers pass intent and never write its
+rows; hand-written outgoing rows are superseded. It runs as its actor and
+decides before it claims or writes: who may answer a message is
+`Message.require_reply`, whom and from where it is answered is
+`Message.reply_envelope` (its refusal is `Message.reply_error`, which intake's
+email route asks too), and posting on a record is the chatter's own gate,
+`ThreadedModelMixin.require_post`. An email is sent from its channel's default
+sender, and its text part is only its own text, never made from its HTML.
+Each typed recipient is one entry, as
+[`MessageManager.clean_recipient`](managers.py) reads it and as `compose` lands
+it: a bare address or one explicit `Name <address>`. An entry a mail library
+would read as another address or as several, or whose name or address a mail
+header would not carry as read (a NUL byte, a control character, an
+encoded-word opener: [`header_text`](email.py), the rule every subject and
+display name the email backend writes takes), is refused (`invalid`) under its
+role, never re-read. `compose` lands every address in lower case, as inbound
+mail does, and finds its handle by that exact value: a contact another writer
+stored with a capital is a handle row of its own, grouped with the lower-case
+one by the handle owner's comparison key wherever a person is looked up; ending
+that split is the handle owner's. A name inbound mail stored with a literal encoded word is
+written on the wire as `header_text` carries it, so an answer to its sender
+still reaches that sender. An address with an internationalised domain is
+stored as typed and written on the wire with its domain in ASCII (IDNA) form;
+one whose local part is outside ASCII is admitted but cannot be delivered, as
+no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
+naming the address. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
+addresses across `to`, `cc`
+and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
+contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
+under the argument that crosses the bound, before anything is read; an answer
+taking more addresses than that from its parent's `Reply-To` is refused under
+`reply_to`, and `Message.reply_error` says so. A
+`scheduled_at` without an offset is refused (`naive_datetime`), never read in
+the server's zone. The docstrings own the exact refusals and hold rules.
+
+An email answer carries a Message-ID minted as Django mints one and renders
+the parent's as `In-Reply-To` and `References`, so an answer arriving on the
+channel it was sent from threads back onto its conversation. A message a person
+starts opens a thread of its own; inbound mail joins it only through those
+threading headers, never by its subject, which groups inbound mail with inbound
+mail alone ([`ThreadManager.resolve`](managers.py)). An answer to a mail sent
+from a record's chatter lands on that chatter as an email, not a comment, so it
+is answered by email in turn.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
@@ -157,7 +187,9 @@ a draft with no release instant requires operator approval indefinitely.
 `ActionSelectionInput(id, expected_revision)` selection and return ordered
 `ActionResult` outcomes. They authorize one bounded selection through channel
 `write`, check every revision, and use `many_actions` for per-row refusals. The
-channel's grantable `replier` relation grants `reply` together with comment read.
+channel's grantable `replier` relation grants `reply` (answering on the channel and
+composing a new message there) together with comment read; `Channel.reply_permission`
+is that permission's one name, which `Message.require_reply` and `compose` decide.
 All untrashed messages count in their thread, including drafts, queues and failures.
 Inserts use `F()` deltas; loss/restoration and settlement use a thread-scoped
 aggregate with the same model predicate. Queueing never changes the count.

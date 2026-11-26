@@ -3,6 +3,7 @@
 from typing import Any
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, to_object_ref
 
 from angee.messaging.events import message_ingested
@@ -33,15 +34,26 @@ class MessageIngested(TriggerSource):
 
     @classmethod
     def check_access(cls, trigger: Any, actor: Any, record: Any = None) -> None:
-        """Check the channel when enabling and recheck current scope on admission."""
+        """Check the channel when enabling and recheck current scope on admission.
+
+        A channel the actor cannot read is refused as such; a readable one whose
+        backend is not offered (``ChannelBackend.offered``, the system channel's)
+        is refused under ``channel``, before any grant.
+        """
         channel_id = trigger.require_channel_id()
         if record is not None:
             if record.channel_id != channel_id:
                 raise PermissionDenied("The message no longer belongs to the trigger's channel.")
-        visible = apps.get_model("messaging", "Channel").objects.with_actor(actor).with_action("read")
-        if not visible.filter(pk=channel_id).exists():
+        channel_model = apps.get_model("messaging", "Channel")
+        visible = channel_model.objects.with_actor(actor).with_action("read")
+        backend_class = visible.filter(pk=channel_id).values_list("backend_class", flat=True).first()
+        if backend_class is None:
             subject = "The enabling user" if record is None else "The workflow principal"
             raise PermissionDenied(f"{subject} cannot read the channel.")
+        if not channel_model.backend_class.field.resolve_class(backend_class).offered:
+            raise ValidationError({"channel": ValidationError(
+                "This channel is not offered as a trigger source.", code="not_offered",
+            )})
 
     @classmethod
     def connect(cls) -> None:

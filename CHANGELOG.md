@@ -10,6 +10,122 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
+  writes an outgoing message.**
+  - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
+    a new email on a channel (`channel=`), or a new email on a record's chatter
+    (`channel=` with `record=`): its row, parts, recipients, sender, thread,
+    idempotency and delivery hand-off, decided under the actor by `reply` on the
+    channel (and posting on the record) before anything is claimed or written.
+    A new message takes `to`, `cc` and `bcc` entries, each one recipient as
+    `Message.objects.clean_recipient(entry, *, key="to")` reads it: a bare
+    address read as itself or one explicit `Name <address>`, returned as
+    `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
+    entry a mail library would read as another address or as several (a
+    comment, a group, a list, trailing text), or whose name or address a mail
+    header would not carry as read (a NUL byte, which failed the write on
+    PostgreSQL after it began, a control character, or an encoded-word opener,
+    which a mail library decodes into another address or name), is refused,
+    never re-read. **Known limit:** `compose` lands every address in lower
+    case, as inbound mail does, and finds its handle by that exact value, so a
+    contact another writer stored with a capital is a handle row of its own,
+    grouped with the lower-case one by the handle owner's comparison key
+    wherever a person is looked up; ending that split is the handle owner's. A caller
+    asks `clean_recipient` before expensive work. A message takes at most
+    `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
+    (default 50, the strictest common provider's per-message limit; each new
+    address costs a call about 34 statements) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
+    statements each); more is refused (`too_many`) under the argument that
+    crosses the bound, before anything is read. An answer is bound the same way
+    by the addresses its parent's `Reply-To` names: over the bound it is refused
+    under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
+    offset is refused (`naive_datetime`, as scheduling, calendar and workflows
+    refuse one) instead of being read in the server's zone. A new message also
+    takes a one-line `subject`,
+    `text`, `html` and readable `attachments`, and starts a thread of its own
+    through the new `ThreadManager.open_thread`, which `resolve` now shares.
+    `Message.require_reply(actor)` decides who may answer a message and returns
+    its channel; `Message.reply_envelope(*, actor=None, channel=None)` returns
+    whom an answer goes to (a `ReplyEnvelope`) or refuses, and
+    `Message.reply_error` is that refusal, without side effects.
+    `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
+    which `compose` shares. `Channel.reply_permission` (`"reply"`) is the one
+    name of the channel permission to send, which `require_reply` and `compose`
+    decide. `HandleManager.clean_identity` validates a handle
+    identity without writing, `HandleManager.upsert(fill_only=...)` names display
+    fields it only fills while blank (a fill locks and reads the row again, so
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
+    email address is stored in on a handle. `PartManager.attach_files` attaches
+    several files under one message lock. `HandleManager.find_identities` (and so
+    `find_identity`, `upsert` and every compose lookup) names the platform in each
+    arm of its one statement, so the `(platform, value)` key's index serves it; it
+    was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Changed.** An inbound email that its own threading headers place on a
+    record's chatter (the customer's answer to a mail sent from the record) is
+    ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
+    answers it by email; before, the answer was refused for want of a sender.
+    Like every email it is a retained record: a moderator no longer trashes it.
+  - **Removed.** `Message.objects.compose_reply`. Use
+    `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
+    takes no argument, and an email reply takes no `sender`.
+  - **Superseded.** An outgoing message written by hand (its row, recipients and
+    parts, then `deliver()`) is superseded by `compose`, which is now its one
+    writer.
+  - **Changed.** `compose` runs as its actor: an elevated call is refused
+    (`RuntimeError`), as a workflow step body refuses one. An email reply is
+    sent from its channel's default sender, so a held or queued email reply on a
+    channel whose delivery is not configured, that is not connected, or whose
+    default sender is invalid is refused; a keyed retry still returns its
+    original. A reply to a message whose `Reply-To` names no address the handle
+    owner accepts is refused (`reply_to`) rather than sent to the sender, which
+    may be a relay. Idempotency keys claimed through `compose_reply` (scope
+    `messaging.reply:`) do not replay through `compose` (scope
+    `messaging.compose:`): a posts workflow reply retried across the upgrade
+    does not replay, and if its original was trashed or failed, which the
+    comment's answered check does not count, a second reply is written. A reply's
+    preview is 280 characters, like every message's, and chatter posts and edits
+    preview through the same rule as ingest. An HTML-only email is sent without a
+    text part; it was made by stripping the HTML's tags. An outgoing subject, typed
+    or derived from a conversation's title, has each control character and line
+    break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
+    so no mail library, client or provider decodes anything out of it: the subject
+    stored, sent and read back are one string (`angee.messaging.email.header_text`,
+    the one rule for text a mail header carries, which every display name the
+    email backend writes also takes, so a sender name inbound mail stored with a
+    literal encoded word no longer makes an answer to that sender fail); a typed
+    line break is still refused. An address with an internationalised domain,
+    typed or taken from inbound mail, is now delivered: the backend writes its
+    domain in ASCII (IDNA) form and the stored address keeps what was typed.
+    **Known limit:** an address whose local part is outside ASCII is still
+    admitted and written, and its delivery fails, as no transport here speaks
+    SMTPUTF8; the stored reason names the address and says so, where it said
+    "The email could not be rendered.". A rendering failure the backend states
+    itself (an attachment that is unavailable) keeps its own reason too. A channel's own sender handle is landed with no
+    creator, under a non-user attribution (`messaging/system:outgoing`): the
+    first person to compose on a channel no longer holds read, write and delete
+    on it, so cannot rename, re-address or delete the desk's sender. A recipient
+    a person types keeps that person as its creator, as the handle owner rules.
+    A sender handle created before the upgrade keeps the creator it was given; a
+    deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
+    is its message's, set by the model on insert (`Recipient.save`), which
+    refuses a different one. `Message.reply_addresses` keeps only what
+    `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
+    channel's default sender lands on the handle its lower-cased address names.
+    A name typed with a recipient address fills only a handle that has none.
+    Inbound mail joins a thread by its subject only when the thread was grouped
+    by subject: a conversation a person composed is joined through its threading
+    headers alone. Intake asks a requester by email when their request has only
+    a `Reply-To`. A reviewer who may not reply on the request's channel is
+    refused with that permission refusal, as before, when the email is the only
+    way to ask; a requester who may post on the task is now asked on chatter
+    alone instead of the whole question being refused. Creating a
+    message part (`messaging/part#create`) requires `write` on its message or
+    the administrators (schema revision 28), and creating a message
+    (`messaging/message#create`) requires `write` on its channel or the
+    administrators (schema revision 29); every framework and consumer writer of
+    both runs as system work.
+  - **Upgrade:** `rebac sync` (provision runs it). No migration.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the

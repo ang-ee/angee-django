@@ -34,31 +34,80 @@ def test_handle_upsert_bounds_source_display_text(db: None, refresh: bool) -> No
         assert getattr(handle, name) == value[: Handle._meta.get_field(name).max_length]
 
 
+@pytest.mark.parametrize("verb", ["upsert", "clean_identity"])
 @pytest.mark.parametrize("field", ["value", "external_id"])
-def test_handle_upsert_refuses_oversized_identifiers(db: None, field: str) -> None:
-    """Unlandable identities raise field validation instead of changing their key."""
+def test_handle_upsert_refuses_oversized_identifiers(db: None, field: str, verb: str) -> None:
+    """Unlandable identities raise field validation instead of changing their key, and the check writes nothing."""
 
     del db
     fields = {"value": "bounded@example.test", "external_id": "stable-id"}
     fields[field] = "x" * (Handle._meta.get_field(field).max_length + 1)
     with system_context(reason="test invalid handle identifiers"):
         with pytest.raises(ValidationError) as refused:
-            Handle.objects.upsert(platform="email", **fields)
+            getattr(Handle.objects, verb)(platform="email", **fields)
     assert list(refused.value.error_dict) == [field]
     assert refused.value.error_dict[field][0].code == "max_length"
     assert not Handle._base_manager.exists()
 
 
-def test_handle_upsert_refuses_normalization_that_exceeds_its_field(db: None) -> None:
+@pytest.mark.parametrize("verb", ["upsert", "clean_identity"])
+def test_handle_upsert_refuses_normalization_that_exceeds_its_field(db: None, verb: str) -> None:
     """Unicode case normalization may expand an otherwise column-sized identity."""
 
     del db
     value = "İ" * Handle._meta.get_field("value").max_length
     with system_context(reason="test invalid normalized handle"):
         with pytest.raises(ValidationError) as refused:
-            Handle.objects.upsert(platform="other", value=value)
+            getattr(Handle.objects, verb)(platform="other", value=value)
     assert list(refused.value.error_dict) == ["normalized_value"]
     assert not Handle._base_manager.exists()
+
+
+def test_clean_identity_returns_the_comparison_key_upsert_stores(db: None) -> None:
+    """The check and the write agree on the key, and the check alone writes no row."""
+
+    del db
+    key = Handle.objects.clean_identity(platform="email", value="Person@Example.test")
+    assert not Handle._base_manager.exists()
+    with system_context(reason="test handle comparison key"):
+        handle = Handle.objects.upsert(platform="email", value="Person@Example.test")
+    assert handle.normalized_value == key
+
+
+def test_a_fill_only_name_fills_a_blank_handle_and_never_renames_a_named_one(db: None) -> None:
+    """A typed name lands on a new or nameless handle; a handle that has a name keeps it."""
+
+    del db
+    with system_context(reason="test fill-only handle names"):
+        Handle.objects.upsert(platform="email", value="named@example.test", display_name="Kept")
+        Handle.objects.upsert(platform="email", value="blank@example.test")
+        for value in ("named@example.test", "blank@example.test", "new@example.test"):
+            Handle.objects.upsert(platform="email", value=value, display_name="Typed", fill_only=("display_name",))
+        filled = dict(Handle._base_manager.values_list("value", "display_name"))
+        # Without fill_only, a source name still refreshes a named handle.
+        Handle.objects.upsert(platform="email", value="named@example.test", display_name="Source")
+    assert filled == {"named@example.test": "Kept", "blank@example.test": "Typed", "new@example.test": "Typed"}
+    assert Handle._base_manager.get(value="named@example.test").display_name == "Source"
+
+
+def test_find_identities_reads_a_batch_in_one_statement_with_each_arm_naming_its_platform(db: None) -> None:
+    """A value one platform holds answers only for that platform, and every arm is served by the identity key.
+
+    The statement is the plan's evidence: an arm without its platform cannot use
+    ``(platform, value)``'s index, and PostgreSQL then scans the table on every upsert.
+    """
+
+    del db
+    with system_context(reason="test batched handle lookup"):
+        ada = Handle.objects.upsert(platform="telegram", value="ada")
+        Handle.objects.upsert(platform="slack", value="ada")
+        mail = Handle.objects.upsert(platform="email", value="ada@example.test")
+        wanted = [("telegram", "ada"), ("email", "ada@example.test"), ("email", "ada"), ("telegram", "bo")]
+        with CaptureQueriesContext(connection) as queries:
+            found = Handle.objects.find_identities(wanted)
+    assert found == {("telegram", "ada"): ada, ("email", "ada@example.test"): mail}
+    (statement,) = queries.captured_queries
+    assert statement["sql"].count('."platform" = ') == 2
 
 
 @pytest.fixture

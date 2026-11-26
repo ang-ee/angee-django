@@ -50,7 +50,9 @@ def test_group_membership_reaches_and_revokes_project_resource_cascade(db: None)
     with actor_context(owner):
         project = Project.objects.create(title="Composite access")
         thread = Thread.objects.create(channel=channel)
-        message = Message.objects.create(thread=thread)
+        # A message is written as system work; the actor's grants are what the test reads.
+        with system_context(reason="test composite message"):
+            message = Message.objects.create(thread=thread)
         ProjectBinding.objects.bind(project=project, target=folder)
         ProjectBinding.objects.bind(project=project, target=channel)
         group_members = SubjectRef.of("auth/group", str(group.pk), "member")
