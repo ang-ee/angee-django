@@ -288,10 +288,9 @@ export function messageTemplateSchemas({
       return operation(args, request);
     }) satisfies GraphQLWireOperation,
   ]));
-  const fixture = storySchema(answered, onRequest).public!;
   return {
-    public: fixture,
-    console: { ...fixture, metadata: { angee: { resources: [MESSAGE_TEMPLATE_RESOURCE, BRAND_KIT_RESOURCE] } } },
+    ...storySchema(answered, { onRequest }),
+    ...storySchema(answered, { schema: "console", resources: [MESSAGE_TEMPLATE_RESOURCE, BRAND_KIT_RESOURCE], onRequest }),
   };
 }
 
