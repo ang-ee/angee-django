@@ -1377,6 +1377,9 @@ importers:
       '@angee/provenance':
         specifier: workspace:*
         version: link:../../provenance/web
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@angee/timeline':
         specifier: workspace:*
         version: link:../../timeline/web
