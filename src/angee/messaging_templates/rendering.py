@@ -83,8 +83,9 @@ def validate_variables(variables: Any, *, max_paths: int = 50, lengths: bool = T
     declared), no path reads one value both as a list and as an object
     (``items.*`` beside ``items.pop``), and no path starts with a name in
     :data:`RESERVED_VARIABLE_ROOTS`. The first offending key is named. The check
-    takes time linear in the number and length of the keys, since a console insert
-    runs it before it checks who may insert.
+    takes time linear in the number and length of the keys: every save through
+    ``full_clean()`` runs it on what its author wrote, and every walk runs it on each
+    row it reaches, rows stored past ``clean()`` among them.
     """
 
     if not isinstance(variables, dict):
