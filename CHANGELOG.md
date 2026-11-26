@@ -30,7 +30,11 @@ live in code docstrings.
   `MessageTemplate.objects.clean_link(value, *, path="link") -> str` asks the same
   rule before a run: the link a mail prints, `""` for a blank value, or the
   render's refusal in the same words. The walk records the paths each form
-  prints through `url` (`TemplateWalk.link_paths`).
+  prints through `url` (`TemplateWalk.link_paths`). The rule admits the
+  deployment's own public origin, asked of base (`configured_public_origin`), with
+  its port and whatever its host (a single label such as `localhost` under
+  `DEBUG`, an address, an IPv6 address written in its brackets); other
+  single-label hosts and addresses stay refused, now loudly.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None, must_print=())` renders one effective template (the caller picks it for its

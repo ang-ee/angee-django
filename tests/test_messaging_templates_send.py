@@ -460,6 +460,46 @@ def test_the_public_link_check_answers_as_the_render_does(plain: Any, settings: 
     assert f'href="{escape(link)}"' in rendered.html and f"Open the decision ({link})" in rendered.plain_text
 
 
+@pytest.mark.parametrize(
+    ("origin", "debug", "value", "linked"),
+    [
+        pytest.param("https://localhost:6173", False, "https://localhost:6173/decisions/1", True, id="own-https-port"),
+        pytest.param("http://localhost:6173", True, DECISION, True, id="own-http-in-debug"),
+        pytest.param("http://LocalHost:6173/", True, DECISION, True, id="own-spelled-otherwise"),
+        pytest.param("http://127.0.0.1:8000", True, "http://127.0.0.1:8000/decisions/1", True, id="own-address"),
+        pytest.param("http://[::1]:8000", True, "http://[::1]:8000/decisions/1", True, id="own-ipv6-address"),
+        pytest.param("https://app.example.test", False, "https://app.example.test/d", True, id="two-labels"),
+        pytest.param("http://localhost:6173", False, DECISION, False, id="http-origin-outside-debug"),
+        pytest.param("http://localhost:6173", True, "http://localhost:6174/decisions/1", False, id="another-port"),
+        pytest.param("http://localhost:6173", True, "https://localhost:6173/decisions/1", False, id="another-scheme"),
+        pytest.param("http://localhost:6173", True, "http://intranet/decisions/1", False, id="a-foreign-host"),
+        pytest.param("http://127.0.0.1:8000", True, "http://10.0.0.1/decisions/1", False, id="a-foreign-address"),
+        pytest.param("", False, DECISION, False, id="no-origin"),
+    ],
+)
+def test_the_deployments_own_public_origin_is_linked_in_both_bodies_and_no_other_single_label_host(
+    system_channel: Any, settings: Any, origin: str, debug: bool, value: str, linked: bool,
+) -> None:
+    """The link rule asks base for the deployment's origin: whatever host that is, with its port, under the owner's
+    own DEBUG rule; the public check answers alike in every case."""
+
+    del system_channel
+    settings.ANGEE_PUBLIC_ORIGIN, settings.DEBUG = origin, debug
+    row = _decision(key="tests.decision_origin")
+    if not linked:
+        with pytest.raises(ValidationError) as checked:
+            MessageTemplate.objects.clean_link(value)
+        with _refused(ValidationError) as refusal:
+            _send(row, {"link": value}, must_print=["link"])
+        assert refusal.value.error_list[0].message == checked.value.error_list[0].message
+        assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"]
+        return
+    link = MessageTemplate.objects.clean_link(value)
+    subject, text, html = _stored(_send(row, {"link": value}, must_print=["link"]))
+    assert link.lower() == value.lower()
+    assert f'href="{escape(link)}"' in html and f"Open the decision ({link})" in text
+
+
 SECRET = "https://app.example.test/sign-in/SECRET-marker"
 
 

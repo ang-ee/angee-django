@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from operator import attrgetter
 from typing import Any, ClassVar, cast
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
 from django.template import (
@@ -49,6 +50,7 @@ from django.template.loaders.base import Loader
 from django.utils.safestring import SafeData, SafeString
 from markdown_it import MarkdownIt
 
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 from angee.brandkit.models import BrandKit, MailRole, MailScheme
 
 ALLOWED_TAGS = ("if", "for", "with", "comment", "block", "include", "extends", "templatetag")
@@ -75,7 +77,8 @@ with a host (:data:`LINK_HOST`), or a ``mailto:`` or ``tel:`` link."""
 
 LINK_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?", re.I)
 """The authority of an ``https`` or ``http`` link: a domain name of two labels or more, the last a name, and a port.
-No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty."""
+No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty. The
+deployment's own public origin is linkable besides, whatever its host (:func:`_own_origin_authority`)."""
 
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
@@ -332,8 +335,27 @@ def _link(value: Any) -> tuple[str, str | None]:
         if "@" in authority:
             return "", "it carries user info before its host"
         if not LINK_HOST.fullmatch(authority):
-            return "", f"the mail cannot link to {authority}"
+            own = _own_origin_authority(scheme, authority)
+            if own is None:
+                return "", f"the mail cannot link to {authority}"
+            link = f"{link.partition(':')[0]}://{own}{rest[2 + len(authority):]}"
     return link, None
+
+
+def _own_origin_authority(scheme: str, authority: str) -> str | None:
+    """The authority of this deployment's public origin, as its owner gives it
+    (:func:`~angee.base.origins.configured_public_origin`), when ``scheme://authority`` (as markdown-it writes a
+    link) is that origin; else ``None``. So a deployment whose origin is ``http://localhost:6173`` in ``DEBUG``, an
+    address or another single-label host links its own pages, an IPv6 address in its brackets, which markdown-it
+    would percent-encode, and no other host of that kind."""
+
+    try:
+        origin = configured_public_origin()
+    except PublicOriginUnavailable:
+        return None
+    if f"{scheme}://{authority}".lower() != _LINKS.normalizeLink(origin).lower():
+        return None
+    return urlsplit(origin).netloc
 
 
 def url(value: Any) -> str:
@@ -341,8 +363,9 @@ def url(value: Any) -> str:
 
     markdown-it's own normalisation of the value without its surrounding white
     space, kept only when it is an absolute link of :data:`LINK_SCHEMES`; any
-    other scheme, a protocol- or path-relative link, a fragment, and input over
-    :data:`URL_INPUT_LIMIT` characters give ``""``. A render never lets a value
+    other scheme, a protocol- or path-relative link, a fragment, a host
+    :data:`LINK_HOST` refuses unless it is the deployment's own public origin,
+    and input over :data:`URL_INPUT_LIMIT` characters give ``""``. A render never lets a value
     it was given be emptied here unseen: it asks :func:`clean_link` of each value
     it prints through this filter first.
     """

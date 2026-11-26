@@ -78,8 +78,10 @@ Anything else fails to compile.
   (`brand.light.primary`), `lang` and `dir` the row's language and its writing
   direction, and a template or layout reads `subject` and `preheader`.
 - A link a value supplies goes through `url` (`href="{{ link|url }}"`), which
-  gives an absolute `https`, `http` (to a named host, with no userinfo),
-  `mailto` or `tel` link, percent-encoded, or none. A render never sends that
+  gives an absolute `https`, `http` (to a domain name of two labels or more, or
+  to the deployment's own public origin as `angee.base.origins.configured_public_origin`
+  gives it, whatever its host: `http://localhost:6173` under `DEBUG`, an address;
+  with no userinfo), `mailto` or `tel` link, percent-encoded, or none. A render never sends that
   none in place of a value it was given: before rendering, each value a row
   prints through `url` (a Markdown link's destination among them) that `url`
   would empty and that is not blank is refused, `value_not_linkable`, naming its
