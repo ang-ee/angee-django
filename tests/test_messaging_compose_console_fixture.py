@@ -44,11 +44,12 @@ from rebac import system_context
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.testing.documents import authored_documents, execute_schema
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.messaging.constants import DELIVERY_TASK_EXPIRES
+from angee.messaging.constants import DELIVERY_TASK_EXPIRES, TRANSPORT_MAILER_ALIAS
 from angee.messaging.delivery import run_message_delivery
 from angee.messaging.testing.models import Channel, Message
 from tests.conftest import Feed, create_user, make_integration
 from tests.messaging_campaign import grant
+from tests.test_messaging_compose import MAILERS
 from tests.test_messaging_compose import desk as desk
 from tests.test_messaging_compose_graphql import mailer as mailer
 
@@ -241,7 +242,7 @@ def _inbound(channel: Any, key: str, *, answers: str = "", reply_to: str = "", t
 def _world(desk: Any, settings: Any) -> SimpleNamespace:
     """The channels, the seats and the two conversations, each outgoing message in its delivery state."""
 
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     with _system():
         Channel._base_manager.filter(pk=desk.pk).update(display_name="Support desk")
     channels = {"support": Channel._base_manager.get(pk=desk.pk)}
@@ -304,7 +305,7 @@ def test_the_composer_fixture_is_what_the_server_says(  # noqa: PLR0915 -- one r
     def refusing(code: int) -> None:
         transport = Mock()
         transport.send_messages.side_effect = SMTPRecipientsRefused({"client@example.test": (code, b"Refused.")})
-        monkeypatch.setattr("angee.messaging.email.mailers", SimpleNamespace(default=transport))
+        monkeypatch.setattr("angee.messaging.email.mailers", {TRANSPORT_MAILER_ALIAS: transport})
 
     # The Support conversation: one request, then an outgoing message in each local state, and synced own mail.
     request = _inbound(desk, "support-request")
