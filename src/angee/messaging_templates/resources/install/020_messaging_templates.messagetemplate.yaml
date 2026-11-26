@@ -1,0 +1,98 @@
+# Message template blocks: styled pieces of a mail, in HTML with a plain-text form. Each
+# colour is the light one written inline with the role class the base layout's dark
+# rules set; secondary text is at least 14px; a rounded corner is the layout's
+# brand-radius class. They load before the layout, which includes the header and footer.
+- xref: block.header.en
+  kind: block
+  key: header
+  language: en
+  name: Header
+  description: The brand mark at the top of every email. It reads the brand kit and takes no arguments.
+  format: html
+  source: >-
+    <p class="brand-text" style="margin:0;font:700 20px/28px {{ brand.font.heading }};color:{{ brand.light.text }}"><span
+    class="brand-primary" style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ brand.light.primary }};margin:0
+    8px"></span>{{ brand.name }}</p>
+  text_source: '{{ brand.name }}'
+  variables: {}
+  sample: {}
+- xref: block.footer.en
+  kind: block
+  key: footer
+  language: en
+  name: Footer
+  description: Who sent the email and, when the mail can be stopped, how to stop it.
+  format: html
+  source: |-
+    <p class="brand-muted" style="margin:0 0 6px;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}">{{ brand.footer.organization }}{% if brand.footer.address %} · {{ brand.footer.address }}{% endif %}</p>
+    {% if unsubscribe %}<p class="brand-muted" style="margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}"><a class="brand-muted" href="{{ unsubscribe|url }}" style="color:{{ brand.light.muted }};text-decoration:underline">Stop these emails</a></p>{% endif %}
+  text_source: |-
+    {{ brand.footer.organization }}{% if brand.footer.address %} · {{ brand.footer.address }}{% endif %}
+    {% if unsubscribe %}Stop these emails: {{ unsubscribe|url }}{% endif %}
+  variables:
+    unsubscribe: Where the recipient stops this kind of email; the line is left out when empty.
+  sample:
+    unsubscribe: https://app.example.test/forms/email-preferences
+- xref: block.button.en
+  kind: block
+  key: button
+  language: en
+  name: Button
+  description: The one action an email asks for. Real text on the brand's primary colour, 44px tall.
+  format: html
+  source: >-
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:4px 0 20px"><tr><td
+    class="brand-primary brand-radius" style="background:{{ brand.light.primary }}"><a class="brand-on-primary"
+    href="{{ url|url }}" style="display:inline-block;padding:12px 22px;font:600 16px/20px {{ brand.font.body }};color:{{ brand.light.on_primary }};text-decoration:none">{{ label }}</a></td></tr></table>
+  text_source: '{{ label }}: {{ url|url }}'
+  variables:
+    label: What the button says.
+    url: Where it goes.
+  sample:
+    label: Open the record
+    url: https://app.example.test/tasks/tsk_18
+- xref: block.quote.en
+  kind: block
+  key: quote
+  language: en
+  name: Quote
+  description: Someone's words, set apart on a rule; a comment, a message, a reply.
+  format: html
+  source: >-
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 20px"><tr><td
+    class="brand-border" style="padding:12px 16px;border-left:3px solid {{ brand.light.border }}"><p class="brand-text"
+    style="margin:0 0 4px;font:600 14px/20px {{ brand.font.body }};color:{{ brand.light.text }}">{{ author }}</p><p
+    class="brand-text" style="margin:0;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}">{{ body|linebreaksbr }}</p></td></tr></table>
+  text_source: |-
+    {{ author }} wrote:
+    {{ body }}
+  variables:
+    author: Who said it.
+    body: What they said, as plain text.
+  sample:
+    author: Tomás Rey
+    body: |-
+      The tuner can come on Thursday at ten.
+      Shall I confirm?
+- xref: block.record_card.en
+  kind: block
+  key: record_card
+  language: en
+  name: Record card
+  description: The record an email is about; what it is, its title and its state.
+  format: html
+  source: >-
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 16px"><tr><td
+    class="brand-border brand-radius" style="padding:14px 16px;border:1px solid {{ brand.light.border }}"><p
+    class="brand-muted" style="margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}">{{ kind }}</p><p
+    class="brand-text" style="margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}">{{ title }}</p><p
+    class="brand-muted" style="margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}">{{ status }}</p></td></tr></table>
+  text_source: '{{ kind }}: {{ title }} ({{ status }})'
+  variables:
+    kind: What the record is, such as Task, Invoice or Event.
+    title: Its title.
+    status: Its current state.
+  sample:
+    kind: Task
+    title: Book the piano tuner
+    status: In progress

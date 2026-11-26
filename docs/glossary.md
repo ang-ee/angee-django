@@ -44,7 +44,8 @@ built on top of the framework and its reusable addons.
 selection, emits concrete models, and publishes and verifies artifacts supplied
 by capability integrations. It also owns explicit database preparation and
 readiness for the verified composition. Permission, resource and web semantics
-stay with those integrations. See [The Composer](composer.md).
+stay with those integrations. Not **Compose (a message)**. See
+[The Composer](composer.md).
 
 **Project settings** — the authored Python module selected by Django's
 `DJANGO_SETTINGS_MODULE`, with optional terse `settings.yaml` loaded through
@@ -226,6 +227,19 @@ users; agents and workflows link one service user each by composing
 [`ServiceUserMixin`](../src/angee/iam/models.py), whose sync and deactivation
 verbs their saves and delete receivers call.
 
+**Account action** — an action on a person's account (rename, deactivate, give
+or reset access, set a password, send a sign-in link), named by its Zed
+permission on `auth/user`. IAM owns the set and its shared refusals
+([`User.account_actions`](../src/angee/iam/models.py),
+`account_action_blockers`); an addon adds its own action through them, and the
+`account_actions` projection offers each action exactly where it acts.
+
+**Sign-in link** — a single-use link an administrator emails a person so they
+sign in once without a password; it expires, a newer link retires it, and it
+is never sent to a protected account. Owned by
+[`angee.iam_messaging`](../src/angee/iam_messaging/README.md); a host without
+that addon has none.
+
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,
 and triggered runs act as it; the user who enables a trigger only authorizes
@@ -380,6 +394,35 @@ addresses, the message's `Recipient` rows, one per handle and envelope role
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
+**Transport mailer** — the one mailer that sends, `MAILERS["transport"]`:
+messaging delivers every email through it, and without it delivery is not
+configured. Not Django's default mailer, which is the **System mailer**. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mail** — mail the framework sends on no person's behalf, each email
+Django sends among it: one queued message written on the **System channel** by
+`MessageManager.compose_as_system` and delivered through the **Transport mailer**.
+Not a person's mail on a channel they send from. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mailer** — Django's default mailer wherever messaging is installed,
+`SystemMailer`: it records each email Django sends as **System mail** and sends
+nothing itself. See [messaging's contracts](../src/angee/messaging/README.md).
+
+**System channel** — messaging's install row `messaging.system_channel` (backend
+`system`), where **System mail** is written. Administrators alone read it, no
+verb shares its threads or grants on its messages, and it is system-only: nobody
+chooses it to send from or to watch. A person finds it in a
+list of channels under the label "System mail", which the row is given once, when
+it is created. See [messaging's contracts](../src/angee/messaging/README.md).
+
+**Compose (a message)** — write one outgoing message through
+`MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
+hand-off, decided for the caller by read on the message it answers and `reply` on
+its channel, or by `reply` on the channel and post on the record it is sent on.
+Not the **Composer** (`django-compose`). See
+[messaging's contracts](../src/angee/messaging/README.md).
+
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
 
@@ -518,6 +561,46 @@ intent remain separate facts.
 
 **posts** — the public-post and engagement overlay on `messaging`. A Feed is a
 Channel child, so posts use the same channel-scoped message identity and access.
+
+## Message templates
+
+**Message template** — one row of outgoing mail's text for one kind, key and
+language (`messaging_templates.MessageTemplate`). A sender renders the row a
+recipient reads; messaging delivers what is sent. See
+[the message templates README](../src/angee/messaging_templates/README.md).
+
+**Send a message template as system work** — render an effective message
+template for one address as named system work and record it on messaging's
+system channel (`MessageTemplateManager.send_as_system`); the row's language is
+the mail's, and the caller's own gate authorised the send. See
+[sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
+
+**Test send** — an administrator's send of a message template with its sample
+to their own account address, rendered under them and recorded on messaging's
+system channel with a `[Test] ` subject (`MessageTemplateManager.send_test`);
+decided by `preview` alone, and projected as `can_send_test`. See
+[a test send](../src/angee/messaging_templates/README.md#a-test-send).
+
+**Layout / template / block / part** — a message template's four kinds, written
+once. A **template** is the mail itself, with its subject, preheader and the
+**layout** it sits in, the HTML that wraps templates; a **block** (a styled
+piece) and a **part** (a piece of wording) are what rows include by name. What
+differs by kind is the kind's handler. See
+[the rows](../src/angee/messaging_templates/README.md#the-rows).
+
+**Shipped default / override** — a **shipped default** (a baseline) is a row an
+addon ships in its `install` resources, written only by a resource load. The
+deployment's **override** is its own row with the default's kind, key and
+language (`overrides_default`); deleting it resets to the default. A row says
+whether its reader may start or keep an override (`can_override`,
+`can_keep_override`), as the verbs decide. See
+[shipped defaults, overrides and reset](../src/angee/messaging_templates/README.md#shipped-defaults-overrides-and-reset).
+
+**Backlinks (message templates)** — the rows, in any language, naming a message
+template's kind and key: a template its layout, any row a block or part it
+includes. It is the Links rule's **Backlinks**, incoming references
+([context aside](frontend/guidelines.md#context-aside)), read for one record's page. See
+[the console](../src/angee/messaging_templates/README.md#console).
 
 ## Frontend
 

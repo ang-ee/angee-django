@@ -973,7 +973,7 @@ class DeliveryContracts(DeliveryFixtures):
             claim = changeset_model()._base_manager.get(key="discarded-turn")
             self.assertEqual(claim.created_row.pk, reply.pk)
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_email_explicit_refusals_and_lost_acknowledgements_settle_distinctly(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -995,7 +995,7 @@ class DeliveryContracts(DeliveryFixtures):
             connection_.send_messages.side_effect = error
             with self.subTest(error=type(error).__name__), system_context(reason="email refusal fixture"), patch.object(
                 transport, "email_message", return_value=envelope,
-            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=connection_)):
+            ), patch("angee.messaging.email.mailers", {constants.TRANSPORT_MAILER_ALIAS: connection_}):
                 row = self.outbound(external_id=f"email-{index}")
                 self.backend.deliver.side_effect = transport.deliver
                 row.deliver()
@@ -1004,7 +1004,7 @@ class DeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.status, expected)
                 self.assertNotIn("private", row.local_metadata["delivery_error"])
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_email_render_failure_precedes_the_effect_and_fails_definitely(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -1018,7 +1018,7 @@ class DeliveryContracts(DeliveryFixtures):
             row.refresh_from_db()
             self.assertNotIn("private", row.local_metadata["delivery_error"])
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_email_open_failures_are_not_sent_and_always_close_the_connection(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -1028,14 +1028,14 @@ class DeliveryContracts(DeliveryFixtures):
             connection_.open.side_effect = error
             with self.subTest(error=type(error).__name__), patch.object(
                 transport, "email_message", return_value=envelope,
-            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=connection_)):
+            ), patch("angee.messaging.email.mailers", {constants.TRANSPORT_MAILER_ALIAS: connection_}):
                 with self.assertRaises(IntegrationError) as failure:
                     transport.deliver(self.outbound(external_id=type(error).__name__))
                 self.assertTrue(failure.exception.transient)
             connection_.send_messages.assert_not_called()
             connection_.close.assert_called_once()
 
-    @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+    @override_settings(MAILERS={"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}})
     def test_real_anymail_http_exceptions_retry_only_provable_connection_failures(self):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
@@ -1064,7 +1064,7 @@ class DeliveryContracts(DeliveryFixtures):
                 api.session, "request", side_effect=request_error,
             ), patch.object(transport, "email_message", return_value=envelope), patch.object(
                 api, "send_messages", side_effect=lambda messages: api.post_to_esp(payload, messages[0]),
-            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=api)), system_context(
+            ), patch("angee.messaging.email.mailers", {constants.TRANSPORT_MAILER_ALIAS: api}), system_context(
                 reason="real Anymail request exception settlement",
             ):
                 # post_to_esp, rather than a fabricated wrapper, raises Anymail's
@@ -1078,31 +1078,31 @@ class DeliveryContracts(DeliveryFixtures):
                 self.assertEqual(row.status, expected)
                 self.assertNotIn("mail.example.test", row.local_metadata["delivery_error"])
 
-    def test_admission_and_creation_replay_run_under_the_actor_outside_elevation(self):
+    def test_admission_and_creation_replay_run_under_the_actor(self):
         comment = self.comment()
         seen = []
 
-        def admit(parent):
+        def admit():
             self.assertFalse(is_sudo())
-            self.assertTrue(parent.has_access("read"))
-            seen.append(parent.pk)
+            self.assertTrue(comment.has_access("read"))
+            seen.append(comment.pk)
 
-        with system_context(reason="trusted caller with explicit reply actor"):
-            first = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                   idempotency_key="admitted", admit=admit)
-            replay = Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=self.agent,
-                                                    idempotency_key="admitted", admit=admit)
+        first = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
+                                        idempotency_key="admitted", admit=admit)
+        replay = Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=self.agent,
+                                         idempotency_key="admitted", admit=admit)
         self.assertEqual(first.pk, replay.pk)
         self.assertEqual(seen, [comment.pk])
 
-    def test_elevated_reply_caller_cannot_bypass_the_explicit_actors_permissions(self):
+    def test_an_elevated_caller_is_refused_whatever_actor_it_names(self):
         comment = self.comment()
         with system_context(reason="unprivileged reply actor"):
             stranger = get_user_model().objects.create_user(username="unprivileged-replier")
-            with self.assertRaises(PermissionDenied):
-                Message.objects.compose_reply(comment, body="Reply", sender=self.feed.handle, actor=stranger,
-                                              idempotency_key="denied")
-            self.assertFalse(changeset_model()._base_manager.filter(key="denied").exists())
+        for actor in (stranger, self.agent):
+            with system_context(reason="elevated reply caller"), self.assertRaises(RuntimeError):
+                Message.objects.compose(parent=comment, text="Reply", sender=self.feed.handle, actor=actor,
+                                        idempotency_key="elevated")
+        self.assertFalse(changeset_model()._base_manager.filter(key="elevated").exists())
 
     def test_failed_discovery_receiver_is_repaired_before_classifying_the_next_record(self):
         seen = []
@@ -1679,13 +1679,13 @@ class FeedDeliveryContracts(DeliveryFixtures):
         self.run_delivery(row)
         for index in range(35):
             with actor_context(self.operator):
-                Message.objects.compose_reply(parent=row.parent, body=f"Other {index}",
-                                              sender=self.feed.handle, actor=self.operator)
+                Message.objects.compose(parent=row.parent, text=f"Other {index}",
+                                        sender=self.feed.handle, actor=self.operator)
         with system_context(reason="unrelated broken chain"):
             broken = Message.objects.create(channel_id=self.feed.pk, thread_id=row.thread_id,
                                             external_id="unrooted", direction="inbound", platform="youtube")
         with actor_context(self.operator):
-            Message.objects.compose_reply(parent=broken, body="Thanks!", sender=self.feed.handle, actor=self.operator)
+            Message.objects.compose(parent=broken, text="Thanks!", sender=self.feed.handle, actor=self.operator)
         since = timezone.now() - timedelta(days=3)
         with CaptureQueriesContext(connection) as queries:
             self.assertFalse(row.has_ambiguous_delivery_reply(since=since))
@@ -1699,8 +1699,8 @@ class FeedDeliveryContracts(DeliveryFixtures):
     def test_sql_plain_body_matches_the_tree_reader_and_detects_multipart_ambiguity(self):
         row = self.queued_reply()
         with actor_context(self.operator):
-            other = Message.objects.compose_reply(parent=row.parent, body="Other",
-                                                  sender=self.feed.handle, actor=self.operator)
+            other = Message.objects.compose(parent=row.parent, text="Other",
+                                            sender=self.feed.handle, actor=self.operator)
         with system_context(reason="nested plain-body projection"):
             Part = apps.get_model("messaging", "Part")
             for message in (row, other):
@@ -1720,8 +1720,8 @@ class FeedDeliveryContracts(DeliveryFixtures):
     def test_sql_ambiguity_window_includes_the_exact_creation_or_claim_boundary(self):
         row = self.queued_reply()
         with actor_context(self.operator):
-            other = Message.objects.compose_reply(parent=row.parent, body="Thanks!",
-                                                  sender=self.feed.handle, actor=self.operator)
+            other = Message.objects.compose(parent=row.parent, text="Thanks!",
+                                            sender=self.feed.handle, actor=self.operator)
         since = timezone.now() - timedelta(minutes=1)
         with system_context(reason="native datetime preparation for the SQL window"):
             Message.objects.filter(pk=other.pk).update(created_at=since)

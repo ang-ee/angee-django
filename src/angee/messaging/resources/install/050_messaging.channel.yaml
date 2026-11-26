@@ -1,0 +1,8 @@
+# System mail is recorded here and sent through MAILERS["transport"]. Ownerless
+# and grant-free: administrators alone read and send on it (permissions.zed, the
+# channel's system seal). A deleted row is recreated by the next load.
+- xref: system_channel
+  vendor: messaging.email
+  backend_class: system
+  display_name: System mail
+  lifecycle: connected

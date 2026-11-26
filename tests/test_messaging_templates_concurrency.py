@@ -20,7 +20,7 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging_templates.testing.models import MessageTemplate
 from tests.conftest import create_platform_admin
 from tests.lock_waits import submit, wait_for_lock
-from tests.test_messaging_templates import _LAYOUT_HEADERS, _OVERRIDE, _UPDATE, _load, _read, _row, _schema
+from tests.test_messaging_templates import _CONTENT, _LAYOUT_HEADERS, _OVERRIDE, _UPDATE, _load, _read, _row, _schema
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -38,6 +38,10 @@ def _keep(pk: Any, admin: Any) -> Any:
         return MessageTemplate.objects.keep_override(MessageTemplate.objects.get(pk=pk))
 
 
+EDITED = f"<div>{_CONTENT}Edited</div>"
+"""An edit a save walks: a layout's forms hold the content block."""
+
+
 def _overrides(key: str = "base") -> list[Any]:
     with system_context(reason="tests.messaging_templates.concurrency.read"):
         return list(MessageTemplate.objects.filter(key=key, is_baseline=False))
@@ -46,7 +50,7 @@ def _overrides(key: str = "base") -> list[Any]:
 def _release(baseline: Any) -> None:
     with system_context(reason="tests.messaging_templates.concurrency.release"):
         released = MessageTemplate.objects.get(pk=baseline.pk)
-        released.source = "<main>Released</main>"
+        released.source = "<div>Released</div>"
         released.save()
 
 
@@ -63,7 +67,8 @@ def test_a_second_override_waits_on_the_default_and_returns_the_first() -> None:
 
 
 def test_the_override_verb_racing_an_insert_of_the_same_row_returns_that_row() -> None:
-    """A console insert does not take the default's lock; the verb's insert waits on the row, then answers with it."""
+    """An insert from code does not take the default's lock, and the console's insert creates no override; the
+    verb's insert waits on the row, then answers with it."""
 
     admin = create_platform_admin("messaging-templates-race-inserter")
     baseline = _row(baseline=True)
@@ -72,7 +77,7 @@ def test_the_override_verb_racing_an_insert_of_the_same_row_returns_that_row() -
     )["override_message_template"]
     with ThreadPoolExecutor(max_workers=1) as pool:
         with transaction.atomic():
-            own = _row(source="<main>Inserted first</main>")
+            own = _row(source="<div>Inserted first</div>")
             contender, pid = submit(pool, verb)
             wait_for_lock(pid, contender)
         answer = contender.result(timeout=10)
@@ -84,11 +89,11 @@ def test_the_override_verb_racing_an_insert_of_the_same_row_returns_that_row() -
 def test_keep_and_an_edit_of_the_override_serialise_and_lose_nothing(holder: str) -> None:
     admin = create_platform_admin(f"messaging-templates-race-{holder}")
     baseline = _row(baseline=True)
-    override = _row(source="<main>Ours</main>")
+    override = _row(source="<div>Ours</div>")
     _release(baseline)
 
     def edit() -> Any:
-        variables = {"id": public_id_of(override), "set": {"source": "<main>Edited</main>"}}
+        variables = {"id": public_id_of(override), "set": {"source": EDITED}}
         return result_data(execute_schema(_schema(), _UPDATE, variables, user=admin))
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -96,7 +101,7 @@ def test_keep_and_an_edit_of_the_override_serialise_and_lose_nothing(holder: str
             if holder == "edit":
                 with system_context(reason="tests.messaging_templates.concurrency.edit"):
                     held = MessageTemplate.system_queryset(lock=("self",)).get(pk=override.pk)
-                    held.source = "<main>Edited</main>"
+                    held.source = EDITED
                     held.save()
                 contender, pid = submit(pool, lambda: _keep(override.pk, admin))
             else:
@@ -105,7 +110,7 @@ def test_keep_and_an_edit_of_the_override_serialise_and_lose_nothing(holder: str
             wait_for_lock(pid, contender)
         contender.result(timeout=10)
     kept = _read(override)
-    assert kept.source == "<main>Edited</main>"
+    assert kept.source == EDITED
     assert kept.baseline_hash == _read(baseline).content_hash
     assert not kept.has_updated_default
 
@@ -115,8 +120,8 @@ def test_an_override_and_a_reload_of_its_default_serialise_and_tell_the_truth(ho
     """Reload first: the override copies the new text. Override first: the reload waits, then the default moved."""
 
     admin = create_platform_admin(f"messaging-templates-race-{holder}-first")
-    one = ("base", "layout", "base", "en", "Base", "html", "<main>One</main>", "One")
-    two = ("base", "layout", "base", "en", "Base", "html", "<main>Two</main>", "Two")
+    one = ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}One</div>", f"{_CONTENT}One")
+    two = ("base", "layout", "base", "en", "Base", "html", f"<div>{_CONTENT}Two</div>", f"{_CONTENT}Two")
     _load(one, headers=_LAYOUT_HEADERS)
     with system_context(reason="tests.messaging_templates.concurrency.read"):
         baseline = MessageTemplate.objects.get(key="base", is_baseline=True)
@@ -131,8 +136,8 @@ def test_an_override_and_a_reload_of_its_default_serialise_and_tell_the_truth(ho
             wait_for_lock(pid, contender)
         contender.result(timeout=10)
     (override,) = _overrides()
-    assert _read(baseline).source == "<main>Two</main>"
+    assert _read(baseline).source == f"<div>{_CONTENT}Two</div>"
     if holder == "reload":
-        assert (override.source, override.has_updated_default) == ("<main>Two</main>", False)
+        assert (override.source, override.has_updated_default) == (f"<div>{_CONTENT}Two</div>", False)
     else:
-        assert (override.source, override.has_updated_default) == ("<main>One</main>", True)
+        assert (override.source, override.has_updated_default) == (f"<div>{_CONTENT}One</div>", True)

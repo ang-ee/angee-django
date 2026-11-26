@@ -580,13 +580,13 @@ class MessagePublic(Composable, extends="messaging.Message"):
                 raise ValidationError("The comment's feed has no publishing identity.")
             handle = feed.handle.canonical()
 
-            def admit(comment: Any) -> None:
-                if comment.reply_state():
+            def admit() -> None:
+                if parent.reply_state():
                     raise CommentAnswered("The comment is already answered.")
 
-            return apps.get_model("messaging", "Message").objects.compose_reply(
-                parent,
-                body=body,
+            return apps.get_model("messaging", "Message").objects.compose(
+                parent=parent,
+                text=body,
                 sender=handle,
                 actor=actor,
                 local=local,

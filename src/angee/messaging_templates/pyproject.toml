@@ -3,12 +3,21 @@ build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_ange
 [project]
 name = "angee-messaging-templates"
 version = "3.0.0"
-description = "Message templates: the layouts, templates, blocks and parts outgoing mail is written from, shipped by addons and overridden by a deployment."
-keywords = ["message templates", "email templates", "mail layout", "shipped defaults", "overrides"]
-dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4", "angee-parties>=3,<4"]
+description = "Message templates: the layouts, templates, blocks and parts outgoing mail is written from, shipped by addons, overridden by a deployment and rendered on Django's template engine."
+keywords = ["message templates", "email templates", "mail layout", "shipped defaults", "overrides", "render mail", "preview mail", "send a message template", "system mail from a template", "test send"]
+dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4", "angee-parties>=3,<4", "angee-brandkit>=3,<4", "angee-messaging>=3,<4", "markdown-it-py>=4.2,<5"]
 dynamic = ["entry-points"]
 
 [tool.angee]
+
+# The shipped library, each file after the rows it includes: a row is walked when it
+# saves, and the walk reads every row it includes.
+[tool.angee.resources]
+install = [
+  { path = "install/010_messaging_templates.messagetemplate.yaml" },
+  { path = "install/020_messaging_templates.messagetemplate.yaml", depends_on = "install/010_messaging_templates.messagetemplate.yaml" },
+  { path = "install/030_messaging_templates.messagetemplate.yaml", depends_on = "install/020_messaging_templates.messagetemplate.yaml" },
+]
 
 [tool.angee.platform]
 category = "Data"

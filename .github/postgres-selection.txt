@@ -87,6 +87,7 @@ tests/test_base_row_lock.py
 tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql
 tests/test_hierarchy.py
 tests/test_iam_concurrency_campaign.py
+tests/test_iam_messaging_concurrency_campaign.py
 tests/test_iam_graphql.py
 tests/test_oidc.py::test_credential_disconnect_guard_blocks_last_oidc_sign_in
 tests/test_oidc.py::test_credential_disconnect_preserves_other_sign_in_methods
@@ -109,6 +110,7 @@ tests/test_messaging.py
 tests/test_messaging_concurrency_campaign.py
 tests/test_messaging_channel_concurrency.py
 tests/test_messaging_reaction_concurrency.py
+tests/test_messaging_compose_concurrency.py
 tests/test_messaging_inbox_read.py
 tests/test_inbox_explorer.py
 tests/test_inbox_part_reads.py

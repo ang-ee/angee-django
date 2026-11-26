@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from datetime import timedelta
 from email.utils import parseaddr
+from types import SimpleNamespace
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -10,7 +11,7 @@ from django.core import mail
 from django.core.exceptions import ValidationError
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
-from rebac import actor_context, system_context
+from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
@@ -18,6 +19,12 @@ from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.tasks import deliver_message
 from angee.work.events import task_woken
 from tests.native_intake_capture import ChannelIntakeCaptureTests, FormCaptureTests, IntakeAccessCase
+
+LOCMEM = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
+TRANSPORT = {"default": LOCMEM, "transport": LOCMEM}
+"""Delivery configured: the test mailer is the transport mailer messaging sends through."""
+NO_TRANSPORT = {"default": LOCMEM}
+"""Delivery not configured: no transport mailer is stated."""
 
 REQUESTER = "requester@example.test"
 CLARIFY = """
@@ -268,10 +275,7 @@ class ClarifyTests(IntakeAccessCase):
                 reply = self.Task._base_manager.get(pk=task.pk).with_actor(self.reader).message_post("The 4th.")
         self.assertEqual(events, [(task.pk, "reply", reply.pk)])
 
-    @override_settings(
-        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
-        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
-    )
+    @override_settings(MAILERS=TRANSPORT)
     def test_an_emailed_requester_gets_an_account_and_the_question_and_their_answer_wakes_the_task(self):
         channel = self.channel()
         request = email(channel, "booking@example.test")
@@ -306,10 +310,7 @@ class ClarifyTests(IntakeAccessCase):
         self.assertEqual(events, [(task.pk, "reply", answer.pk)])
         self.assertEqual(self.Need._base_manager.count(), 1)
 
-    @override_settings(
-        ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
-        MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
-    )
+    @override_settings(MAILERS=TRANSPORT)
     def test_a_relayed_requester_is_asked_at_their_reply_to_and_only_their_answer_wakes_the_task(self):
         channel = self.channel()
         request = email(
@@ -409,6 +410,86 @@ class ClarifyTests(IntakeAccessCase):
         )
         self.assertTrue(data["clarify_task"]["ok"], data)
         self.assertEqual(self.task(need).snoozed_awaiting_id, self.reader.pk)
+
+    @override_settings(MAILERS=TRANSPORT)
+    def test_a_request_whose_reply_to_names_no_address_is_never_asked_at_its_relay(self):
+        request = email(
+            self.channel(), "intranet@example.test", sender="relay@example.test",
+            headers=(("Reply-To", "Requester <requester@intranet>"),),
+        )
+        with self.assertRaises(ValidationError) as refused:
+            self.clarify(self.Need._base_manager.get(source_message=request))
+        self.assertIn("to", refused.exception.error_dict)
+        self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
+
+    def reviewer_reading_the_channel(self, need, channel):
+        """The task's assignee, made its editor, who reads the channel but holds no ``reply`` on it."""
+
+        with system_context(reason="tests.intake.review.reviewer"):
+            self.Task._base_manager.get(pk=need.task_id).grant_record_access("editor", self.writer)
+        channel.with_actor(self.owner).grant_record_access("reader", self.writer)
+        return self.writer
+
+    @override_settings(MAILERS=TRANSPORT)
+    def test_a_reviewer_who_may_not_reply_on_the_channel_is_refused_as_the_one_who_may_not_send(self):
+        channel = self.channel()
+        need = self.Need._base_manager.get(source_message=email(channel, "no-reply-seat@example.test"))
+        reviewer = self.reviewer_reading_the_channel(need, channel)
+        before = self.task(need).revision
+        with self.assertRaises(PermissionDenied):
+            self.clarify(need, user=reviewer)
+        task = self.task(need)
+        self.assertEqual((task.revision, task.snoozed_at), (before, None))
+        self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
+
+    @override_settings(MAILERS=TRANSPORT)
+    def test_a_requester_who_may_post_is_asked_on_chatter_when_the_reviewer_may_not_send_the_email(self):
+        channel = self.channel()
+        with system_context(reason="tests.intake.review.requester_account"):
+            requester = self.User.objects.create_user(username="chatter-requester", email=REQUESTER)
+        need = self.Need._base_manager.get(source_message=email(channel, "chatter-only@example.test"))
+        reviewer = self.reviewer_reading_the_channel(need, channel)
+        with system_context(reason="tests.intake.review.requester_post"):
+            self.Task._base_manager.get(pk=need.task_id).grant_record_access("editor", requester)
+        task = self.clarify(need, user=reviewer)
+        self.assertEqual(task.snoozed_awaiting_id, requester.pk)
+        (question,) = self.comments(task)
+        notified = apps.get_model("messaging", "ThreadNotification")._base_manager.filter(message=question)
+        self.assertIn(requester.pk, set(notified.values_list("user_id", flat=True)))
+        self.assertFalse(apps.get_model("messaging", "Message")._base_manager.filter(direction="outbound").exists())
+
+    @override_settings(MAILERS=TRANSPORT)
+    def test_the_email_route_asks_what_compose_enforces_for_a_reviewer_who_does_not_own_the_channel(self):
+        message_model = apps.get_model("messaging", "Message")
+        channel = self.channel()
+        replier = self.writer
+        channel.with_actor(self.owner).grant_record_access("replier", replier)
+        with system_context(reason="tests.intake.review.stranger"):
+            stranger = self.User.objects.create_user(username="route-stranger")
+        rows = {
+            "sender": (email(channel, "row-sender@example.test"), True),
+            "reply-to": (email(channel, "row-relay@example.test", sender="relay@example.test",
+                               headers=(("Reply-To", REQUESTER),)), True),
+            "reply-to without an address": (email(channel, "row-intranet@example.test", sender="relay@example.test",
+                                                  headers=(("Reply-To", "requester@intranet"),)), True),
+            "delivery not configured": (email(channel, "row-unconfigured@example.test"), False),
+        }
+        for name, (source, configured) in rows.items():
+            for user in (replier, stranger):
+                with self.subTest(row=name, user=user.username), override_settings(
+                    MAILERS=TRANSPORT if configured else NO_TRANSPORT,
+                ), actor_context(user):
+                    route, _refused = self.Task._email_reply_route(
+                        [SimpleNamespace(source_message=source)], actor=user,
+                    )
+                    try:
+                        message_model.objects.compose(parent=source, text="Which dates?", actor=user)
+                    except (PermissionDenied, ValidationError):
+                        composed = False
+                    else:
+                        composed = True
+                    self.assertEqual(route is source, composed)
+                    self.assertEqual(composed, user == replier and name in ("sender", "reply-to"))
 
 
 class RequestPositionTests(IntakeAccessCase):

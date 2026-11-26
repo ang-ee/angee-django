@@ -10,6 +10,398 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging_templates`: **A message template is sent as system work.**
+  - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
+    kit=None)` renders one effective template (the caller picks it for its
+    recipient with `effective("template", key, person=...)`) with the caller's
+    values inside `system_context(reason=reason)`, and records it on messaging's
+    system channel through `Message.objects.compose_as_system`, queued: one
+    message per call, returned unbound, with no idempotency key. It is for mail
+    the framework writes on no person's request and is called only from named
+    system work: the caller's own gate authorised the send, the verb checks no
+    permission and decides nothing about the values or who may be mailed, and a
+    test lists the modules that call it. The caller looks the row up inside its
+    own `system_context(reason=...)`, under the reason it sends with (the
+    README's recipe). A blank `reason` is a `ValueError`; then
+    `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;
+    a row that is not what renders, `not_effective`), the render's codes, and what
+    `compose_as_system` refuses, as its docstring says, an address the transport
+    cannot carry among it; no message row is written before a refusal. Entering
+    the system context writes its permission audit row at once, even when the
+    render then refuses. What a send stores (the thread's title, the preview, the
+    parts and their content-addressed fragments, which outlive the message) is
+    read by the system channel's readers, whom messaging's README names.
+  - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
+    kit=None)` sends a row with its `sample` to `actor`'s own account address on
+    the system channel, the subject after `[Test] ` (`TEST_SUBJECT_PREFIX`). It
+    is decided by `preview` alone (`MessageTemplate.send_test_refusal()`, which
+    then asks `send_refusal()`), refuses an account with no address
+    (`no_test_address`), and renders under `actor`, never elevated, so its
+    render writes no permission audit row. The console gets
+    `send_message_template_test(template, brand_kit)`, an `ActionResult` naming
+    the message (a signed-out caller gets the session's error, a caller who may
+    not preview the row `PERMISSION_DENIED`, the rest in band with its code), and
+    `MessageTemplateType.can_send_test`, what it asks first, riding the list's
+    statement. A test's thread and message are the system channel's, read as
+    messaging's README says. **Upgrade:** regenerate the console schema and its
+    codegen.
+  - **Shipped rows.** The `signature` part ships in Spanish too
+    (`part.signature.es`: "El equipo de {{ brand.name }}"), so every shipped part
+    has its English and Spanish rows. **Upgrade:** load the install tier. A
+    Spanish recipient of a template including `parts/signature` now reads the
+    Spanish line; a deployment that wrote its own Spanish `signature` row finds
+    it an override of the new default, with an updated default to keep or reset.
+  - **Changed.** A row fact read on a row the list did not annotate
+    (`is_effective`, `is_overridden`, `has_updated_default`,
+    `overrides_default`) is a structural read through the base manager and writes
+    no permission audit row. `render`'s documented codes include
+    `values_too_large`, which it already raised.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-messaging`;
+    messaging still never imports message templates. **Upgrade:** a host that
+    lists `angee.messaging_templates` without `angee.messaging` now also enables
+    messaging, since the composer turns on a component's required addons; the
+    rest of messaging's requirements were already this addon's, and the new
+    libraries are `django-anymail` and `requests`. Such a host migrates,
+    synchronizes the permission schema and loads the install tier for messaging,
+    whose mail settings then apply.
+- `angee.messaging`, `angee.workflows_messaging`, `angee.iam_messaging`: **System mail: each email
+  Django sends is recorded on a system channel and sent through one transport mailer.**
+  - **Upgrade first:** stop the serving processes and workers through the operator
+    before editing settings: with messaging installed, start-up refuses a
+    deployment that states its own `MAILERS.default` until it is renamed
+    `MAILERS.transport` (keeping its `BACKEND` and `OPTIONS`; remove it instead
+    when a transport is stated), and the refusal names the edit; a process that
+    reloads before the edit stops at settings load. Django itself refuses legacy
+    `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
+    `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
+    rows and runs `rebac sync` for schema revision 32. Without that load, every
+    email Django sends raises `SystemChannelMissing` at the sender (a password
+    reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
+    channel backend enums gain `SYSTEM`.
+    A host that authors `LOGGING` names `using: transport` on its
+    `AdminEmailHandler` (messaging's README gives the block). Tests that observed
+    delivery through `MAILERS={"default": ...}` override `transport`. With
+    messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
+    say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
+    The emailed sign-in link (`angee.iam_messaging`) still asks the default
+    mailer, so a host with no transport offers a link whose send raises and
+    stamps nothing, and a recorded link whose delivery later fails is stamped as
+    sent.
+  - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
+    wherever messaging is installed, contributed by messaging's autoconfig. It
+    records each email (a password reset, `sendtestemail`, a link an addon mails)
+    as one queued message on the system channel through the new
+    `MessageManager.compose_as_system(*, reason, to, cc, bcc, subject, text, html)`,
+    in the caller's transaction, and sends nothing itself. Its rows record the
+    causing actor as `created_by`; the handles it lands have no creator, and their
+    history is a changeset of their own under messaging's non-user attribution
+    (`messaging/system:outgoing`), beside the caller's. The system channel is
+    messaging's install row `messaging.system_channel` (backend `system`,
+    `SystemChannelBackend`, vendor `messaging.email`), found through
+    `ChannelManager.system_channel()`, which refuses with `SystemChannelMissing`
+    (`SYSTEM_CHANNEL_MISSING`, under `channel`) when it is absent.
+    `AnymailEmailChannelBackend.default_sender()` is the deployment's sender
+    (`DEFAULT_FROM_EMAIL`) from settings alone, and
+    `SystemChannelBackend.system_mail_configured()` answers whether system mail
+    can be sent. `carries_address(address)` (`angee.messaging.email`) is the one
+    rule for what the transport can carry. `ChannelBackend.system_only` (read
+    through `Channel.system_only`) declares a backend that serves the system
+    channel alone, which people never choose to send from or to watch. `messaging.E004`
+    (`check --deploy`) reports a development-only transport mailer. Messaging
+    contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
+    with `mail_admins` sending through `transport`. `messaging.W001` reports a
+    host's `AdminEmailHandler` that would send through the system mailer.
+  - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
+    default mailer; delivery is configured exactly when it is stated. System mail
+    is queued, so mail sent in a transaction that rolls back is never sent; it
+    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` (`SERVER_EMAIL` on a
+    direct `mail_admins` too) and `Message-ID` are not kept, and attachments,
+    `reply_to`, extra headers, an empty body and a recipient the transport cannot
+    carry (`cannot_carry`, under its role) are refused, so such a mail is never
+    recorded as sent. A
+    transport that hands a delivery back to the system mailer fails that delivery
+    instead of recording it again. Administrators alone read, send on, write,
+    annotate and delete the system channel (schema revision 32): no channel,
+    integration, team, project or ownership grant reaches it. No verb shares its
+    threads or grants on its messages: nobody shares a system thread or writes a
+    system message, administrators included, and none of messaging's own arms
+    writes a system thread, so a group or project binding of one is refused.
+    Without any verb, a `reader` or `editor` tuple written directly and the
+    source-identity rule's principal read system mail, and another addon's arm on
+    the thread's `read_granted`, `chatter_read` or `write` holds whenever a system
+    thread carries what it keys on (messaging's README). `messaging.E003` refuses a fragment arm on the
+    channel's `read`, `reply`, `write`, `annotate` or `delete`, the thread's
+    `share`, `delete` or `annotate`, or the message's `write`, `delete` or
+    `annotate`. Its threads show in administrators' inbox lists. A channel whose
+    backend is system-only (the system channel) is never selected to send from
+    (`ChannelQuerySet.outbound_email`), and enabling a `message_ingested` trigger
+    on it is refused under `channel` (`system_only`) before any grant. A channel's
+    default sender is checked by `MessageManager.clean_recipient`, the check every
+    address messaging lands takes, and must be an address the transport carries,
+    where it was Django's `validate_email`. Error mail goes through the transport,
+    never the system channel. The sign-in link's mail is recorded on the system channel
+    with the rest of Django's mail.
+  - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
+    reads `MAILERS["transport"]` itself.
+- `angee.base`: an implementation key, the value an `ImplClassField` holds,
+  pickles. Its choices enum is built at run time, so no module holds it by name
+  and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
+  query pickling failed for any filter on such a field, and so did a REBAC
+  permission whose compiled statement filters on one; so did any row loaded from
+  the database, which holds its key as that member. A key now pickles as its
+  registry setting, its key set and its value, and unpickles without reading
+  settings: as that very member in any process with the same key set; elsewhere
+  as a member that equals its key, which the field maps onto its own. Upgrade:
+  nothing.
+- `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
+  writes an outgoing message.**
+  - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
+    a new email on a channel (`channel=`), or a new email on a record's chatter
+    (`channel=` with `record=`): its row, parts, recipients, sender, thread,
+    idempotency and delivery hand-off, decided under the actor by `reply` on the
+    channel (and posting on the record) before anything is claimed or written.
+    A new message takes `to`, `cc` and `bcc` entries, each one recipient as
+    `Message.objects.clean_recipient(entry, *, key="to")` reads it: a bare
+    address read as itself or one explicit `Name <address>`, returned as
+    `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
+    entry a mail library would read as another address or as several (a
+    comment, a group, a list, trailing text), or whose name or address a mail
+    header would not carry as read (a NUL byte, which failed the write on
+    PostgreSQL after it began, a control character, or an encoded-word opener,
+    which a mail library decodes into another address or name), is refused,
+    never re-read. **Known limit:** `compose` lands every address in lower
+    case, as inbound mail does, and finds its handle by that exact value, so a
+    contact another writer stored with a capital is a handle row of its own,
+    grouped with the lower-case one by the handle owner's comparison key
+    wherever a person is looked up; ending that split is the handle owner's. A caller
+    asks `clean_recipient` before expensive work. A message takes at most
+    `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
+    (default 50, the strictest common provider's per-message limit; each new
+    address costs a call about 34 statements) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
+    statements each); more is refused (`too_many`) under the argument that
+    crosses the bound, before anything is read. An answer is bound the same way
+    by the addresses its parent's `Reply-To` names: over the bound it is refused
+    under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
+    offset is refused (`naive_datetime`, as scheduling, calendar and workflows
+    refuse one) instead of being read in the server's zone. A new message also
+    takes a one-line `subject`,
+    `text`, `html` and readable `attachments`, and starts a thread of its own
+    through the new `ThreadManager.open_thread`, which `resolve` now shares.
+    `Message.require_reply(actor)` decides who may answer a message and returns
+    its channel; `Message.reply_envelope(*, actor=None, channel=None)` returns
+    whom an answer goes to (a `ReplyEnvelope`) or refuses, and
+    `Message.reply_error` is that refusal, without side effects.
+    `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
+    which `compose` shares. `Channel.reply_permission` (`"reply"`) is the one
+    name of the channel permission to send, which `require_reply` and `compose`
+    decide. `HandleManager.clean_identity` validates a handle
+    identity without writing, `HandleManager.upsert(fill_only=...)` names display
+    fields it only fills while blank (a fill locks and reads the row again, so
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
+    email address is stored in on a handle. `PartManager.attach_files` attaches
+    several files under one message lock. `HandleManager.find_identities` (and so
+    `find_identity`, `upsert` and every compose lookup) names the platform in each
+    arm of its one statement, so the `(platform, value)` key's index serves it; it
+    was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Changed.** An inbound email that its own threading headers place on a
+    record's chatter (the customer's answer to a mail sent from the record) is
+    ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
+    answers it by email; before, the answer was refused for want of a sender.
+    A stored message keeps the kind it was ingested with through every re-sync,
+    identical or edited, so replies received before the upgrade stay comments
+    and cannot be answered by email; new ones can. No data migration.
+    Anyone who has seen a chatter mail's Message-ID can answer onto the record,
+    so a message received on a record's chatter, email or comment, is one its
+    moderator may trash; mail sent from the record, system notes, and mail in a
+    mailbox conversation an earlier version merged into the record (a
+    colleague's own thread, still in the chatter's group) stay retained, that
+    last its owner's to remove, and that refusal is now a coded `ValidationError` (`retained`,
+    "Only comments and received messages can be removed.") where it was a bare
+    `ValueError`. Whether such mail should land on the record at all is open.
+  - **Changed.** A record's chatter thread is never folded with a mailbox thread.
+    The copy of a chatter mail (or of an answer to one) that reaches a
+    colleague's own connected mailbox still folds as a message, but the
+    colleague's thread stays theirs: it was merged into the chatter, dropped out
+    of their inbox, and took their later mail on that conversation onto the
+    record. Threads already folded this way are left as they are; a person
+    keeps them separate through the source-copy decision.
+  - **Removed.** `Message.objects.compose_reply`. Use
+    `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
+    takes no argument, and an email reply takes no `sender`.
+  - **Superseded.** An outgoing message written by hand (its row, recipients and
+    parts, then `deliver()`) is superseded by `compose`, which is now its one
+    writer.
+  - **Changed.** `compose` runs as its actor: an elevated call is refused
+    (`RuntimeError`), as a workflow step body refuses one. An email reply is
+    sent from its channel's default sender, so a held or queued email reply on a
+    channel whose delivery is not configured, that is not connected, or whose
+    default sender is invalid is refused; a keyed retry still returns its
+    original. A reply to a message whose `Reply-To` names no address the handle
+    owner accepts is refused (`reply_to`) rather than sent to the sender, which
+    may be a relay; the sender an answer falls back to is checked the same way,
+    so one stored with an address the handle owner does not take (a control or
+    an invisible character in it) is refused (`parent`, `reply_unaddressed`)
+    instead of being written and failing at delivery. Idempotency keys claimed through `compose_reply` (scope
+    `messaging.reply:`) do not replay through `compose` (scope
+    `messaging.compose:`): a posts workflow reply retried across the upgrade
+    does not replay, and if its original was trashed or failed, which the
+    comment's answered check does not count, a second reply is written. A reply's
+    preview is 280 characters, like every message's, and chatter posts and edits
+    preview through the same rule as ingest. An HTML-only email is sent without a
+    text part; it was made by stripping the HTML's tags. An outgoing subject, typed
+    or derived from a conversation's title, has each control character and line
+    break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
+    so no mail library, client or provider decodes anything out of it: the subject
+    stored, sent and read back are one string (`angee.messaging.email.header_text`,
+    the one rule for text a mail header carries, which every display name the
+    email backend writes also takes, so a sender name inbound mail stored with a
+    literal encoded word no longer makes an answer to that sender fail); a typed
+    line break is still refused. An address with an internationalised domain,
+    typed or taken from inbound mail, is now delivered: the backend writes its
+    domain in ASCII (IDNA) form and the stored address keeps what was typed.
+    **Known limit:** an address whose local part is outside ASCII is still
+    admitted and written, and its delivery fails, as no transport here speaks
+    SMTPUTF8; the stored reason names the address and says so, where it said
+    "The email could not be rendered.". A rendering failure the backend states
+    itself (an attachment that is unavailable) keeps its own reason too. A channel's own sender handle is landed with no
+    creator, under a non-user attribution (`messaging/system:outgoing`): the
+    first person to compose on a channel no longer holds read, write and delete
+    on it, so cannot rename, re-address or delete the desk's sender. A recipient
+    a person types keeps that person as its creator, as the handle owner rules.
+    A sender handle created before the upgrade keeps the creator it was given; a
+    deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
+    is its message's, set by the model on insert (`Recipient.save`), which
+    refuses a different one. `Message.reply_addresses` keeps only what
+    `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
+    channel's default sender lands on the handle its lower-cased address names.
+    A name typed with a recipient address fills only a handle that has none.
+    Inbound mail joins a thread by its subject only when the thread was grouped
+    by subject: a conversation a person composed is joined through its threading
+    headers alone. Intake asks a requester by email when their request has only
+    a `Reply-To`. A reviewer who may not reply on the request's channel is
+    refused with that permission refusal, as before, when the email is the only
+    way to ask; a requester who may post on the task is now asked on chatter
+    alone instead of the whole question being refused. Creating a
+    message part (`messaging/part#create`) requires `write` on its message or
+    the administrators (schema revision 28), and creating a message
+    (`messaging/message#create`) requires `write` on its channel or the
+    administrators (schema revision 29); every framework and consumer writer of
+    both runs as system work.
+  - **Upgrade:** `rebac sync` (provision runs it). No migration.
+- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
+  single-use sign-in link leaves base IAM for its own addon, with everything
+  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
+  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
+  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
+  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
+  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
+  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
+  the document, now `IamMessagingRedeemSignInLink`. The permission
+  `auth/user#issue_sign_in_link` is the addon's own declaration
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
+  Platform administrators send links, and for now no other role can be given the
+  action: the permission merge lets other fragments add arms only to the
+  permissions a resource type's owner declares, so a consumer's
+  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
+  addon joins the template's `full` profile; a host without it, the `base`
+  profile included, offers and redeems no sign-in link. A link's session records
+  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
+  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
+  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
+  (`iam_messaging_signinlink`) and was in no release, so no migration template
+  ships.
+  - Every host that tracks main deletes the old rows, whether or not it keeps
+    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
+    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
+    before it runs `migrate` with what that writes, it deletes them on every
+    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
+    (`--database <alias>` for each other alias), the same statement on SQLite
+    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
+    and, with the addon, its initial migration. After migrating, the host
+    provisions, which syncs the permissions: IAM's schema at revision 32 and,
+    with the addon, its fragment at revision 2.
+  - Until the rows are gone, both commands refuse, on django-compose
+    0.1.0.dev14, which the framework requires since the composer upgrade below:
+    - `makemigrations`, on the databases of the environment that authors the
+      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
+      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
+      migration before native makemigrations." (0.1.0.dev13 said the same, its
+      last sentence "Declare a reviewed cutover migration before native
+      makemigrations.")
+    - `migrate`, and so `provision`, on a database that still holds links when a
+      migration authored where none were drops their table: "unsafe migration
+      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
+      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
+      To proceed, keep the storage, or move its data and declare the drop in
+      that migration of the project's history with
+      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
+      Nothing was applied, the addon's initial migration included. Delete the
+      rows on that database and run `migrate` (or `provision`) again; the links
+      cannot move, so declaring the drop loses them the same way. On a stack, a
+      refused `provision` holds Django stopped until the rows are deleted. Under
+      0.1.0.dev13 that `migrate` dropped the table without a word.
+  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
+    under this heading, so the framework release that brings either brings both.
+  - Such a host loses the links already sent (they stop working; send them
+    again), the record of who was sent a link, and every session a link opened
+    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
+    people sign in again).
+  - The stale `iam.signinlink` content type can be removed with
+    `manage.py remove_stale_contenttypes`, which also deletes that model's
+    `auth.Permission` rows; it lists what it deletes and asks first.
+  - Projects that author `AUTHENTICATION_BACKENDS` replace
+    `angee.iam.auth.SignInLinkBackend` with
+    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
+    raises, a password's included, as does every request that carries a
+    session a link opened before the upgrade; start-up reports
+    `angee.iam.E006`, which names the entry.
+  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
+  seal's own remedy, which a refused fragment's error carries; it no longer gives every
+  seal one hint that names a record's own read. Messaging's `messaging.E003` and
+  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
+  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
+  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
+  open set another addon extends: `User.account_actions()` names the actions
+  `account_actions` offers, in offer order, and it and
+  `User.account_action_blockers` (now a classmethod) are extended through
+  `super()`; a contributed action runs under `User.lock_for_account_action`, the
+  private `_lock_for_account_action` made public, and meets IAM's person-kind
+  and protected-account blockers before its own, whatever its hook returns:
+  `angee.iam.models.account_action_refusals` puts them first, and no override
+  drops them. `account_actions` is
+  typed by one enum of the composed actions, built when the schema is by the
+  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
+  `_permission_enum` made public beside `permissions_field`)
+  and named after its members (`Permissions_10_set_active_…`): its values are the
+  actions' Zed permission names (`issue_password`), where the fixed
+  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
+  leaves the console and public schemas, and the web's TypeScript type
+  `UserAccountAction` goes. `offersAccountAction` compares
+  names exactly, and `@angee/iam` exports `AccountActionBar` and
+  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
+  `useIssueSignInLinkAction` is no longer exported. The disclosures
+  `auth/user#active_account` and `#nonstaff_account` derive from the union points
+  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
+  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
+  a composed account action offered twice or not declared on `auth/user`
+  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
+  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
+  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
+  (`sign_in_account`) and marks a genuine but spent credential with
+  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
+  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
+  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
+  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
+  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
+  that compares `account_actions` values with the old enum's upper-case names
+  compares the permission names, and one typed by `UserAccountAction` reads the
+  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
 - `@angee/ui`: The Links pane says it is empty when it is. A related group
   with neither rows nor a verb is left out, and the pane showed its empty
   state only when no group was eligible; a record whose eligible groups were
@@ -410,6 +802,102 @@ live in code docstrings.
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and
   expected `0` finds the number's own control.
+- **Message templates render, on Django's template engine.**
+  - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
+    `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
+    Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
+    whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
+    `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
+    anything else fails to compile. A template names its layout in its `layout`
+    column and never writes `extends` or `block`; blocks and parts are included
+    by name with `{% include "…" with … only %}`. A Markdown row goes through
+    markdown-it first, with raw HTML off, its template code kept whole. Each pass
+    runs in the row's language, with `dir` from Django's
+    `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
+    include renders, 200,000 characters of loop output, 500,000 characters of
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
+  - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
+    walks a row and every row it reaches and refuses what may not render safely:
+    oversized sources and lines, literals holding `<`, `>` or `"`, costly or
+    unsafe filter use, template code the Markdown pass would not keep whole, HTML
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    every save, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, counts each level from its rows'
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
+    on a save resolves a level's include targets in one query. A Markdown row's
+    link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
+  - **Preview.** `MessageTemplate.preview(*, kit=None)` renders a row's `sample`
+    (a layout around a fixed body, a block or part alone) and returns a
+    `TemplatePreview` with `TemplateWarning`s: the subject or preheader length,
+    unused variables, a missing stop link, an empty plain-text body, the size, or
+    the render error. The console's `message_template_preview(template,
+    brand_kit)` read returns it to callers holding the new `preview` permission
+    (platform admins; `messaging_templates/message_template` revision 2).
+  - **Shipped rows.** The addon's install tier ships the `base` layout, the
+    `header`, `footer`, `button`, `quote` and `record_card` blocks and the
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
+  - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
+    install tier (`resources load`), and regenerate the console schema and its
+    codegen. No migration: no column changed. Existing rows are walked when they
+    render, and when their source, forms, variables or layout are next edited.
 - **Message templates: the new addon `angee.messaging_templates`.**
   - **What it holds.** A message template (`MessageTemplate`) is one row of one
     kind for one key and one language: a message template of the kind `template`
@@ -423,19 +911,21 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
-    `sample` holds preview values. The addon renders nothing and ships no rows.
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
+    `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -447,11 +937,27 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
