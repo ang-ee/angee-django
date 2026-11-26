@@ -8,6 +8,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import replace
+from itertools import product
 from typing import Any
 
 import pytest
@@ -431,13 +432,15 @@ _UNDIRECTED = "query($id: ID!) { message_template_preview(template: $id) { rende
 
 def test_a_preview_says_the_direction_of_the_mails_own_text(library: dict[str, Any]) -> None:
     """An Arabic mail whose subject starts with a Latin brand name reads right to left (``RTL`` on the wire), as its
-    HTML's ``dir`` says, and an English one left to right (``LTR``). Reading the direction costs no statement and
-    adds no gate."""
+    HTML's ``dir`` says, and an English one left to right (``LTR``), named in the console as its warning codes are.
+    Reading the direction costs no statement and adds no gate."""
 
     del library
     admin = create_platform_admin("messaging-templates-console-director")
     member = create_user("messaging-templates-console-undirected")
     schema = _schema()
+    sdl = schema.as_str()
+    assert "direction: MessageTemplateTextDirection!" in sdl and "enum TextDirection" not in sdl
     arabic = _row("template", "tests.welcome", "ar", subject="Acme: مرحبا", source="مرحبا بك.")
     english = _row("template", "tests.welcome", subject="Acme: welcome", source="Welcome.")
     for row, wire, direction in ((arabic, "RTL", TextDirection.RTL), (english, "LTR", TextDirection.LTR)):
@@ -685,10 +688,10 @@ def test_a_member_or_a_signed_out_caller_is_refused_before_anything_is_judged(
 def test_an_insert_of_what_no_column_can_store_is_refused_before_any_row_is_read(
     db: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A lone surrogate in any column the insert takes: an administrator is refused under that column, never with an
-    internal error, and a member and a signed-out caller are refused create first. No seat's insert reads a message
-    template row, lexes anything or writes a row. A null or a value JSON cannot write never reaches the insert: its
-    four inputs are strings the schema requires."""
+    """A lone surrogate or a NUL in any column the insert takes: an administrator is refused under that column, never
+    with an internal error, and a member and a signed-out caller are refused create first. No seat's insert reads a
+    message template row, lexes anything or writes a row. A null or a value JSON cannot write never reaches the
+    insert: its four inputs are strings the schema requires."""
 
     del db
     admin = create_platform_admin("messaging-templates-console-unstorable")
@@ -696,8 +699,8 @@ def test_an_insert_of_what_no_column_can_store_is_refused_before_any_row_is_read
     checked: list[str] = []
     _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
     table = MessageTemplate._meta.db_table
-    for column in ("kind", "key", "language", "name"):
-        identity = {"kind": "part", "key": "fresh", "language": "en", "name": "Fresh", column: "a\ud800"}
+    for column, unstorable in product(("kind", "key", "language", "name"), ("a\ud800", "a\x00")):
+        identity = {"kind": "part", "key": "fresh", "language": "en", "name": "Fresh", column: unstorable}
         for user, refusal in (
             (admin, ("VALIDATION", [column])), (member, ("PERMISSION_DENIED", [])),
             (AnonymousUser(), ("PERMISSION_DENIED", [])),
@@ -705,8 +708,8 @@ def test_an_insert_of_what_no_column_can_store_is_refused_before_any_row_is_read
             with CaptureQueriesContext(connection) as captured:
                 (error,) = _insert(user, **identity).errors
             assert (error.extensions["code"], sorted(error.extensions.get("validationErrors", {}))) == refusal, (
-                column, user)
-            assert not any(table in query["sql"] for query in captured.captured_queries), (column, user)
+                column, unstorable, user)
+            assert not any(table in query["sql"] for query in captured.captured_queries), (column, unstorable, user)
     assert checked == []
     with system_context(reason="tests.messaging_templates.console.read"):
         assert not MessageTemplate.objects.exists()
