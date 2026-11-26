@@ -883,8 +883,11 @@ describe("FormView", () => {
       const [tab, setTab] = useState("pane");
       return <FormView resource="notes.Note" id="note-1" defaultRecordTab={selection === "default" ? "pane" : undefined}
         recordTab={selection === "controlled" ? tab : undefined} onRecordTabChange={setTab}
-        recordTabs={[{ id: "activity", label: "Activity", render: ({ focusField }) =>
-          <button type="button" onClick={() => focusField("location", selection === "default" ? { recordTabId: "missing" } : undefined)}>Reveal location</button> }]}>
+        recordTabs={[{ id: "activity", label: "Activity", render: ({ focusField, fieldLabel }) => <>
+          <button type="button" onClick={() => focusField("location", selection === "default" ? { recordTabId: "missing" } : undefined)}>Reveal location</button>
+          {/* A pane names a field as the form does: by its label; none for a field the form does not hold. */}
+          <output aria-label="Labels">{JSON.stringify([fieldLabel("location"), fieldLabel("absent") ?? null])}</output>
+        </> }]}>
         <Field name="title" title />
         <Group label="Details"><Field name="wordCount" /></Group>
         <Group label="Schedule"><Field name="location" label="Location" /></Group>
@@ -898,6 +901,7 @@ describe("FormView", () => {
     expect(screen.getAllByRole("tablist")).toHaveLength(1);
     fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
     const reveal = await screen.findByRole("button", { name: "Reveal location" });
+    expect(screen.getByRole("status", { name: "Labels" }).textContent).toBe(JSON.stringify(["Location", null]));
     fireEvent.click(reveal);
     const location = screen.getByLabelText("Location");
     await waitFor(() => expect(document.activeElement).toBe(location));

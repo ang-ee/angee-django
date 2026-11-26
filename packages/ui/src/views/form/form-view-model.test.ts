@@ -38,6 +38,8 @@ import {
   visibleFields,
   withModeLockedFields,
   type PresetMemory,
+  fieldValidationSummary,
+  formFieldLabel,
 } from "./form-view-model";
 import { dialogRuleErrors } from "./MutationDialog";
 
@@ -972,5 +974,30 @@ describe("seedPreset and PresetMemory", () => {
     expect(seed(preset, target)).toEqual(["settings", "settings.a"]);
     expect(target.reads).toEqual([["settings.a", "seeded"]]);
     expect(target.values).toEqual({ settings: { a: "again", b: 1 } });
+  });
+});
+
+describe("a form field's label as text", () => {
+  const fields = new Map<string, FieldDescriptor>([
+    ["title", { name: "title", label: "Title" }],
+    ["code", { name: "code" }],
+    ["blank", { name: "blank", label: "  " }],
+    // A label that is not text: the form shows it, but a line of words cannot.
+    ["rich", { name: "rich", label: { type: "span", props: {}, key: null } as unknown as FieldDescriptor["label"] }],
+  ]);
+  const t = (key: string, vars?: Record<string, unknown>) => `${key}${vars ? `:${String(vars.fields)}` : ""}`;
+
+  test("the lookup gives a text label, and nothing for a field without one, with a label that is not text, or that the form does not hold", () => {
+    expect(formFieldLabel(fields, "title")).toBe("Title");
+    expect(formFieldLabel(fields, "code")).toBeUndefined();
+    expect(formFieldLabel(fields, "blank")).toBeUndefined();
+    expect(formFieldLabel(fields, "rich")).toBeUndefined();
+    expect(formFieldLabel(fields, "absent")).toBeUndefined();
+  });
+
+  test("the banner's line names each refused field by that label, or by its name where there is none", () => {
+    expect(fieldValidationSummary({ title: ["x"], code: ["x"], rich: ["x"], absent: ["x"] }, fields, t))
+      .toBe("form.fixHighlightedFieldsNamed:Title, code, rich, absent");
+    expect(fieldValidationSummary({}, fields, t)).toBe("form.fixHighlightedFields");
   });
 });

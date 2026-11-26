@@ -10,6 +10,18 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed API.** A record pane can name a field as the form
+  does. `RecordPanelContext` gains `fieldLabel(name)` beside `focusField`, the
+  label the form's save banner names a refused field by. `RecordIssues` gains
+  an optional `fieldLabel` prop: an issue that names a field is titled by the
+  label and the control that focuses the field is described by it, so two
+  reports with the same words under two fields read apart on screen and to a
+  screen reader. It also gains an optional `polite` prop, for issues about
+  edits not yet submitted: one polite live region that stays in the page with
+  no issues too, in place of an alert per danger issue. In the save banner's
+  field line, a field whose label is not text is named by its name, where the
+  line printed `[object Object]`. Code that builds a `RecordPanelContext` by
+  hand adds `fieldLabel`.
 - `@angee/ui`: **Changed API.** A keyboard user sees when a mail in
   `MessageHtmlFrame` has focus. Focus inside the sandboxed frame matches
   neither the frame's `:focus-visible` nor its wrapper's `:focus-within`, so

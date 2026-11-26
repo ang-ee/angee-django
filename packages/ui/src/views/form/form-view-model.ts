@@ -981,13 +981,21 @@ function nestedFieldErrorMessages(error: unknown, path?: string, rootPath?: stri
   }));
 }
 
+/**
+ * The text of the label a form shows for its field `name`: undefined for a field the form does
+ * not hold, one it shows without a label, or one whose label is not text (`textValue`).
+ */
+export function formFieldLabel(fieldByName: ReadonlyMap<string, FieldDescriptor>, name: string): string | undefined {
+  return textValue(fieldByName.get(name)?.label) || undefined;
+}
+
 export function fieldValidationSummary(
   fieldErrors: Record<string, readonly string[]>,
   fieldByName: ReadonlyMap<string, FieldDescriptor>,
   t: UiTranslate,
 ): string {
   const fields = Object.keys(fieldErrors).map(
-    (name) => fieldByName.get(name)?.label || name,
+    (name) => formFieldLabel(fieldByName, name) ?? name,
   );
   return fields.length > 0
     ? t("form.fixHighlightedFieldsNamed", { fields: fields.join(", ") })
