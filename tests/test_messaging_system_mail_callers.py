@@ -26,6 +26,11 @@ CALLERS = {
     # The system mailer, Django's default mailer: each email Django sends is
     # recorded. The code that calls Django's mail API decided that send.
     Path("src/angee/messaging/email.py"),
+    # Message templates' one send path (``MessageTemplateManager._render_and_record``), behind two verbs:
+    # ``send_test`` is decided by the template's ``preview`` (an administrator's test send, the pressing
+    # decided before the system renders); ``send_as_system`` by its caller's own permission, as its docstring
+    # states, each of its callers listed in ``SYSTEM_SEND_CALLERS`` (``tests/test_messaging_templates_send.py``).
+    Path("src/angee/messaging_templates/models.py"),
 }
 
 
