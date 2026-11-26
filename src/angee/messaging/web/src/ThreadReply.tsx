@@ -10,6 +10,7 @@ import {
   useIdempotencyDraftOwner,
   useIdempotencyKeys,
   useIdempotencyKeyState,
+  useLateAnswerReport,
   useLatestRef,
   useRuntimeViewAs,
   useToast,
@@ -45,16 +46,19 @@ export interface ThreadReplyProps {
  * The reply box docked under a conversation: the quoted email, the channel it goes out from, and
  * the text, which takes focus. Send (Ctrl/Cmd+Enter) answers the email through `compose_message`
  * with the conversation's draft key (`replyScope`), so sending again from this page writes it
- * once, to whichever of its emails the box answers now; a resolved answer is toasted by `useActionResultRun`, a failure is told from what it says
- * (`failedWriteOutcome`): a lost answer, a version written earlier and an attempt that may already
- * have been sent in the box's live note, a refusal in a toast, an unsent request by the
- * connection boundary alone. Under a preview the box is read-only and sends nothing.
+ * once, to whichever of its emails the box answers now; a resolved answer is toasted by
+ * `useActionResultRun`, a failure is told from what it says (`failedWriteOutcome`): a lost answer,
+ * a version written earlier and an attempt that may already have been sent in the box's live note,
+ * a refusal in a toast, an unsent request by the connection boundary alone, and a failure that
+ * lands after the box went away by `useLateAnswerReport`. Under a preview the box is read-only and
+ * sends nothing.
  */
 export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest, onClose }: ThreadReplyProps): React.ReactElement {
   const t = useMessagingT();
   const uiT = useUiT();
   const toast = useToast();
   const settle = useActionResultRun();
+  const reportLate = useLateAnswerReport();
   const preview = useRuntimeViewAs();
   const readOnly = Boolean(preview.viewAs || preview.pending);
   const keys = useIdempotencyKeys();
@@ -100,16 +104,9 @@ export function ThreadReply({ id, threadId, parent, leaves, onSent, onShowLatest
         onSent();
       }
     } catch (cause) {
+      // Gone, the box's note says nothing: the shared late report tells what it threw.
+      if (!mounted.current) return reportLate({ thrown: cause }, t("compose.notSent"));
       const told = failedWriteOutcome(cause);
-      if (!mounted.current) {
-        // Gone, the box's note says nothing: the late report the shared dialogs give (`useLateAnswerReport`'s
-        // wording; that owner is not exported yet), and the connection boundary's for an unsent request.
-        if (told !== "not-sent") {
-          toast.danger({ title: t("compose.notSent"),
-            description: told === "unconfirmed" ? uiT("form.answerLost") : errorMessage(cause, t("compose.notSent")) });
-        }
-        return;
-      }
       // The note tells a lost answer and an earlier version; the connection boundary, an unsent request.
       if (told === "refused" || told === "denied") toast.danger({ title: errorMessage(cause, t("compose.notSent")) });
       if (told === "conflict") onShowLatest();

@@ -469,7 +469,7 @@ test("after a lost answer, Reply on another email keeps the conversation's draft
   expect(second).toMatchObject({ parent: MESSAGE.unaddressed, idempotency_key: first?.idempotency_key });
 });
 
-test("a box that went away while sending still reports a lost answer, in the shared late report's words", async () => {
+test("a box that went away while sending still reports a lost answer, through the shared late report under the box's own title", async () => {
   const { fixture, rerender } = mount({ surface: "transcript", seat: "ana", lose: true });
   const box = await openReply("Please add me.");
   const release = fixture().holdNextAnswer();
@@ -481,7 +481,9 @@ test("a box that went away while sending still reports a lost answer, in the sha
   rerender({ conversation: "sales" });
   await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
   await act(async () => release());
-  expect((await screen.findAllByText(ui("form.answerLost"))).length).toBeGreaterThan(0);
+  // Base UI stamps the toast's type on its title and description, never on the hidden announcer repeating them.
+  expect(await screen.findByText(word("compose.notSent"), { selector: "[data-type='danger']" })).toBeTruthy();
+  expect(screen.getByText(ui("form.answerLost"), { selector: "[data-type='danger']" })).toBeTruthy();
 });
 
 test("a request refused before it was sent is left to the connection boundary: no note, no toast", async () => {
