@@ -276,13 +276,32 @@ It also includes typography weights (integer 100–900), selected font sizes
 (integer 10–40px) and line heights (integer 12–56px), chart series and surface
 colours, and motion durations (integer 0–1000ms). Easing is limited to the
 standard CSS keywords or `cubic-bezier(...)` with four finite numbers; chart
-colours retain the general safe token-value bounds above.
+colours retain the general safe token-value bounds above. An elevation
+(`--elevation-*`), `--ring` and `--ring-danger` are composed into one
+`box-shadow`, so the validator holds each to a list of shadows in these forms
+only, each layer matched whole: an optional leading or trailing `inset`; two to
+four lengths, each `0` or a number in `px`, `rem` or `em` (the blur not
+negative); and an optional colour before or after them: a hex value,
+`transparent`, `currentcolor`, `rgb()`/`rgba()` of three numbers and an optional
+alpha (`r g b / a` or the comma form), `rgb(from <hex> r g b / a)`, or
+`color-mix(in srgb|oklab|oklch, <hex> <percentage>, transparent)`.
+Anything else is refused, `none`, `0`, a named colour, `calc()`, another unit or
+a `var()` included (an undefined variable would void the ring with the shadow);
+"no elevation" is `0 0 #0000`.
 The type scale is authored in pixels by design, and the theme validator enforces
 those bounds.
 
 Put complex authored design in a stylesheet listed by the definition. Every
 visual selector in that file must be gated by its theme ID, and asset paths must
-be local and relative:
+be local and relative. A theme stylesheet never sets an elevation: elevations are
+definition tokens the validator checks. The composer refuses a theme stylesheet
+whose text, comments and strings included, declares an `--elevation-*` property,
+names one in `@property`, or holds a backslash (no theme stylesheet needs an
+escape), naming the theme. That is what the contract covers, a theme's
+definition and its stylesheet; an elevation set anywhere else (an addon's own
+stylesheet, the host's entry CSS, an inline style, an arbitrary-property class)
+is not checked, and neither is a rule of your own that removes a control's
+shadow outright (`box-shadow: none`), which removes its ring with it:
 
 ```js
 stylesheets: ["./theme.css"]

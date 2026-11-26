@@ -86,6 +86,7 @@ function CalendarPickerEdit(props: WidgetRenderProps): React.ReactElement {
   return <div className="flex items-center gap-2">
     <RelationFieldWidget relation={CALENDAR_RELATION} filters={WRITABLE} value={relationValueId(value) || null}
       selectedOption={relationSelectedOption(value, CALENDAR_RELATION.labelField, CALENDAR_RELATION.colorField)}
+      edit={props.field?.relationEdit}
       readOnly={locked} onChange={choose} aria-label={fieldLabel(props)} controlRef={controlRef} />
     {!locked && writable?.length === 0
       ? <Button variant="secondary" size="sm" loading={ensuring.fetching} onClick={() => void startOwn()}>

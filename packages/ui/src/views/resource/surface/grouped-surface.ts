@@ -102,6 +102,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     setColumnVisibility,
     pagination: rootPagination,
     sorting,
+    meta,
     handleSortingChange,
   } = tableState;
   const rootPage = rootPagination.pageIndex + 1;
@@ -384,6 +385,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     data: leafRows as TRow[],
     columns: tableColumns as ColumnDef<TRow>[],
     state: { columnVisibility: effectiveColumnVisibility, sorting },
+    meta,
     onColumnVisibilityChange: setColumnVisibility,
     onSortingChange: handleSortingChange,
     manualSorting: true,

@@ -175,6 +175,12 @@ function hasFieldSelection(fields: unknown): boolean {
   return fields !== null && typeof fields === "object" && Object.keys(fields).length > 0;
 }
 
+/**
+ * Bound a native transport failure to the messages a client may show. The result's
+ * `response.errors` is present only when the server's response held a GraphQL `errors`
+ * list, public or not: that is the server's answer ({@link hasGraphQLAnswer}). A network
+ * failure, a cancelled request and a gateway's own page carry none.
+ */
 export function boundedGraphQLTransportError(
   value: unknown,
   errorMessages: AngeeHasuraClientOptions["errorMessages"] = "public",
@@ -186,6 +192,7 @@ export function boundedGraphQLTransportError(
   }
   const response = recordValue(record.response);
   const project = errorMessages === "all" ? serverGraphQLError : publicGraphQLError;
+  const answered = Array.isArray(response?.errors);
   const errors = Array.isArray(response?.errors)
     ? response.errors.flatMap((error) => project(error) ?? [])
     : [];
@@ -193,7 +200,7 @@ export function boundedGraphQLTransportError(
   return Object.assign(new Error(message), {
     response: {
       status: response?.status,
-      errors,
+      ...(answered ? { errors } : {}),
     },
     graphQLErrors: errors,
   });
@@ -249,6 +256,19 @@ export function publicGraphQLErrorsFromUnknown(value: unknown): readonly PublicG
   return errors
     .map(publicGraphQLError)
     .filter((error): error is PublicGraphQLError => error !== null);
+}
+
+/**
+ * Whether a failed request got the server's GraphQL answer: its error carries the
+ * `errors` list the server's response held, public or not. Without one (a network
+ * failure, a cancelled request, a gateway's own page) whether the server acted on the
+ * request is unknown, and a write's answer is lost.
+ */
+export function hasGraphQLAnswer(value: unknown): boolean {
+  const record = recordValue(value);
+  if (!record) return false;
+  if (Array.isArray(record.graphQLErrors) && record.graphQLErrors.length > 0) return true;
+  return Array.isArray(recordValue(record.response)?.errors);
 }
 
 /**

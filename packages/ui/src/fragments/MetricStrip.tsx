@@ -7,7 +7,7 @@ import { cn } from "../lib/cn";
 import { formatNumber } from "../lib/format-number";
 import { getHumanLocale } from "../lib/human-locale";
 import { toneSolidBg, type Tone } from "../lib/tones";
-import { useMotionTokens } from "../lib/use-motion-tokens";
+import { useMotionTokens } from "../lib/use-root-tokens";
 import { tv, type VariantProps } from "../lib/variants";
 import { Chip } from "../ui/chip";
 import { Card } from "../ui/card";

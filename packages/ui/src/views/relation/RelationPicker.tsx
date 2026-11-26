@@ -91,6 +91,12 @@ export interface RelationPickerProps extends Pick<RelationFieldProps, "presentat
   /** Called with the new id after an inline create (e.g. to refetch options). */
   onCreated?: (id: string) => void;
   /**
+   * The field the picker edits, which names its create form's draft (`relation:<field>`), so two
+   * relation fields to one resource keep their drafts apart. Outside a form, name what tells two
+   * pickers of one resource apart there; without one they share the `relation` slot.
+   */
+  fieldName?: string;
+  /**
    * Enables the in-place "Edit" affordance: a pencil beside the picker opens the
    * *selected* record in a form dialog, so a related record is changed without
    * leaving the parent surface. Server-enforced permission surfaces in the form.
@@ -140,6 +146,7 @@ export function RelationPicker({
   readOnly,
   create,
   onCreated,
+  fieldName,
   edit,
   onEdited,
   onOpenChange,
@@ -215,6 +222,7 @@ export function RelationPicker({
       </div>
       <RelationRecordDialog
         dialog={dialog}
+        fieldName={fieldName}
         create={create}
         edit={edit}
         onClose={() => setDialog(null)}

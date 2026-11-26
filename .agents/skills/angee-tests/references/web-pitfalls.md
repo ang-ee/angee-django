@@ -11,6 +11,20 @@ Traps moved from the frontend guide's Pitfalls and Checks sections. Commands and
   fixture a data-bound story declares (`parameters.angeeFixture`, `RuntimeFixture`,
   `storySchema`, `angeeOwnRuntime`, one provider stack) is the
   [rendering and testing contract](../../../../docs/frontend/guidelines.md#rendering-and-testing).
+- **A story whose schema metadata names no resources loads no record.**
+  Its `FormView` warns `[Angee] model metadata lookup: Cannot resolve model
+  spelling …` and shows "Record unavailable"; the workshop's story check fails on
+  that warning when a workshop-package story logs it before its render settles
+  (a record story within 500 ms of showing its record), as it fails on a crash
+  or an unanswered read, and nothing fails for a fragment's or product's story. Declare the story's resources once,
+  `storySchema(operations, { schema, resources })`.
+- **A module a story imports never loads a test runner.** In the workshop,
+  `vitest` finds Storybook's own expect already set up and throws `Cannot read
+  properties of undefined (reading 'customEqualityTesters')` for every story of
+  a file whose module graph reaches the runner; the architecture guardrails
+  refuse it and name the chain.
+  `@angee/refine/testing` and `@angee/ui/testing` are Vitest harnesses; stories
+  take `@angee/storybook/testing` and `@angee/refine/testing/wire`.
 - **A rendered test waits for the effect itself.** Wait for the save's call or
   the element with the shared waiting limit; never pause a fixed time and then
   assert that something HAS happened, and pass no per-test timeout, a shorter

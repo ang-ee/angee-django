@@ -392,17 +392,31 @@ export interface AuthoredMutationEnvelope {
   error_code?: unknown;
 }
 
+/**
+ * A refusal the server answered in band, in a mutation's result envelope: the write's
+ * answer arrived, unlike a transport failure. `code` is the envelope's `error_code`, or
+ * null for a refusal its caller read as a message alone.
+ */
+export class AuthoredEnvelopeError extends Error {
+  readonly code: string | null;
+
+  constructor(message: string, code: string | null) {
+    super(message);
+    this.name = "AuthoredEnvelopeError";
+    this.code = code;
+  }
+}
+
 export function errorFromAuthoredEnvelope(
   value: AuthoredMutationEnvelope | Error | string | null | undefined,
 ): Error | null {
   if (!value) return null;
   if (value instanceof Error) return value;
-  if (typeof value === "string") return value ? new Error(value) : null;
+  if (typeof value === "string") return value ? new AuthoredEnvelopeError(value, null) : null;
   if (!value.error_code) return null;
-  const message = typeof value.error === "string" && value.error
-    ? value.error
-    : String(value.error_code);
-  return new Error(message);
+  const code = String(value.error_code);
+  const message = typeof value.error === "string" && value.error ? value.error : code;
+  return new AuthoredEnvelopeError(message, code);
 }
 
 const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];

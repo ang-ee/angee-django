@@ -58,16 +58,19 @@ import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHead
 import { RecordFieldMarkControl, UnregisteredImplementationField } from "./record-field-marks";
 import { createLabelForResource } from "../resource/utils/labels";
 
+// The wrapper draws the field's focus ring (`focus-within:focus-ring`). A focused input, textarea or
+// button directly inside it drops its own ring (`ring-0`) and forced-colours outline; a control that
+// draws a focus-within ring on an element of its own (number, search, JSON, markdown, tags) keeps it.
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
   "-mx-2 min-h-8 rounded-6 border border-transparent bg-transparent px-2",
   "transition-colors hover:border-border-subtle hover:bg-inset",
   "focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring",
   "[&>button]:h-8 [&>button]:border-0 [&>button]:bg-transparent [&>button]:px-0 [&>button]:shadow-none",
-  "[&>button:hover]:bg-transparent [&>button:focus-visible]:shadow-none",
+  "[&>button:hover]:bg-transparent [&>button:focus-visible]:ring-0 [&>button:focus-visible]:outline-none",
   "[&>input]:h-8 [&>input]:border-0 [&>input]:bg-transparent [&>input]:px-0 [&>input]:shadow-none",
-  "[&>input:focus]:border-transparent [&>input:focus]:shadow-none [&>input:focus-visible]:border-transparent [&>input:focus-visible]:shadow-none",
+  "[&>input:focus]:border-transparent [&>input:focus]:ring-0 [&>input:focus]:outline-none [&>input:focus-visible]:border-transparent",
   "[&>textarea]:min-h-[120px] [&>textarea]:border-0 [&>textarea]:bg-transparent [&>textarea]:px-0 [&>textarea]:py-1.5 [&>textarea]:shadow-none",
-  "[&>textarea:focus]:border-transparent [&>textarea:focus]:shadow-none",
+  "[&>textarea:focus]:border-transparent [&>textarea:focus]:ring-0 [&>textarea:focus]:outline-none",
   "[&>div]:border-0 [&>div]:bg-transparent [&>div]:shadow-none",
 );
 const READONLY_FIELD_CONTROL_CLASS = "min-h-8 text-13 text-fg";
@@ -275,6 +278,8 @@ export function FormViewRecordHeader({
               relation={titleRelation}
               filters={currentTitleField.filters}
               selectedOption={titleSelectedOption}
+              fieldName={currentTitleField.name}
+              edit={currentTitleField.relationEdit}
               placeholder={currentTitleField.placeholder ?? t("relation.placeholder")}
               aria-label={fieldAriaLabel(currentTitleField)}
             />
@@ -810,6 +815,8 @@ function BoundFieldRow({
             relation={relation}
             filters={field.filters}
             selectedOption={selectedOption}
+            fieldName={field.name}
+            edit={field.relationEdit}
             aria-label={fieldAriaLabel(field)}
           />
         ) : relationList ? (
@@ -822,6 +829,7 @@ function BoundFieldRow({
             readOnly={effectiveReadOnly}
             relation={relationList}
             filters={field.filters}
+            fieldName={field.name}
             aria-label={fieldAriaLabel(field)}
           />
         ) : (

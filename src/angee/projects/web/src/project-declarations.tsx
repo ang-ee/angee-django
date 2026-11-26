@@ -1,7 +1,6 @@
 import {
   Action,
   Column,
-  createClientKey,
   Facet,
   Field,
   Form,
@@ -12,9 +11,12 @@ import {
   useEnumOptions,
   mutationDialogValueCodecs,
   relationValueId,
+  actionOutcomeSubmitResult,
+  formSubmitOutcome,
   useActionOutcomeMutation,
   useActionResultMutation,
   useActionResultRun,
+  useIdempotencyKeys,
   useRecordAction,
   defineRowAction,
   type StringIdRow,
@@ -23,6 +25,7 @@ import {
   type FormProps,
   type ListProps,
 } from "@angee/ui";
+import { failedWriteOutcome } from "@angee/refine";
 import * as React from "react";
 
 import { enProjectsMessages, useProjectsT } from "./i18n";
@@ -78,17 +81,19 @@ export function useProjectFormDeclaration(
     invalidateModels: [PROJECT_MODEL],
   });
   const settleCreation = useActionResultRun({ linkTo: PROJECT_MODEL });
-  // A retry of the same template reuses its key, so the server replays one creation.
-  const pendingCreation = React.useRef<{ template: string; key: string } | null>(null);
+  // Creating from one template is one draft: every attempt until a project is created carries its
+  // key, so the server creates it once.
+  const keys = useIdempotencyKeys();
   const createProject = useRecordAction(async (id) => {
-    if (pendingCreation.current?.template !== id) {
-      pendingCreation.current = { template: id, key: createClientKey("project-template") };
-    }
-    const { key } = pendingCreation.current;
+    const scope = `projects.project-from-template:${id}`;
     await settleCreation(async () => {
-      const outcome = await createFromTemplate(id, { idempotency_key: key });
-      if (outcome?.ok) pendingCreation.current = null;
-      return outcome;
+      try {
+        return await keys.send(scope, (key) => createFromTemplate(id, { idempotency_key: key }), (outcome) => formSubmitOutcome(actionOutcomeSubmitResult(outcome)));
+      } catch (cause) {
+        if (failedWriteOutcome(cause) !== "conflict") throw cause;
+        // An earlier attempt created a project under this draft's key: the next one is a new draft.
+        return { ok: false, message: t("project.createdEarlier") };
+      }
     });
   });
   const verbs = selection.verbs ?? ["pause", "resume", "complete", "drop", "createFromTemplate", "transfer"];

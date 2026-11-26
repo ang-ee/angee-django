@@ -38,10 +38,7 @@ const schemas = storySchema({
   libraryPage: () => ({ rows: [{ ...record, parent: null, expandable: false }], total: 1 }),
   action_selection_limit: () => 100,
   impl_choices: () => choices,
-});
-const publicSchema = schemas.public;
-if (!publicSchema) throw new Error("The library fixture requires its public schema.");
-publicSchema.metadata = { angee: { resources: [resource] } };
+}, { resources: [resource] });
 const source = { record, values: record };
 const containers = U.containersFromChildren(U.FORM_CONTAINERS, {
   "notes.Note#rail": { "library.properties": { content:
