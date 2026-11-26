@@ -10,6 +10,32 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, `@angee/metadata`: **Changed API.** A list header shows a sort
+  only for the key its rows visibly follow, the first of the order's keys that
+  its groups do not share. A declared or default order's later keys only break
+  ties, and each of them that has a column showed as sorted: a list grouped by
+  kind and ordered by kind, key and language showed "Language, ascending" over
+  rows not in language order, and the first press on that header sorted it
+  descending. That header now shows "not sorted", and its first press sorts it
+  in its first direction as a fresh single-key order, decided from the
+  table's state when pressed. A key a group's records share shows no sort:
+  the field grouped by its whole value (a `Date` by day included) and a
+  grouped relation's members, which the new `GroupAxis.shares` in
+  `@angee/metadata` answers; each list's table carries its group axes as
+  `meta.groupAxes`. A grouping column's press is the table's toggle, as
+  before: it turns the groups of a list grouped in the browser, and on a
+  server-grouped list it leaves the groups in place and asks for their records
+  in that column's order alone. The table's sorting still holds the whole
+  order: every read asks for each key and a list sorted in the browser keeps
+  its tie-breakers. A tie-breaker press drops the grouping key with the rest,
+  so groups made in the browser lose its order (the table orders them by the
+  pressed column's value on each group).
+  `ariaSortForColumn` is removed from
+  `@angee/ui/views/resource-view-list-body`; a custom header renders its cells
+  with `ListHeaderCell` from the same entry, which sets `aria-sort` (on a table
+  of your own, set `meta.groupAxes` for it). `@angee/ui` augments TanStack's
+  `TableMeta` with the optional `groupAxes`: a program that passes `meta` to a
+  table of its own declares its keys by augmenting `TableMeta` too.
 - `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
   as its value, are honoured by every relation control a descriptor field
   renders through. The dialogs' own relation control passed the picker

@@ -57,6 +57,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     pagination: paginationState,
     sorting: sortingState,
     grouping,
+    meta,
     rowSelection,
     handlePaginationChange,
     handleSortingChange,
@@ -125,6 +126,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     manualSorting: true,
     manualFiltering: true,
     enableMultiSort: false,
+    meta,
     getCoreRowModel: getCoreRowModel(),
     state: {
       columnVisibility: effectiveColumnVisibility,
