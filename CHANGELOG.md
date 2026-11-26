@@ -10,6 +10,123 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed contract.** An action or mutation dialog the server
+  refuses says each reason once, where the reason is (a `content` editor's
+  reason excepted). The server joins every reason into the outcome's message (a
+  refused target's message is the verb's summary), and the dialog showed that
+  message on its banner beside the reasons it joins. Now, in a `MutationDialog`
+  fed an action
+  outcome and in an `ActionFormDialog`, typed or schema-driven:
+  a refusal of one field shows its sentence under the field only and the banner
+  names the field ("Please fix the highlighted fields: To.") without repeating
+  it. Focus goes to that field (with several, the first in the dialog's order)
+  when it is a text field of a `MutationDialog` or of a typed-argument
+  `ActionFormDialog`; a schema-driven or definition `ActionFormDialog` holds
+  its fields in a fieldset it disables while the submit runs, so a browser
+  cannot focus a native input there and focus goes to the banner naming the
+  field (a checkbox or switch still takes it). A refusal of a field and a
+  reason about the whole action shows that
+  reason on the banner, without the `__all__:` prefix it carried, beside the
+  line naming the field, and the banner takes focus; a reason about the whole
+  action alone shows once; a refused
+  target shows its reason ("You are not allowed to modify this task.") instead
+  of the verb's summary ("Send failed."); a refusal that carries only a
+  message, a domain refusal in band included, still shows that message. A
+  reason under a field the dialog does not render (a hidden field, a field its
+  `showWhen` hides for the values, a field of another schema branch than the
+  one chosen) shows on the banner once, as `key: reason`; before, an
+  `ActionFormDialog` bound it to the field nobody saw, so only the server's
+  joined message told it, and a `MutationDialog` said it twice. A reason under
+  a name only an `ActionFormDialog`'s `content` editor holds shows under that
+  editor and on the banner. A row's direct submit (`useDescriptorRowActions`
+  with `valuesFromRow`) refused for its fields only toasts under the verb's
+  label, not its id (the id still stands in when the label is not text). The
+  adapter, `actionOutcomeSubmitResult`, keeps field
+  reasons under their keys,
+  moves the `__all__` reasons to the form level as they are, and uses the
+  message only when the outcome carries no reason, the rule `runActionResult`
+  applies; `ActionFormDialog` tells the binder the fields it renders when the
+  answer lands. `ActionFormDefinition.fieldNames` is removed and
+  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.fieldNames`
+  also takes a function of the form's values. Unchanged: a record form's save
+  refusal, which the server already splits into field and form reasons and
+  which never passes through the adapter, and the record bar's toast for a
+  refused verb, titled by the verb's label, whose body is the outcome's
+  reasons, or its message when it carries none.
+  Not in this change: focus reaching a field that is disabled or replaced while
+  the submit runs: a native input of a schema-driven or definition
+  `ActionFormDialog`, and a select, combobox, date, time, tag or relation input
+  in any dialog; nor a member of a rows, object or list field, which has no
+  control of its own to focus. Until then the banner takes focus, which names
+  the field but no longer repeats its reason.
+  Nor inline action forms that claim no field (`useActionForm`'s empty
+  default), whose banner still repeats a field's reason as `key: reason`, nor a
+  raised domain error reading "Request failed." or its code.
+- `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
+  Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
+  the one composed `box-shadow` holds the ring beside the element's own
+  `shadow-*` elevation: a focused pill tab, pressed segmented toggle, drawer
+  rail tab, toast, block-card link, interactive card or collection card frame
+  keeps its elevation and shows the ring. In forced-colours mode, where the
+  browser drops every `box-shadow` and in the last release no control that
+  draws the ring showed focus (controls with their own outline or border, such
+  as the calendar's buttons, did), every control that draws the ring shows a
+  2px outline in the system's colour; the outline is declared for that mode
+  only. An open tab panel shows the ring on keyboard focus. The ring's colour,
+  width and offset are the theme's `--ring` and `--ring-danger`, unchanged.
+  An elevation token is a shadow, never `none`: a layer that is not a shadow
+  voids the composed `box-shadow`, ring included, so "no elevation" is
+  `0 0 #0000` (Ledger and the flat elevation choice). The theme contract
+  (`theme/runtime.mjs`) holds elevations, `--ring` and `--ring-danger` to fixed
+  shadow forms with one exported judge, `isShadowList`, which the theme matrix
+  test also uses, and the composer refuses a theme stylesheet whose text
+  declares an `--elevation-*` property, names one in `@property`, or holds a backslash.
+  `shadow-none` clears an element's own shadow, never the ring: a ring is
+  removed with `ring-0` and `outline-none` under a selector that outranks the
+  ring's state variant, as the form's editable fields do for an input,
+  textarea or button directly inside them and the data-attribute read-only
+  path does. The public token-name list (`@angee/ui/tokens`) leaves out
+  Tailwind's own `--tw-*` variables, so it is unchanged.
+- `@angee/ui`, `@angee/metadata`: **Changed API.** A list header shows a sort
+  only for the key its rows visibly follow, the first of the order's keys that
+  its groups do not share. A declared or default order's later keys only break
+  ties, and each of them that has a column showed as sorted: a list grouped by
+  kind and ordered by kind, key and language showed "Language, ascending" over
+  rows not in language order, and the first press on that header sorted it
+  descending. That header now shows "not sorted", and its first press sorts it
+  in its first direction as a fresh single-key order, decided from the
+  table's state when pressed. A key a group's records share shows no sort:
+  the field grouped by its whole value (a `Date` by day included) and a
+  grouped relation's members, which the new `GroupAxis.shares` in
+  `@angee/metadata` answers; each list's table carries its group axes as
+  `meta.groupAxes`. A grouping column's press is the table's toggle, as
+  before: it turns the groups of a list grouped in the browser, and on a
+  server-grouped list it leaves the groups in place and asks for their records
+  in that column's order alone. The table's sorting still holds the whole
+  order: every read asks for each key and a list sorted in the browser keeps
+  its tie-breakers. A tie-breaker press drops the grouping key with the rest,
+  so groups made in the browser lose its order (the table orders them by the
+  pressed column's value on each group).
+  `ariaSortForColumn` is removed from
+  `@angee/ui/views/resource-view-list-body`; a custom header renders its cells
+  with `ListHeaderCell` from the same entry, which sets `aria-sort` (on a table
+  of your own, set `meta.groupAxes` for it). `@angee/ui` augments TanStack's
+  `TableMeta` with the optional `groupAxes`: a program that passes `meta` to a
+  table of its own declares its keys by augmenting `TableMeta` too.
+- `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
+  as its value, are honoured by every relation control a descriptor field
+  renders through. The dialogs' own relation control passed the picker
+  neither the opt-out nor a known option, so a dialog still offered Edit and
+  read a record it had been given. An action's relation argument
+  (`ActionRelationArg`) can declare the opt-out; it still holds a bare id, so
+  its record is read for its label. A registered widget's `field` now carries
+  `relationEdit` (declared on `FieldPresentation`) from a form, a dialog and a
+  line's cell, and the party picker and the calendar picker pass it on.
+  `relationSelectedOption` returns `undefined` when the row's label path reads
+  `undefined`, so a relation value such as `{ id }` is read for its label
+  instead of showing its raw id; a member held as `null` or blank still labels
+  the option by its id. A form spec cannot declare the opt-out.
 - `@angee/ui`: A relation field can decline inline edit of its selected
   record with `relationEdit: null` (a form's field, a dialog's field, an
   authored line field; `edit={null}` on `RelationFieldWidget`, beside
@@ -43,10 +160,11 @@ live in code docstrings.
   the mail itself, before its first link. While the body or anything in the
   mail has keyboard focus, a ring fixed to the frame's edges stays as the
   arrow, page, space and end keys scroll the mail, and stays beside a link's
-  own ring, also in a mail that removes its links' outline: 2px of the theme's
-  `--border-focus` outside, made opaque, and 2px of white or black inside,
-  whichever contrasts with it, so one edge holds 3:1 on a white mail and on a
-  near-black one (on a mid-grey mail neither edge may reach it). A click on
+  own ring, also in a mail that removes its links' outline. The ring has three
+  tones, 2px each: the theme's `--border-focus` outside, then a black line,
+  then a white one, so one of them holds contrast on any mail, whatever it
+  paints and whatever the theme's color is (at least 4.6:1 on any grey). A
+  click on
   the mail's text or on a link shows no ring until the next key press; a
   click into a field of the mail shows it, as the field shows its own. The
   ring is the root's own
@@ -67,10 +185,9 @@ live in code docstrings.
   name. The ring's color is read from the page when the document is
   assembled: a theme, brand or light/dark switch reloads an open mail, which
   returns to its top and shows no ring until the next Tab; an ordinary render
-  keeps it. A browser without CSS relative color syntax draws the theme's
-  color as it is, then a black and a white line inside it; one without
-  `:has()` (before Chrome 105, Safari 15.4, Firefox 121) draws no ring, as
-  before this change.
+  keeps it. A browser without `:has()` (before Chrome 105, Safari 15.4,
+  Firefox 121) draws no ring, as before this change; the ring needs nothing
+  newer.
   `@angee/ui/lib/use-motion-tokens` is removed and
   `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
   beside `useRootTokens`, the one reader of the root's resolved tokens, which
@@ -160,6 +277,47 @@ live in code docstrings.
   `saveBanner`. **Upgrade:** replace
   `focus: true` with that hook's `focusBanner` and spread its `banner` on the
   surface's `ErrorBanner`.
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+  The default brand kit's colours dress the app at run time, on every page inside
+  it, signed in or not.
+  - `@angee/app` gains the install-one manifest key `hostAppearance`, a
+    `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
+    per render of its session frame; two providers fail composition, as two dashboard
+    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps each
+    person's first paint, and the boot cache, where they wear the host's options, until
+    the source's first read answers, fails or pauses; a person's own saved theme or
+    customisation is painted at once, and after the first paint every choice applies
+    at once, a draft's included. Only the session frame sets it, and
+    `CreateAppInput.appearance` takes none.
+    Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
+    precedence".
+  - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
+    colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
+  - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
+    of any kit, through the new public root `default_brand_kit_colors`
+    (`BrandKitColors`), under `read_colors`, a deliberate disclosure on the kit's own
+    `is_default` column (`brandkit/brand_kit` at schema revision 2; no tuple). Console
+    reads stay signed-in.
+  - The Appearance page's customisation editor starts from the options the person
+    wears, so customising while following the app default keeps its other choices.
+  - **Upgrade:** the console root `default_brand_kit` is removed; read
+    `default_brand_kit_colors` on the public schema, or `BrandKit.objects.default()` in
+    Python. Provision applies the permission revision through `rebac sync`; until it
+    has, the public root answers `null` with no error and the app wears the build's
+    colours. Once the addon is provisioned a default kit always exists, so on a host with
+    `angee.brandkit`: a project on the stock theme (the full profile's default) wears
+    the shipped Angee kit's colours; a project on another customisable theme, such as
+    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
+    states in `appearance_options` show only on a device's first visit, before the read
+    answers; and every app of a deployment with per-app themes wears the kit's palette,
+    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
+    hosts without the addon, and a theme that ships its own default kit stating its own
+    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+  - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
+    (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
+    because the workshop's toolbar is the host's appearance there; a story about the
+    source passes `hostAppearanceSource`.
+
 - `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
   applied: the panel library (react-resizable-panels) sets `overflow: auto`
   inline on the element that takes a pane's class, and an inline style wins
@@ -260,10 +418,16 @@ live in code docstrings.
   `failedWriteOutcome`, exported for any surface whose answer can land after
   it is gone). `MessageActions` shows on a coarse pointer. The
   unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
-  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`; an
-  open form dialog renders under the router and `ModalsHost` and says so when
-  one is missing; `createUiTestProviders` and `ShellPageTestProviders` render
-  one app shell (`AppShellTestProviders`), which provides `ModalsHost`;
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`;
+  every surface the unsaved-changes guard protects (a `DialogForm` given
+  `dirty` as it opens, so both form dialogs; `FormView`; a page guarding its
+  own edits) renders under the app's router and `ModalsHost`, and without the
+  router throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
+  test or a story provides both through the shared providers below;
+  `createUiTestProviders` and `ShellPageTestProviders` render
+  one app shell (`AppShellTestProviders`, from the runner-free
+  `@angee/ui/testing/shell`), which provides `ModalsHost`;
   `ShellPageTestProviders` renders under a memory router unless one is already
   above, and `createUiTestProviders` takes `router`; a keyed dialog's
   submission drops any assertion of its key.

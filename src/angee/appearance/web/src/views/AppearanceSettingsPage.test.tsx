@@ -154,6 +154,31 @@ test("Discard restores saved values in every control and permits another draft",
   expect(f.patchPreferences).not.toHaveBeenCalled();
 });
 
+test("while the host's own options are still pending, a picked theme and its scheme re-theme the document at once", async () => {
+  const f = await fixture({ unrelated: true }, { themeId: paper.definition.id, colorScheme: "light", pending: true });
+  // Following the app default, the document waits for the host's options.
+  expect(document.documentElement.dataset.themeId).toBeUndefined();
+  fireEvent.click(radio(/ink.label/));
+  fireEvent.click(radio("Dark"));
+  await waitFor(() => expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" }));
+  expect(f.patchPreferences).not.toHaveBeenCalled();
+});
+
+test("customising while following the app default starts from the options the app wears and pins its theme", async () => {
+  const worn = {
+    version: paper.definition.options!.version,
+    value: { ...parseThemeCustomization(paper.definition.options!.defaults), brand: "#778899", radius: "soft" },
+  };
+  const f = await fixture({ unrelated: true }, { themeId: paper.definition.id, colorScheme: "light", options: worn });
+  expect(brandInput().value).toBe("#778899");
+  fireEvent.change(screen.getByLabelText<HTMLInputElement>("Accent color"), { target: { value: "#abcdef" } });
+  await waitFor(() => expect(f.appearance().currentPreferences).toMatchObject({
+    themeId: paper.definition.id,
+    options: { value: { brand: "#778899", accent: "#abcdef", radius: "soft" } },
+  }));
+  expect(f.patchPreferences).not.toHaveBeenCalled();
+});
+
 test("Restore theme defaults edits the draft while Reset appearance deletes the saved preference directly", async () => {
   const f = await fixture();
   fireEvent.click(screen.getByRole("button", { name: "Restore theme defaults" }));

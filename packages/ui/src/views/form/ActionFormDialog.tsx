@@ -21,7 +21,7 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
-import { fieldValidationSummary, visibleFields } from "./form-view-model";
+import { fieldValidationSummary, shownFields, visibleFields } from "./form-view-model";
 import { actionOutcomeSubmitResult, formSubmitOutcome, markMemberErrors } from "./validation-errors";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
@@ -51,11 +51,19 @@ type ArgValues = Record<string, unknown>;
  * `DescriptorFieldList`) with react-hook-form for collection, and `useActionForm` for the submit
  * lifecycle; no hand-rolled `<form>`.
  *
- * On an `ok=false` outcome it binds the in-band `validationErrors` to their args
- * and stays open; it closes only on `ok=true`, toasting the success `message`.
+ * On an `ok=false` outcome it binds each in-band reason under the field it names
+ * that the dialog renders, shows the rest (a non-field reason, one under a hidden
+ * field or an inactive branch) in its banner, and stays open; a reason under a name
+ * only a `content` editor holds shows in both places, under that editor (when it
+ * reads its field's error) and on the banner. It closes only on `ok=true`, toasting
+ * the success `message`.
  * A thrown (non-domain / GraphQL) failure surfaces in the form-level banner. While
  * the submit runs it cannot be dismissed, and dismissing typed values asks first
- * (`DialogForm`'s `pending` and `dirty`).
+ * (`DialogForm`'s `pending` and `dirty`), so it renders under the app's router and
+ * `ModalsHost`: opened without the router it throws
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.` A test provides both
+ * through the shared providers (`createUiTestProviders` or `AppShellTestProviders` with
+ * `router`).
  * @kind surface
  */
 export function ActionFormDialog(props: ActionFormDialogProps): React.ReactElement | null {
@@ -108,11 +116,6 @@ function ActionArgsDialog({
   const keys = useIdempotencyKeys();
   const draftScope = action.idempotencyScope?.(context) ?? null;
   useIdempotencyDraftOwner(open || inline ? draftScope : null, `the form of action "${action.id}"`);
-  const argNames = React.useMemo(
-    () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
-      ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),
-    [args, definition],
-  );
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     ...(draftScope ? { answerLost: t("form.answerLostResend") } : {}),
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
@@ -138,7 +141,9 @@ function ActionArgsDialog({
       onSucceeded?.(outcome);
       if (!inline) onOpenChange(false);
     },
-    fieldNames: argNames,
+    // The fields the dialog renders when the answer lands, in its order: a reason under any other
+    // name (a hidden field, a field of an inactive schema branch) shows on the banner.
+    fieldNames: (values) => shownFields(typeof fields === "function" ? fields(values) : fields, values).map((field) => field.name),
     // The banner's line naming the refused fields, by the labels the dialog shows.
     fieldSummary: (fieldErrors: Record<string, readonly string[]>): string => fieldValidationSummary(fieldErrors, new Map(
       (typeof fields === "function" ? fields(actionForm.form.getValues()) : fields).map((field) => [field.name, field]),

@@ -15,7 +15,7 @@ import {
 } from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { useRelationOptions } from "./relation-options";
+import { relationSelectedOption, useRelationOptions } from "./relation-options";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
 import { AppRuntimeProvider } from "../../runtime";
 
@@ -405,3 +405,19 @@ const metadata: SchemaFieldMetadata = schemaFieldMetadataFromDataResources([
     recordSearchFields: ["code", "name"],
   }),
 ]);
+
+describe("relationSelectedOption", () => {
+  test("a row is a known option only when it holds its label member", () => {
+    expect(relationSelectedOption({ id: "channel-1", name: "Support" }, "name")).toEqual({ value: "channel-1", label: "Support" });
+    expect(relationSelectedOption({ id: "channel-1", owner: { name: "Ada" } }, "owner.name")).toEqual({ value: "channel-1", label: "Ada" });
+    // Held but empty: the record has no label, so its id labels it and nothing is left to read.
+    expect(relationSelectedOption({ id: "channel-1", name: null }, "name")).toEqual({ value: "channel-1", label: "channel-1" });
+    expect(relationSelectedOption({ id: "channel-1", name: " " }, "name")).toEqual({ value: "channel-1", label: "channel-1" });
+    // Not held: the row is not a loaded record, so no option is known and the picker reads it.
+    expect(relationSelectedOption({ id: "channel-1" }, "name")).toBeUndefined();
+    expect(relationSelectedOption({ id: "channel-1", title: "Support" }, "name")).toBeUndefined();
+    expect(relationSelectedOption({ id: "channel-1", owner: null }, "owner.name")).toBeUndefined();
+    expect(relationSelectedOption("channel-1", "name")).toBeUndefined();
+    expect(relationSelectedOption({ name: "Support" }, "name")).toBeUndefined();
+  });
+});

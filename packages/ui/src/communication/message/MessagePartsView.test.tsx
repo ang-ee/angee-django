@@ -257,21 +257,18 @@ describe("MessageHtmlFrame", () => {
     expect(values("pointer-events")).toEqual(["none"]);
     // Above the mail's own positioned content, which would otherwise cover it.
     expect(values("z-index")).toEqual(["2147483647"]);
-    const [fallback, relative, ...more] = values("box-shadow");
+    // Three tones: the theme's color as the border, then a black and a white line inside it, each two pixels.
+    // The black or the white line holds contrast on any mail, so nothing is computed from the theme's color.
+    expect(values("border")).toEqual([expect.stringMatching(/^2px solid .+$/)]);
+    expect(values("border-color")).toEqual([]);
+    const lines = values("box-shadow");
+    expect(lines).toHaveLength(1);
+    const [black, white, ...more] = (lines[0] ?? "").split(",").map((line) => line.trim());
     expect(more).toEqual([]);
-    // A black and a white line first, for a browser that drops the relative color after it.
-    expect(fallback).not.toContain("from");
-    expect(fallback).toMatch(/#000(?:000)?\b|\bblack\b/i);
-    expect(fallback).toMatch(/#fff(?:fff)?\b|\bwhite\b/i);
-    expect(relative).toContain("oklch(from ");
-    // White below the threshold, black above. Over all 16,777,216 sRGB colors one edge holds 3:1 on #fff and on #111
-    // exactly while the threshold lies in (0.5285, 0.6489); the bounds here sit just inside that window.
-    const threshold = Number(/\(([\d.]+) - l\)/.exec(relative ?? "")?.[1]);
-    expect(threshold).toBeGreaterThanOrEqual(0.529);
-    expect(threshold).toBeLessThanOrEqual(0.648);
-    // Both edges opaque, whatever alpha the theme's color has.
-    expect(values("border-color")).toEqual([expect.stringMatching(/^oklch\(from .+ l c h \/ (?:1|100%)\)$/)]);
-    expect(relative).toMatch(/\/ (?:1|100%)\)$/);
+    expect(black).toMatch(/^inset 0 0 0 2px (?:#000(?:000)?|black)$/i);
+    expect(white).toMatch(/^inset 0 0 0 4px (?:#fff(?:fff)?|white)$/i);
+    // No declaration needs a newer browser than the selector does.
+    expect(declarations.map((declaration) => declaration.value).join(" ")).not.toMatch(/\bfrom\b|clamp\(|oklch\(/);
   });
 
   test("draws the ring in the theme's focus color the page's root resolves, asking the browser whether it is a color", () => {
@@ -279,13 +276,11 @@ describe("MessageHtmlFrame", () => {
     const { unmount } = render(<MessageHtmlFrame title="Body" html="<p>Plain</p>" />);
     expect(CSS.supports).toHaveBeenCalledWith("color", "#e7b008");
     expect(outerColor()).toBe("#e7b008");
-    expect(ring().values("border-color")).toEqual([expect.stringContaining("(from #e7b008 ")]);
-    expect(ring().values("box-shadow")[1]).toContain("(from #e7b008 ");
+    expect(srcdoc().split("#e7b008")).toHaveLength(2);
     unmount();
     document.documentElement.style.setProperty("--border-focus", "#5b5bd680");
     render(<MessageHtmlFrame title="Body" html="<p>Plain</p>" />);
     expect(outerColor()).toBe("#5b5bd680");
-    expect(ring().values("border-color")).toEqual([expect.stringContaining("(from #5b5bd680 ")]);
   });
 
   test("admits a color function that is closed", () => {
