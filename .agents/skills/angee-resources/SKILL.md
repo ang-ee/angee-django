@@ -105,8 +105,12 @@ description: "Declares and loads an addon's master, install and demo data: pypro
    `create_only = ["<field>", …]` in a row entry of its own: applied only to a row the load
    creates, never on adoption or re-application (`after_init_instance` and `load_scope` in
    `loader.py`; `iam_integrate_oidc/pyproject.toml`). Adding it to a shipped entry re-applies
-   that entry's existing rows once, since their hashes change. If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
-   in a tier at or below yours (`EntryGraph.ordered` in `entries.py`). **Owner rule:** the manifest selects files
+   that entry's existing rows once, since their hashes change. If a relation names another addon's seed → `depends_on = "<label>:<tier>/<file>"`, the
+   path that addon's manifest declares (`iam_messaging/pyproject.toml` depends on
+   `messaging_templates:install/030_messaging_templates.messagetemplate.yaml`), in a tier at or below yours
+   (`EntryGraph.ordered` in `entries.py`; `_package_resource_entry` prefixes `resources/` to an entry's path and to
+   each dependency's after the label, which `EntryGraph._dependency_key` splits at the first `:`, so a written
+   `resources/` is doubled). **Owner rule:** the manifest selects files
    and keys; the model owns uniqueness, so no field is adoptable without it
    ([addon declarations](../../../docs/composer.md#addon-declarations)).
 
