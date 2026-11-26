@@ -90,7 +90,16 @@ path for an account that cannot receive email.
 
 ## Permissions
 
-Platform admins send links. The permission is this addon's own declaration on
-IAM's `auth/user`; IAM's own Zed names no link action. The fragment's arms land in
-IAM's union points, so IAM's sealed disclosures (`angee.iam.E004`) keep the
-action to active, non-staff accounts.
+Platform administrators send links, and for now no other role can be given the
+action. The permission is this addon's own declaration on IAM's `auth/user`;
+IAM's own Zed names no link action. The permission merge lets other fragments
+add arms only to the permissions a resource type's owner declares, so a
+consumer's `permission issue_sign_in_link = …` is refused ("already declared by
+a contributor"), unlike its arm on IAM's `issue_password`. A role that should
+send links waits for that merge to change.
+
+The fragment also unions the action into IAM's `active_account_granted` and
+`nonstaff_account_granted`, so the action's holders see which accounts are
+active and which are not staff, as offering it needs. The blockers keep the
+action to those accounts: IAM's person-kind and protected-account ones and this
+addon's inactive and undeliverable ones.

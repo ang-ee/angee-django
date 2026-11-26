@@ -20,7 +20,11 @@ live in code docstrings.
   kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
   the document, now `IamMessagingRedeemSignInLink`. The permission
   `auth/user#issue_sign_in_link` is the addon's own declaration
-  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action. The
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
+  Platform administrators send links, and for now no other role can be given the
+  action: the permission merge lets other fragments add arms only to the
+  permissions a resource type's owner declares, so a consumer's
+  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
   addon joins the template's `full` profile; a host without it, the `base`
   profile included, offers and redeems no sign-in link. A link's session records
   IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are

@@ -836,7 +836,11 @@ data through REBAC, never a queryset bypass.
   still requires Change password; non-person accounts remain refused.
   A consumer marks an elevated role by unioning it
   into that permission from its fragment, never by mirroring holders; see
-  [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). Generic
+  [`tests/extcontrib`](../../tests/extcontrib/permissions.extends.zed). It
+  gives its role IAM's own actions the same way. An action another addon
+  contributes is that addon's own permission declaration, which the merge lets
+  no other fragment extend, so no consumer role can be given it yet: the
+  emailed sign-in link is for platform administrators. Generic
   updates pass `write` and `write__<field>` gates on changed fields only;
   protected accounts additionally need `administer`. Generic updates do not
   accept `password`; use `set_user_password` with the observed revision.
