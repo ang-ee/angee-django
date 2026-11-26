@@ -1681,11 +1681,15 @@ retains its native routing contract.
   own the operational cautions; routine startup never retires history.
 - **Removing a field, model or donor addon whose storage holds data needs a
   declared cutover.** A host's `makemigrations` refuses an autodetected removal
-  of a table or column that holds data on any database the host routes it to
-  ([django-compose's authoring guard](../composer.md#project-migration-history));
+  of a table or column that holds data on any database the host routes it to,
+  and its `migrate`, so `provision` too, refuses a pending removal in the
+  project's history that would destroy stored data, before any operation runs
+  ([django-compose's drop guard](../composer.md#project-migration-history));
   a cutover is declared in a reviewed migration. A
   project authors a native migration that preserves or retires the data and
-  removes the field or model; an empty column needs
+  removes the field or model, writing each removal of data it moved or retires
+  as django-compose's `IntendedRemoveField` or `IntendedDeleteModel`, and an
+  addon's migration template does the same; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
   seeded once the addon names the model under `retired_models` in its
   `pyproject.toml` `[tool.angee.resources]`.
