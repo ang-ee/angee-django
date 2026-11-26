@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider, baseIcons } from "@angee/ui";
 import {
   RouterProvider,
@@ -72,14 +72,14 @@ describe("SignInLinkMethod", () => {
   });
 
   test("shows one plain refusal when the link is refused, focused and without the token", async () => {
-    renderAt("/sign-in-link#token=usr_abc.spent");
+    renderAt("/sign-in-link#token=usr_abc.zz9");
     mocks.mutate.mockResolvedValue({ redeem_sign_in_link: { ok: false, user: null } });
 
     fireEvent.click(await screen.findByRole("button", { name: "Sign in with your link" }));
 
     expect(await screen.findByText("This sign-in link cannot be used")).toBeTruthy();
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("alert")));
-    expect(document.body.textContent).not.toContain("spent");
+    expect(document.body.textContent).not.toContain("zz9");
     expect(mocks.proceed).not.toHaveBeenCalled();
   });
 
@@ -109,6 +109,25 @@ describe("SignInLinkMethod", () => {
     expect(screen.queryByText("Could not reach the server")).toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
     expect(document.body.textContent).not.toContain("secret");
+  });
+
+  test("a second link opened in the page replaces the first: its token is sent and cleared from every entry", async () => {
+    const { history } = renderAt("/sign-in-link#token=usr_abc.first");
+    mocks.mutate.mockResolvedValue({ redeem_sign_in_link: { ok: false, user: null } });
+    await screen.findByRole("button", { name: "Sign in with your link" });
+    await waitFor(() => expect(history.location.href).toBe("/sign-in-link"));
+
+    // The second link changes only the fragment, so the browser pushes it onto this page.
+    await act(async () => { history.push("/sign-in-link#token=usr_abc.second"); });
+    await waitFor(() => expect(history.location.href).toBe("/sign-in-link"));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with your link" }));
+
+    await screen.findByText("This sign-in link cannot be used");
+    expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith({ token: "usr_abc.second" });
+    // Two entries, neither holding a token: the push added one and the page replaced it.
+    expect(history.length).toBe(2);
+    await act(async () => { history.back(); });
+    expect(history.location.href).toBe("/sign-in-link");
   });
 
   test("refuses a visit without a token and calls nothing", async () => {

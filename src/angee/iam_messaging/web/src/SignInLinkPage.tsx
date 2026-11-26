@@ -36,7 +36,8 @@ export function SignInLinkPage(): ReactNode {
 /**
  * Redeem the link only on an explicit click, so a mail scanner that opens it
  * cannot spend it. The token is read from the URL fragment, which no request,
- * log or referrer carries, and then dropped from the address bar; the transient
+ * log or referrer carries, and then dropped from the address bar; a second link
+ * opened in the same page takes the first one's place; the transient
  * mutation keeps it out of the client's mutation cache and runs once at a time.
  * A request that never reached the server keeps the link and offers a retry; a
  * server error says so; every refusal reads the same. Once signed in, the page
@@ -47,8 +48,14 @@ export function SignInLinkMethod(): ReactNode {
   const t = useIamMessagingT();
   const navigate = useNavigate();
   const hash = useRouterState({ select: (state) => state.location.hash });
-  const [token] = useState(() => new URLSearchParams(hash).get("token") || null);
-  const [state, setState] = useState<LinkState>(() => (token === null ? { kind: "refused" } : { kind: "ready" }));
+  const linked = new URLSearchParams(hash).get("token") || null;
+  const [token, setToken] = useState(linked);
+  const [state, setState] = useState<LinkState>(() => (linked === null ? { kind: "refused" } : { kind: "ready" }));
+  if (linked !== null && linked !== token && state.kind !== "pending") {
+    // A second link opened in this page replaces the held one, unredeemed; the effect below clears it too.
+    setToken(linked);
+    setState({ kind: "ready" });
+  }
   // This method renders its own refusal; no generic notification on top.
   const [redeem] = useAuthoredMutation(IamMessagingRedeemSignInLink, { transient: true, errorNotification: false });
   const proceed = useSignInRedirect();
