@@ -1245,7 +1245,12 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
 
 def _default_sender_usable() -> bool:
-    """Whether ``DEFAULT_FROM_EMAIL`` names a valid address, as messaging's outbound sender requires."""
+    """Whether ``DEFAULT_FROM_EMAIL`` is an address Django's email validator accepts.
+
+    This is iam's own check. Messaging's sender rule, which decides whether a link's
+    mail can leave where messaging is installed, is stricter: one address as
+    written, which the transport can carry (``SystemChannelBackend.system_mail_configured``).
+    """
 
     _name, address = parseaddr(str(settings.DEFAULT_FROM_EMAIL))
     try:
@@ -1445,7 +1450,15 @@ class SignInLink(AuditMixin, AngeeModel, concrete=True):
 
     @classmethod
     def deliverable(cls) -> bool:
-        """Whether this deployment can build and send links: a usable public origin, sender and default mailer."""
+        """Whether this deployment can build links and hand them to a mailer: an origin, a sender and a default mailer.
+
+        Where messaging is installed, Django's default mailer always exists (messaging's
+        system mailer, which records mail), so this no longer says the mail can leave:
+        a host with no transport mailer offers a link whose send raises and stamps
+        nothing. Debt: the lane that sends the link's mail replaces this check with
+        messaging's predicate, ``SystemChannelBackend.system_mail_configured()``; iam
+        cannot ask it itself, as iam does not depend on messaging.
+        """
 
         origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
         return origin is not None and _default_sender_usable() and DEFAULT_MAILER_ALIAS in mailers

@@ -20,7 +20,12 @@ live in code docstrings.
     loads the system channel's rows and runs `rebac sync` for schema revision 30.
     A host that authors `LOGGING` names `using: transport` on its
     `AdminEmailHandler` (messaging's README gives the block). Tests that observed
-    delivery through `MAILERS={"default": ...}` override `transport`.
+    delivery through `MAILERS={"default": ...}` override `transport`. With
+    messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
+    say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
+    iam's sign-in link still asks the default mailer, so a host with no transport
+    offers a link whose send raises and stamps nothing, and a recorded link whose
+    delivery later fails is stamped as sent.
   - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
     wherever messaging is installed, contributed by messaging's autoconfig. It
     records each email (a password reset, `sendtestemail`, a link an addon mails)

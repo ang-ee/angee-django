@@ -162,11 +162,10 @@ second link within `ANGEE_IAM_SIGN_IN_LINK_COOLDOWN` seconds (60 by default).
 It stores a `SignInLink` row with a keyed digest of the token, never the token
 itself, and a digest of the account facts the link is bound to. Once that row
 commits, the link goes to the account's `email` through Django's default mailer
-as plain text. The row then records `sent_at`, and `sign_in_link_sent` fires with
-the account and the row. The link leaves through Django's default mailer once
-the issuing transaction commits. Where that mailer records mail, the link is
-stored with it, and "accepted" means recorded. `created_by` records who issued it. System callers issue under `system_context`, which leaves
-`created_by` empty; an automatic invitation must follow an approval a person
+as plain text; where that mailer records mail, the link is stored with it. The
+row then records `sent_at`, and `sign_in_link_sent` fires with the account and
+the row. `created_by` records who issued it. System callers issue under
+`system_context`, which leaves `created_by` empty; an automatic invitation must follow an approval a person
 reviewed, never an unreviewed request. The console mutation is
 `issue_user_sign_in_link` (an `ActionResult`), offered through `account_actions`
 as `issue_sign_in_link`.
@@ -216,8 +215,13 @@ setting and its rule (`angee.base.origins.public_origin`): only an `https`
 origin (`http` only under `DEBUG`) with a valid host and port and no wildcard,
 user info or path joins the CSRF trusted origins and builds links, and
 `angee.E051` reports any other set value. Links are also built only when
-`DEFAULT_FROM_EMAIL` is a valid address and `MAILERS["default"]` exists.
-Otherwise no link is offered and the verb refuses. The token rides the
+`DEFAULT_FROM_EMAIL` is a valid address and `MAILERS["default"]` exists;
+otherwise no link is offered and the verb refuses. Where messaging is installed,
+a default mailer always exists (messaging's system mailer, which records mail),
+so this no longer says the mail can leave: a host with no transport mailer
+offers a link whose send raises and stamps nothing. And "accepted" then means
+recorded: a link whose delivery later fails is still stamped as sent and
+replaces the link that worked. The token rides the
 fragment, which no browser request, access log or referrer carries, and
 Angee's browser error reporting strips fragments from what it records. IAM's
 public `/sign-in-link` route renders the login page, with the link as its
