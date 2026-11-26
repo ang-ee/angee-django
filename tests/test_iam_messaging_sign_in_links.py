@@ -49,6 +49,7 @@ from angee.iam_messaging.autoconfig import SETTINGS as LINK_SETTINGS
 from angee.iam_messaging.models import (
     ISSUE_SIGN_IN_LINK,
     SIGN_IN_LINK_NO_ADDRESS_MESSAGE,
+    SIGN_IN_LINK_NOT_SHOWN_MESSAGE,
     SIGN_IN_LINK_PATH,
     SIGN_IN_LINK_TEMPLATE,
     SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE,
@@ -961,6 +962,65 @@ def test_a_link_whose_insert_fails_after_its_mail_leaves_no_mail_and_nothing_que
 
 
 # ---------- what is refused, before anything is written ----------
+
+
+def _override(kind: str, key: str, **changes: Any) -> Any:
+    """The deployment's override of a shipped English row, saved with ``changes``, as an administrator edits one."""
+
+    with system_context(reason="tests.iam_messaging.sign_in_link.override"):
+        baseline = MessageTemplate._base_manager.get(kind=kind, key=key, language="en", is_baseline=True)
+        override = MessageTemplate.objects.override(baseline)
+        for name, value in changes.items():
+            setattr(override, name, value)
+        override.full_clean()
+        override.save()
+    return override
+
+
+GUARDED = """{% include "parts/greeting" with person=person only %}
+
+Use the link below to sign in to {{ brand.name }}.
+
+{% if person.first_name %}
+
+{% include "blocks/button" with label="Sign in" url=link only %}
+
+{% endif %}"""
+"""The shipped text with the button behind a condition that is false for a person with no first name."""
+
+
+@pytest.mark.parametrize("override", [
+    pytest.param(lambda: _override("template", SIGN_IN_LINK_TEMPLATE, source=GUARDED),
+                 id="the-link-under-a-false-condition"),
+    pytest.param(lambda: _override("block", "button", text_source="{{ label }}"),
+                 id="the-link-dropped-from-the-text-body"),
+])
+def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fault(
+    deliverable, iam_admin, sent, caplog, django_capture_on_commit_callbacks, override,
+):
+    """Offered, since only the send can tell; refused in band, nothing written, the earlier link still current."""
+
+    target = _person("guest-hidden")  # no first name
+    earlier = sent(target, iam_admin)
+    override()
+    with system_context(reason=READ):
+        links = list(SignInLink._base_manager.values_list("pk", flat=True))
+        mails = list(Message._base_manager.values_list("pk", flat=True))
+    with (
+        caplog.at_level(logging.WARNING, logger="angee.iam_messaging.models"),
+        django_capture_on_commit_callbacks(execute=True) as callbacks,
+        actor_context(iam_admin),
+        _refused(ValidationError) as refusal,
+    ):
+        target.with_actor(iam_admin).issue_sign_in_link()
+    assert (refusal.value.code, refusal.value.messages) == ("link_not_shown", [SIGN_IN_LINK_NOT_SHOWN_MESSAGE])
+    assert "does not show the link" in caplog.text and callbacks == []
+    answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
+    assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": SIGN_IN_LINK_NOT_SHOWN_MESSAGE}
+    with system_context(reason=READ):
+        assert list(SignInLink._base_manager.values_list("pk", flat=True)) == links
+        assert list(Message._base_manager.values_list("pk", flat=True)) == mails
+    assert _redeem(earlier) == target
 
 
 def _broken(state: str, channel: Any) -> None:

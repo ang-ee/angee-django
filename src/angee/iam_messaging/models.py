@@ -56,6 +56,13 @@ SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE = (
 )
 """Refusal of a link on a deployment whose resources never loaded the template, code ``template_missing``."""
 
+SIGN_IN_LINK_NOT_SHOWN_MESSAGE = (
+    "The sign-in link's email template does not show the link, so no link was sent: "
+    "edit or delete the template's override."
+)
+"""Refusal of a link whose effective template, as the deployment edited it, does not show the link (the template's
+``value_not_printed``), code ``link_not_shown``."""
+
 logger = logging.getLogger(__name__)
 
 
@@ -147,9 +154,11 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         (``template_missing``), looked up for the recipient's person with
         ``MessageTemplateQuerySet.effective`` inside the send's named work; then
         whatever ``MessageTemplateManager.send_as_system`` refuses, as its
-        docstring orders it (the system channel missing or paused among it).
-        That send renders the template with the link, its expiry and the
-        person's first name, and records it on messaging's system channel,
+        docstring orders it (the system channel missing or paused among it),
+        a template whose bodies do not both show the link (``must_print``)
+        refused as the deployment's fault (``link_not_shown``, logged as a
+        warning naming the row). That send renders the template with the link,
+        its expiry and the person's first name, and records it on messaging's system channel,
         queued for delivery when the outermost transaction commits. Only then is
         the row saved, its ``sent_at`` stamped: recorded and queued, which makes
         it the account's current link at once. The send and the save are one
@@ -189,8 +198,17 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
             "person": {"first_name": user.first_name},
         }
         with transaction.atomic():
-            with actor_context(actor) if actor is not None else nullcontext():
-                templates.send_as_system(template, reason=reason, to=address, values=values)
+            try:
+                with actor_context(actor) if actor is not None else nullcontext():
+                    templates.send_as_system(template, reason=reason, to=address, values=values, must_print=["link"])
+            except ValidationError as refusal:
+                if "value_not_printed" not in {item.code for item in getattr(refusal, "error_list", ())}:
+                    raise
+                logger.warning(
+                    "Refused a sign-in link: message template %s (%s, %s) does not show the link.",
+                    template.pk, SIGN_IN_LINK_TEMPLATE, template.language,
+                )
+                raise ValidationError(SIGN_IN_LINK_NOT_SHOWN_MESSAGE, code="link_not_shown") from None
             link.sent_at = timezone.now()
             with system_context(reason="iam_messaging.sign_in_link.issue"):
                 if actor is not None:

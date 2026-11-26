@@ -54,9 +54,13 @@ by `MessageTemplate.objects.effective("template", ..., person=...)`: their
 person's languages, then the deployment's default. A deployment edits the text
 as an override of the shipped row, as for any message template
 ([message templates](../messaging_templates/README.md)), and the override must
-keep `link`: one that drops it saves with only the preview's "Nothing reads
-link." warning, and every link sent after that is a mail without its link that
-still retires the link before it. The template reads
+show `link` in both bodies: the send asks it (`must_print=["link"]`), so an
+override that drops the link, from either body or from a block it includes, or
+shows it only under a condition that is false for this person, is refused when a
+link is sent. The action refuses in band ("The sign-in link's email template does
+not show the link…", code `link_not_shown`), nothing is written, the earlier link
+stays current, and a warning on this addon's logger names the template row. The
+template reads
 three values, which the server builds: `link`, the single-use link; `expires_at`,
 when it stops working, printed in the deployment's time zone; and
 `person.first_name`, the account's first name, the one value a person typed,
