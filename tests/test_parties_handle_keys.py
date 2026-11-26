@@ -26,7 +26,7 @@ from rebac import actor_context, system_context
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.models.identity import public_id_of
 from angee.messaging.testing.models import Channel, Handle, Message, Party, Person, Reaction, Recipient, Thread
-from angee.parties.managers import EmailBasis, HandleManager, KeyRepair, ValueOwned
+from angee.parties.managers import EmailBasis, KeyRepair, ValueOwned
 from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
 from tests.conftest import create_platform_admin, create_user, make_integration
@@ -636,13 +636,18 @@ def test_a_deferred_handle_whose_owner_was_merged_away_meanwhile_is_keyed_alone(
             elsewhere.fold([Handle._base_manager.get(pk=owner_row.pk)])
 
     if when == "before the fold's transaction":
-        key_spelling = HandleManager._key_spelling
+        value_owner = Handle.value_owner
+        asked: list[Any] = []
 
-        def merged_first(self: Any, pk: Any) -> str:
-            merge_once()
-            return key_spelling(self, pk)
+        def merged_after_the_batch(self: Any) -> Any:
+            if self.pk == deferred.pk:
+                asked.append(self.pk)
+                if len(asked) == 2:
+                    # The batch asked first and deferred the row; this is its fold's turn, before its transaction.
+                    merge_once()
+            return value_owner(self)
 
-        monkeypatch.setattr(HandleManager, "_key_spelling", merged_first)
+        monkeypatch.setattr(Handle, "value_owner", merged_after_the_batch)
     else:
         lock = Party.objects.lock_identity_rows
 
@@ -666,15 +671,15 @@ def test_a_spelling_another_writer_committed_after_the_lookup_is_landed_on_not_r
 
     with system_context(reason="tests.parties.handle_keys.committed_meanwhile"):
         committed = Handle.objects.upsert(platform="email", value="Hal@Example.test", created_by_id=owner.pk)
-        find_identity = HandleManager.find_identity
+        find_identity = Handle.objects.find_identity
         asked: list[str] = []
 
-        def missed_once(self: Any, **identity: Any) -> Any:
+        def missed_once(**identity: Any) -> Any:
             # The first lookup ran before the other writer's commit.
             asked.append(identity["value"])
-            return None if len(asked) == 1 else find_identity(self, **identity)
+            return None if len(asked) == 1 else find_identity(**identity)
 
-        monkeypatch.setattr(HandleManager, "find_identity", missed_once)
+        monkeypatch.setattr(Handle.objects, "find_identity", missed_once)
         landed = Handle.objects.upsert(platform="email", value="hal@example.test", created_by_id=owner.pk)
 
     assert (landed.pk, asked) == (committed.pk, ["hal@example.test", "hal@example.test"])
