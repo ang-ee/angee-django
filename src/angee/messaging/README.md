@@ -417,7 +417,7 @@ selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
 source. `compose` and `Message.require_reply` decide `reply` on the channel,
 which nobody holds there, so `compose(channel=Channel.objects.system_channel())`
 and an answer to a system message are refused for every person, administrators
-included, with no branch of their own: the channels offered to send from are
-exactly the channels a send admits. Its readers, administrators alone, find it
+included, with no branch of their own. On the system channel the selection and
+the send agree: neither admits it. Its readers, administrators alone, find it
 among channels as "System mail", its threads in the inbox and its messages in
 timelines.
