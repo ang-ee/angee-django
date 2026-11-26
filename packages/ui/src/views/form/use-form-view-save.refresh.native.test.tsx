@@ -33,18 +33,25 @@ afterEach(() => { cleanup(); clearClients(); });
 
 /**
  * A record form's save beside one authored read registered on the saved model, as the record's own
- * chrome mounts them. The read answers its first load at once; `refetch` decides every later answer.
+ * chrome mounts them. The read answers its first load at once unless `first` says otherwise; `refetch`
+ * decides every later answer.
  */
-function renderSave(refetch: () => Promise<{ data: { summary: string } }>) {
+function renderSave(
+  refetch: () => Promise<{ data: { summary: string } }>,
+  first: () => Promise<{ data: { summary: string } }> = async () => ({ data: { summary: "Before" } }),
+) {
   const reads = vi.fn(async ({ meta }: { meta?: MetaQuery }) => {
     if (meta?.gqlQuery !== summary) throw new Error("unexpected read");
-    return reads.mock.calls.length === 1 ? { data: { summary: "Before" } } : refetch();
+    return reads.mock.calls.length === 1 ? first() : refetch();
   });
   const update = vi.fn(async ({ variables }: { variables?: unknown }) => ({ data: { id: "note-1", title: "Before", body: "", ...(variables as Row) } }));
   const onSaved = vi.fn();
-  const state: { surface?: FormViewSaveSurface; summary?: string } = {};
+  // `fetchStatuses`: what each render of the read's owner saw, as a reader that waits for a first answer does.
+  const state: { surface?: FormViewSaveSurface; summary?: string; fetchStatuses: string[] } = { fetchStatuses: [] };
   function Harness() {
-    state.summary = useAuthoredQuery(summary, {}, { dataProviderName: "console", models: [resource.modelLabel] }).data?.summary;
+    const read = useAuthoredQuery(summary, {}, { dataProviderName: "console", models: [resource.modelLabel] });
+    state.summary = read.data?.summary;
+    state.fetchStatuses.push(read.fetchStatus);
     state.surface = useFormViewSave({
       resource: resource.modelLabel, id: "note-1", isCreate: false, dataResource: resource,
       modelMetadata: schemaFieldMetadataFromDataResources([resource]).labels[resource.modelLabel]!,
@@ -104,4 +111,20 @@ test("guard: the read of the saved model still refreshes after the confirmation,
   expect(view.state.summary).toBe("Before");
   await act(async () => { answer({ data: { summary: "After" } }); });
   await waitFor(() => expect(view.state.summary).toBe("After"));
+});
+
+test("a save confirmed while a read of the saved model has not answered its first load never renders that read idle", async () => {
+  const never = () => new Promise<{ data: { summary: string } }>(() => undefined);
+  const view = renderSave(never, never);
+  await waitFor(() => expect(view.state.surface?.loading).toBe(false));
+  expect(view.reads).toHaveBeenCalledTimes(1);
+  act(() => { view.state.surface!.form.setValue("title", "After", { shouldDirty: true }); });
+  // Counted after the edit's own render, so what follows is rendered by the save.
+  const rendersBeforeSave = view.state.fetchStatuses.length;
+  await act(async () => { void view.state.surface!.submitForm(); });
+  // The refresh cancelled the unanswered read and sent it again, and the confirmation rendered meanwhile.
+  await waitFor(() => expect(view.reads).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(view.onSaved).toHaveBeenCalledTimes(1));
+  expect(view.state.fetchStatuses.length).toBeGreaterThan(rendersBeforeSave);
+  expect([...new Set(view.state.fetchStatuses)]).toEqual(["fetching"]);
 });
