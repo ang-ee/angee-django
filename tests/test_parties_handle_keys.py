@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
 from django.db import IntegrityError, connection, transaction
@@ -799,6 +800,47 @@ def test_a_revert_that_would_keep_a_second_live_handle_of_an_address_is_refused_
         Handle.objects.upsert(platform="email", value="Gil@Example.test", display_name="Gil")
     _revert(naming, variant)
     assert Handle._base_manager.get(pk=variant.pk).display_name == ""
+
+    # A redirect the key repair has not reached, restored by a revert of its redirect alone: its address decides.
+    restoring = "tests.parties.handle_keys.restore"
+    (away,) = _spelled(owner, "ike@example.test")
+    with system_context(reason=restoring):
+        into = Handle.objects.upsert(platform="email", value="ike@work.example", created_by_id=owner.pk)
+        # A version of the older rule's row in its history, keyed as that rule left it: not at all.
+        away.label = "home"
+        away.save(update_fields=["label", "updated_at"])
+    with (
+        django_capture_on_commit_callbacks(execute=True),
+        changeset(fresh=True, change_reason=restoring),
+        system_context(reason=restoring),
+    ):
+        into.fold([Handle._base_manager.get(pk=away.pk)])
+    with system_context(reason=restoring):
+        spelled = Handle.objects.upsert(platform="email", value="IKE@example.test", created_by_id=owner.pk)
+    assert spelled.pk not in (away.pk, into.pk)
+    with pytest.raises(ValueOwned):
+        _revert(restoring, away)
+    assert _stored(away) == ("", 1, into.pk)
+
+
+def test_a_refused_save_spends_its_write_once_allowance_and_leaves_the_keys_as_they_were(owner: Any) -> None:
+    """The refusal comes before the foundation's save, which would otherwise spend the allowance."""
+
+    with system_context(reason="tests.parties.handle_keys.allowance"):
+        Handle.objects.upsert(platform="email", value="Ivy@Example.test", created_by_id=owner.pk)
+        other = Handle.objects.upsert(platform="email", value="ivy@work.example", created_by_id=owner.pk)
+        row = Handle._base_manager.get(pk=other.pk)
+        row.value = "ivy@example.test"
+        row.allow_immutable_save("value")
+        with pytest.raises(ValueOwned):
+            row.save(update_fields=["value", "updated_at"])
+        assert (row.spelling_key, row.normalized_value) == ("ivy@work.example", "ivy@work.example")
+        row.value = "ivy@elsewhere.example"
+        with pytest.raises(ValidationError) as refused:
+            row.save(update_fields=["value", "updated_at"])
+
+    assert refused.value.message_dict == {"value": ["This identity or receipt is immutable."]}
+    assert Handle._base_manager.get(pk=other.pk).value == "ivy@work.example"
 
 
 def test_the_repair_folds_only_spellings_of_an_email_address_never_a_shared_person_key(owner: Any) -> None:

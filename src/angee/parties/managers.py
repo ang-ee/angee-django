@@ -1064,7 +1064,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             row = self.model._base_manager.filter(pk=pk).first()
             if row is None or row.normalized_version == version:
                 return ""
-            row.spelling_key = self.model.spelling_key_of(row.platform, row.value)
             candidate = row.value_owner()
             with transaction.atomic():
                 ids = (pk,) if candidate is None else (pk, candidate.pk)
@@ -1072,7 +1071,6 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 row = handles.get(pk)
                 if row is None or row.normalized_version == version:
                     return ""
-                row.spelling_key = self.model.spelling_key_of(row.platform, row.value)
                 owner = row.value_owner()
                 if getattr(owner, "pk", None) != getattr(candidate, "pk", None):
                     continue

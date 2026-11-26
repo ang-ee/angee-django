@@ -1074,10 +1074,10 @@ class Handle(
         """The email handles spelling any of these addresses: each one's row by the value as given, and every row,
         live or merged away, owning its spelling key (:meth:`spelling_key_of`).
 
-        At most one live row owns a key (``uq_handle_spelling_key``);
-        ``HandleManager.find_identities`` decides which row an address lands on,
-        and :meth:`value_owner` reads the live one. One arm naming the platform,
-        so the ``(platform, value)`` key's index and the spelling key's serve it.
+        The email arm of ``HandleManager.find_identities``, which decides which
+        row an address lands on; at most one live row owns a key
+        (``uq_handle_spelling_key``). One arm naming the platform, so the
+        ``(platform, value)`` key's index and the spelling key's serve it.
         """
 
         spelled = sorted(set(values))
@@ -1253,45 +1253,54 @@ class Handle(
         insert, on a full save, and whenever a partial save names ``platform``,
         ``value`` or a key column; the key columns are then written together with
         ``normalized_version``, which always says which rule they came from.
-        Before anything is written, an insert, a keyed save, or a save naming
-        ``merged_into`` (a revert restoring a merged-away row) that would keep this
-        row a live email handle beside the one owning its spelling key
-        (:meth:`value_owner`) raises :class:`ValueOwned` on ``value``, so the
-        caller's transaction stays usable. ``uq_handle_spelling_key`` is the
-        backstop for what that read cannot see (a concurrent insert,
-        ``bulk_create``).
+        First, an insert, a keyed save, or a save naming ``merged_into`` (a revert
+        restoring a merged-away row, keyed or not) that would keep this row a live
+        email handle beside the one owning its address's spelling key
+        (:meth:`value_owner`) raises :class:`ValueOwned` on ``value``: nothing is
+        written, the instance's keys are left as they were, a write-once allowance
+        granted for this save is spent as a save spends it, and the caller's
+        transaction stays usable. ``uq_handle_spelling_key`` is the backstop for
+        what that read cannot see (a concurrent insert, ``bulk_create``).
         """
 
         update_fields = kwargs.get("update_fields")
         key_fields = ("spelling_key", "normalized_value", "normalized_version")
         keyed = update_fields is None or {"platform", "value", *key_fields}.intersection(update_fields)
+        if (self._state.adding or keyed or "merged_into" in (update_fields or ())) and (
+            owner := self.value_owner()
+        ) is not None:
+            # The foundation spends an allowance in its own save (ImmutableFieldsMixin), which this refusal precedes.
+            self._allowed_immutable_fields = set()
+            raise ValueOwned({"value": ValidationError(
+                "Handle %(owner)s is this address; a second live handle of it is not kept.",
+                code="value_owned",
+                params={"owner": public_id_of(owner)},
+            )})
         if self._state.adding or keyed:
             self.spelling_key = self.spelling_key_of(self.platform, self.value)
             self.normalized_value = self.normalize_value(self.platform, self.value)
             self.normalized_version = self.NORMALIZATION_VERSION
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
-        if (self._state.adding or keyed or "merged_into" in (update_fields or ())) and (
-            owner := self.value_owner()
-        ) is not None:
-            raise ValueOwned({"value": ValidationError(
-                "Handle %(owner)s is this address; a second live handle of it is not kept.",
-                code="value_owned",
-                params={"owner": public_id_of(owner)},
-            )})
         super().save(*args, **kwargs)
 
     def value_owner(self) -> Handle | None:
-        """Return the other live email handle owning this row's spelling key, or ``None``.
+        """Return the other live email handle owning the spelling key of this row's address, or ``None``.
 
-        It reads nothing off email, for a merged-away row (a redirect keeps its
-        survivor's key) or for an unkeyed one. :meth:`save` refuses to keep this
-        row live and keyed beside it (:class:`ValueOwned`).
+        The key is this row's own, computed from ``value``
+        (:meth:`spelling_key_of`), never read from its stored column, which the
+        key repair may not have reached; the other row is matched by its stored
+        key under ``uq_handle_spelling_key``'s own condition, so at most one
+        answers. It reads nothing off email, for a value that is no address, or
+        for a merged-away row (a redirect keeps its survivor's key). A structural
+        read through the base manager: no REBAC scope, no audit row.
+        :meth:`save` refuses to keep this row live beside it (:class:`ValueOwned`).
         """
 
-        if self.platform != self.Platform.EMAIL or self.merged_into_id is not None or not self.spelling_key:
+        key = self.spelling_key_of(self.platform, self.value)
+        if not key or self.merged_into_id is not None:
             return None
-        live = type(self)._base_manager.filter(self.spellings_filter([self.value]), merged_into__isnull=True)
+        live = type(self)._base_manager.filter(platform=self.Platform.EMAIL, spelling_key=key, merged_into__isnull=True)
         return live.exclude(pk=self.pk).order_by("pk").first()
 
     def spells(self, value: str) -> bool:
