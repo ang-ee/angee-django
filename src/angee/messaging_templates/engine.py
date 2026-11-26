@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from operator import attrgetter
 from typing import Any, ClassVar, cast
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
 from django.template import (
@@ -47,8 +48,10 @@ from django.template.base import FilterExpression, Node, NodeList, Parser, Token
 from django.template.loader_tags import IncludeNode
 from django.template.loaders.base import Loader
 from django.utils.safestring import SafeData, SafeString
+from django.views.decorators.debug import sensitive_variables
 from markdown_it import MarkdownIt
 
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 from angee.brandkit.models import BrandKit, MailRole, MailScheme
 
 ALLOWED_TAGS = ("if", "for", "with", "comment", "block", "include", "extends", "templatetag")
@@ -75,7 +78,13 @@ with a host (:data:`LINK_HOST`), or a ``mailto:`` or ``tel:`` link."""
 
 LINK_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?", re.I)
 """The authority of an ``https`` or ``http`` link: a domain name of two labels or more, the last a name, and a port.
-No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty."""
+No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty. The
+deployment's own public origin is linkable besides, whatever its host (:func:`_own_origin_authority`)."""
+
+_NAMED_AUTHORITY = re.compile(r"\[[0-9a-f:.]*\](?::\d{1,5})?|[a-z0-9.-]+(?::\d{1,5})?", re.I)
+"""An authority a refusal may name: a host, an IPv6 address in brackets, with an optional port. Anything else may hold
+the rest of the link (a percent-encoded separator, a ``;`` or a space after the host), so a refusal does not repeat
+it."""
 
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
@@ -307,27 +316,92 @@ _LINKS = MarkdownIt("commonmark")
 in punycode."""
 
 
+VALUE_NOT_LINKABLE = "value_not_linkable"
+"""The code of a value a render prints as a link and :func:`url` would empty (:func:`clean_link`)."""
+
+
+def _link(value: Any) -> tuple[str, str | None]:
+    """The link :func:`url` gives for ``value`` and, when it gives none for a value that is not blank, why."""
+
+    text = str(value)
+    if not text.strip():
+        return "", None
+    if len(text) > URL_INPUT_LIMIT:
+        return "", f"it is over {URL_INPUT_LIMIT:,} characters"
+    link = _LINKS.normalizeLink(text.strip())
+    scheme, colon, rest = link.partition(":")
+    scheme = scheme.lower()
+    if not colon or scheme not in LINK_SCHEMES:
+        schemes = f"{', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]}"
+        return "", f"a mail has no base, so a link is an absolute {schemes} link"
+    if scheme in ("https", "http"):
+        authority = re.split(r"[/?#]", rest[2:], maxsplit=1)[0] if rest.startswith("//") else ""
+        if not authority:
+            return "", "it names no host"
+        if "@" in authority:
+            return "", "it carries user info before its host"
+        if not LINK_HOST.fullmatch(authority):
+            own = _own_origin_authority(scheme, authority)
+            if own is None:
+                if _NAMED_AUTHORITY.fullmatch(authority):
+                    return "", f"the mail cannot link to {authority}"
+                return "", "its host is not one a mail can link to"
+            link = f"{link.partition(':')[0]}://{own}{rest[2 + len(authority):]}"
+    return link, None
+
+
+def _own_origin_authority(scheme: str, authority: str) -> str | None:
+    """The authority of this deployment's public origin, as its owner gives it
+    (:func:`~angee.base.origins.configured_public_origin`), when ``scheme://authority`` (as markdown-it writes a
+    link) is that origin; else ``None``. So a deployment whose origin is ``http://localhost:8000`` in ``DEBUG``, an
+    address or another single-label host links its own pages, an IPv6 address in its brackets, which markdown-it
+    would percent-encode, and no other host of that kind."""
+
+    try:
+        origin = configured_public_origin()
+    except PublicOriginUnavailable:
+        return None
+    if f"{scheme}://{authority}".lower() != _LINKS.normalizeLink(origin).lower():
+        return None
+    return urlsplit(origin).netloc
+
+
 def url(value: Any) -> str:
     """Return ``value`` as a link a message may carry, or ``""``.
 
     markdown-it's own normalisation of the value without its surrounding white
     space, kept only when it is an absolute link of :data:`LINK_SCHEMES`; any
-    other scheme, a protocol- or path-relative link, a fragment, and input over
-    :data:`URL_INPUT_LIMIT` characters give ``""``.
+    other scheme, a protocol- or path-relative link, a fragment, a host
+    :data:`LINK_HOST` refuses unless it is the deployment's own public origin,
+    and input over :data:`URL_INPUT_LIMIT` characters give ``""``. A render never lets a value
+    it was given be emptied here unseen: it asks :func:`clean_link` of each value
+    it prints through this filter first.
     """
 
-    text = str(value)
-    if len(text) > URL_INPUT_LIMIT:
-        return ""
-    link = _LINKS.normalizeLink(text.strip())
-    scheme, colon, rest = link.partition(":")
-    scheme = scheme.lower()
-    if not colon or scheme not in LINK_SCHEMES:
-        return ""
-    if scheme in ("https", "http") and not (
-        rest.startswith("//") and LINK_HOST.fullmatch(re.split(r"[/?#]", rest[2:], maxsplit=1)[0])
-    ):
-        return ""
+    return _link(value)[0]
+
+
+@sensitive_variables()
+def clean_link(value: Any, *, path: str = "link") -> str:
+    """Return the link a mail prints for ``value`` through :func:`url`, or refuse it as a render refuses it.
+
+    A blank value (nothing but white space) gives ``""`` and no refusal, as a
+    render leaves an optional link empty. Any other value :func:`url` would empty
+    is refused with a ``ValidationError`` of one item, code
+    :data:`VALUE_NOT_LINKABLE`, naming ``path`` and why: for a value as a render
+    prepares it (:meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`
+    drops its control characters first), the link and the words a render gives
+    that value at that path. Every local of this frame and of the rule's
+    below it is Django's ``sensitive_variables``, so a report of a refusal that
+    propagates does not show the link. It reads no row, so a caller that mails
+    many recipients asks it once before the first send.
+    """
+
+    link, problem = _link(value)
+    if problem is not None:
+        raise ValidationError([ValidationError(
+            f"{path} is not a link this mail can carry: {problem}.", code=VALUE_NOT_LINKABLE,
+        )])
     return link
 
 

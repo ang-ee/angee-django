@@ -52,6 +52,7 @@ from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.lookups import In
 from django.utils import timezone
 from django.utils.html import strip_tags
+from django.views.decorators.debug import sensitive_variables
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -104,7 +105,7 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import carries_address, header_text
+from angee.messaging.email import header_text, require_carried
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -120,7 +121,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
-    from angee.messaging.email import AnymailEmailChannelBackend
+    from angee.messaging.email import SystemChannelBackend
     from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
@@ -267,7 +268,19 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         an empty selection with its coded reason.
         """
 
-        return self.filter(
+        return self.filter(self.outbound_email_rule(backend_class=backend_class))
+
+    def outbound_email_rule(self, *, backend_class: str | None = None) -> models.Q:
+        """:meth:`outbound_email` as a condition, for an expression that decides it per row.
+
+        It reads the backend registry and settings, never a row, so it builds on
+        any selection of this model, an empty one included. It does not check the
+        channel's sender, which lives in its config or the settings, beyond SQL:
+        that is checked when a message is sent (the backend's ``outbound_sender``),
+        so a channel this admits can still refuse a message under ``channel``.
+        """
+
+        return models.Q(
             backend_class__in=self._outbound_email_backends(backend_class), lifecycle=IntegrationLifecycle.CONNECTED,
         )
 
@@ -375,6 +388,35 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
                 return apps.get_model("resources", "Resource").objects.resolve(SYSTEM_CHANNEL_XREF, model=self.model)
             except ValueError as error:
                 raise SystemChannelMissing from error
+
+    def system_mail_configured(self) -> bool:
+        """Whether system mail can be sent, from settings alone: the one answer callers ask.
+
+        The backend the channel's registry binds to the system key
+        (``SYSTEM_CHANNEL_BACKEND``, which a host may rebind) decides, through its
+        ``system_mail_configured()``; :meth:`MessageManager.compose_as_system` refuses
+        exactly when this is false. It reads no row, so a projection may ask it per record.
+        """
+
+        try:
+            self._require_system_mail()
+        except ValidationError:
+            return False
+        return True
+
+    def _require_system_mail(self) -> None:
+        """Refuse unless the registered system backend answers that system mail can be sent.
+
+        The refusal is the sender rule's coded one (under ``channel``) where it is the
+        reason, else :class:`OutboundEmailNotConfigured`.
+        """
+
+        backend = cast("type[SystemChannelBackend]", self.model.backend_class.field.resolve_class(
+            SYSTEM_CHANNEL_BACKEND,
+        ))
+        if not backend.system_mail_configured():
+            backend.default_sender()
+            raise OutboundEmailNotConfigured
 
     def create_disconnected(
         self,
@@ -3141,6 +3183,16 @@ _MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     """Owns idempotent ingest, outgoing messages (:meth:`compose`), insert deltas and state-change recounts."""
 
+    @staticmethod
+    def recipient_limit() -> int:
+        """The most addresses one composed message takes across ``to``, ``cc`` and ``bcc`` together.
+
+        The deployment's ``ANGEE_MESSAGING_MAX_RECIPIENTS``: :meth:`compose`
+        refuses more, and the console reads it to state the bound.
+        """
+
+        return int(settings.ANGEE_MESSAGING_MAX_RECIPIENTS)
+
     def compose(
         self,
         *,
@@ -3170,7 +3222,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         It runs as its actor and refuses an elevated call. Its shape is checked
         first, reading nothing: its anchor, and at most
-        ``ANGEE_MESSAGING_MAX_RECIPIENTS`` addresses across ``to``, ``cc`` and
+        :meth:`recipient_limit` addresses across ``to``, ``cc`` and
         ``bcc`` and ``ANGEE_MESSAGING_MAX_ATTACHMENTS`` attachments, each refused
         (``too_many``) under the argument that crosses it. Who may write it is
         decided next: :meth:`Message.require_reply` for an answer, else
@@ -3201,7 +3253,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             )})
         if parent is None and channel is None:
             raise ValidationError({"channel": ValidationError("Choose the channel to send from.", code="required")})
-        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        _require_at_most(self.recipient_limit(), "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
         _require_at_most(settings.ANGEE_MESSAGING_MAX_ATTACHMENTS, "attachments", (("attachments", attachments),))
         values = dict(local or {})
         intent = {
@@ -3235,6 +3287,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
 
+    # System mail carries credentials: an error report (Django's filter, with DEBUG off) hides
+    # every local of this frame and of every frame below it, down to the ORM's and the SQL's.
+    @sensitive_variables()
     def compose_as_system(
         self,
         *,
@@ -3248,10 +3303,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     ) -> MessageT:
         """Write one email on the system channel as named system work, queued for delivery; return the row unbound.
 
-        System mail: mail the framework sends on no person's behalf (each email Django sends,
-        through the system mailer): the caller's gate authorized it, and no grant
-        is consulted. It runs in the caller's context and transaction, through
-        the writer :meth:`compose` uses: the rows record the causing actor as
+        The system channel's one writer, as nobody sends on that channel as a person.
+        System mail is named system work (each email Django sends, through the system
+        mailer, among it): the caller's own gate authorized it, so a caller whose own
+        permission decided the send may be a person's button, and no grant is consulted
+        here. Its direct callers are listed, each with that permission, in
+        ``tests/test_messaging_system_mail_callers.py``. It runs in the caller's context
+        and transaction, through the writer :meth:`compose` uses: the rows record the causing actor as
         ``created_by`` (empty with none), which grants nothing on them, and join
         the caller's changeset; a handle it creates, the system sender's or a
         recipient's, has no creator. It is sent from the system channel's sender,
@@ -3261,7 +3319,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``ValueError``); compose's checks of the arguments (more recipients than
         ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
         ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
-        carry (``carries_address``), under its role with code ``cannot_carry``,
+        carry (:meth:`clean_system_recipient`), under its role with code ``cannot_carry``,
         so a mail that could never leave is never recorded as sent; system mail not configured,
         from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
         ``channel``), none of which writes a permission audit row; then, after
@@ -3278,20 +3336,35 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
         for addressee in outgoing.recipients:
-            if not carries_address(addressee.address):
-                raise ValidationError({addressee.role: ValidationError(
-                    "%(address)s cannot be delivered: this mail transport cannot carry an address whose part before "
-                    "the @ is outside ASCII.", code="cannot_carry", params={"address": addressee.address},
-                )})
+            self.clean_system_recipient(addressee.address, key=addressee.role)
         channel_model = apps.get_model("messaging", "Channel")
-        system_backend = cast("type[AnymailEmailChannelBackend]",
-                              channel_model.backend_class.field.resolve_class(SYSTEM_CHANNEL_BACKEND))
-        system_backend.default_sender()
-        channel = channel_model.objects.system_channel()
+        channels = channel_model.objects
+        channels._require_system_mail()
+        channel = channels.system_channel()
         return self._write_outgoing(
             replace(outgoing, channel=channel), actor=None, fingerprint={}, idempotency_key=None, admit=None,
             reason=reason,
         )
+
+    @staticmethod
+    def replay_claimed(original: MessageT) -> MessageT:
+        """Return the message a keyed write's claim names, to replay it, or refuse one trashed since.
+
+        The replay rule of a keyed message write: a key whose message has been
+        trashed (``is_trashed``) is refused under ``idempotency_key`` with code
+        ``discarded``, never answered with the trashed row as success. It reads
+        and writes nothing. Today :meth:`compose` (through ``_write_outgoing``)
+        and a message template's test send ask it on a replay;
+        :meth:`post_to_thread` (a chatter post) is the one keyed writer left with
+        its own copy, which refuses a trashed original as a non-field error with
+        other words and no code.
+        """
+
+        if original.is_trashed:
+            raise ValidationError({"idempotency_key": ValidationError(
+                "This key belongs to a discarded message.", code="discarded",
+            )})
+        return original
 
     def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
         """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
@@ -3305,10 +3378,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         write stores, a control character, or an encoded-word opener, which a mail
         library decodes into another address or name. The handle owner then decides
         whether the address can be one and can be stored on a handle
-        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
-        nothing, so a caller can ask it before expensive work, and ``compose``
-        lands exactly what it returns. The refusal is ``invalid``, naming the
-        entry as typed.
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). The
+        address is returned as typed: the handle owner lands any letter case or
+        domain spelling of a stored address on its handle, and a handle compose
+        creates first keeps the typed spelling. It reads nothing, so a caller can
+        ask it before expensive work, and ``compose`` lands exactly what it
+        returns. The refusal is ``invalid``, naming the entry as typed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3323,8 +3398,20 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})
-        address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
+        return name, address
+
+    def clean_system_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
+        """Return the display name and the address system mail sends ``entry`` to, or refuse it under ``key``.
+
+        System mail's one recipient rule, which :meth:`compose_as_system` applies to
+        each recipient: :meth:`clean_recipient` (``invalid``), then the transport's
+        (:func:`~angee.messaging.email.require_carried`, ``cannot_carry``). It reads
+        and writes nothing, so a caller asks it before offering a send.
+        """
+
+        name, address = self.clean_recipient(entry, key=key)
+        require_carried(address, key=key)
         return name, address
 
     def _validate_outgoing(
@@ -3432,6 +3519,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             scheduled_at=scheduled_at,
         )
 
+    # A mail's text travels below the writer under the ORM's names too (rows, defaults, SQL
+    # params), so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def _write_outgoing(
         self,
         outgoing: _Outgoing,
@@ -3478,11 +3568,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     )}),
                 )
                 if original is not None:
-                    if original.is_trashed:
-                        raise ValidationError({"idempotency_key": ValidationError(
-                            "This key belongs to a discarded message.", code="discarded",
-                        )})
-                    return original.with_actor(actor)
+                    return self.replay_claimed(original).with_actor(actor)
             recipients, subject, sender_address = outgoing.recipients, outgoing.subject, None
             if outgoing.parent is not None:
                 envelope = outgoing.parent.reply_envelope(actor=actor, channel=outgoing.channel)
@@ -3495,7 +3581,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             elif email:
                 sender_address = outgoing.channel.outbound_sender()
             if sender_address is not None:
-                sender_address = (sender_address[0], handle_model.email_value(sender_address[1]))
                 _require_landable(handle_model, (("channel", sender_address[1]),))
             if admit is not None:
                 admit()
@@ -3551,10 +3636,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``HandleManager.find_identities``); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
         only a handle that has none and never renames a shared one. Those writes
-        take the handles in one order, by their identity key, so two composes
-        naming the same addresses in different orders take their row locks in the
-        same order and do not deadlock each other; another writer that takes the
-        same handles in its own order still can.
+        take the handles in one order, by their spelling key
+        (``Handle.spelling_key_of``), so two composes naming the same addresses in
+        different orders or spellings take their row locks in the same order and
+        do not deadlock each other; another writer that takes the same handles in
+        its own order still can. Spellings of one address keep the order given, so
+        a new address is stored as it was first given.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3562,7 +3649,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         found = handle_model.objects.find_identities(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+        for addressee in sorted(recipients, key=lambda each: handle_model.spelling_key_of(email, each.address)):
             if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
                 found[(email, addressee.address)] = handle_model.objects.upsert(
                     platform=email, value=addressee.address, display_name=addressee.name,
@@ -3698,7 +3785,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             self._set_reconciliation_horizon(row, now=moment)
         row.metadata = {**(row.metadata or {}), "local": {
             **row.local_metadata,
-            "delivery_attempts": int(row.local_metadata.get("delivery_attempts", 0)) + 1,
+            "delivery_attempts": row.delivery_attempts + 1,
             "delivery_error": "Delivery may have succeeded; reconcile or acknowledge before retrying.",
         }}
         row.save(update_fields=(
@@ -3794,7 +3881,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 row.delivery_lease_until = row.scheduled_at + timedelta(seconds=DELIVERY_TASK_EXPIRES)
                 result = "retry"
             else:
-                attempts = int(local.get("delivery_attempts", 0)) + (0 if reconciling else 1)
+                attempts = row.delivery_attempts + (0 if reconciling else 1)
                 local["delivery_attempts"] = attempts
                 if error is not None and uncertain_error:
                     if row.delivery_claim is None:
@@ -3950,6 +4037,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     self._recount_thread(thread)
             return results
 
+    # A row's str is its preview, so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def release_held_messages(self, *, now: datetime | None = None, limit: int = 200) -> int:
         """SQL-scoped skip-locked release, with a savepoint for every row."""
 

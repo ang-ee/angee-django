@@ -303,6 +303,40 @@ def test_a_missing_system_channel_or_address_comes_back_in_band_with_its_code(ma
     assert answers[1] == {"ok": False, "code": "no_test_address", "validation_errors": None}
 
 
+_KEYED_SEND_TEST = (
+    "mutation($id: ID!, $key: String) { send_message_template_test(template: $id, idempotency_key: $key) "
+    "{ ok code id validation_errors } }"
+)
+
+
+def test_the_test_send_replays_under_its_key_conflicts_for_another_request_and_refuses_an_uncarried_address(
+    installed: Any,
+) -> None:
+    """The retry rows of the decision table: a replay names the first message and sends nothing more; the key reused
+    for another row is ``CREATION_KEY_CONFLICT``; an address the transport cannot carry is refused in band, under
+    ``to``, with no message written."""
+
+    del installed
+    admin = create_platform_admin("messaging-templates-console-retrier")
+    uncarried = create_platform_admin("messaging-templates-console-uncarried", email="tëster@example.test")
+    _row()  # the base layout
+    template, other = _template("tests.welcome", "Hello."), _template("tests.other", "Hi.")
+    messages = apps.get_model("messaging", "Message")._base_manager
+
+    def answer(user: Any, row: Any, key: str | None) -> Any:
+        return execute_schema(_schema(), _KEYED_SEND_TEST, {"id": public_id_of(row), "key": key}, user=user)
+
+    first = result_data(answer(admin, template, "click-1"))["send_message_template_test"]
+    count = messages.count()
+    again = result_data(answer(admin, template, "click-1"))["send_message_template_test"]
+    assert (first["ok"], again, messages.count()) == (True, first, count)
+    conflict = answer(admin, other, "click-1")
+    assert [error.extensions["code"] for error in conflict.errors] == ["CREATION_KEY_CONFLICT"]
+    refused = result_data(answer(uncarried, template, "click-2"))["send_message_template_test"]
+    assert (refused["ok"], refused["id"], list(refused["validation_errors"])) == (False, None, ["to"])
+    assert messages.count() == count
+
+
 def _with_a_template_manager(original: Any) -> Any:
     """``original`` with a deployment's template manager: a stored relation that may create, write and delete rows
     as an administrator may, and neither preview nor read samples."""

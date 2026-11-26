@@ -646,8 +646,12 @@ data through REBAC, never a queryset bypass.
   [sealed-permission check](../../src/angee/base/checks.py)
   (`check_sealed_permissions`), which refuses a fragment that changes one:
   messaging's [`check_messaging_seals`](../../src/angee/messaging/checks.py)
-  (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and
-  the permissions that subtract the system channel's seal (its `SEALED` map).
+  (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and,
+  in its `SEALED` map, the permissions kept closed to fragments because each
+  applies the system channel's seal or `& read`, which an appended arm would
+  escape. The thread's `write` is the known open one, and a thread's
+  `read_granted` is not sealed on system threads: widening it reaches system mail
+  too ([messaging's README](../../src/angee/messaging/README.md#system-mail)).
   Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
   (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
   can restore file inheritance.
@@ -943,7 +947,8 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. Its
+  deliberate exceptions, each with its guard: merge and system mail (below).
 - **Structural reads use Django's `_base_manager`, including in consumers.**
   It is the model's unscoped read manager (`Meta.base_manager_name`), with no
   REBAC scope and no audit row. Use it for membership predicates, existence
@@ -992,6 +997,12 @@ data through REBAC, never a queryset bypass.
     hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
+- **System mail is named system work.** Also a deliberate exception: the
+  calling verb checks its own permission first; only then does it call
+  [`MessageManager.compose_as_system`](../../src/angee/messaging/managers.py),
+  which consults no send right and records the causing actor in the changeset
+  ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
+  Its direct callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
@@ -1380,6 +1391,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
+  The guard runs only in an instance's `save()`: a queryset `update`,
+  `bulk_update` or a `bulk_create` that updates on conflict writes declared
+  fields unchecked.
 - **Archive and trash are different facts.** `ArchiveMixin` soft-hides a row
   from default pickers. `TrashMixin` removes it: who, when and an optional reason
   are stamped and restore re-grants nothing. The model's Zed withholds a trashed

@@ -36,19 +36,63 @@ live in code docstrings.
   the template rows (the `install` tier of `resources load`) and syncs the
   fragment at revision 3; links are offered once system mail is configured
   (messaging's README, System mail). No migration.
+- `angee.base`: **The deployment's public origin has one accessor.**
+  `angee.base.origins.configured_public_origin()` returns
+  `settings.ANGEE_PUBLIC_ORIGIN` as `public_origin` gives it under `DEBUG`, or
+  raises `PublicOriginUnavailable` (a `DomainError` coded
+  `PUBLIC_ORIGIN_UNAVAILABLE`, and an `ImproperlyConfigured`) when it is unset or
+  not one. Code that builds or judges a link without a request calls it instead
+  of reading the setting; the callers that read it today move onto it in their
+  own changes.
+- `angee.messaging_templates`: **A render never sends an empty link in place of a value it was given.**
+  Before rendering, each value a row prints through `url` (a Markdown link's
+  destination among them) that `url` would empty and that is not blank is
+  refused, `value_not_linkable`, naming its path and why; a blank value still
+  leaves an optional link empty, and `url` itself still gives no link for what it
+  refuses. A host sees one change: a send, a test send or a render whose link
+  value the rule refuses (a single-label host, a relative link, another scheme)
+  used to go out with `href=""` and is now refused before anything is written;
+  a preview of such a sample shows the refusal as its `render_error`.
+  `MessageTemplate.objects.clean_link(value, *, path="link") -> str` asks the same
+  rule before a run: the link a mail prints, `""` for a blank value, or the
+  render's refusal in the same words, for a value as a render prepares it. A
+  refusal names the link's host only when it is wholly a host and port, so no
+  part of a link past its host (a token behind an encoded separator) reaches an
+  answer, the preview or a log; `clean_link` and the send's two frames hide every
+  local from an exception's report, the recipient's address among them. The walk
+  records the paths each form prints through `url` (`TemplateWalk.link_paths`). The rule admits the
+  deployment's own public origin, asked of base (`configured_public_origin`), with
+  its port and whatever its host (a single label such as `localhost` under
+  `DEBUG`, an address, an IPv6 address written in its brackets); other
+  single-label hosts and addresses stay refused, now loudly. `must_print`
+  follows: a path with no `*` must be shown by each body of this mail, as the
+  render emits its value (itself or its link, escaped in the HTML; the stop-link
+  warning's comparison, now one helper), so a value that is blank or not text,
+  or left out by a false condition, is refused `value_not_printed` after the
+  render and before anything is written; a path through a list stays held to
+  the text, and an empty list passes. `must_print` given as one bare string is a
+  `TypeError`, no longer read letter by letter.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
-    kit=None)` renders one effective template (the caller picks it for its
+    kit=None, must_print=())` renders one effective template (the caller picks it for its
     recipient with `effective("template", key, person=...)`) with the caller's
     values inside `system_context(reason=reason)`, and records it on messaging's
     system channel through `Message.objects.compose_as_system`, queued: one
-    message per call, returned unbound, with no idempotency key. It is for mail
-    the framework writes on no person's request and is called only from named
-    system work: the caller's own gate authorised the send, the verb checks no
-    permission and decides nothing about the values or who may be mailed, and a
-    test lists the modules that call it. The caller looks the row up inside its
-    own `system_context(reason=...)`, under the reason it sends with (the
-    README's recipe). A blank `reason` is a `ValueError`; then
+    message per call, returned unbound, with no idempotency key. It is named
+    system work, which a person's button may cause when the caller's own
+    permission decided the send, the causing actor recorded in the caller's
+    changeset. Call it only from system work whose own gate decided the send: a
+    person's request reaches it only through such a gate, never from a resolver,
+    an MCP tool or a view that hands it a person's choice of row, address or values
+    unchecked. It checks no permission and decides nothing about the values, the
+    links in them or who may be mailed; a test lists the modules that call it. The
+    caller looks the row up inside its own `system_context(reason=...)`, under
+    the reason it sends with (the README's recipe), and names in `must_print` the
+    values the mail is useless without (a sign-in link's path):
+    `MessageTemplate.render(values, *, kit=None, must_print=())` refuses
+    (`value_not_printed`) before rendering when the HTML or the plain-text body
+    does not print one, so an override that drops it is refused, not sent; the
+    walk records what each form prints (`TemplateWalk.printed`). A blank `reason` is a `ValueError`; then
     `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;
     a row that is not what renders, `not_effective`), the render's codes, and what
     `compose_as_system` refuses, as its docstring says, an address the transport
@@ -58,15 +102,21 @@ live in code docstrings.
     parts and their content-addressed fragments, which outlive the message) is
     read by the system channel's readers, whom messaging's README names.
   - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
-    kit=None)` sends a row with its `sample` to `actor`'s own account address on
-    the system channel, the subject after `[Test] ` (`TEST_SUBJECT_PREFIX`). It
-    is decided by `preview` alone (`MessageTemplate.send_test_refusal()`, which
-    then asks `send_refusal()`), refuses an account with no address
-    (`no_test_address`), and renders under `actor`, never elevated, so its
-    render writes no permission audit row. The console gets
-    `send_message_template_test(template, brand_kit)`, an `ActionResult` naming
-    the message (a signed-out caller gets the session's error, a caller who may
-    not preview the row `PERMISSION_DENIED`, the rest in band with its code), and
+    kit=None, idempotency_key=None)` sends a row with its `sample` to `actor`'s
+    own account address on the system channel, the subject after `[Test] `
+    (`TEST_SUBJECT_PREFIX`). The administrator presses and the system writes the
+    mail: the pressing is decided by `preview` alone
+    (`MessageTemplate.send_test_refusal()`, which then asks `send_refusal()`), an
+    account with no address is refused (`no_test_address`), and the mail is named
+    system work on `send_as_system`'s one path, the administrator recorded as who
+    caused it. With an `idempotency_key` the request (the row and the kit) is
+    claimed through provenance's `claim_created`: a retry returns the first
+    message, sent once, and another request under the key raises
+    `CreationKeyConflict`. The console gets
+    `send_message_template_test(template, brand_kit, idempotency_key)`, an
+    `ActionResult` naming the message (a signed-out caller gets the session's
+    error, a caller who may not preview the row `PERMISSION_DENIED`, a key reused
+    for another request `CREATION_KEY_CONFLICT`, the rest in band with its code), and
     `MessageTemplateType.can_send_test`, what it asks first, riding the list's
     statement. A test's thread and message are the system channel's, read as
     messaging's README says. **Upgrade:** regenerate the console schema and its
@@ -100,15 +150,15 @@ live in code docstrings.
     reloads before the edit stops at settings load. Django itself refuses legacy
     `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
     `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
-    rows and runs `rebac sync` for schema revision 32. Without that load, every
+    rows and runs `rebac sync` for schema revision 34. Without that load, every
     email Django sends raises `SystemChannelMissing` at the sender (a password
     reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
     channel backend enums gain `SYSTEM`.
-    A host that authors `LOGGING` names `using: transport` on its
-    `AdminEmailHandler` (messaging's README gives the block). Tests that observed
+    A host that authors `LOGGING` restates the `django` logger with a
+    `mail_admins` naming `using: transport` (messaging's README gives the block). Tests that observed
     delivery through `MAILERS={"default": ...}` override `transport`. With
     messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
-    say mail can be sent: ask `SystemChannelBackend.system_mail_configured()`.
+    say mail can be sent: ask `Channel.objects.system_mail_configured()`.
   - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
     wherever messaging is installed, contributed by messaging's autoconfig. It
     records each email (a password reset, `sendtestemail`, a link an addon mails)
@@ -124,15 +174,23 @@ live in code docstrings.
     (`SYSTEM_CHANNEL_MISSING`, under `channel`) when it is absent.
     `AnymailEmailChannelBackend.default_sender()` is the deployment's sender
     (`DEFAULT_FROM_EMAIL`) from settings alone, and
-    `SystemChannelBackend.system_mail_configured()` answers whether system mail
-    can be sent. `carries_address(address)` (`angee.messaging.email`) is the one
-    rule for what the transport can carry. `ChannelBackend.system_only` (read
+    `ChannelManager.system_mail_configured()` answers whether system mail can be
+    sent, as the backend the registry binds to the system key decides.
+    `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
+    recipient rule, which reads nothing. `carries_address(address)`
+    (`angee.messaging.email`) is the one rule for what the transport can carry,
+    and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
+    error report hides every local of the system write's frames, and of the
+    shared writer's, the delivery path's and the operator's retry and
+    acknowledge frames for any mail; an exception's own text is not filtered. `ChannelBackend.system_only` (read
     through `Channel.system_only`) declares a backend that serves the system
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging
     contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
-    with `mail_admins` sending through `transport`. `messaging.W001` reports a
-    host's `AdminEmailHandler` that would send through the system mailer.
+    with `mail_admins` sending through `transport`. `messaging.W001` reports an
+    `AdminEmailHandler` on any configured logger that would send through the
+    system mailer, Django's own `mail_admins` included, which a host `LOGGING`
+    that does not name the `django` logger keeps.
   - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
     default mailer; delivery is configured exactly when it is stated. System mail
     is queued, so mail sent in a transaction that rolls back is never sent; it
@@ -142,12 +200,17 @@ live in code docstrings.
     carry (`cannot_carry`, under its role) are refused, so such a mail is never
     recorded as sent. A
     transport that hands a delivery back to the system mailer fails that delivery
-    instead of recording it again. Administrators alone read, send on, write,
-    annotate and delete the system channel (schema revision 32): no channel,
+    instead of recording it again. Administrators alone read, write, annotate
+    and delete the system channel (schema revision 34), and nobody sends on it
+    as a person, administrators included: `compose` and answering refuse it, as
+    the framework writes it as named system work (`compose_as_system`). No channel,
     integration, team, project or ownership grant reaches it. No verb shares its
     threads or grants on its messages: nobody shares a system thread or writes a
     system message, administrators included, and none of messaging's own arms
-    writes a system thread, so a group or project binding of one is refused.
+    writes a system thread, so a group or project binding of one is refused;
+    nobody retries or acknowledges a system mail whose delivery failed or is
+    uncertain either (the release task sends a lost one again): it stays so,
+    and the feature that sent it sends a new one.
     Without any verb, a `reader` or `editor` tuple written directly and the
     source-identity rule's principal read system mail, and another addon's arm on
     the thread's `read_granted`, `chatter_read` or `write` holds whenever a system
@@ -175,6 +238,227 @@ live in code docstrings.
   settings: as that very member in any process with the same key set; elsewhere
   as a member that equals its key, which the field maps onto its own. Upgrade:
   nothing.
+- `angee.messaging`, `angee.messaging_integrate_imap`, `angee.calendar`,
+  `angee.intake`: **Changed behaviour.** Compose and answers land an address as
+  given; inbound mail keeps the parser's lower-cased form.
+  `Message.reply_addresses` returns each address its `Reply-To` names once, by
+  its spelling key (`Handle.spelling_key_of`), as the header first spells it,
+  with that entry's display name, where it lower-cased each. An answer to an
+  address no handle holds yet stores and sends it in that spelling; an address a
+  handle holds is sent as that handle stores it, with its display name, as every
+  recipient is. The IMAP parser still emits an address trimmed and lower-cased,
+  the form every stored sync hash covers, so a message already synced hashes as
+  it did. An IMAP account's own addresses (its `own_addresses`, its username and
+  its external account's email) compare with a message's by spelling key, any
+  configured display name dropped, so its own mail is outbound, or internal, in
+  any letter case or domain spelling; a configured display name, or a domain
+  spelled in Unicode against the header's punycode, left it inbound. The email
+  backend's wire dedupe reads the spelling key instead of `casefold()`; every
+  mailbox it writes has an ASCII part before the `@` and an ASCII domain, where
+  the two agree, so nothing is sent differently.
+  `angee.calendar.backends.normalized_address` is renamed `attendee_key`:
+  calendar's one rule for which addresses are one attendee before a handle
+  exists, still the person-matching key, so a provider's two aliases on one
+  invitation stay one attendee. `organizer_first` finds the organizer in its
+  list by it, so an organizer listed in another domain spelling carries the
+  answer it is listed with. `Need.requester_address` returns an emailed
+  request's sender as its handle stores it; requests are one requester when
+  their addresses are one account email as iam keys it (`normalize_email`), as
+  before. Statement counts are unchanged. **Upgrade:** nothing to run, and
+  nothing is sent. A message an IMAP channel synced from the account's own
+  address in another spelling keeps the direction it was stored with until the
+  mailbox is fetched again in full (a new stream generation, which a changed
+  `UIDVALIDITY` starts); that fetch rewrites the row in place once, with its
+  direction corrected and its status still synced, and later syncs write
+  nothing.
+- `angee.parties`: **Changed behaviour.** An email handle is one address whatever
+  its letter case or domain spelling. A handle has a spelling key,
+  `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
+  address trimmed and lower-cased, not case-folded, its domain in the one
+  spelling the email backend sends it in, so a punycode label and its Unicode,
+  NFD and NFC, full-width letters and their ASCII, and `ß` and `ss` are one
+  domain (`Handle.normalize_email_domain` takes each label through the
+  standard library's IDNA 2003 codec and keeps one it cannot read, such as
+  `xn--strae-oqa`, as typed); `""` on every other platform, where the value
+  itself is the address, and for a value with no `@`, which is no address), and a live
+  email handle is unique by it (`uq_handle_spelling_key`;
+  `ix_handle_spelling_key` serves the lookup of merged-away rows).
+  `HandleManager.find_identities`, and so `find_identity`, `upsert`,
+  `claim_control` and every compose, calendar and sync lookup, lands an email
+  address on the row owning its exact value, else on the live handle owning its
+  spelling key, else on the survivor of the oldest merged-away row owning it;
+  the handle keeps the spelling first written as its `value`, what a message to
+  it is addressed to. A save that would keep a second live handle of an address
+  (an insert, a history revert, a resource load, a rewrite behind an
+  `external_id`) is refused before it writes with
+  `angee.parties.managers.ValueOwned`, a `ValidationError` on `value`
+  (`Handle.value_owner`); `upsert` and `reidentify` land where that owner is.
+  `upsert` no longer writes a key on a hit, and behind a matched `external_id`
+  it no longer rewrites `value` for another letter case or domain spelling of
+  the row's own address (`Handle.is_spelling_of`). The person-matching key
+  (`Handle.normalize_value`, stored as `normalized_value`) finds and suggests a
+  person; a provider's alias (a Gmail dot or plus-tag) stays a handle of its
+  own, though that key still picks the handle an alias lands on at two sites
+  open for a ruling (a directory adoption's through-handle, a claimant's email
+  handle). Its outputs change only for an email value whose domain carries
+  surrounding whitespace (`a.b@ gmail.com` is now `ab@gmail.com`) and for the
+  domain spellings above. A person's merge of handles (`Handle.validate_merge`)
+  compares that key as the rule computes it from each value, so a row the key
+  repair has not reached compares as it will, and two phone handles whose
+  numbers the rule reads only as their digits (`Handle.is_fallback_key`:
+  `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
+  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2. A consumer rule
+  bound to an email handle now meets that handle for mail from every letter
+  case and domain spelling of its address, and an account signing in with
+  another letter case of a contact's address takes that handle as its own, as
+  it already did for the exact spelling.
+  `HandleManager.clean_identity` returns `None`; nothing read the key it
+  returned.
+  `renormalize_handles` folds each live email handle that spells the address
+  of an older one into it (`KeyRepair.folded`) and reports a fold the merge
+  refuses (`KeyRepair.refused`); its log lines are "Saved the keys of N
+  handle(s) again.", "Folded N handle(s) into the older handle of the same
+  address; each is kept as a redirect.", "N handle(s) spell an address another
+  handle owns and could not be folded; the log names each and why." and "The
+  keys of N handle(s) could not be saved; ...". **Upgrade:**
+  - A host whose own resource files seed two spellings of one email address
+    changes them first: that load is now refused and the provision stops.
+  - After compose, run `uv run --no-sync python manage.py makemigrations
+    parties` and commit it: it adds `spelling_key` with a database default of
+    `""` to the handle and its history table, the constraint and the index.
+  - Before provisioning, count what will fold, on the new code, in
+    `uv run --no-sync python manage.py shell` (it reads only `value`, so it
+    runs before the column exists); it is an upper bound, since a refused fold
+    cannot be predicted:
+
+    ```python
+    from collections import Counter
+    from django.apps import apps
+    Handle = apps.get_model("parties", "Handle")
+    live = Handle._base_manager.filter(platform="email", merged_into__isnull=True)
+    groups = Counter(Handle.spelling_key_of("email", value) for value in live.values_list("value", flat=True).iterator())
+    print(sum(count - 1 for count in groups.values() if count > 1), "handle(s) will fold at most")
+    ```
+
+  - Provision with services held. The repair saves every handle once
+    (`updated_at` stamped, one history version each) and folds each live
+    email handle that spells the address of an older one into it, kept as a
+    redirect. Afterwards there is one handle per address; messages and
+    recipients stay on the handle they used, so a held message keeps its
+    spelling; a contact's statements, calendar attendees and reactions on a
+    folded handle move to the survivor; where two contacts held two
+    spellings, one now holds the address and the same-person review proposes
+    the two; a rule that confers nothing on a merge survivor stops applying
+    to the folded handle; a two-way directory contact whose handle was folded
+    is written back with the survivor's spelling on its next push. A fold the
+    merge refuses (a seeded row, a row under an unfinished workflow run) is
+    logged once per provision, its row left live and unkeyed and still found
+    by its exact spelling.
+  - A host that loaded the workflows demo keeps its former pair of spellings
+    (`Directory-Contact@example.test` beside `directory-contact@example.test`;
+    the demo now seeds a pair of phone spellings instead): both rows stay in
+    the resource ledger, so the seeded-record merge guard refuses their fold,
+    and each provision logs one warning naming both handles and reports
+    `remaining` above zero. It ends when the resources owner's change for a
+    removed row's ledger entry lands; nothing here works around it.
+  - A step skipped: with no migration, every handle read and save fails, since
+    each selects the missing column, the provision's key repair included; only
+    the count above runs. Migrated but not provisioned, an exact spelling still
+    lands on its old row, but a new spelling of an old, unkeyed address makes a
+    second, keyed row of its own, which the next provision folds into the old
+    one.
+  - Rollback: deploy the older code; the column's database default admits its
+    inserts, which stay unkeyed until this code's next provision keys and
+    folds them. Leaving for good removes the column and the constraint with a
+    reviewed migration.
+  - No `rebac sync` and no SDL change.
+- `angee.messaging`: **The console reads where one may send a new message, which
+  messages were written here, and the recipient bound.**
+  - **New.** The channels filter `sendable`
+    (`channels(where: {sendable: {_eq: true}})`): the channels the reader may send
+    a new email on, their `reply` on a channel that can send email now.
+    `ChannelQuerySet.outbound_email_rule` is that condition (connected, on a
+    backend whose outbound email is configured), which `outbound_email` filters by.
+    The channel's sender is checked when a message is sent, not by the filter: a
+    listed channel whose configured sender is not an address refuses the message
+    under `channel`.
+  - **New.** `MessageType.is_locally_written` (`Message.is_locally_written`):
+    whether the message was written here rather than synced from its source, a
+    function of its status alone. An internal note is written here and has no
+    delivery: a reader showing delivery status also requires an outgoing
+    `direction`.
+  - **New.** The console root `message_recipient_limit`, the most addresses
+    `compose_message` takes, read with `compose` and an answer's `Reply-To`
+    bound (`Message.reply_envelope`) from `MessageManager.recipient_limit()`,
+    the one reader of `ANGEE_MESSAGING_MAX_RECIPIENTS`.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
+- `angee.parties`: **Changed behaviour.** A person's merge of handles
+  (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
+  addresses only for a contact administrator, an effective member of
+  `parties/role:contact_admin` (platform administrators are). Every later message
+  to a merged handle's address goes to the kept one, so whoever had created two
+  handles (the person who first typed each address) could merge a contact into
+  their own address and receive other people's later mail to it. Anyone else
+  merging two different addresses is refused with a `ValidationError` that names
+  who can and says to merge their contacts instead, which moves no address.
+  Merging another spelling or alias of an address (the same platform and person-matching key)
+  is unchanged for whoever holds the merge's permissions, messages already
+  written keep their addresses, and the system's `fold` (`HandleManager.reidentify`)
+  is unchanged. A contact administrator can now complete a handle merge at all:
+  the merge wrote the redirect after resolving the merged handle's party, which
+  had cleared the party the administrator's write on that handle came through.
+  The redirect is now written first; the rows a merge ends in are unchanged, and
+  only the merged handle's history between differs. A contact administrator's
+  merge leaves the merged handle on no contact, so that administrator cannot
+  revert it: a platform administrator can, as can the handles' creator when they
+  may also write the contact. **Upgrade:** a person who
+  merged two addresses of one contact merges the contacts, or is granted the
+  contact administrator role.
+- `angee.base`: **Changed behaviour.** A refused write of a write-once field
+  (`ImmutableFieldsMixin`) is keyed by the field's name, as model validation and
+  `form.add_error` key a field: a relation changed through its attname is refused
+  under the relation as before (`recipient` for `recipient_id`), and any other
+  field under its own name. A plain field whose name ends in `_id` was keyed by
+  that name less the suffix, which names no field, so no form showed the refusal
+  beside it: `Handle.external_id` was refused under `external` and portfolio's
+  `Update.object_id` under `object`. **Upgrade:** a consumer that matched the old
+  key for a plain `..._id` field reads the field's own name.
+- `angee.parties`: **Changed behaviour.** A handle's ingestion keys, `platform`,
+  `value` and `external_id`, are written once (`Handle.immutable_fields`, through
+  the foundation's `ImmutableFieldsMixin`). A message reads its addresses from its
+  handles when it is sent, and whoever held `write` on a handle (the person who
+  first typed a contact's address holds it) could re-address it with a field
+  write: another person's held message to that contact was then sent to the new
+  address. A save that changes a key is now refused with the foundation's
+  write-once refusal, whoever saves it, system work included. Only the handle
+  owner's verbs change one: `HandleManager.upsert` rewrites `value` when a
+  source's `external_id` matched and the account behind it moved, and
+  `HandleManager.reidentify` rewrites or folds a handle; history's revert restores
+  earlier keys as they were. `upsert` no longer rewrites the value onto an address
+  another row holds (a spelling merged into the row the account id names), which
+  raised `IntegrityError` on every later message from that account: the call lands
+  on that row, which keeps its address. An `external_id` given as a number is
+  matched and stored as its text. Display fields stay writable as before. A resource
+  row that names another address under an xref a load already wrote is refused
+  (`ResourceLoadError`). **Upgrade:** a caller that set `platform`, `value` or
+  `external_id` on an existing handle and saved it lands the new address as its
+  own handle (`HandleManager.upsert`), or, as admitted system work, rewrites the
+  handle with `HandleManager.reidentify`; a seed gives a new address its own row.
+  No migration and no `rebac sync`.
+- `angee.messaging`: **The console composes a message and reads back its
+  delivery.**
+  - **New.** The console mutation `compose_message`, a keyed verb over
+    `Message.objects.compose` that answers a message or sends a new email.
+  - **New.** `MessageType.delivery_attempts` (`Message.delivery_attempts`) and
+    `MessageType.delivery_error` (`Message.delivery_error(permissions)`, read
+    only with `send_held`): what delivery made of a message. `Message.local_fact`
+    and `Message.local_metadata_annotation` read a local fact on a row and in SQL.
+  - **New.** `ChannelType.permissions`, answering `reply`.
+  - **Changed.** On SQLite, `delivery_actions` no longer reads a delivery conflict
+    whose stored provider id looks like JSON (`"0"`, `"null"`) as no conflict.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
 - `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
   writes an outgoing message.**
   - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
@@ -191,17 +475,12 @@ live in code docstrings.
     header would not carry as read (a NUL byte, which failed the write on
     PostgreSQL after it began, a control character, or an encoded-word opener,
     which a mail library decodes into another address or name), is refused,
-    never re-read. **Known limit:** `compose` lands every address in lower
-    case, as inbound mail does, and finds its handle by that exact value, so a
-    contact another writer stored with a capital is a handle row of its own,
-    grouped with the lower-case one by the handle owner's comparison key
-    wherever a person is looked up; ending that split is the handle owner's. A caller
+    never re-read. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
-    (default 50, the strictest common provider's per-message limit; each new
-    address costs a call about 34 statements) and
-    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
-    statements each); more is refused (`too_many`) under the argument that
+    (default 50, the strictest common provider's per-message limit) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20), each setting's
+    comment saying what one more costs; more is refused (`too_many`) under the argument that
     crosses the bound, before anything is read. An answer is bound the same way
     by the addresses its parent's `Reply-To` names: over the bound it is refused
     under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
@@ -220,8 +499,7 @@ live in code docstrings.
     decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
     fields it only fills while blank (a fill locks and reads the row again, so
-    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
-    email address is stored in on a handle. `PartManager.attach_files` attaches
+    it never overwrites a value another transaction has just written). `PartManager.attach_files` attaches
     several files under one message lock. `HandleManager.find_identities` (and so
     `find_identity`, `upsert` and every compose lookup) names the platform in each
     arm of its one statement, so the `(platform, value)` key's index serves it; it
@@ -295,8 +573,11 @@ live in code docstrings.
     deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
-    `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
-    channel's default sender lands on the handle its lower-cased address names.
+    `Handle.is_email_address` accepts, one entry per address as the header
+    first spells it. A channel's default sender lands on the handle its
+    configured address names.
+    A recipient address no handle holds yet is stored and sent as first typed,
+    and every other letter case or domain spelling of it lands on that handle.
     A name typed with a recipient address fills only a handle that has none.
     Inbound mail joins a thread by its subject only when the thread was grouped
     by subject: a conversation a person composed is joined through its threading
@@ -2240,7 +2521,7 @@ live in code docstrings.
   passes the domain rule of Django's `EmailValidator`, and no longer than an
   address may be or the handle's value holds. Both spellings of an
   internationalised domain are one address: `Handle.normalize_value` reads a
-  domain's punycode labels (`xn--`) as Unicode in the comparison key, while
+  domain's punycode labels (`xn--`) as Unicode in the person-matching key, while
   `value` keeps what was typed. The rule for a domain is one function,
   `Handle.normalize_email_domain`, and the organization-domain suggestion
   reads the handle's domain and `Organization.domain` (stored as typed)
@@ -2267,7 +2548,7 @@ live in code docstrings.
   without case and the public id, the pointer aside); the verb reads it, and a
   consumer compares the references `standing_claims()` returns with its own
   the same way. No resource or permission change. Upgrade: a handle stores
-  the comparison key its rule gave when it was last saved, so a change of the
+  the key its rule gave when it was last saved, so a change of the
   rule leaves stored keys behind. The rule now has a version,
   `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
   `Handle.normalize_email_domain` returns something else (a test pins the
@@ -2291,14 +2572,14 @@ live in code docstrings.
   kept under heavy load (load average 75 to 87). The repair saves in batches
   of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
   an interrupted provision keeps what it saved and the next one resumes. The
-  provision log prints "Saved the comparison key of N handle(s) again." A row
+  provision log prints "Saved the keys of N handle(s) again." A row
   whose save raises is rolled back alone, logged with its error, counted in
-  "The comparison key of N handle(s) could not be saved; ..." and tried again
+  "The keys of N handle(s) could not be saved; ..." and tried again
   by the next run, while the rest are saved. `manage.py renormalize_handles
   --limit N` saves a share instead, and only then prints "Stopped at the cap
   of N handle(s); M more await the next provision or renormalize_handles
   run". Once no row is behind, the repair is one indexed query per provision
-  and prints "Saved the comparison key of 0 handle(s) again." A handle stored
+  and prints "Saved the keys of 0 handle(s) again." A handle stored
   with a punycode-domain key is found by its Unicode spelling after that
   first provision. A row newer code stamped with a later version is selected
   too, so a rollback keys it again by the older rule. The PostgreSQL lane
@@ -2306,12 +2587,9 @@ live in code docstrings.
   (`tests/test_parties_handle_keys_concurrency.py`): a row another process
   deletes, and one it saves, after the repair selected its key and before
   the repair holds its lock.
-  Limits: two callers that meet two spellings of
-  one new address at once each make its row, and so its person, which the
-  pairing job then proposes; a handle is unique by its value as typed, not by
-  its comparison key, so writers that key on the exact value can still make
-  two rows of one address, which every lookup by the key reads together; a
-  number that is no valid international number is read as its digits. The
+  Limits: a number that is no valid international
+  number is read as its digits (an email address's letter case and domain
+  spelling are one handle since the spelling key, above). The
   domain codec is the standard library's, IDNA 2003: a punycode label that
   carries `ß`, `ς` or a joiner does not read back and stays as typed.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
@@ -2849,7 +3127,7 @@ live in code docstrings.
   handed none). `UserManager.sign_in_addresses(emails, *, key=None)` also
   compares by a caller's key, read among the person accounts at the given
   addresses' domains in the same one query; parties passes the handle's
-  normalized key, so an account address spelled the provider's other way, which
+  person-matching key, so an account address spelled the provider's other way, which
   neither the contact nor any handle uses, still counts. `Party.CLAIM_CONFIDENCE`
   names the confidence of a claim for review (0.4), and a test holds the
   schema's `stating_directory` threshold to `Party.REVIEW_CONFIDENCE`.
@@ -3110,7 +3388,7 @@ live in code docstrings.
   directory's owner is a platform admin, so `write` admitted everyone), no other
   live link of the directory names them, and no live link of a stream that writes
   back names them. A pull-only contacts page locks every spelling of its contacts'
-  addresses (by normalized value), the people they name and the parties its
+  addresses (by person-matching key), the people they name and the parties its
   links name before any record decides (`DirectoryBackend.prepare_page`), and
   each record checks admission again under those locks. The handle that found the
   person is the evidence of the directory's identity statement
@@ -3323,7 +3601,7 @@ live in code docstrings.
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over
   `same_person_links`). A party is linked when it holds a handle of that
-  normalized value or when a source that states its own record names one for it
+  person-matching key or when a source that states its own record names one for it
   in a standing statement, a claim below review confidence included; before,
   only two holders of two spellings were proposed, so one address claimed by a
   second source's party was never proposed. The linking sources are an

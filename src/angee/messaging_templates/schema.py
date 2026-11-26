@@ -18,7 +18,9 @@ shipped default and ``keep_message_template_override`` keeps an override over a
 default that changed; both return an ``ActionResult`` naming the override.
 ``send_message_template_test`` sends a row with its sample to the caller's own
 address on the system channel (``MessageTemplateManager.send_test``) and returns
-an ``ActionResult`` naming the message. The verbs refuse as the framework's
+an ``ActionResult`` naming the message; with an ``idempotency_key`` a retry of
+the same request names the same message, and another request under the key is a
+``CREATION_KEY_CONFLICT`` GraphQL error. The verbs refuse as the framework's
 actions do: a signed-out caller gets the session's GraphQL error, and a caller
 who may not create or write the override, or preview the row, gets a
 ``PERMISSION_DENIED`` GraphQL error; an unreadable or missing row, a row that is
@@ -270,13 +272,16 @@ class MessageTemplateMutation:
     @action_guard("Send message template test failed.")
     def send_message_template_test(
         self, info: strawberry.Info, template: PublicID, brand_kit: PublicID | None = None,
+        idempotency_key: str | None = None,
     ) -> ActionResult:
         """Send the row with its sample to the caller's own address, on the system channel, in the named kit or the
-        default one."""
+        default one; a retry under the same ``idempotency_key`` answers with the message the first one sent."""
 
         row = authorized_permission_target(info, MessageTemplate, template, "read")
         kit = _named_brand_kit(info, brand_kit)
-        message = MessageTemplate.objects.send_test(row, actor=session_user(info), kit=kit)
+        message = MessageTemplate.objects.send_test(
+            row, actor=session_user(info), kit=kit, idempotency_key=idempotency_key,
+        )
         return ActionResult(ok=True, message="A test of this message template is queued.", id=message.sqid)
 
 

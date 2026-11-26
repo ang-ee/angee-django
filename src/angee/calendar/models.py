@@ -87,7 +87,7 @@ from angee.calendar.backends import (
     ParsedAttendee,
     ParsedCalendar,
     ParsedEvent,
-    normalized_address,
+    attendee_key,
 )
 from angee.calendar.choices import (
     AttendeeResponse,
@@ -736,11 +736,11 @@ class CalendarEventManager(_CalendarEventManagerBase):
 
         Text is trimmed and cut to its column, an untitled event takes
         :data:`UNTITLED_EVENT`, a conference URL that is not a web address is
-        dropped, and attendees are deduplicated on the handle owner's normalized
-        address, collapsed by :meth:`EventAttendee.collapse`, and capped at
-        :data:`ATTENDEES_PER_EVENT`, the organizer first.
-        Each attendee keeps the address the source gave; only dedup and the projection
-        read its normalized form.
+        dropped, and attendees are deduplicated on
+        :func:`~angee.calendar.backends.attendee_key`, collapsed by
+        :meth:`EventAttendee.collapse`, and capped at :data:`ATTENDEES_PER_EVENT`,
+        the organizer first. Each attendee keeps the address the source gave; only
+        dedup and the projection read that key.
         """
 
         def cut(name: str, value: str) -> str:
@@ -756,7 +756,7 @@ class CalendarEventManager(_CalendarEventManagerBase):
         attendees: dict[str, ParsedAttendee] = {}
         for attendee in parsed.attendees:
             address = attendee.address.strip()
-            normalized = normalized_address(address)
+            normalized = attendee_key(address)
             if not normalized:
                 continue
             first = attendees.get(normalized)

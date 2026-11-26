@@ -65,19 +65,21 @@ would read as another address or as several, or whose name or address a mail
 header would not carry as read (a NUL byte, a control character, an
 encoded-word opener: [`header_text`](email.py), the rule every subject and
 display name the email backend writes takes), is refused (`invalid`) under its
-role, never re-read. `compose` lands every address in lower case, as inbound
-mail does, and finds its handle by that exact value: a contact another writer
-stored with a capital is a handle row of its own, grouped with the lower-case
-one by the handle owner's comparison key wherever a person is looked up; ending
-that split is the handle owner's. A name inbound mail stored with a literal encoded word is
+role, never re-read. `compose` lands every address as typed, the channel's
+sender as configured, on the handle the handle owner finds for it
+(`HandleManager.find_identities`): any letter case or domain spelling of a
+stored address is that handle, and a message to it is addressed as the handle
+stores it, so an address with no handle yet is stored, shown and addressed as
+typed; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
 one whose local part is outside ASCII is admitted but cannot be delivered, as
 no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
-naming the address. A message takes at most `ANGEE_MESSAGING_MAX_RECIPIENTS`
-addresses across `to`, `cc`
-and `bcc` (50) and `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both
+naming the address. A message takes at most
+[`MessageManager.recipient_limit()`](managers.py) addresses across `to`, `cc`
+and `bcc` (`ANGEE_MESSAGING_MAX_RECIPIENTS`, 50) and
+`ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both settings
 contributed in [`autoconfig.py`](autoconfig.py); more is refused (`too_many`)
 under the argument that crosses the bound, before anything is read; an answer
 taking more addresses than that from its parent's `Reply-To` is refused under
@@ -93,6 +95,23 @@ threading headers, never by its subject, which groups inbound mail with inbound
 mail alone ([`ThreadManager.resolve`](managers.py)). An answer to a mail sent
 from a record's chatter lands on that chatter as an email, not a comment, so it
 is answered by email in turn.
+
+The console composes through the `compose_message` mutation, a verb over
+`compose` rather than a generic insert (its docstring in [`schema.py`](schema.py)
+says why). It answers `parent` or sends on `channel`, takes a required
+`idempotency_key` and `queued`, and returns an `ActionResult` whose `id` is the
+message, fresh or replayed. Readers of a message read back its `status`,
+`scheduled_at` and [`Message.delivery_attempts`](models.py); those who hold
+`send_held` also read why delivery last failed,
+[`Message.delivery_error`](models.py), as they read `delivery_actions`. Every
+reader reads `is_locally_written`, which tells a message written here, an
+internal note included, from one synced from its source
+([`Message.is_locally_written`](models.py)); delivery status belongs to an
+outgoing one. A channel's `permissions` answer `reply`; the channels filter
+`sendable` keeps the channels the reader may send a new email on, `reply` on a
+channel [`ChannelQuerySet.outbound_email_rule`](managers.py) admits, whose
+sender is checked only when a message is sent; and `message_recipient_limit`
+states the recipient bound.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
@@ -294,10 +313,13 @@ the database the error may be about. Messaging contributes `LOGGING` as Django's
 `DEFAULT_LOGGING` with one change, the `mail_admins` handler naming
 `using: transport` (with no transport, Django drops the report). It is contributed
 raw, so the settings loader keeps the `django.server` formatter's `{server_time}`
-as text. A host that states its own `LOGGING` keeps it; `messaging.W001` reports
-an `AdminEmailHandler` in it that names no `using`, which would send through the
-system mailer. A host's own block keeps Django's loggers and names the transport
-on the handler that reports errors:
+as text. A host that states its own `LOGGING` keeps it, and Django applies its
+`DEFAULT_LOGGING` first and the host's block over it: a block that does not name
+the `django` logger keeps Django's own `mail_admins` there, which sends through
+the system mailer. `messaging.W001` reports an `AdminEmailHandler` on any
+configured logger that names no `using`, or the default. A host's own block
+keeps Django's loggers and names the transport on the handler that reports
+errors:
 
 ```yaml
 LOGGING:raw: true
@@ -359,11 +381,42 @@ recipient's, has no creator: the handles are written under messaging's non-user
 attribution (`messaging/system:outgoing`), so their history is a changeset of
 its own beside the caller's, with the caller's change reason, naming no user.
 Each call mints its own Message-ID.
-`SystemChannelBackend.system_mail_configured()` answers from settings alone
-whether system mail can be sent: a transport and a default sender the sender
-rule accepts. That rule is `MessageManager.clean_recipient`, the one check
-every address messaging lands takes, plus `carries_address`: a sender whose part
-before the `@` is outside ASCII is refused, as no transport here speaks SMTPUTF8.
+`Channel.objects.system_mail_configured()` (`ChannelManager`) is the one
+answer callers ask, from settings alone, whether system mail can be sent: the
+backend the registry binds to the system key decides (a transport and a default
+sender the sender rule accepts, for messaging's own), and `compose_as_system`
+refuses exactly when it is false. `SystemChannelBackend.system_mail_configured()`
+is that backend's own contract, which callers do not name. The sender rule is
+`MessageManager.clean_recipient`, the one check every address messaging lands
+takes, plus `carries_address`: a sender whose part before the `@` is outside
+ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
+`Message.objects.clean_system_recipient(entry, key=...)`, which
+`compose_as_system` applies to each recipient and a caller asks before offering
+a send; both read nothing.
+
+An error report hides every local of every frame of the system write, from the
+system mailer and `compose_as_system` down to the ORM's and the SQL's, and of
+the shared writer `_write_outgoing` down for any mail (`sensitive_variables`).
+The delivery path is hidden the same way for any mail, as a message's string
+form is its preview: `Message.deliver` down, the worker's
+`run_message_delivery` down to the transport library's own frames, the release
+task's `release_held_messages` down, and the operator's `retry_delivery` and
+`acknowledge_delivery` down. Django's filter applies only with `DEBUG` off, so a
+debug page shows them all, and it never filters an exception's own message: a
+transport's or a database's error text can carry what the server echoed (an
+address, a line of the mail). An ordinary `compose`'s report
+therefore shows hidden frames below the writer, while `compose`'s own frame is
+not marked. Frames above the system mailer are the caller's: Django's
+`send_mail` holds the message it was given, so a caller that mails a credential
+through Django's mail API marks its own frame with a bare `@sensitive_variables()`:
+a named list still shows `send_mail`'s `message` and the wrapper's arguments. The delivery path logs a
+message's id and an error's type, never the message, and the recorded
+`delivery_error` keeps a transport's own text private. Nobody retries or
+acknowledges a system mail whose delivery failed or is uncertain, as its sealed
+`write` refuses both; the release task sends a lost one again. A failed or
+uncertain system mail stays so: once its transient retries are spent, nothing
+tries it again and no person can retry or acknowledge it; the feature that sent
+it sends a new one.
 
 The system mailer carries what a Django email can mean on the system channel:
 `to`, `cc`, `bcc`, the subject, a plain or HTML body and one HTML alternative.
@@ -376,14 +429,16 @@ under its role), so a mail that could never leave is never recorded as sent. A b
 `fail_silently`, it logs a refusal and reports none sent.
 
 The system channel holds system mail, live sign-in links among it,
-so administrators alone read it, send on it, write, annotate or delete it
-(messaging's `permissions.zed`, the channel's system seal; `messaging.E003`
-refuses a fragment arm on any of those permissions). Every other way a channel
-is read is closed on it:
+so administrators alone read it, write, annotate or delete it, and nobody sends
+on it as a person, administrators included: the framework writes it as named
+system work (`MessageManager.compose_as_system`). These are messaging's
+`permissions.zed`, the channel's system seal; `messaging.E003` refuses a
+fragment arm on any of those permissions. Every other way a channel is read is
+closed on it:
 
 | Path | On the system channel |
 |---|---|
-| administrators | read, send, write, annotate, delete |
+| administrators | read, write, annotate, delete; never send (`reply`) |
 | a channel `reader`, `replier` or `annotator` grant | grants nothing |
 | an integration `reader` on its parent integration | lists the integration row, which holds no mail |
 | a spaces team bound to the channel | grants nothing |
@@ -409,8 +464,10 @@ it, and the composer appends the fragments' `write` arms after the seal.
 
 The system channel is system-only (`ChannelBackend.system_only`): it is never
 selected to send from (`ChannelQuerySet.outbound_email`) and never a trigger's
-source. `compose` decides `reply` on the channel, which administrators alone
-hold there, so an administrator's
-`compose(channel=Channel.objects.system_channel())` is admitted and every other
-person's is refused. Its readers find it among channels as "System mail", its threads in the inbox
-and its messages in timelines.
+source. `compose` and `Message.require_reply` decide `reply` on the channel,
+which nobody holds there, so `compose(channel=Channel.objects.system_channel())`
+and an answer to a system message are refused for every person, administrators
+included, with no branch of their own. On the system channel the selection and
+the send agree: neither admits it. Its readers, administrators alone, find it
+among channels as "System mail", its threads in the inbox and its messages in
+timelines.

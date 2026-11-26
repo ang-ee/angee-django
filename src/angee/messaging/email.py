@@ -26,6 +26,7 @@ from django.core.mail import EmailMessage, EmailMultiAlternatives, mailers
 from django.core.mail.backends.base import BaseEmailBackend
 from django.db import DatabaseError, transaction
 from django.utils.encoding import force_str, punycode
+from django.views.decorators.debug import sensitive_variables
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
 from urllib3.exceptions import MaxRetryError, NewConnectionError
@@ -83,7 +84,7 @@ def _valid_sender(value: str) -> tuple[str, str]:
     The one sender rule: ``value`` is one address as written, which the handle
     owner lands (``MessageManager.clean_recipient``, the check every address
     ``compose`` lands takes), and which the transport can carry
-    (:func:`carries_address`). A sender accepted here is never refused, nor read
+    (:func:`require_carried`). A sender accepted here is never refused, nor read
     as another address, once a message is being written or delivered. It reads nothing.
     """
 
@@ -94,11 +95,7 @@ def _valid_sender(value: str) -> tuple[str, str]:
             "Configure a valid sender address for this email channel (its from_email, else DEFAULT_FROM_EMAIL).",
             code="invalid",
         )}) from error
-    if not carries_address(address):
-        raise ValidationError({"channel": ValidationError(
-            "This mail transport cannot carry a sender address whose part before the @ is outside ASCII.",
-            code="cannot_carry",
-        )})
+    require_carried(address, key="channel")
     return name, address
 
 
@@ -369,9 +366,12 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
     def system_mail_configured(cls) -> bool:
         """Whether system mail can be sent, from settings alone: a transport mailer and a valid sender.
 
-        True exactly when :meth:`default_sender` returns, which is when a connected
-        system channel's :meth:`outbound_sender` does. It reads no row, so a
-        projection may ask it per record.
+        This backend's own contract: callers ask ``ChannelManager.system_mail_configured()``,
+        which asks the backend the registry binds to the system key. True exactly
+        when :meth:`default_sender` returns. As installed, the system
+        channel's row names no ``from_email``, so its :meth:`outbound_sender` is that
+        default sender too; a ``from_email`` set on the row would be its own. It
+        reads no row, so a projection may ask it per record.
         """
 
         try:
@@ -386,19 +386,34 @@ def carries_address(address: str) -> bool:
 
     Its part before the ``@`` must be ASCII: no transport here speaks SMTPUTF8.
     An internationalised domain is carried, written in its ASCII (IDNA) form
-    (:func:`_mailbox`). The one rule for both the mailbox writer, which fails a
-    delivery it cannot write, and the sender rule, which refuses such a sender
-    before any mail is written (:func:`_valid_sender`).
+    (:func:`_mailbox`). :func:`require_carried` refuses what it does not carry.
     """
 
     local, _at, _domain = address.rpartition("@")
     return local.isascii()
 
 
+def require_carried(address: str, *, key: str) -> None:
+    """Refuse ``address`` under ``key``, code ``cannot_carry``, unless :func:`carries_address` holds for it.
+
+    The one refusal for every address messaging writes for the transport: a
+    sender before any mail is written (under ``channel``), a recipient of system
+    mail (under its role), and a mailbox the delivery writes, whose failure says it.
+    """
+
+    if not carries_address(address):
+        raise ValidationError({key: ValidationError(
+            "This mail transport cannot carry %(address)s: its part before the @ is outside ASCII.",
+            code="cannot_carry", params={"address": address},
+        )})
+
+
 class SystemMailer(BaseEmailBackend):
     """Django's default mailer wherever messaging is installed: it records each email on the system channel.
 
-    Each email becomes one queued message through
+    Any code that calls Django's mail API writes system mail through this mailer,
+    which consults no permission: that code's own gate is the send's only
+    authorization. Each email becomes one queued message through
     :meth:`~angee.messaging.managers.MessageManager.compose_as_system`, in the
     caller's transaction, so mail sent in a transaction that rolls back is never
     sent; it sends nothing itself. Delivery runs later through ``MAILERS["transport"]``.
@@ -415,6 +430,9 @@ class SystemMailer(BaseEmailBackend):
         super().__init__(**kwargs)
         self.fail_silently = fail_silently
 
+    # System mail carries credentials: an error report (DEBUG off) hides every local from here down,
+    # ``_system_mail``'s included.
+    @sensitive_variables()
     def send_messages(self, email_messages: Any) -> int:
         """Record each email with a recipient as one queued system message; return how many were recorded."""
 
@@ -504,11 +522,11 @@ def _mailbox(name: str, address: str) -> str:
     """
 
     local, at, domain = address.rpartition("@")
-    if not carries_address(address):
-        raise IntegrationError(
-            f"{address} cannot be delivered: this mail transport cannot carry an address whose part before "
-            "the @ is outside ASCII. Send to another address of this contact.",
-        )
+    try:
+        require_carried(address, key="address")
+    except ValidationError as refused:
+        # A delivery fails with the refusal's reason; it is never a form error.
+        raise IntegrationError(f"{' '.join(refused.messages)} Send to another address of this contact.") from refused
     if at and not domain.isascii():
         address = f"{local}@{punycode(domain)}"
     return formataddr((header_text(name), address))
@@ -535,8 +553,16 @@ def _dedupe(addresses: Any) -> list[str]:
 
 
 def _bare_address(address: str) -> str:
+    """Return which address one written mailbox names, for sending each address once.
+
+    Which mailboxes are one address is the handle owner's spelling key
+    (``Handle.spelling_key_of``); a mailbox with no ``@`` is only itself.
+    """
+
     parsed = getaddresses([address])
-    return parsed[0][1].strip().casefold() if parsed else ""
+    bare = parsed[0][1].strip() if parsed else ""
+    handle_model = apps.get_model("parties", "Handle")
+    return handle_model.spelling_key_of(handle_model.Platform.EMAIL, bare) or bare
 
 
 def _rfc_message_id(external_id: str) -> str:
