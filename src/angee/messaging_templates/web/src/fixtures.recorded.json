@@ -697,6 +697,14 @@
    ],
    "sample": null
   },
+  "mtl_part_signature_es_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
   "mtl_template_example_invoice_sent_en": {
    "can_keep_override": false,
    "permissions": [],
@@ -2444,6 +2452,24 @@
      "creatable": false,
      "currencyField": null,
      "kind": "scalar",
+     "name": "can_send_test",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "currencyField": null,
+     "kind": "scalar",
      "name": "has_open_decisions",
      "readable": true,
      "relationModelLabel": null,
@@ -2636,6 +2662,21 @@
        "path": "can_override",
        "paths": [
         "can_override"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "can_send_test": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "can_send_test",
+       "paths": [
+        "can_send_test"
        ]
       },
       "scalar": "Boolean",
@@ -4433,6 +4474,37 @@
    "redacted_fields": [],
    "sample": {},
    "source": "The {{ brand.name }} team",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "How an email signs off, in the brand's name.",
+   "display_name": "Signature",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_signature_es_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "signature",
+   "kind": "PART",
+   "language": "es",
+   "layout": "",
+   "name": "Signature",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "El equipo de {{ brand.name }}",
    "subject": "",
    "text_source": "",
    "updated_at": "2026-11-24T09:00:00+00:00",
