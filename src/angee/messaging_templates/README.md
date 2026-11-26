@@ -261,17 +261,25 @@ own lookup, and a caller that offers the send to a person turns it into its own
 coded refusal.
 
 A caller that mails a credential or a call to action passes the paths of the
-values the mail is useless without as `must_print` (`["link"]`, or
-`["person.first_name"]` for a nested one). The render then refuses, before it
-renders anything, when the HTML body or the plain-text body does not print one of
-them (`value_not_printed`, one item per path and body), through any include and
-whether or not a condition guards the output; a value only tested in a condition
-is not printed, and a path the row no longer declares is refused like a path its
-text no longer prints, once, because an override may edit `variables` as well as
-the text. Both bodies
-are required because some clients show only the plain-text part. So a
-deployment's override that drops `{{ link }}`, or its declaration, is refused
-rather than sent without its link. The preview's "Nothing reads …" warning stays
+values the mail is useless without as `must_print`, an iterable of paths
+(`["link"]`, `["person.first_name"]`; a bare string is a `TypeError`). Each is
+refused `value_not_printed`, one item per path and body, as follows. For every
+path, before anything renders: a path the row no longer declares, once (an
+override may edit `variables` as well as the text), and a body with no output of
+it, through any include, a condition around it or not (a value only tested, or
+printed only in the subject or preheader, is printed by no body). For a path
+with no `*`, after the render: a value that is not a string or is blank, and a
+body that does not hold the value as the render emits it (itself, or its link
+through `url`, escaped in the HTML), as when `{% if first_name %}` left the
+output out of this mail or it is printed only through another filter
+(`upper`). For a path through a list (`questions.*.link`), the text alone: the
+row prints the item's field inside the loop, not every item's value in this
+mail, and an empty list passes; a caller that needs each item's value guards its
+own values. Both bodies are required because some clients show only the
+plain-text part. Before a run that mails one link to many recipients, a caller
+asks `MessageTemplate.objects.clean_link(value, path="link")`: the link a mail
+prints for the value, `""` for a blank one, or exactly the render's
+`value_not_linkable` refusal. The preview's "Nothing reads …" warning stays
 a warning: it knows no caller's requirement. The row renders as the instance holds it: edits not yet saved are
 sent, and a row never saved is refused `not_effective`. `to` is one entry as
 messaging's `clean_recipient` reads it; pass a bare address, since a typed name

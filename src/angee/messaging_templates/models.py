@@ -81,7 +81,6 @@ from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
     PreviewFrame,
     RenderedMessage,
-    RowPiece,
     TemplatePreview,
     TemplateWalker,
     TemplateWarning,
@@ -703,18 +702,21 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         does.
 
         ``must_print`` names the values the mail is useless without, a credential
-        or a call to action's target (``link``, ``person.first_name``): a caller
-        that mails one passes its path, and the send is refused
-        (``value_not_printed``) when the HTML or the plain-text body does not
-        print it, as a deployment's override that drops it would not
-        (:meth:`MessageTemplate.render`). The default requires nothing.
+        or a call to action's target (``["link"]``, ``["person.first_name"]``): a
+        caller that mails one passes its path, and the send is refused
+        (``value_not_printed``) when a body cannot print it, or, for a path with
+        no ``*``, when this mail's body does not show it, as
+        :meth:`MessageTemplate.render` states for each kind of path. The default
+        requires nothing. A link value the mail cannot carry is refused whatever
+        ``must_print`` says (``value_not_linkable``); :attr:`clean_link` asks that
+        rule of a value before a run.
 
         In order: a blank ``reason`` is a ``ValueError``, before anything is read;
         :meth:`MessageTemplate.send_refusal`; the render
         (:meth:`MessageTemplate.render`) inside ``system_context(reason=reason)``,
         which reads every row and the default kit and whose entry writes one
         permission audit row at once, kept when the render then refuses
-        (``value_not_printed`` among its refusals, before anything renders); then
+        (``value_not_linkable`` and ``value_not_printed`` among its refusals); then
         :meth:`~angee.messaging.managers.MessageManager.compose_as_system` under
         the same reason, outside that context, in the caller's own context and
         transaction, with the rendered subject, plain text and HTML, which
@@ -1435,31 +1437,24 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
         (:func:`~angee.messaging_templates.walker.refusals_only`).
 
-        ``must_print`` names the declared values the mail is useless without (a
-        sign-in link, a call to action's target): after the walk and before
-        anything renders, each must be printed by the HTML body and by the
-        plain-text body, through any include and whether or not a condition
-        guards it; a value only tested is not printed. A path either body does
-        not print is refused, one item per path and body, with the code
-        ``value_not_printed``. A path the row no longer declares is refused like a
-        path its text no longer prints, once and with the same code, because an
-        override may edit ``variables`` as well as the text. The preview warns
-        of a declared value nothing reads, but it knows no caller's requirement,
-        so it stays a warning; the requirement is the sender's to pass here.
+        ``must_print`` is an iterable of the declared paths the mail is sent for
+        (a bare string is a ``TypeError``), held as
+        :meth:`~angee.messaging_templates.walker.TemplateWalk.render` states: every
+        path declared and printed by each body's text, a path the row no longer
+        declares refused like one its text no longer prints, because an override
+        may edit ``variables`` as well as the text; a path with no ``*`` also
+        shown by each body of this mail, its value text that is not blank; a path
+        through a list held to the text alone, so an empty list passes. Each
+        refusal is ``value_not_printed``, one item per path and body. The preview
+        warns of a declared value nothing reads, but it knows no caller's
+        requirement, so it stays a warning; the requirement is the sender's to
+        pass here.
         """
 
+        if isinstance(must_print, str):
+            raise TypeError("Pass must_print as an iterable of paths, not one path.")
         walk = TemplateWalker().walk(self, type(self).objects)
-        unprinted: list[str] = []
-        for path in must_print:
-            if path not in self.variables:
-                unprinted.append(f"This message template does not declare {path}, so neither body prints it.")
-                continue
-            for form, body in ((RowPiece.HTML, "HTML"), (RowPiece.TEXT, "plain-text")):
-                if tuple(path.split(".")) not in walk.printed.get(form, set()):
-                    unprinted.append(f"The {body} body does not print {path}, which this mail is sent for.")
-        if unprinted:
-            raise ValidationError([ValidationError(message, code="value_not_printed") for message in unprinted])
-        return walk.render(values, kit=self._brand_kit(kit))
+        return walk.render(values, kit=self._brand_kit(kit), must_print=must_print)
 
     def preview(self, *, kit: BrandKit | None = None) -> TemplatePreview:
         """Render this row with its ``sample`` and say what a sender should know about it.

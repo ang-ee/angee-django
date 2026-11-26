@@ -34,7 +34,7 @@ import logging
 import math
 import quopri
 import re
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
@@ -584,7 +584,10 @@ class TemplateWalk:
 
     @sensitive_variables()
     @refusals_only()
-    def render(self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None = None) -> RenderedMessage:
+    def render(
+        self, values: Mapping[str, Any], *, kit: BrandKit, frame: PreviewFrame | None = None,
+        must_print: Collection[str] = (),
+    ) -> RenderedMessage:
         """Render the walked row with ``values``, the mail colours from ``kit``.
 
         Passes, each in ``translation.override`` of the row's language and its own
@@ -600,8 +603,24 @@ class TemplateWalk:
         frame it calls (:meth:`prepare`, the engine, Django's template frames, the
         filters), is Django's ``sensitive_variables``: the values and the text a
         report would show may hold a credential.
+
+        ``must_print`` names the declared values the mail is sent for, each refused
+        with ``value_not_printed``, one item per path and body: before anything
+        renders, a path the root row does not declare (once: an override may edit
+        ``variables`` as well as the text), and a body that has no output of the
+        path (:attr:`printed`: through any include, guarded by a condition or not;
+        a value only tested, or printed in the subject or preheader alone, is not
+        printed by a body). After the render, for a path with no ``*``: a value
+        that is not a string, or is blank, and a body that does not hold it as
+        the render emits it (:func:`_bodies_without`), as when a condition left
+        its output out of this mail. A path through a list (``questions.*.link``)
+        is held to the text alone: some output prints the item's field, not that
+        every item's value is in this mail, so an empty list passes.
         """
 
+        unprinted = self._unprinted(must_print)
+        if unprinted:
+            raise _refused(unprinted, "value_not_printed")
         language = self.language
         with translation.override(language):
             prepared = self.prepare(values)
@@ -632,10 +651,50 @@ class TemplateWalk:
             )
             with RenderBudget().spend():
                 text = text_root.render(text_engine.context(prepared))
-        return RenderedMessage(
+        rendered = RenderedMessage(
             subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
             direction=direction,
         )
+        unshown = self._unshown(must_print, prepared, rendered)
+        if unshown:
+            raise _refused(unshown, "value_not_printed")
+        return rendered
+
+    def _unprinted(self, must_print: Collection[str]) -> list[str]:
+        """Why the walked text cannot print each of ``must_print`` in both bodies, before anything renders."""
+
+        declared = self.root.variables if isinstance(self.root.variables, dict) else {}
+        unprinted: list[str] = []
+        for path in must_print:
+            if path not in declared:
+                unprinted.append(f"This message template does not declare {path}, so neither body prints it.")
+                continue
+            unprinted.extend(
+                f"The {body} body does not print {path}, which this mail is sent for." for form, body in _BODIES
+                if tuple(path.split(".")) not in self.printed.get(form, set())
+            )
+        return unprinted
+
+    def _unshown(
+        self, must_print: Collection[str], prepared: Mapping[str, Any], rendered: RenderedMessage,
+    ) -> list[str]:
+        """Why this render's bodies do not show each of ``must_print`` that names no list item."""
+
+        unshown: list[str] = []
+        for path in must_print:
+            segments = tuple(path.split("."))
+            if "*" in segments:
+                continue
+            value = next(_at(prepared, segments), "")
+            if not isinstance(value, str):
+                unshown.append(f"{path} is not text, and this mail is sent for its text.")
+            elif not value.strip():
+                unshown.append(f"{path} is empty, and this mail is sent for it.")
+            else:
+                missing = _bodies_without(rendered, value)
+                unshown.extend(f"The {body} body of this mail does not show {path}, which it is sent for."
+                               for form, body in _BODIES if form in missing)
+        return unshown
 
     def _engine(self, form: RowPiece, mail_globals: Mapping[str, Any]) -> MessageTemplateEngine:
         """An engine serving ``form`` of every walked row, through a per-render ``cached.Loader``."""
@@ -677,10 +736,7 @@ class TemplateWalk:
         )
         if isinstance(self.root.variables, dict) and "unsubscribe_url" in self.root.variables:
             stop = sample.get("unsubscribe_url")
-            links = {stop, url(stop)} - {""} if isinstance(stop, str) else set()
-            if not any(escape(link) in rendered.html for link in links) or not any(
-                link in rendered.plain_text for link in links
-            ):
+            if not isinstance(stop, str) or _bodies_without(rendered, stop):
                 warnings.append(TemplateWarning(
                     TemplateWarningCode.STOP_LINK, "The HTML or plain-text body lacks the sample's unsubscribe_url.",
                 ))
@@ -713,6 +769,21 @@ def _one_line(text: str, name: str) -> str:
             code="subject_too_long", params={"name": name, "limit": SUBJECT_LIMIT},
         )
     return line
+
+
+_BODIES = ((RowPiece.HTML, "HTML"), (RowPiece.TEXT, "plain-text"))
+"""The two bodies of a mail, with the names a refusal gives them."""
+
+
+def _bodies_without(rendered: RenderedMessage, value: str) -> set[RowPiece]:
+    """The bodies of ``rendered`` that do not hold ``value`` as a render emits it: the value without its surrounding
+    white space, or the link :func:`~angee.messaging_templates.engine.url` makes of it; escaped as Django escapes an
+    output in the HTML, as it is in the plain text. A blank value is in neither. A value printed only through another
+    filter (``upper``, ``truncatechars``) is not found."""
+
+    emitted = {value.strip(), url(value)} - {""}
+    return {form for form, body in ((RowPiece.HTML, rendered.html), (RowPiece.TEXT, rendered.plain_text))
+            if not any((escape(text) if form == RowPiece.HTML else text) in body for text in emitted)}
 
 
 def _plain(text: str) -> str:

@@ -34,7 +34,14 @@ live in code docstrings.
   deployment's own public origin, asked of base (`configured_public_origin`), with
   its port and whatever its host (a single label such as `localhost` under
   `DEBUG`, an address, an IPv6 address written in its brackets); other
-  single-label hosts and addresses stay refused, now loudly.
+  single-label hosts and addresses stay refused, now loudly. `must_print`
+  follows: a path with no `*` must be shown by each body of this mail, as the
+  render emits its value (itself or its link, escaped in the HTML; the stop-link
+  warning's comparison, now one helper), so a value that is blank or not text,
+  or left out by a false condition, is refused `value_not_printed` after the
+  render and before anything is written; a path through a list stays held to
+  the text, and an empty list passes. `must_print` given as one bare string is a
+  `TypeError`, no longer read letter by letter.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None, must_print=())` renders one effective template (the caller picks it for its

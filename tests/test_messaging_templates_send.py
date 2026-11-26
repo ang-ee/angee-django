@@ -358,6 +358,64 @@ def test_a_required_value_must_be_printed_by_each_body_through_any_include(
                                                           for item in refusal.value.error_list)] == unprinted
 
 
+SIGN_IN = "https://app.example.test/sign-in#token=a&b"
+GATED = {**LINKED, "first_name": "The reader's first name."}
+HTML_BODY = "The HTML body of this mail does not show link, which it is sent for."
+TEXT_BODY = "The plain-text body of this mail does not show link, which it is sent for."
+QUESTION_LIST = {"questions.*.title": "A question's title.", "questions.*.link": "Where it is answered."}
+
+
+@pytest.mark.parametrize(
+    ("make", "values", "must_print", "refusals"),
+    [
+        pytest.param(lambda: _mail("{% if first_name %}[Sign in]({{ link }}){% endif %}Hello.", GATED),
+                     {"link": SIGN_IN, "first_name": ""}, ["link"], [HTML_BODY, TEXT_BODY], id="a-false-condition"),
+        pytest.param(lambda: _mail("{% if first_name %}[Sign in]({{ link }}){% endif %}Hello.", GATED),
+                     {"link": SIGN_IN, "first_name": "Ana"}, ["link"], [], id="a-true-condition"),
+        pytest.param(lambda: _mail("[Sign in]({{ link }})", LINKED), {"link": ""}, ["link"],
+                     ["link is empty, and this mail is sent for it."], id="a-blank-value"),
+        pytest.param(lambda: _mail("Your code: {{ code }}", {"code": "A code."}), {"code": 123456}, ["code"],
+                     ["code is not text, and this mail is sent for its text."], id="a-number"),
+        pytest.param(lambda: _mail("Hi {{ name }}.", {"name": "A name."}), {"name": "Tom & 'Jerry' <x>"}, ["name"],
+                     [], id="escaped-in-the-html"),
+        pytest.param(lambda: _mail("Code {{ code|upper }}.", {"code": "A code."}), {"code": "abc"}, ["code"],
+                     ["The HTML body of this mail does not show code, which it is sent for.",
+                      "The plain-text body of this mail does not show code, which it is sent for."],
+                     id="only-through-another-filter"),
+        pytest.param(lambda: _row("template", "tests.subject_link", format="html", variables=LINKED, layout="plain",
+                                  subject="Sign in: {{ link }}", source='<p><a href="{{ link|url }}">Sign in</a></p>',
+                                  text_source="Sign in at the site."),
+                     {"link": SIGN_IN}, ["link"],
+                     ["The plain-text body does not print link, which this mail is sent for."],
+                     id="the-subject-is-no-body"),
+        pytest.param(lambda: _mail("{% for question in questions %}- [{{ question.title }}]({{ question.link }})\n"
+                                   "{% endfor %}", QUESTION_LIST),
+                     {"questions": []}, ["questions.*.link"], [], id="an-empty-list-passes"),
+    ],
+)
+def test_must_print_holds_a_plain_path_to_what_this_mail_shows_and_a_list_path_to_its_text(
+    system_channel: Any, sent: list[str], make: Callable[[], Any], values: dict[str, Any], must_print: list[str],
+    refusals: list[str],
+) -> None:
+    del system_channel
+    row = make()
+    if not refusals:
+        _send(row, values, must_print=must_print)
+        return
+    with _refused(ValidationError) as refusal:
+        _send(row, values, must_print=must_print)
+    assert [(item.code, item.message) for item in refusal.value.error_list] == [
+        ("value_not_printed", message) for message in refusals]
+    assert sent == []
+
+
+def test_must_print_is_an_iterable_of_paths_never_one_path(system_channel: Any) -> None:
+    del system_channel
+    row = _mail("[Sign in]({{ link }})", LINKED)
+    with pytest.raises(TypeError, match="Pass must_print as an iterable of paths, not one path."):
+        _send(row, {"link": SIGN_IN}, must_print="link")
+
+
 DECISION = "http://localhost:6173/decisions/dec_1"
 
 
