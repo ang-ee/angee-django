@@ -12,6 +12,7 @@ import { ControlBandProvider } from "../../layouts/ControlBand";
 import { CommandBand } from "../resource/CommandBand";
 import { cn } from "../../lib/cn";
 import { ContainerOutlet } from "../../lib/container-outlet";
+import { DraftScopeProvider } from "../../lib/idempotency-key";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
 import type { RecordHeaderProps } from "../../fragments/RecordHeader";
@@ -149,7 +150,10 @@ export const FormView = Object.assign(FormViewComponent, {
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
   const surface = useFormViewSurface(props);
-  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+  // A create form inside this form (a relation field's, an embedded list's) names its draft under this one's.
+  return <DraftScopeProvider scope={surface.draftScope}>
+    <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>
+  </DraftScopeProvider>;
 }
 
 function FormViewContent({ surface, ...props }: FormViewProps & {
@@ -193,7 +197,9 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     displayRecord,
     loadError,
     saveErrors,
+    saveBanner,
     saveConflict,
+    saveKeyConflict,
     declaredActions,
     genericActions,
     actionsBlocked,
@@ -237,14 +243,6 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
     publishBreadcrumbLabel,
   );
   const awaitingRecord = !isCreate && displayRecord == null && loading;
-  // A refused save brings the person to its reason, as the form's own check does: the answer has moved
-  // focus to the first shown field it names (`applyFormErrors`); any other refusal focuses its banner,
-  // which a sheet scrolled down to the edited field would leave out of view.
-  const saveBannerRef = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
-    if (saveErrors.length === 0 || document.activeElement?.getAttribute("aria-invalid") === "true") return;
-    saveBannerRef.current?.focus();
-  }, [saveErrors]);
   if (!isCreate && !awaitingRecord && displayRecord == null) {
     if (loadError) return <ErrorBanner title={t("form.loadFailed")}
       description={errorMessage(loadError, t("form.loadFailed"))}
@@ -417,10 +415,12 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
       description={errorMessage(loadError, t("form.loadFailed"))}
       actions={<Button type="button" size="sm" disabled={loading} onClick={() => void reload()}>{t("collection.retry")}</Button>} /> : null}
     <ErrorBanner
-      ref={saveBannerRef}
-      tabIndex={-1}
-      messages={saveErrors}
-      title={t(saveConflict ? "form.saveConflict" : "form.saveFailed")}
+      {...saveBanner}
+      // A spent key is told in the form's own words, true however the person got here (a different
+      // record after a discard, or the same one corrected after a lost answer); it offers nothing to
+      // undo, since saving again is the person's call.
+      messages={saveKeyConflict ? [t("form.createdEarlier")] : saveErrors}
+      title={t(saveConflict ? "form.saveConflict" : saveKeyConflict ? "form.createdEarlierTitle" : "form.saveFailed")}
       actions={saveConflict ? (
         <Button type="button" variant="secondary" size="sm" onClick={() => { discardChanges(); reload(); }}>
           {t("form.reloadSaved")}

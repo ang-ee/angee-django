@@ -47,8 +47,9 @@ function Directories(): React.ReactElement {
 }
 
 function renderAction(): void {
+  // Under a router, as an app page is: the dialog guards route moves while it holds work.
   render(
-    <Provider dataProvider={{ custom: mocks.custom, getList: mocks.getList }}>
+    <Provider router dataProvider={{ custom: mocks.custom, getList: mocks.getList }}>
       <AppRuntimeProvider runtime={{ i18n, widgets: defaultWidgets }}>
         <ToastProvider>
           <Directories />

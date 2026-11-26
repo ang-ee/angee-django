@@ -29,6 +29,7 @@ vi.mock("../SubjectControl", () => ({
 }));
 
 import { AppRuntimeProvider, InAppLinkProvider, ModalsHost, ToastProvider, baseIcons, createRouteHref, defaultWidgets } from "@angee/ui";
+import { createUiTestProviders } from "@angee/ui/testing";
 
 import { OverviewPage } from "./OverviewPage";
 
@@ -137,6 +138,9 @@ function overviewData(): unknown {
   };
 }
 
+// Under a router, as an app page is: a grant dialog guards route moves while it holds work.
+const { Provider } = createUiTestProviders({ router: true });
+
 function renderPage(children: ReactNode): ReturnType<typeof render> {
   return render(
     <AppRuntimeProvider
@@ -150,5 +154,6 @@ function renderPage(children: ReactNode): ReturnType<typeof render> {
         <ModalsHost><InAppLinkProvider navigate={mocks.navigate}>{children}</InAppLinkProvider></ModalsHost>
       </ToastProvider>
     </AppRuntimeProvider>,
+    { wrapper: Provider },
   );
 }

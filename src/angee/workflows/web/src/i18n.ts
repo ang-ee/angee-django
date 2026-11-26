@@ -5,6 +5,7 @@ export const enWorkflowsMessages = {
   "trigger.grantRevoked": "Grant revoked",
   "action.runWorkflow": "Run workflow",
   "action.startFailed": "Start workflow failed.",
+  "action.startedEarlier": "An earlier attempt already started this workflow on this record.",
   "timeline.continuedBy": "Continued at the request of {name}",
   ...enCatalogueMessages,
   "timeline.unavailable": "Timeline unavailable.",

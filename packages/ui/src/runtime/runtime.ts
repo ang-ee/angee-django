@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useMatches, useRouterState } from "@tanstack/react-router";
 import type {
   MessageResources,
@@ -34,6 +34,7 @@ import type { DashboardRegistry } from "../dashboard/headless";
 import type { ThemeContribution } from "../theme";
 import type { StatusToneMap } from "../widgets/status-tones";
 import { setHumanDateLocale } from "../widgets/date-format";
+import { IdempotencyKeyStore, IdempotencyKeyStoreContext } from "../lib/idempotency-key";
 
 /**
  * The sign-in URL of a runtime that composes no `auth.login` route (a workshop,
@@ -313,6 +314,10 @@ export function AppRuntimeProvider(props: {
 }): React.ReactNode {
   const { runtime } = props;
   const parent = RuntimeContext.useMaybe();
+  // The root provider holds the runtime's idempotency keys, as the app's query client is held once.
+  const parentKeys = useContext(IdempotencyKeyStoreContext);
+  const [ownKeys] = useState(() => parentKeys ? null : new IdempotencyKeyStore());
+  const keys = parentKeys ?? ownKeys!;
   const [languageRevision, setLanguageRevision] = useState(0);
   const value = useMemo<AppRuntime>(
     () => ({ ...EMPTY_RUNTIME, ...(parent ?? {}), ...runtime }),
@@ -320,6 +325,11 @@ export function AppRuntimeProvider(props: {
   );
   // Set before descendants render: the formatter API is pure and has no hook.
   if (value.i18n?.language) setHumanDateLocale(value.i18n.language);
+  // The keys belong to the person signed in (the real one during a preview, whose writes are
+  // refused): another person forgets them. The provider that supplies `auth` says who that is.
+  const suppliesAuth = runtime.auth !== undefined;
+  const actor = value.auth.viewAs?.realUser?.id ?? value.auth.user?.id ?? "";
+  useEffect(() => { if (suppliesAuth) keys.setActor(actor); }, [actor, keys, suppliesAuth]);
   useEffect(() => {
     const i18n = value.i18n;
     if (!i18n?.on || !i18n.off) return;
@@ -330,7 +340,10 @@ export function AppRuntimeProvider(props: {
     i18n.on("languageChanged", onLanguageChanged);
     return () => { i18n.off?.("languageChanged", onLanguageChanged); };
   }, [value.i18n]);
-  return RuntimeContext.Provider({ value, children: props.children });
+  return RuntimeContext.Provider({
+    value,
+    children: parentKeys ? props.children : createElement(IdempotencyKeyStoreContext.Provider, { value: keys }, props.children),
+  });
 }
 
 /** The merged runtime, or the empty runtime when unprovided.

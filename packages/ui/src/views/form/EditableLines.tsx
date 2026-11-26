@@ -259,6 +259,7 @@ export function EditableLines({
                   value={Array.isArray(controller.value) ? controller.value : []}
                   onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relationMulti}
                   filters={relationFilters?.(field.name, parentRow ?? null)}
+                  fieldName={`${name}.${field.name}`}
                   aria-label={header}
                 />
               ) : relation ? (
@@ -268,6 +269,7 @@ export function EditableLines({
                   onChange={onChange} onCommit={onCommit} readOnly={cellReadOnly} relation={relation}
                   filters={relationFilters?.(field.name, parentRow ?? null)}
                   selectedOption={relationSelectedOption(controller.value, relation.labelField)}
+                  fieldName={`${name}.${field.name}`}
                   aria-label={header}
                 />
               ) : (

@@ -220,6 +220,11 @@ export interface ActionOutcome {
    * backend populated `validation_errors`; absent on success and on a plain result.
    */
   validationErrors?: Record<string, readonly string[]>;
+  /**
+   * The refusal's stable code (`ActionResult.code`), when the answer carries one: a caller's own
+   * refusal sets it too (`CREATION_KEY_CONFLICT` for a create whose key an earlier version spent).
+   */
+  code?: string;
 }
 
 /** Variables for an action mutation targeted by `id` with optional extra arguments. */
@@ -485,6 +490,7 @@ export function extractActionOutcome(
       ? { id: outcome.id }
       : {}),
     ...(validationErrors ? { validationErrors } : {}),
+    ...(typeof outcome.code === "string" && outcome.code !== "" ? { code: outcome.code } : {}),
   };
 }
 

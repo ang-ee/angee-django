@@ -781,7 +781,8 @@ export interface MessageActionsProps extends Omit<HTMLAttributes<HTMLDivElement>
 }
 
 /** A presentational action row under a message (copy, reply, edit, …). Reveals on
- *  hover/focus of the enclosing `group` message and aligns per `align`. Transport-
+ *  hover/focus of the enclosing `group` message, and always shows where the primary
+ *  pointer is coarse (touch), which never hovers; aligns per `align`. Transport-
  *  agnostic: the consumer composes plain buttons or a binding's action controls inside
  *  it.
  * @kind fragment
@@ -790,7 +791,7 @@ export function MessageActions({ align = "start", className, children, ...props 
   return (
     <div
       className={cn(
-        "mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        "mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100",
         align === "end" ? "justify-end" : "justify-start",
         className,
       )}

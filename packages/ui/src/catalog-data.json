@@ -2066,6 +2066,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "DraftScopeProvider",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Provider infrastructure: the enclosing draft scope.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "Drawer",
     "source": "packages/ui/src/ui/drawer.tsx",
     "kind": "primitive",
@@ -6203,6 +6212,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "formErrorsFromForm",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "formLayoutVariants",
     "source": "packages/ui/src/ui/form-layout.tsx",
     "kind": "token",
@@ -6230,6 +6248,15 @@
   {
     "package": "@angee/ui",
     "name": "formSubmitError",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "formSubmitOutcome",
     "source": "packages/ui/src/views/form/validation-errors.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
@@ -7085,6 +7112,15 @@
     "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
     "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "pathnameChanges",
+    "source": "packages/ui/src/views/form/use-unsaved-changes-navigation-guard.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },
@@ -8188,6 +8224,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useDraftScope",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDraggable",
     "source": "packages/ui/src/lib/dnd.ts",
     "kind": null,
@@ -8302,6 +8347,33 @@
     "source": "packages/ui/src/chrome/icon-registry.ts",
     "kind": "primitive",
     "owner": "@angee/ui:Glyph",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyDraftOwner",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeyState",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeys",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },
@@ -8599,6 +8671,15 @@
     "source": "packages/ui/src/feedback/refine-notification.ts",
     "kind": null,
     "reason": "Provider infrastructure: adapts Toast to Refine notifications.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRefusalBannerFocus",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

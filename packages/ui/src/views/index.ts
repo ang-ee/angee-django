@@ -85,6 +85,7 @@ export {
 } from "./relation/RelationPicker";
 export {
   MutationDialog,
+  type KeyedMutationDialogProps,
   type MutationDialogParseValues,
   type MutationDialogProps,
   type MutationDialogValues,
@@ -109,7 +110,7 @@ export {
   type FormSpecWire,
 } from "./form/form-spec-schema";
 export { structuredFieldErrors, textValue, type FieldRuleError } from "./form/field-values";
-export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
+export { pathnameChanges, useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,
@@ -132,8 +133,12 @@ export {
   actionOutcomeSubmitResult,
   invalidFormSubmit,
   formSubmitError,
+  formSubmitOutcome,
   savedFormSubmitResult,
   applyFormErrors,
+  formErrorsFromForm,
+  useRefusalBannerFocus,
+  type FormSubmitConflictCode,
   type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
