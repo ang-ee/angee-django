@@ -484,7 +484,6 @@ def test_message_sender_and_recipient_expose_resolved_party(db: None) -> None:
         message.sender = handle
         message.save(update_fields=("sender", "updated_at"))
         messaging_models.Recipient.objects.create(
-            thread=thread,
             message=message,
             handle=handle,
             role=messaging_models.Recipient.RecipientRole.TO,
@@ -3342,7 +3341,7 @@ def test_delete_channel_preview_total_matches_real_deleted_rows(db: None) -> Non
         messaging_models.MessageEdge._base_manager.create(src=msg1, dst=msg2, created_by_id=owner_id)
         messaging_models.Recipient._base_manager.create(message=msg1, handle=handle, created_by_id=owner_id)
         messaging_models.Recipient._base_manager.create(
-            message=msg2, thread=thread2, handle=handle, created_by_id=owner_id,
+            message=msg2, handle=handle, created_by_id=owner_id,
         )
         # Thread-rooted CASCADE children: a bare follower and a delivery notification.
         messaging_models.ThreadFollower._base_manager.create(

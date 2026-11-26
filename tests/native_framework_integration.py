@@ -55,8 +55,10 @@ class ReplyJoins(DeliveryFixtures):
             )
             Message.posts.land(self.feed, [native], owner_id=self.operator.pk)
             self.assertTrue(comment.reply_state())
-            with self.assertRaisesMessage(CommentAnswered, "already answered"):
-                comment.reply_to_comment(body="Stale inference", actor=self.agent, idempotency_key="late-run")
+        # The reply is the agent's own call: compose refuses one made inside an elevation.
+        with self.assertRaisesMessage(CommentAnswered, "already answered"):
+            comment.reply_to_comment(body="Stale inference", actor=self.agent, idempotency_key="late-run")
+        with system_context(reason="native reply evidence"):
             Message.objects.filter(pk=comment.pk).update(sender_id=self.feed.handle_id)
             comment.refresh_from_db()
             self.assertTrue(comment.reply_state())
