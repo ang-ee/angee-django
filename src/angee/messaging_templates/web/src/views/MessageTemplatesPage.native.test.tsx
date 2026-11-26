@@ -645,13 +645,15 @@ function busyPane(): HTMLElement {
 
 /**
  * Whether what the pane shows stands in for a preview not yet read: the band and the body under it dimmed and
- * inert, as a list keeping its previous rows is; the toolbar never is. Each is asked, and they must agree.
+ * inert, as a list keeping its previous rows is; the toolbar never is. Each is asked, and they must agree with each
+ * other and with the pane's `aria-busy`: one state, seen and announced alike.
  */
 function standsIn(): boolean {
   const body = factsBand().nextElementSibling as HTMLElement;
   const states = [factsBand(), body].map((part) => part.className.includes("opacity-50")
     && part.className.includes("pointer-events-none"));
   expect(states[0]).toBe(states[1]);
+  expect(busyPane().getAttribute("aria-busy") === "true").toBe(states[0]);
   return states[0]!;
 }
 
@@ -767,7 +769,7 @@ test("Discard returns the Preview to the saved row at once, and the next edit st
   expect(within(factsBand()).queryByText(edit.result.rendered!.subject)).toBeNull();
 });
 
-test("after a save the Preview shows the saved row at once, said to be busy until the row is read again", async () => {
+test("after a save the Preview shows the saved row at once, busy and dimmed until the row is read again", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   const requests: GraphQLWireRequest[] = [];
   const reread = heldAnswer();
@@ -789,11 +791,11 @@ test("after a save the Preview shows the saved row at once, said to be busy unti
   await waitFor(() => expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy());
   expect(within(factsBand()).getByText(before.subject)).toBeTruthy();
   expect(busyPane().getAttribute("aria-busy")).toBe("true");
-  // It is the saved row's own last answer, read again, not another read's: busy, and not dimmed, as a list
-  // reading its rows again keeps them.
-  expect(standsIn()).toBe(false);
+  // The render from before the edits, under the saved row's caption: busy and dimmed until the row is read again.
+  expect(standsIn()).toBe(true);
   act(() => reread.release());
   await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+  expect(standsIn()).toBe(false);
   expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset });
 });
 

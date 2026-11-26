@@ -114,10 +114,11 @@ function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | nu
  * The HTML is only ever in the framework's sandboxed message frame, which runs no
  * script, has no same origin and loads remote images only when asked; the frame's
  * own body styles sit under the mail, so a mail client may space and size it
- * slightly differently, which the pane says beside a frame. While newer edits
- * settle, or a preview for another kit or other edits loads, the earlier one stays
- * dimmed and inert under the caption for what was asked for; while the shown one is
- * read again, as after a save, it stays as it is. The pane says it is busy throughout.
+ * slightly differently, which the pane says beside a frame. Whenever what is on
+ * screen may not be the preview of what is now asked for, the pane says it is busy
+ * and dims it, inert, under the caption for what was asked for: while newer edits
+ * settle, while a preview for another kit or other edits loads, and while the shown
+ * one is read again because something it depends on changed, as after a save.
  *
  * The pane fills the height its record tab is given. The brand kit select and the
  * HTML or plain-text switch are its pane toolbar's (`PaneToolbar`, in the host the
@@ -172,9 +173,11 @@ export function MessageTemplatePreviewPane({
   const issues = previewIssues(result?.warnings ?? [], rendered !== null);
   // Save would refuse the edits; else, with edits, Save would keep them but the sample does not render them.
   const saveRefused = result?.warnings.some((warning) => warning.code === "SAVE_REFUSED") ?? false;
-  // What is on screen stands in for a preview not yet read (newer edits settle, or a new read shows the last
-  // answer meanwhile): dimmed and inert as a list keeping its previous rows is, beside saying it is busy.
-  const standIn = cn((settling || preview.isPlaceholderData) && "pointer-events-none opacity-50");
+  // What is on screen may not be the preview of what is asked for: newer edits settle, or a read is in flight
+  // (another kit's or other edits', or the shown answer's again). One state: busy, and dimmed and inert as a list
+  // keeping its previous rows is.
+  const busy = settling || preview.isFetching || preview.isPlaceholderData;
+  const standIn = cn(busy && "pointer-events-none opacity-50");
   const framed = rendered !== null && format === "html";
   const dir = rendered ? TEXT_DIRECTION[rendered.direction] : undefined;
 
@@ -242,7 +245,7 @@ export function MessageTemplatePreviewPane({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-sheet"
-      aria-busy={settling || preview.isFetching || preview.isPlaceholderData || undefined}>
+      aria-busy={busy || undefined}>
       {toolbar}
       {result || preview.error ? (
         <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}
