@@ -1548,9 +1548,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   next send, and the caller only says what happened. The owner reads a thrown
   answer itself and a resolved one through `send`'s `outcome`
   (`formSubmitOutcome` for a submit's result, whose conflict carries its
-  `code`), so a conflict ends the draft whether thrown or returned. A lost
-  answer must reach `send` thrown: a returned result cannot say it may have
-  been written, and the draft would forget it. A dialog takes its draft as
+  `code`), so a conflict ends the draft whether thrown or returned.
+  `formSubmitError` marks a lost answer's result `outcome: "unconfirmed"`, so
+  the draft keeps it as possibly written either way; a result a caller builds
+  by hand for a lost answer carries that mark, or the draft forgets the
+  attempt may have been written. A dialog takes its draft as
   `idempotencyScope`. Never hold a key in component
   state, and promise "it will not go out twice" only from this page.
 - One draft scope belongs to one surface at a time: two holding it at once

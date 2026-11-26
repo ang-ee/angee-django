@@ -609,6 +609,34 @@ describe("MutationDialog", () => {
     expect(sent[2]).not.toBe(sent[0]);
   });
 
+  test("a lost answer returned as a result keeps its draft past a dismissal: the same content sent after reopening carries the same key", async () => {
+    const sent: string[] = [];
+    const resend = "No answer came back, so it may have been sent. Sending again from this page sends it once.";
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New quarter</button>} title="Create" fields={[{ name: "name", label: "Name" }]}
+        submitLabel="Create" parseValues={parseRawValues} idempotencyScope="quarters.create"
+        onSubmit={(_values, _options, idempotencyKey) => {
+          sent.push(idempotencyKey);
+          return sent.length === 1
+            ? formSubmitError(boundedGraphQLTransportError(new TypeError("Failed to fetch")), "Could not create.", resend)
+            : { status: "ok", data: null };
+        }} />
+    </AppRuntimeProvider>);
+    const typeAndCreate = async () => {
+      fireEvent.click(screen.getByRole("button", { name: "New quarter" }));
+      fireEvent.change(await screen.findByRole("textbox", { name: "Name" }), { target: { value: "Q4" } });
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    };
+    await typeAndCreate();
+    expect(await screen.findByText(resend)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: DISCARD })).getByRole("button", { name: "Leave" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await typeAndCreate();
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toBe(sent[0]);
+  });
+
   test("one draft scope belongs to one open dialog: two open at once fail in development, naming it; a closed one holds none", async () => {
     const caught: Error[] = [];
     // A trigger-owned dialog stays mounted while closed: it holds its scope only once opened.

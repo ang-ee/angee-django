@@ -60,7 +60,10 @@ pending write and typed values.
   by `formSubmitError` and `actionOutcomeSubmitResult`; a bare conflict stays
   a stale one. `formSubmitOutcome(result)` says what a submit's result tells
   its draft's key, and the record form and both dialogs pass it to `send`, so
-  a submission may return its conflict as well as throw it. A creation-key
+  a submission may return its conflict as well as throw it. A lost answer's
+  result from `formSubmitError` is marked `outcome: "unconfirmed"`, given its
+  sentence or not, so a returned one keeps its draft as a thrown one does,
+  past a dismissal. A creation-key
   conflict does not lock a dialog's draft as a stale one does: the next
   attempt is a new draft. `@angee/refine`'s `ActionOutcome` carries a
   refusal's `code` when the answer has one, and a caller's own refusal may set
