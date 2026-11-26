@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
@@ -35,7 +36,9 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
+from angee.messaging.email import header_text
 from angee.messaging.managers import MessageManager, _preview
+from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.messaging_integrate_imap.parser import parse_message
 from angee.provenance import context as provenance_context
@@ -289,6 +292,112 @@ def test_a_reply_to_a_title_holding_an_encoded_word_is_written_on_one_line(desk:
     assert stored.startswith("Re: ") and _one_plain_line(stored)
 
 
+MAILERS = {
+    "default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"},
+    "smtp": {"BACKEND": "django.core.mail.backends.smtp.EmailBackend", "OPTIONS": {"host": "localhost"}},
+}
+"""The test mailer delivers; the SMTP one is only asked for the envelope it would send, never connected."""
+
+
+def _delivered(message: Any) -> EmailMessage:
+    """Deliver ``message`` through the test mailer as the worker does, and return the bytes it sent, parsed."""
+
+    assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+    return message_from_bytes(mail.outbox[-1].message().as_bytes(), policy=email.policy.default)
+
+
+def test_an_answer_to_a_sender_named_with_an_encoded_word_is_delivered_to_that_sender(desk: Any, settings: Any) -> None:
+    """A hostile inbound name reaches the wire as written, never decoded into another name the envelope refuses."""
+
+    settings.MAILERS = MAILERS
+    raw = (
+        b"From: =?utf-8?q?=3D=3Futf-8=3Fq=3Fceo=3D40bank.test=3F=3D?= <mallory@example.test>\r\n"
+        b"To: desk@example.test\r\nMessage-ID: <hostile-name@example.test>\r\nSubject: Hello\r\n\r\nbody\r\n"
+    )
+    with system_context(reason="tests.messaging.compose.hostile_name"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        stored = (parent.sender.display_name, parent.sender.value)
+    assert stored == ("=?utf-8?q?ceo=40bank.test?=", "mallory@example.test")
+    reply = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner, queued=True)
+    (to,) = _delivered(reply)["To"].addresses
+    assert (to.display_name, to.addr_spec) == (header_text(stored[0]), stored[1])
+    assert to.display_name == "= ?utf-8?q?ceo=40bank.test?="
+    assert mail.mailers["smtp"].prep_address(str(to)) == stored[1]
+
+
+def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, settings: Any) -> None:
+    """Typed or taken from an inbound sender, the address is stored as written and sent with its domain in IDNA form."""
+
+    settings.MAILERS = MAILERS
+    raw = (
+        "From: Ada <ada@exämple.test>\r\nTo: desk@example.test\r\nMessage-ID: <idn@example.test>\r\n"
+        "Subject: Hello\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.idn"):
+        (parent,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+    typed = Message.objects.compose(
+        channel=desk, to=["Ada <ada@exämple.test>"], text="Hi.", actor=desk.owner, queued=True,
+    )
+    answer = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner, queued=True)
+    for message in (typed, answer):
+        with system_context(reason="tests.messaging.compose.idn"):
+            assert Recipient._base_manager.get(message=message).handle.value == "ada@exämple.test"
+        (to,) = _delivered(message)["To"].addresses
+        assert (to.display_name, to.addr_spec) == ("Ada", "ada@xn--exmple-cua.test")
+        assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
+
+
+def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_so(desk: Any, settings: Any) -> None:
+    """Admitted, as inbound mail stores such senders, and refused at delivery with the reason a person can act on."""
+
+    settings.MAILERS = MAILERS
+    typed = Message.objects.compose(channel=desk, to=["jörg@example.test"], text="Hi.", actor=desk.owner, queued=True)
+    answer = Message.objects.compose(
+        parent=_receive(desk, "utf8-local", sender="jörg@example.test"), text="Answer.", actor=desk.owner, queued=True,
+    )
+    for message in (typed, answer):
+        assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["status"] == "failed"
+        with system_context(reason="tests.messaging.compose.utf8_local"):
+            message.refresh_from_db()
+            assert message.local_metadata["delivery_error"] == (
+                "jörg@example.test cannot be delivered: this mail transport cannot carry an address whose part "
+                "before the @ is outside ASCII. Send to another address of this contact."
+            )
+    assert not mail.outbox
+
+
+def test_a_mail_sent_from_a_records_chatter_is_answered_and_its_answer_answered_by_email(
+    desk: Any, settings: Any,
+) -> None:
+    """Send, receive and reply: the customer's answer lands on the chatter as an email, and is answered as one."""
+
+    settings.MAILERS = MAILERS
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.round_trip"):
+        doc = ChatterDoc.objects.create(title="Invoice 42")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(
+        channel=desk, record=doc, to=["Client <client@example.test>"], subject="Invoice 42",
+        text="Please find the invoice attached.", actor=owner, queued=True,
+    )
+    wire = _delivered(sent)
+    raw = (
+        f"From: Client <client@example.test>\r\nTo: {wire['From']}\r\nMessage-ID: <paid@example.test>\r\n"
+        f"In-Reply-To: {wire['Message-ID']}\r\nReferences: {wire['Message-ID']}\r\nSubject: Re: Invoice 42\r\n"
+        "\r\nThanks, paid.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.round_trip"):
+        (received,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        chatter = doc.message_thread(create=False).pk
+    assert (received.message_type, received.thread_id, received.parent_id) == ("email", chatter, sent.pk)
+    answer = Message.objects.compose(parent=received, text="Receipt attached.", actor=owner, queued=True)
+    assert (answer.message_type, answer.thread_id) == ("email", chatter)
+    out = _delivered(answer)
+    assert ([address.addr_spec for address in out["To"].addresses], out["In-Reply-To"]) == (
+        ["client@example.test"], "<paid@example.test>",
+    )
+
+
 @pytest.mark.parametrize(
     ("values", "key", "code"),
     [
@@ -451,6 +560,25 @@ def test_an_entry_compose_would_read_as_another_address_is_refused(desk: Any, en
 
 
 @pytest.mark.parametrize("role", ["to", "cc", "bcc"])
+@pytest.mark.parametrize("entry", [
+    "=?us-ascii?q?boss?=@example.test",
+    "=?utf-8?q?b=40evil.test?=@example.test",
+    "=?utf-8?q?ceo=40bank.test?= <eve@example.test>",
+    '"Eve\tX" <eve@example.test>',
+    '"Eve\x1bX" <eve@example.test>',
+    "Eve\u2028X <eve@example.test>",
+])
+def test_an_entry_a_mail_header_would_not_carry_as_typed_is_refused_under_its_role(
+    desk: Any, role: str, entry: str,
+) -> None:
+    """A mail library decodes an encoded word into another address or name, and rewrites a control character."""
+
+    with _refused(key=role, code="invalid"):
+        Message.objects.compose(channel=desk, **{role: [entry]}, text="Hi.", actor=desk.owner)
+    assert not Handle._base_manager.filter(value__in=("boss@example.test", "b@evil.test", "eve@example.test")).exists()
+
+
+@pytest.mark.parametrize("role", ["to", "cc", "bcc"])
 @pytest.mark.parametrize("entry", ["Na\x00me <nul@example.test>", "nul@example.test\x00", "nu\x00l@example.test"])
 def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str, entry: str) -> None:
     """PostgreSQL stores no NUL, so a name holding one would fail the write after it began; it is refused first."""
@@ -464,6 +592,7 @@ def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str,
     ("Name <a@example.test>", ("Name", "a@example.test")),
     ('"Doe, Jane" <jane@example.test>', ("Doe, Jane", "jane@example.test")),
     ("jörg@example.test", ("", "jörg@example.test")),
+    ("Eve\tX <eve@example.test>", ("Eve X", "eve@example.test")),
 ])
 def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: str, expected: tuple[str, str]) -> None:
     assert Message.objects.clean_recipient(entry) == expected
@@ -777,6 +906,21 @@ def test_an_email_reply_goes_to_its_reply_to_else_its_sender_and_a_reply_to_with
     assert to == {"reply-to": ["ann@example.test"], "sender": ["requester@example.test"]}
     unaddressed = _receive(desk, "unaddressed", sender=None)
     assert unaddressed.reply_error(actor=owner).error_dict["parent"][0].code == "reply_unaddressed"
+
+
+def test_an_answer_to_a_reply_to_over_the_recipient_bound_is_refused_and_one_at_it_is_written(desk: Any) -> None:
+    """The bound on to, cc and bcc holds for the addresses an answer takes from its parent's Reply-To."""
+
+    owner = desk.owner
+    over = _receive(desk, "reply-to-over", reply_to=", ".join(_addresses("reply", 51)))
+    assert over.reply_error(actor=owner).error_dict["reply_to"][0].code == "too_many"
+    with _refused(key="reply_to", code="too_many"):
+        Message.objects.compose(parent=over, text="Thanks.", actor=owner)
+    at = _receive(desk, "reply-to-at", reply_to=", ".join(_addresses("reply", 50)))
+    assert at.reply_error(actor=owner) is None
+    answer = Message.objects.compose(parent=at, text="Thanks.", actor=owner)
+    with system_context(reason="tests.messaging.compose.reply_to_bound"):
+        assert Recipient._base_manager.filter(message=answer).count() == 50
 
 
 def test_an_answer_to_a_message_with_a_channel_and_no_thread_is_refused_unwritten(desk: Any) -> None:

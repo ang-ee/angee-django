@@ -19,6 +19,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -75,7 +76,7 @@ from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
-from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
+from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size, row_lock_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import canonical_json
 from angee.base.signals import MutedChanges, mute_changes, publish_change
@@ -659,8 +660,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     ) -> None:
         """Apply the non-blank ``fields`` that differ; one save, only when dirty.
 
-        A field named in ``fill_only`` is applied only while the handle's value is
-        blank. ``allow_immutable`` names the write-once keys
+        A field named in ``fill_only`` is applied only while the handle's stored
+        value is blank: when the loaded handle shows it blank, the row is locked
+        and read again first, so a value another transaction has just written is
+        kept rather than overwritten (and the handle given that value). Only that
+        fill pays for the lock. ``allow_immutable`` names the write-once keys
         (``Handle.immutable_fields``) the calling verb may change: the one save that
         applies them holds that allowance, and the handle's guard refuses any other.
         Adapter-owned metadata merges key-wise so refreshing one identifier does not
@@ -676,11 +680,21 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             name for name, new in fields.items()
             if new and getattr(handle, name, None) != new and not (name in fill_only and getattr(handle, name, None))
         ]
-        if dirty:
-            for name in dirty:
-                setattr(handle, name, fields[name])
-            handle.allow_immutable_save(*(name for name in dirty if name in allow_immutable))
-            handle.save(update_fields=[*dirty, "updated_at"])
+        filling = [name for name in dirty if name in fill_only]
+        if not dirty:
+            return
+        with transaction.atomic() if filling else nullcontext():
+            if filling:
+                stored = row_lock_queryset(type(handle)).get(pk=handle.pk)
+                for name in filling:
+                    if value := getattr(stored, name, None):
+                        setattr(handle, name, value)
+                        dirty.remove(name)
+            if dirty:
+                for name in dirty:
+                    setattr(handle, name, fields[name])
+                handle.allow_immutable_save(*(name for name in dirty if name in allow_immutable))
+                handle.save(update_fields=[*dirty, "updated_at"])
 
     def claim_control(
         self,
