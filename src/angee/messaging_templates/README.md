@@ -148,9 +148,10 @@ the same process, so a busy machine slows the case and the bound alike.
 | The values | `prepare()` costs a constant per declared path per value; `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` | `dated` |
 | The call stack | the caps above keep the deepest admitted row (16 nested tags in each of four rows, three includes, two loops, a ten-operator condition) 254 frames over its caller's | `test_the_deepest_admitted_row_and_values_render` (under 300) |
 
-The Markdown pass and the row checks scan per opener in these constructs, and nowhere else. Each row's worst cost
-is measured on one row of 49 lines of 999 characters, the most the source caps admit, at load 49 to 52 on the machine
-class above, beside the review case's heaviest row (its commented emphasis runs, 0.28 s):
+The Markdown pass and the row checks scan per opener in the inline constructs below, and nowhere else; the block
+rules scan each line once, and the HTML rules are off. Each row's worst cost is measured on one row of 49 lines of 999
+characters, the most the source caps admit, at load 49 to 52 on the machine class above (the last two rows at load 27),
+beside the review case's heaviest row (its commented emphasis runs, 0.28 s):
 
 | Construct | What scans per opener | Cap | Worst row |
 |---|---|---|---|
@@ -162,6 +163,8 @@ class above, beside the review case's heaviest row (its commented emphasis runs,
 | `&` (entities), `\` (escapes) | a bounded pattern; one character | the source caps | 0.20 s; 0.18 s |
 | `*`, `_` (emphasis runs) | markdown-it's `balance_pairs`, its openers bounded by run | the source caps | 0.28 s (the review row); `***` runs 0.23 s |
 | link reference definitions | none: the rule is off | — | — |
+| block rules: fences, indented code, block quotes, rules, lists, ATX and setext headings, paragraphs | each line once a block, linearly; its inline content then as above | the source caps; markdown-it's `maxNesting` (20) for nested lists and quotes | 0.005 s at most (49 list items; a fence opening on every line: 0.004 s), against 0.21 s for the `review` row, at load 27 |
+| HTML blocks and inline HTML | none: with `html` off both rules return at once, so a `<` is text or an autolink (above) | — | `<b>x</b>` runs: 0.05 s at load 27 |
 
 The costliest admitted template found is `onebracket`: the review case's loop beside three commented parts of
 emphasis runs, each opening on one `![`. It previews at 1.09 to 1.10 times the review case measured back to back
