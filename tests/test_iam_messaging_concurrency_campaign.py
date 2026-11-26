@@ -13,6 +13,7 @@ from rebac import actor_context
 
 from angee.base.testing.queries import statement_startswith
 from angee.iam_messaging.auth import sign_in_credentials
+from angee.iam_messaging.models import SIGN_IN_LINK_COOLDOWN_MESSAGE
 from angee.iam_messaging.testing.models import SignInLink
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.test_iam_concurrency_campaign import _thread
@@ -93,7 +94,7 @@ def test_two_issues_within_the_cooldown_store_one_link_and_send_one_mail(iam_adm
             try:
                 user.with_actor(iam_admin).issue_sign_in_link()
             except ValidationError as error:
-                assert error.messages == ["A sign-in link was sent to this account moments ago; wait to send another."]
+                assert error.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
                 return False
         return True
 

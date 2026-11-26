@@ -49,6 +49,7 @@ from angee.iam_messaging.auth import sign_in_credentials
 from angee.iam_messaging.autoconfig import SETTINGS as LINK_SETTINGS
 from angee.iam_messaging.models import (
     ISSUE_SIGN_IN_LINK,
+    SIGN_IN_LINK_COOLDOWN_MESSAGE,
     SIGN_IN_LINK_NO_ADDRESS_MESSAGE,
     SIGN_IN_LINK_NOT_SHOWN_MESSAGE,
     SIGN_IN_LINK_PATH,
@@ -620,8 +621,9 @@ def test_issue_waits_out_the_per_account_cooldown(deliverable, iam_admin, sent):
     target = _person("guest-cooldown")
     sent(target, iam_admin)
     with override_settings(ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN=60):
-        with actor_context(iam_admin), pytest.raises(ValidationError, match="moments ago"):
+        with actor_context(iam_admin), pytest.raises(ValidationError) as refused:
             target.with_actor(iam_admin).issue_sign_in_link()
+        assert refused.value.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
         SignInLink._base_manager.filter(user=target).update(created_at=timezone.now() - timedelta(seconds=61))
         assert sent(target, iam_admin)
     assert len(_mails(target)) == 2
@@ -1108,7 +1110,15 @@ def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fa
             target.with_actor(iam_admin).issue_sign_in_link()
         answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert (refusal.value.code, refusal.value.messages) == ("link_not_shown", [SIGN_IN_LINK_NOT_SHOWN_MESSAGE])
-    assert "does not show the link" in caplog.text and callbacks == []
+    warnings = [record.getMessage() for record in caplog.records if record.name == "angee.iam_messaging.models"
+                and record.levelno == logging.WARNING]
+    with system_context(reason=READ):
+        row = MessageTemplate.objects.effective("template", SIGN_IN_LINK_TEMPLATE, person=None)
+    assert warnings == 2 * [  # the verb's refusal, then the mutation's
+        f"Refused a sign-in link: the message template {row.handler.template_name(row.key)} ({row.language}), "
+        f"row {row.public_id}, or a block or part it includes, does not show the link."
+    ]
+    assert callbacks == []
     assert result_data(answered)["issue_user_sign_in_link"] == {"ok": False, "message": SIGN_IN_LINK_NOT_SHOWN_MESSAGE}
     assert not any(SECRET in text for text in (caplog.text, repr(refusal.value), str(answered.errors)))
     with system_context(reason=READ):
@@ -1164,7 +1174,7 @@ def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_li
         assert refusal.value.code == code
         assert refusal.value.messages == [SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE]
     if state == "cooldown":
-        assert refusal.value.messages == ["A sign-in link was sent to this account moments ago; wait to send another."]
+        assert refusal.value.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
     assert result_data(result)["issue_user_sign_in_link"]["ok"] is False
     assert callbacks == answered == []
     with system_context(reason=READ):

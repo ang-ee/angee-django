@@ -51,20 +51,24 @@ SIGN_IN_LINK_QUEUED_MESSAGE = "Sign-in link queued for the account's email."
 SIGN_IN_LINK_NO_ADDRESS_MESSAGE = "This account has no valid email address to send a sign-in link to."
 """Refusal of an account whose address system mail cannot be sent to (messaging's ``clean_system_recipient``)."""
 
+SIGN_IN_LINK_COOLDOWN_MESSAGE = "A sign-in link was queued for this account moments ago; wait to send another."
+"""Refusal of a link within ``ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`` seconds of the account's last one."""
+
 SIGN_IN_LINK_TEMPLATE = "iam_messaging.sign_in_link"
 """The key of the message template a sign-in link is mailed with; this addon ships it in English and Spanish."""
 
 SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE = (
-    "The sign-in link's message template is not installed. Run `manage.py resources load` (provision runs it)."
+    "This deployment has not installed the sign-in link's email template; its operator loads its resources "
+    "(provision does)."
 )
 """Refusal of a link on a deployment whose resources never loaded the template, code ``template_missing``."""
 
 SIGN_IN_LINK_NOT_SHOWN_MESSAGE = (
     "The sign-in link's email template does not show the link, so no link was sent: "
-    "edit or delete the template's override."
+    "edit or delete the deployment's version of the template, or of a block or part it includes."
 )
-"""Refusal of a link whose effective template, as the deployment edited it, does not show the link (the template's
-``value_not_printed``), code ``link_not_shown``."""
+"""Refusal of a link whose effective template, as the deployment wrote or edited it or a row it includes, does not show
+the link (the template's ``value_not_printed``), code ``link_not_shown``."""
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +135,7 @@ def _token_parts(token: str) -> tuple[str, str]:
 class SignInLinkSpent(Exception):
     """A genuine sign-in link that can no longer sign in.
 
-    It is used, expired or retired, no longer its account's newest sent link,
+    It is used, expired or retired, no longer its account's newest link,
     bound to account facts that have since changed, or for an account that is
     inactive or protected. Its holder had the real link, so this refusal is
     not a guess.
@@ -178,7 +182,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         cooldown = timedelta(seconds=int(settings.ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN))
         with system_context(reason="iam_messaging.sign_in_link.issue"):
             if cooldown and self.filter(user=user, created_at__gt=now - cooldown).exists():
-                raise ValidationError("A sign-in link was sent to this account moments ago; wait to send another.")
+                raise ValidationError(SIGN_IN_LINK_COOLDOWN_MESSAGE)
         reason = "iam_messaging.sign_in_link.send"
         templates = cast(Any, apps.get_model("messaging_templates", "MessageTemplate")).objects
         with system_context(reason=reason):
@@ -208,8 +212,9 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
                 if "value_not_printed" not in {item.code for item in getattr(refusal, "error_list", ())}:
                     raise
                 logger.warning(
-                    "Refused a sign-in link: message template %s (%s, %s) does not show the link.",
-                    template.pk, SIGN_IN_LINK_TEMPLATE, template.language,
+                    "Refused a sign-in link: the message template %s (%s), row %s, or a block or part it includes, "
+                    "does not show the link.",
+                    template.handler.template_name(template.key), template.language, template.public_id,
                 )
                 raise ValidationError(SIGN_IN_LINK_NOT_SHOWN_MESSAGE, code="link_not_shown") from None
             link.sent_at = timezone.now()
@@ -217,7 +222,7 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
                 if actor is not None:
                     link.with_actor(actor)
                 link.save()
-        logger.info("Sent a sign-in link to user %s.", user.pk)
+        logger.info("Queued a sign-in link for user %s.", user.pk)
         return link
 
     @sensitive_variables()
