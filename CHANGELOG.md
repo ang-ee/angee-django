@@ -34,13 +34,16 @@ live in code docstrings.
   **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
   (`iam_messaging_signinlink`) and was in no release, so no migration template
   ships.
-  - A host that tracks main adds `angee.iam_messaging` to `INSTALLED_APPS` to
-    keep emailed sign-in links and composes. Before it runs `makemigrations`,
-    and before it runs `migrate` with what that writes, it deletes the old
-    rows on every database it deploys to: `DELETE FROM iam_signinlink;` in
-    `manage.py dbshell` (`--database <alias>` for each other alias), the same
-    statement on SQLite and PostgreSQL. `makemigrations` then writes IAM's
-    `DeleteModel("SignInLink")` and the addon's initial migration.
+  - Every host that tracks main deletes the old rows, whether or not it keeps
+    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
+    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
+    before it runs `migrate` with what that writes, it deletes them on every
+    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
+    (`--database <alias>` for each other alias), the same statement on SQLite
+    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
+    and, with the addon, its initial migration. After migrating, the host
+    provisions, which syncs the permissions: IAM's schema at revision 32 and,
+    with the addon, its fragment at revision 2.
   - Until the rows are gone, `makemigrations` stops with "unsafe autodetected
     drop: iam.signinlink: iam_signinlink.* holds data in N rows on 'default'.
     Declare a reviewed cutover migration before native makemigrations." It
@@ -56,8 +59,10 @@ live in code docstrings.
     `manage.py remove_stale_contenttypes`.
   - Projects that author `AUTHENTICATION_BACKENDS` replace
     `angee.iam.auth.SignInLinkBackend` with
-    `angee.iam_messaging.auth.SignInLinkBackend`; Django otherwise raises
-    `ImportError` at the first sign-in.
+    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
+    raises, a password's included, as does every request that carries a
+    session a link opened before the upgrade; start-up reports
+    `angee.iam.E006`, which names the entry and its replacement.
   - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
 - `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
   seal's own remedy, which a refused fragment's error carries; it no longer gives every
@@ -88,7 +93,8 @@ live in code docstrings.
   `active_account_granted` and `nonstaff_account_granted`, which a fragment's
   action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
   a composed account action offered twice or not declared on `auth/user`
-  (`angee.iam.E005`). A credential
+  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
+  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
   backend marks a genuine but spent credential with
   `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
   `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.

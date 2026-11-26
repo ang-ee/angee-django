@@ -8,11 +8,14 @@ from functools import partial
 from typing import Any
 
 from django.apps import AppConfig
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
+from django.utils.module_loading import import_string
 
 from angee.base.checks import check_sealed_permissions
 from angee.base.permissions import declared_rebac_definition
+from angee.iam.auth import SESSION_BACKEND
 
 ACCOUNT_PREVIEW = {"auth/user": ("view_as",)}
 """Account preview, ``admin->member`` alone: a platform-admin action.
@@ -86,5 +89,42 @@ def check_account_actions(
             hint="Declare each action's permission on auth/user, in the addon's permissions.extends.zed.",
             obj=users,
             id="angee.iam.E005",
+        ))
+    return errors
+
+
+MOVED_BACKENDS = {"angee.iam.auth.SignInLinkBackend": "angee.iam_messaging.auth.SignInLinkBackend"}
+"""Backend paths IAM no longer provides, each with the path that replaced it, for hosts that list the old one."""
+
+
+def check_authentication_backends(
+    app_configs: Sequence[AppConfig] | None = None, **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """``angee.iam.E006``: every ``AUTHENTICATION_BACKENDS`` entry imports, and ``SESSION_BACKEND`` is listed.
+
+    Django imports the backends only when someone signs in, so an entry that
+    no longer imports makes every sign-in raise, a password's included, while
+    start-up says nothing. Every session records ``SESSION_BACKEND``, so a list
+    without it signs people in and then loads none of their sessions.
+    """
+
+    del app_configs, kwargs
+    errors: list[checks.CheckMessage] = []
+    backends = list(settings.AUTHENTICATION_BACKENDS)
+    for path in backends:
+        try:
+            import_string(path)
+        except ImportError as error:
+            moved = MOVED_BACKENDS.get(path)
+            errors.append(checks.Error(
+                f"AUTHENTICATION_BACKENDS lists {path!r}, which does not import ({error}).",
+                hint=f"Replace it with {moved!r}." if moved else "Remove it, or install the addon that provides it.",
+                id="angee.iam.E006",
+            ))
+    if SESSION_BACKEND not in backends:
+        errors.append(checks.Error(
+            f"AUTHENTICATION_BACKENDS does not list {SESSION_BACKEND!r}, which loads every session IAM opens.",
+            hint="Keep IAM's ModelBackend in AUTHENTICATION_BACKENDS; IAM's autoconfig appends it.",
+            id="angee.iam.E006",
         ))
     return errors

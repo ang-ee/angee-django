@@ -38,6 +38,7 @@ class IAMConfig(AppConfig):
         from angee.iam.checks import (
             check_account_actions,
             check_account_disclosures,
+            check_authentication_backends,
             check_set_password_permissions,
             check_view_as_admin_only,
         )
@@ -47,3 +48,4 @@ class IAMConfig(AppConfig):
         checks.register(check_set_password_permissions, checks.Tags.security)
         checks.register(check_account_disclosures, checks.Tags.security)
         checks.register(check_account_actions, checks.Tags.security)
+        checks.register(check_authentication_backends, checks.Tags.security)

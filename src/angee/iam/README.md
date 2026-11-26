@@ -190,6 +190,9 @@ Every session records `angee.iam.auth.SESSION_BACKEND`, IAM's `ModelBackend`,
 whatever credential opened it: OIDC login and emailed sign-in links
 ([`iam_messaging`](../iam_messaging/README.md)) bind it, so a session outlives
 its credential's backend.
+Start-up refuses an `AUTHENTICATION_BACKENDS` entry that does not import, and a
+list without `SESSION_BACKEND` (`angee.iam.E006`): Django imports backends only
+when someone signs in.
 
 ## Presence
 
