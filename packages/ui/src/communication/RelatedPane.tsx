@@ -79,13 +79,20 @@ function GroupCountsProbe({ context, groups, onCount }: {
   ))}</>;
 }
 
-/** The Links tab: every eligible group, its label with count and verb, then its rows.
+/** The Links tab: every eligible group, its label with count and verb, then its rows; the empty
+ * state when no group is eligible or none shows anything.
  * @kind surface
  */
 export function RelatedPane({ context }: { context: ChatterViewContext }): React.ReactElement {
   const t = useUiT();
   const groups = useRelatedGroups(context);
   const [counts, publishCount] = useChatterCounts();
+  // How many blocks each group shows, published by the group, which alone knows its pane count and
+  // its verb: none when it has neither rows nor a verb (what its `render` then draws is its own).
+  // A group not heard from yet, or still counting, is taken to show something, so the empty state
+  // does not flash while counts load.
+  const [shown, publishShown] = useChatterCounts();
+  const empty = groups.every((group) => shown[group.id] === 0);
   const countedGroups = React.useMemo(
     () => groups.filter((group) => group.content.relatedCount && !group.content.usePaneCount),
     [groups],
@@ -94,27 +101,34 @@ export function RelatedPane({ context }: { context: ChatterViewContext }): React
     <div className="flex min-h-0 flex-1 flex-col">
       {countedGroups.length > 0 ? <GroupCountsProbe context={context} groups={countedGroups} onCount={publishCount} /> : null}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-1">
-        {groups.length === 0 ? (
+        {empty ? (
           <EmptyState icon="link" title={t("related.empty.title")} description={t("related.empty.description")} className="min-h-40 p-4" />
-        ) : (
-          <PaneRows>
-            {groups.map((group) => <RelatedGroup key={group.id} group={group} context={context} groupCount={counts[group.id]} />)}
-          </PaneRows>
-        )}
+        ) : null}
+        {/* The groups stay mounted beside the empty state, in one list that is never remounted: a
+            group that unmounted would withdraw what it published, and the pane would flip for ever. */}
+        <PaneRows hidden={empty}>
+          {groups.map((group) => (
+            <RelatedGroup key={group.id} group={group} context={context} groupCount={counts[group.id]} onShown={publishShown} />
+          ))}
+        </PaneRows>
       </div>
     </div>
   );
 }
 
-function RelatedGroup({ group, context, groupCount }: {
+function RelatedGroup({ group, context, groupCount, onShown }: {
   group: ComposedContainerChild<RelatedGroupContent>;
   context: ChatterViewContext;
   groupCount: number | undefined;
-}): React.ReactElement | null {
+  onShown: CountProbeProps["onCount"];
+}): React.ReactElement {
   const count = group.content.usePaneCount ? group.content.usePaneCount(context) : groupCount;
   const verb = group.content.useVerb?.(context) ?? false;
   // A group with neither rows nor a verb is absent, not empty.
-  if (count === 0 && !verb) return null;
-  return <>{group.content.render(context, (action) =>
-    <PaneLabel count={count} action={verb ? action : null}>{group.content.label}</PaneLabel>)}</>;
+  const absent = count === 0 && !verb;
+  return <>
+    <PublishedCount id={group.id} count={absent ? 0 : 1} onCount={onShown} />
+    {absent ? null : group.content.render(context, (action) =>
+      <PaneLabel count={count} action={verb ? action : null}>{group.content.label}</PaneLabel>)}
+  </>;
 }

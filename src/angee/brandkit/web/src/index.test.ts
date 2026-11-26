@@ -1,6 +1,7 @@
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { describe, expect, test } from "vitest";
 
+import { brandKitHostAppearance } from "./appearance";
 import brandkit from "./index";
 
 describe("angee.brandkit addon manifest", () => {
@@ -11,6 +12,10 @@ describe("angee.brandkit addon manifest", () => {
   test("registers the kit form by model label and the contrast widget by its backend key", () => {
     expect(brandkit.forms?.["brandkit.BrandKit"]).toBeDefined();
     expect(brandkit.widgets?.["angee.brandkit.contrastWarnings"]).toBeDefined();
+  });
+
+  test("provides the app's host appearance", () => {
+    expect(brandkit.hostAppearance).toBe(brandKitHostAppearance);
   });
 
   test("places the Brand kits page in Settings", () => {

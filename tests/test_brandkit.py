@@ -1,9 +1,10 @@
 """Brand kits: theme-named colours, the font-stack field, one default kit, the mail palette and who may do what.
 
 Kits are deployment configuration: setup rows are written under ``system_context``
-and console writes run as a platform admin; every signed-in actor reads kits. The
-shipped Angee kit's values come from its install-tier file, so every kit here
-starts from the Angee brand and changes only what a test is about.
+and console writes run as a platform admin; every signed-in actor reads kits, and
+everyone reads the default kit's colours on the public schema. The shipped Angee
+kit's values come from its install-tier file, so every kit here starts from the
+Angee brand and changes only what a test is about.
 """
 
 from __future__ import annotations
@@ -37,7 +38,9 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.models import PermissionAuditEvent, active_relationship_model
 from rebac.testing import assert_decisions
+from strawberry.types import get_object_definition
 
 from angee.base.build import extension_source_map
 from angee.base.fields.text import ColorField
@@ -58,6 +61,7 @@ from angee.brandkit.models import (
     contrast_ratio,
     mix_colors,
 )
+from angee.brandkit.models import BrandKit as SourceBrandKit
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, result_data
 from angee.provenance.context import changeset
@@ -102,18 +106,28 @@ def _schema() -> Any:
     return addon_schema(brandkit_schema.schemas, "console")
 
 
+def _public_schema() -> Any:
+    return addon_schema(brandkit_schema.schemas, "public")
+
+
 # ---------- one vocabulary with the theme runtime ----------
 
 
 def test_kit_colours_are_the_theme_customisation_hex_inputs() -> None:
-    """The kit's colour columns and the theme runtime's hex inputs are one vocabulary, and its inks are the theme's."""
+    """``THEME_COLORS`` is the addon's own colour columns and the theme runtime's hex inputs, in its order.
+
+    A colour column the addon adds fails here until someone decides whether it is a theme
+    input; a column a consumer adds by extending the kit is not the addon's own, so it never
+    joins ``THEME_COLORS`` or the public type built from it.
+    """
 
     runtime = THEME_RUNTIME.read_text()
-    hex_inputs = set(re.findall(r'normalizedHex\(value\.(\w+), "\1"\)', runtime))
-    colours = {field.name for field in BrandKit._meta.concrete_fields if isinstance(field, ColorField)}
-    assert hex_inputs
-    assert colours == hex_inputs
-    assert {str(seed) for seed in MailSeed} <= colours
+    hex_inputs = tuple(re.findall(r'normalizedHex\(value\.(\w+), "\1"\)', runtime))
+    own_colours = {field.name for field in SourceBrandKit._meta.fields if isinstance(field, ColorField)}
+    assert len(hex_inputs) == 10
+    assert SourceBrandKit.THEME_COLORS == hex_inputs
+    assert own_colours == set(hex_inputs)
+    assert {str(seed) for seed in MailSeed} <= own_colours
 
     readable_text = re.search(
         r'function readableText\(background\) \{\s*return contrastRatio\("(#[0-9a-f]{6})", background\) >= '
@@ -673,7 +687,7 @@ def test_a_brand_colour_no_ink_reads_on_takes_black_text_and_no_warning() -> Non
 
 
 def test_the_policy_decides_every_brand_kit_permission(db: None) -> None:
-    """Every signed-in actor reads kits; only a platform admin creates, edits or deletes one."""
+    """Every signed-in actor reads kits and everyone the default kit's colours; only a platform admin manages kits."""
 
     del db
     seats = {
@@ -681,21 +695,57 @@ def test_the_policy_decides_every_brand_kit_permission(db: None) -> None:
         "admin": create_platform_admin("brandkit-policy-admin"),
         "anonymous": AnonymousUser(),
     }
-    kit = _kit("Policy")
+    default = _kit("Policy")
+    other = _kit("Other")
     cells = seat_cells(
         seats.__getitem__,
-        (kit, "read", "admin member", "anonymous"),
-        (kit, "create", "admin", "member anonymous"),
-        (kit, "write", "admin", "member anonymous"),
-        (kit, "delete", "admin", "member anonymous"),
+        (default, "read", "admin member", "anonymous"),
+        (other, "read", "admin member", "anonymous"),
+        (default, "read_colors", "admin member anonymous", ""),
+        (other, "read_colors", "admin member", "anonymous"),
+        (default, "create", "admin", "member anonymous"),
+        (default, "write", "admin", "member anonymous"),
+        (default, "delete", "admin", "member anonymous"),
     )
-    assert_decisions(checks=cells, accessible=((seats["member"], "read", BrandKit, (kit,)),))
+    assert_decisions(checks=cells, accessible=(
+        (seats["anonymous"], "read", BrandKit, ()),
+        (seats["anonymous"], "read_colors", BrandKit, (default,)),
+    ))
+    # The queryset is the enforcement point; the library's `accessible` also lists the filtered
+    # constant's `default` sentinel to an actor who reads every kit, which no queryset returns.
+    assert set(BrandKit.objects.with_actor(seats["member"])) == {default, other}
+    assert list(BrandKit.objects.with_actor(seats["anonymous"])) == []
+    assert list(BrandKit.objects.with_actor(seats["anonymous"]).with_action("read_colors")) == [default]
+
+
+def test_the_colour_disclosure_follows_the_default_column_and_writes_no_tuple(db: None) -> None:
+    """Making another kit the default moves the anonymous colour read with it; no relationship row backs it."""
+
+    del db
+    anonymous = AnonymousUser()
+    first = _kit("First")
+    second = _kit("Second")
+    assert_decisions(checks=seat_cells(
+        {"anonymous": anonymous}.__getitem__,
+        (first, "read_colors", "anonymous", ""),
+        (second, "read_colors", "", "anonymous"),
+    ))
+
+    with system_context(reason="tests.brandkit.default"):
+        second.is_default = True
+        second.save()
+    assert _default_names() == ["Second"]
+    assert_decisions(checks=seat_cells(
+        {"anonymous": anonymous}.__getitem__,
+        (first, "read_colors", "", "anonymous"),
+        (second, "read_colors", "anonymous", ""),
+    ))
+    assert not active_relationship_model().objects.filter(resource_type="brandkit/brand_kit").exists()
 
 
 # ---------- the console ----------
 
 
-_DEFAULT_KIT = "{ default_brand_kit { name is_default brand contrast_warnings { seed scheme role } } }"
 _INSERT_KIT = """
 mutation($object: brand_kits_insert_input!) {
   insert_brand_kits_one(object: $object) { name is_default info contrast_warnings { seed scheme role } }
@@ -712,19 +762,24 @@ def _console_kit(**values: Any) -> dict[str, Any]:
     return {**ANGEE, **values}
 
 
-def test_a_member_reads_the_default_kit_and_an_anonymous_caller_reads_none(db: None) -> None:
+def _sdl_fields(schema: Any, kind: str, name: str) -> set[str]:
+    """The field names of one type or input in a schema's SDL."""
+
+    found = re.search(rf"^{kind} {name} [^{{]*\{{(.*?)^\}}", str(schema), re.MULTILINE | re.DOTALL)
+    assert found is not None, f"no {kind} {name}"
+    return set(re.findall(r"^\s+(\w+)\s*[(:]", found.group(1), re.MULTILINE))
+
+
+def test_an_anonymous_caller_reads_no_kit_on_the_console(db: None) -> None:
+    """The console's kit reads stay signed-in: the colour disclosure opens nothing there."""
+
     del db
-    member = create_user("brandkit-reader")
+    assert not {"default_brand_kit", "default_brand_kit_colors"} & _sdl_fields(_schema(), "type", "Query")
     _kit("Angee")
     _kit("Other")
-
-    read = result_data(execute_schema(_schema(), _DEFAULT_KIT, user=member))
-    assert read["default_brand_kit"] == {
-        "name": "Angee", "is_default": True, "brand": "#e7b008", "contrast_warnings": [],
-    }
-    anonymous = execute_schema(_schema(), _DEFAULT_KIT, user=AnonymousUser())
-    assert anonymous.errors is None
-    assert anonymous.data == {"default_brand_kit": None}
+    listed = execute_schema(_schema(), "{ brand_kits { id } }", user=AnonymousUser())
+    assert listed.errors is None
+    assert listed.data == {"brand_kits": []}
 
 
 def test_an_admin_writes_a_kit_a_member_and_an_anonymous_caller_cannot(db: None) -> None:
@@ -779,18 +834,26 @@ def test_the_console_updates_a_kit_but_neither_unticks_nor_deletes_the_default(d
 def test_the_console_reads_the_logos_and_cannot_write_them() -> None:
     """The logos are on the kit's type and absent from every input: no console root writes them."""
 
-    sdl = str(_schema())
-
-    def block(kind: str, name: str) -> str:
-        found = re.search(rf"^{kind} {name} [^{{]*\{{(.*?)^\}}", sdl, re.MULTILINE | re.DOTALL)
-        assert found is not None, f"no {kind} {name}"
-        return found.group(1)
-
+    schema = _schema()
     for name in ("brand_kits_insert_input", "brand_kits_set_input"):
-        fields = set(re.findall(r"^\s+(\w+):", block("input", name), re.MULTILINE))
+        fields = _sdl_fields(schema, "input", name)
         assert "font_body" in fields
         assert not {"logo", "logo_dark"} & fields
-    assert {"logo", "logo_dark"} <= set(re.findall(r"^\s+(\w+)", block("type", "BrandKitType"), re.MULTILINE))
+    assert {"logo", "logo_dark"} <= _sdl_fields(schema, "type", "BrandKitType")
+
+
+def test_the_console_type_lists_the_theme_colours_right_after_is_default() -> None:
+    """``BrandKitType``'s colours are ``THEME_COLORS``, in order, after ``is_default``.
+
+    The resource metadata keeps the type's field order, and tools that summarise a resource
+    take its first fields, so the order is part of what an agent reads of a kit.
+    """
+
+    names = [field.name for field in get_object_definition(brandkit_schema.BrandKitType, strict=True).fields]
+    colours = tuple(name for name in names if name in SourceBrandKit.THEME_COLORS)
+    start = names.index("is_default") + 1
+    assert colours == SourceBrandKit.THEME_COLORS
+    assert tuple(names[start : start + len(colours)]) == colours
 
 
 @pytest.mark.usefixtures("image_drive")
@@ -819,6 +882,97 @@ def test_listing_kits_with_logos_costs_the_same_at_one_and_at_twenty_five_rows(d
     for index in range(1, 25):
         add(index)
     assert statements(25) == one
+
+
+# ---------- the public schema ----------
+
+
+THEME_COLORS = SourceBrandKit.THEME_COLORS
+_DEFAULT_COLORS = f"{{ default_brand_kit_colors {{ {' '.join(THEME_COLORS)} }} }}"
+
+CLAY: dict[str, Any] = {
+    "brand": "#c2410c", "accent": "#0f766e", "neutral": "#78716c", "canvas": "#fafaf8", "surface": "#fffbeb",
+    "rail": "#292524", "success": "#15803d", "warning": "#b45309", "danger": "#b91c1c", "info": "#1d4ed8",
+}
+"""A kit whose ten colours all differ from the Angee kit's; the web fragment's mapping tests use the same."""
+
+
+def test_everyone_reads_the_default_kits_colours_and_no_kit_reads_as_none(db: None) -> None:
+    del db
+    member = create_user("brandkit-colour-member")
+    for user in (member, AnonymousUser()):
+        empty = execute_schema(_public_schema(), _DEFAULT_COLORS, user=user)
+        assert empty.errors is None
+        assert empty.data == {"default_brand_kit_colors": None}
+
+    _kit("Clay", **CLAY)
+    _kit("Angee")
+    for user in (member, AnonymousUser()):
+        read = result_data(execute_schema(_public_schema(), _DEFAULT_COLORS, user=user))
+        assert read["default_brand_kit_colors"] == CLAY
+
+
+def test_the_colour_read_is_the_disclosure_and_never_a_bypass(db: None) -> None:
+    """No bypass, no audit row: the public read decides under ``read_colors``, where a ``sudo()`` read is audited."""
+
+    del db
+    _kit("Clay", **CLAY)
+    _kit("Angee")
+    for user in (create_user("brandkit-colour-audit"), AnonymousUser()):
+        audited = PermissionAuditEvent.objects.count()
+        read = result_data(execute_schema(_public_schema(), _DEFAULT_COLORS, user=user))
+        assert read["default_brand_kit_colors"] == CLAY
+        assert PermissionAuditEvent.objects.count() == audited
+
+    audited = PermissionAuditEvent.objects.count()
+    with actor_context(AnonymousUser()):
+        assert BrandKit.objects.sudo(reason="tests.brandkit.bypass").default() is not None
+    assert PermissionAuditEvent.objects.count() == audited + 1
+
+
+def test_the_public_projection_is_the_theme_inputs_and_nothing_more(db: None) -> None:
+    """Only the ten colours of the default kit: no id, name, font, logo, footer, voice or other kit."""
+
+    del db
+    schema = _public_schema()
+    # The built schema, extensions included: a type extension prints apart from the type in SDL.
+    built = schema._schema
+    assert set(built.type_map["BrandKitColors"].fields) == set(THEME_COLORS)
+    assert {name for name in built.query_type.fields if "brand" in name} == {"default_brand_kit_colors"}
+
+    _kit("Angee")
+    for field in ("id", "name", "font_body", "logo", "voice", "is_default"):
+        refused = execute_schema(schema, f"{{ default_brand_kit_colors {{ {field} }} }}", user=AnonymousUser())
+        assert refused.errors
+        assert refused.errors[0].message == f"Cannot query field '{field}' on type 'BrandKitColors'."
+
+
+def test_reading_the_default_kits_colours_costs_the_same_at_one_and_at_twenty_five_kits(db: None) -> None:
+    """The same statements at 1 and 25 kits, and the kit's row read selects its id and the ten colours alone."""
+
+    del db
+    schema = _public_schema()
+    seats = {"member": create_user("brandkit-colour-counter"), "anonymous": AnonymousUser()}
+    table = BrandKit._meta.db_table
+
+    def statements() -> dict[str, int]:
+        counts = {}
+        for seat, user in seats.items():
+            execute_schema(schema, _DEFAULT_COLORS, user=user)
+            with CaptureQueriesContext(connection) as captured:
+                read = result_data(execute_schema(schema, _DEFAULT_COLORS, user=user))
+            assert read["default_brand_kit_colors"] == {name: ANGEE[name] for name in THEME_COLORS}
+            [kit_read] = [query["sql"] for query in captured.captured_queries if f'FROM "{table}"' in query["sql"]]
+            selected = set(re.findall(rf'"{table}"\."(\w+)"', kit_read.split(f' FROM "{table}"', 1)[0]))
+            assert selected == {"id", *THEME_COLORS}
+            counts[seat] = len(captured)
+        return counts
+
+    _kit("Kit 0")
+    one = statements()
+    for index in range(1, 25):
+        _kit(f"Kit {index}", **CLAY)
+    assert statements() == one
 
 
 # ---------- the shipped kit ----------
