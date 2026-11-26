@@ -884,7 +884,7 @@ def test_compose_refuses_an_elevated_call(desk: Any) -> None:
 def test_compose_runs_as_its_actor_under_a_requests_changeset_with_none_process_wide(settings: Any) -> None:
     """A request or a task opens its own changeset and publishes none process-wide; that one holds compose's rows."""
 
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     with changeset(fresh=True, change_reason="setup"):
         desk = make_integration("compose-request", model=Channel, backend_class="email", config={"from_email": DESK})
     owner = desk.owner
