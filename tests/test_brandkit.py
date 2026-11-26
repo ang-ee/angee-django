@@ -333,6 +333,31 @@ def test_a_save_that_does_not_set_the_default_leaves_it(db: None) -> None:
     assert _default_names() == ["Still default"]
 
 
+def test_only_a_save_that_can_move_the_default_takes_the_kits_lock_and_takes_it_once(db: None) -> None:
+    """The lock is one statement, :meth:`lock_default`'s; a save that cannot move the default takes none."""
+
+    del db
+    with CaptureQueriesContext(connection) as lock:
+        BrandKit.objects.lock_default()
+    (lock_statement,) = [query["sql"] for query in lock.captured_queries]
+
+    def locks(kit: Any) -> int:
+        with system_context(reason="tests.brandkit.lock"), CaptureQueriesContext(connection) as captured:
+            kit.save()
+        return [query["sql"] for query in captured.captured_queries].count(lock_statement)
+
+    first = BrandKit(**{**ANGEE, "name": "First"})
+    assert locks(first) == 1  # the first kit takes the default
+    second = BrandKit(**{**ANGEE, "name": "Second"})
+    assert locks(second) == 0  # a kit saved beside the default
+    second.accent = "#0e7490"
+    assert locks(second) == 0  # an edit of a kit that is not the default
+    second.is_default = True
+    assert locks(second) == 1  # a change of default
+    second.name = "Second, renamed"
+    assert locks(second) == 1  # an edit of the default kit, which keeps it
+
+
 def test_the_constraint_refuses_a_second_default_written_past_the_save(db: None) -> None:
     del db
     _kit("First")

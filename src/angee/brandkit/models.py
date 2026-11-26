@@ -9,7 +9,8 @@ voice note for people and AI drafts.
 and :meth:`BrandKit.clean` keep exactly one default (:meth:`BrandKitQuerySet.default`):
 the first kit saved while none is the default takes the flag, saving another kit
 as the default takes it from the previous one, and the default can neither be
-unticked nor, on any delete path, deleted. A write past ``save`` and ``clean``
+unticked nor, on any delete path, deleted. Changes of default made at once take
+turns (:meth:`BrandKitManager.lock_default`). A write past ``save`` and ``clean``
 can leave none.
 
 **Colours are theme inputs.** Each colour column is named exactly as the theme
@@ -34,10 +35,10 @@ them (``permissions.zed``).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -46,6 +47,7 @@ from rebac import PermissionDenied
 
 from angee.base.fields.text import ColorField
 from angee.base.models.base import AngeeDataModel
+from angee.base.querysets import row_lock_queryset
 from angee.base.validators import HEX_COLOR_VALIDATOR
 from angee.brandkit.fields import FontStackField
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -250,13 +252,28 @@ _BrandKitManagerBase = AngeeHistoryManager.from_queryset(BrandKitQuerySet)
 class BrandKitManager[KitT: BrandKit](_BrandKitManagerBase[KitT]):
     """Owns the one-default rule across brand kits."""
 
+    def lock_default(self) -> None:
+        """Lock every kit, in key order: the lock a write takes before it moves or judges the default.
+
+        No one row stands for the default, so every kit row is the lock. A writer
+        takes it before any other kit row (:meth:`demote_defaults`,
+        :meth:`BrandKit.lock_subject`, :meth:`BrandKit.lock_for_delete`), so a
+        second change of default waits for the first and then reads the default it
+        left, and no two writers hold kit rows in different orders. An empty table
+        has no row to lock: two first kits saved at once still meet the one-default
+        constraint.
+        """
+
+        list(row_lock_queryset(self.model).order_by("pk").values_list("pk", flat=True))
+
     def demote_defaults(self, kit: KitT) -> None:
-        """Authorize and clear every other default inside the saving kit's transaction.
+        """Authorize and clear every other default inside the saving kit's transaction, under :meth:`lock_default`.
 
         The saving actor must be able to write the kit it takes the default from;
         named system work always may.
         """
 
+        self.lock_default()
         previous = list(
             self.sudo(reason="brandkit.brand_kit.default_integrity")
             .lock_if_supported()
@@ -395,6 +412,25 @@ class BrandKit(HistoryMixin, AngeeDataModel, concrete=True):
 
         del cascaded
         return DEFAULT_DELETE_MESSAGE if self.is_default else None
+
+    def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
+        """Lock every kit, then this one, so a delete judges the default under :meth:`BrandKitManager.lock_default`."""
+
+        type(self).objects.lock_default()
+        return super().lock_for_delete(queryset=queryset)
+
+    def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
+        """Lock every kit before this one when the write makes or keeps it the default.
+
+        Such a write saves through :meth:`BrandKitManager.demote_defaults`; taking
+        :meth:`BrandKitManager.lock_default` first keeps a writer that locks its
+        subject before saving it, as the console does, in the order every change
+        of default takes.
+        """
+
+        if self.is_default:
+            type(self).objects.lock_default()
+        return super().lock_subject(members)
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Save the kit, keeping exactly one default.

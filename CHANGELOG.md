@@ -380,8 +380,12 @@ live in code docstrings.
   - **Exactly one default kit.** Once any kit exists, writes through `save()` and
     `clean()` keep one: the first kit saved becomes the default, saving another
     kit as the default takes the flag from the previous one, and the default can
-    be neither unticked nor deleted, on any delete path. A conditional unique
-    constraint refuses a second default written past the save.
+    be neither unticked nor deleted, on any delete path. Changes of default made
+    at once take turns: each locks every kit, in key order, before it reads the
+    default (`BrandKitManager.lock_default`), as a console write to the default
+    kit and a delete do first, so the second waits and then takes the default
+    from the first. A conditional unique constraint refuses a second default
+    written past the save, and the second of two first kits saved at once.
     `BrandKit.objects.default()` and the console's `default_brand_kit` query
     return it, or `None` before any kit exists, after a write past `save()` and
     `clean()`, and for an actor who reads no kit.

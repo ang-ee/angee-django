@@ -53,7 +53,13 @@ console and the resource loader) keep exactly one default:
   constraint refuses a second default written any other way;
 - the default kit cannot be unticked (`BrandKit.clean`) or deleted
   (`BrandKit.delete_blocker`, enforced on every delete path, which locks the row
-  first): make another kit the default first.
+  first): make another kit the default first;
+- changes of default made at once take turns: each locks every kit, in key
+  order, before it reads the default (`BrandKitManager.lock_default`), and a
+  console write to the default kit and every delete take that lock before their
+  own row, so the second change waits and then takes the default from the first.
+  An empty table has no row to lock: of two first kits saved at once, the second
+  meets the constraint.
 
 `BrandKit.objects.default()` returns the default kit the actor reads, or `None`:
 before any kit exists, as in a database before its first resource load; after a
