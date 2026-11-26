@@ -409,30 +409,57 @@ def test_a_send_costs_its_render_compose_as_system_and_one_row_fact_read(system_
 # ---------- server code only ----------
 
 
-def _names(source: str) -> set[str]:
-    return {
-        node.attr if isinstance(node, ast.Attribute) else node.id
-        for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Attribute | ast.Name)
-    }
+def _references(source: str, name: str) -> bool:
+    """Whether ``source`` refers to ``name`` in code, as messaging's guard of its writer reads one: an attribute, a
+    name, the string handed to ``getattr``, an import alias; never prose, never the name's own ``def``."""
+
+    return any(
+        (isinstance(node, ast.Attribute) and node.attr == name)
+        or (isinstance(node, ast.Name) and node.id == name)
+        or (isinstance(node, ast.Constant) and node.value == name)
+        or (isinstance(node, ast.alias) and name in (node.name, node.asname))
+        for node in ast.walk(ast.parse(source))
+    )
 
 
 SYSTEM_SEND_CALLERS: frozenset[str] = frozenset()
-"""The source modules that may call ``send_as_system``, each named system work, each added here in a reviewed change.
+"""The source modules that call ``send_as_system``, each added here in a reviewed change.
 
-It checks no permission of its own, so a module a person's request reaches with that person's row, address or
-values (a resolver, an MCP tool, a view, a task fed by a request) is no caller of it."""
+Call it only from system work whose own gate decided the send: a person's request reaches it only through such a
+gate, never from a resolver, an MCP tool or a view that hands it a person's choice of row, address or values
+unchecked. It checks no permission and decides nothing about the values, the links in them or who may be mailed."""
+
+SHARED_STEP_CALLERS: frozenset[str] = frozenset({"src/angee/messaging_templates/models.py"})
+"""The one module that may call the shared send step ``_render_and_record``, whose verbs ask the row's side first."""
 
 
-def test_only_the_listed_modules_call_the_system_send() -> None:
-    """Every module under ``src`` and ``examples`` that names ``send_as_system`` in code, not prose, is listed."""
+def test_only_the_listed_modules_call_the_system_send_or_its_shared_step() -> None:
+    """Every module under ``src`` and ``examples`` that refers to ``send_as_system`` or ``_render_and_record`` is
+    listed. Messaging's guard (``tests/test_messaging_system_mail_callers.py``) names this addon once for its writer;
+    this one names who reaches the template send, whose gate is each caller's own."""
 
     root = Path(__file__).resolve().parents[1]
-    callers = {
-        str(path.relative_to(root))
+    sources = {
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
         for base in ("src", "examples") for path in sorted((root / base).rglob("*.py"))
-        if "send_as_system" in (source := path.read_text(encoding="utf-8")) and "send_as_system" in _names(source)
     }
-    assert callers == SYSTEM_SEND_CALLERS
+    for name, allowed in (("send_as_system", SYSTEM_SEND_CALLERS), ("_render_and_record", SHARED_STEP_CALLERS)):
+        found = {module for module, source in sources.items() if name in source and _references(source, name)}
+        assert found == allowed, name
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param("MessageTemplate.objects._render_and_record(row)", id="attribute"),
+        pytest.param("getattr(MessageTemplate.objects, '_render_and_record')(row)", id="getattr"),
+        pytest.param("step = manager._render_and_record\nstep(row)", id="variable"),
+    ],
+)
+def test_the_tripwire_sees_a_reference_however_it_is_spelled(source: str) -> None:
+    assert _references(source, "_render_and_record")
+    assert not _references('def _render_and_record(self):\n    """See :meth:`_render_and_record`."""\n',
+                           "_render_and_record")
 
 
 # ---------- the test send ----------
