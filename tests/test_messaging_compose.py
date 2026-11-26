@@ -347,6 +347,38 @@ def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, s
         assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
 
 
+def test_a_mail_sent_from_a_records_chatter_is_answered_and_its_answer_answered_by_email(
+    desk: Any, settings: Any,
+) -> None:
+    """Send, receive and reply: the customer's answer lands on the chatter as an email, and is answered as one."""
+
+    settings.MAILERS = MAILERS
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.round_trip"):
+        doc = ChatterDoc.objects.create(title="Invoice 42")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(
+        channel=desk, record=doc, to=["Client <client@example.test>"], subject="Invoice 42",
+        text="Please find the invoice attached.", actor=owner, queued=True,
+    )
+    wire = _delivered(sent)
+    raw = (
+        f"From: Client <client@example.test>\r\nTo: {wire['From']}\r\nMessage-ID: <paid@example.test>\r\n"
+        f"In-Reply-To: {wire['Message-ID']}\r\nReferences: {wire['Message-ID']}\r\nSubject: Re: Invoice 42\r\n"
+        "\r\nThanks, paid.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.round_trip"):
+        (received,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        chatter = doc.message_thread(create=False).pk
+    assert (received.message_type, received.thread_id, received.parent_id) == ("email", chatter, sent.pk)
+    answer = Message.objects.compose(parent=received, text="Receipt attached.", actor=owner, queued=True)
+    assert (answer.message_type, answer.thread_id) == ("email", chatter)
+    out = _delivered(answer)
+    assert ([address.addr_spec for address in out["To"].addresses], out["In-Reply-To"]) == (
+        ["client@example.test"], "<paid@example.test>",
+    )
+
+
 @pytest.mark.parametrize(
     ("values", "key", "code"),
     [

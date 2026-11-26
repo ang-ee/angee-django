@@ -89,7 +89,9 @@ the parent's as `In-Reply-To` and `References`, so an answer arriving on the
 channel it was sent from threads back onto its conversation. A message a person
 starts opens a thread of its own; inbound mail joins it only through those
 threading headers, never by its subject, which groups inbound mail with inbound
-mail alone ([`ThreadManager.resolve`](managers.py)).
+mail alone ([`ThreadManager.resolve`](managers.py)). An answer to a mail sent
+from a record's chatter lands on that chatter as an email, not a comment, so it
+is answered by email in turn.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from

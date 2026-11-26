@@ -61,6 +61,11 @@ live in code docstrings.
     `find_identity`, `upsert` and every compose lookup) names the platform in each
     arm of its one statement, so the `(platform, value)` key's index serves it; it
     was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Changed.** An inbound email that its own threading headers place on a
+    record's chatter (the customer's answer to a mail sent from the record) is
+    ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
+    answers it by email; before, the answer was refused for want of a sender.
+    Like every email it is a retained record: a moderator no longer trashes it.
   - **Removed.** `Message.objects.compose_reply`. Use
     `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
     takes no argument, and an email reply takes no `sender`.
