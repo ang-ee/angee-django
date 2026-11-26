@@ -20,7 +20,9 @@ const REFUSALS: ReadonlySet<unknown> = new Set(["VALIDATION", "BAD_USER_INPUT", 
 /** Read what a failed write's error tells about the write ({@link FailedWriteOutcome}). */
 export function failedWriteOutcome(error: unknown): FailedWriteOutcome {
   if (error instanceof ServerUnavailableError) return "not-sent";
-  if (error instanceof AuthoredEnvelopeError) return DENIALS.has(error.code) ? "denied" : "refused";
+  if (error instanceof AuthoredEnvelopeError) {
+    return error.code === "CREATION_KEY_CONFLICT" ? "conflict" : DENIALS.has(error.code) ? "denied" : "refused";
+  }
   if (!hasGraphQLAnswer(error)) return "unconfirmed";
   const codes = publicGraphQLErrorsFromUnknown(error).map((item) => item.extensions.code);
   if (codes.includes("CREATION_KEY_CONFLICT")) return "conflict";

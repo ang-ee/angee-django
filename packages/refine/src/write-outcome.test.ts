@@ -23,6 +23,7 @@ describe("failedWriteOutcome", () => {
     ["a sign-in answer", answered("UNAUTHENTICATED"), "denied"],
     ["a preview's refusal", answered("VIEW_AS_READ_ONLY"), "denied"],
     ["a spent key, beside a refusal", answered("VALIDATION", "CREATION_KEY_CONFLICT"), "conflict"],
+    ["an in-band spent key", new AuthoredEnvelopeError("Already posted.", "CREATION_KEY_CONFLICT"), "conflict"],
   ])("%s", (_name, error, outcome) => {
     expect(failedWriteOutcome(error)).toBe(outcome);
   });
