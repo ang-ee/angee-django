@@ -929,7 +929,7 @@ requires-dist = [
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-web", editable = "src/angee/web" },
-    { name = "django-compose", specifier = ">=0.1.0.dev13,<0.2" },
+    { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
 ]
 
 [[package]]
