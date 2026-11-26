@@ -82,6 +82,28 @@ assert namespace['CSRF_TRUSTED_ORIGINS'] == []
 ''', tmp_path)
 
 
+def test_postgresql_sessions_run_without_jit_unless_the_url_sets_it(tmp_path: Path) -> None:
+    _probe(_SEAM + r'''
+url = 'postgres://user:pass@localhost:5432/example'
+cases = {
+    url: '-c jit=off',
+    url + '?options=-c%20statement_timeout%3D5000': '-c statement_timeout=5000 -c jit=off',
+    url + '?options=-c%20jit%3Don': '-c jit=on',
+    url + '?options=-c%20statement_timeout%3D5000%20-cJIT%3Don': '-c statement_timeout=5000 -cJIT=on',
+    url + '?options=--jit%3Don': '--jit=on',
+}
+for database_url, expected in cases.items():
+    os.environ['DATABASE_URL'] = database_url
+    namespace = {'__name__':'settings', '__file__':str(root/'settings.py')}
+    configure(namespace)
+    assert namespace['DATABASES']['default']['OPTIONS']['options'] == expected, namespace['DATABASES']
+os.environ['DATABASE_URL'] = f'sqlite:///{root}/example.sqlite3'
+namespace = {'__name__':'settings', '__file__':str(root/'settings.py')}
+configure(namespace)
+assert 'OPTIONS' not in namespace['DATABASES']['default'], namespace['DATABASES']
+''', tmp_path)
+
+
 def test_explicit_databases_and_caches_win_over_urls(tmp_path: Path) -> None:
     _probe(_SEAM + r'''
 os.environ.update(DATABASE_URL='sqlite:///ignored.sqlite3', CACHE_URL='locmemcache://ignored')

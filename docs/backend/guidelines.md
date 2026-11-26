@@ -182,6 +182,11 @@ Use these owners instead of maintaining another contract in an addon:
   `check --database default`) verifies the co-location. Permission reads never
   run on a replica: a lagging replica serves grants already revoked on the
   primary.
+- **PostgreSQL JIT:** the Django connections Angee builds from `DATABASE_URL`
+  run with JIT off ([`disable_jit`](../../src/angee/base/conf/__init__.py)),
+  unless the URL's libpq `options` set `jit` themselves; an authored `DATABASES`
+  stays authoritative. A direct client (psql, `dbshell`, a measurement script)
+  gets the server's default, so a diagnostic runs `SET jit = off` first to match.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction

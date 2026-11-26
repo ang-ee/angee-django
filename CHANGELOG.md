@@ -10,6 +10,19 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: **Changed behaviour.** A `DATABASE_URL` whose libpq `options`
+  carry other server settings now connects with JIT off too:
+  `angee.base.conf.disable_jit` appends `-c jit=off` to those options, where
+  the URL's options used to replace it and leave JIT at the server's default.
+  For example, `-c statement_timeout=5000` becomes
+  `-c statement_timeout=5000 -c jit=off`. A URL that sets `jit` itself
+  (`-c jit=on`, `-cjit=on`, `--jit=on`) keeps it, and a URL with no options
+  still connects with `-c jit=off`. The test settings compose the same rule, so
+  the PostgreSQL CI lane's sessions now run with JIT off, as deployed ones do. A
+  direct client such as psql or `dbshell` still gets the server's default; a
+  diagnostic runs `SET jit = off` first to match. **Upgrade:** nothing, unless
+  a deployment relied on URL options to leave JIT on; it now adds `-c jit=on`
+  to them.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the

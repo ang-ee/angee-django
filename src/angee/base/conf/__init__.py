@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import MutableMapping
 from copy import deepcopy
 from types import ModuleType
@@ -80,13 +81,33 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         _start_error_reporting(namespace, env)
 
 
+# A server switch PostgreSQL reads from libpq options: `-c jit=on`, `-cjit=on`, `--jit=on`.
+_JIT_SWITCH = re.compile(r"(?:^|\s)(?:-c\s*|--)jit=", re.IGNORECASE)
+
+
+def disable_jit(database: MutableMapping[str, Any]) -> None:
+    """Run a PostgreSQL database's Django sessions with JIT off.
+
+    On permission-scoped reads JIT compiles thousands of functions per
+    statement for no plan change. The libpq ``options`` the configuration
+    already carries are kept, and a ``jit`` they set (``-c jit=…`` or
+    ``--jit=…``) wins. Other engines are left unchanged.
+    """
+    if "postgresql" not in database.get("ENGINE", ""):
+        return
+    options = database.setdefault("OPTIONS", {})
+    libpq = options.get("options", "")
+    if not _JIT_SWITCH.search(libpq):
+        options["options"] = f"{libpq} -c jit=off".lstrip()
+
+
 def _deployment_urls(namespace: MutableMapping[str, Any], env: environ.Env) -> None:
     """Project URL environment inputs through django-environ's native parsers."""
     if "DATABASE_URL" in os.environ:
         database = env.db()
+        disable_jit(database)
         if "postgresql" in database.get("ENGINE", ""):
             options = database.setdefault("OPTIONS", {})
-            options.setdefault("options", "-c jit=off")
             if env.bool("ANGEE_DB_POOL", default=environ.Env.parse_value(namespace.get("ANGEE_DB_POOL", False), bool)):
                 if database.get("CONN_MAX_AGE"):
                     raise ImproperlyConfigured("ANGEE_DB_POOL cannot be used with DATABASE_URL CONN_MAX_AGE")
