@@ -2,11 +2,13 @@
 
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+FULL_SUITE = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]["testpaths"]
 
 
 def reached(*changed: str) -> list[str]:
@@ -37,8 +39,39 @@ def test_a_template_reaches_the_tests_that_render_or_read_the_templates() -> Non
     "changed", ["tests/conftest.py", "src/angee/storage/permissions.zed", "uv.lock", ".python-version"],
 )
 def test_an_input_every_test_reads_selects_the_full_suite(changed: str) -> None:
-    assert reached(changed) == ["tests", "src/angee/resources/tests"]
+    assert reached(changed) == FULL_SUITE
 
 
 def test_docs_and_web_code_reach_no_python_test() -> None:
     assert reached("docs/checks.md", "packages/refine/src/provider.ts") == []
+
+
+@pytest.mark.parametrize(
+    "changed", ["src/angee/base/checks.py", "src/angee/server/urls.py", "src/angee/graphql/records.py"],
+)
+def test_a_shared_owner_selects_the_full_suite(changed: str) -> None:
+    assert reached(changed) == FULL_SUITE
+
+
+def test_a_module_every_test_loads_selects_the_full_suite() -> None:
+    """tests/conftest.py imports it, and the repository's conftest imports tests/conftest.py for every test."""
+
+    assert reached("src/angee/checklists/testing/models.py") == FULL_SUITE
+
+
+@pytest.mark.parametrize("changed", ["src/angee/projects/removed_module.py", ".agents/tools/owner-map-guard.py"])
+def test_a_python_file_outside_the_import_graph_selects_the_full_suite(changed: str) -> None:
+    assert reached(changed) == FULL_SUITE
+
+
+def test_a_package_init_reaches_every_importer_of_the_package() -> None:
+    """Importing tests.hierdemo.models runs tests/hierdemo/__init__.py first."""
+
+    assert {"tests/test_append_only.py", "tests/test_hierarchy.py"} <= set(reached("tests/hierdemo/__init__.py"))
+
+
+def test_a_compose_migration_template_reaches_the_tests_that_import_it() -> None:
+    tests = reached("src/angee/projects/compose_migrations/projects/task_recurrence_due_rule.py")
+
+    assert "tests/test_projects_due_rules.py" in tests
+    assert tests != FULL_SUITE
