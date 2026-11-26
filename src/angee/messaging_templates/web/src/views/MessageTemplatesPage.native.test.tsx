@@ -643,6 +643,18 @@ function busyPane(): HTMLElement {
   return factsBand().parentElement!;
 }
 
+/**
+ * Whether what the pane shows stands in for a preview not yet read: the band and the body under it dimmed and
+ * inert, as a list keeping its previous rows is; the toolbar never is. Each is asked, and they must agree.
+ */
+function standsIn(): boolean {
+  const body = factsBand().nextElementSibling as HTMLElement;
+  const states = [factsBand(), body].map((part) => part.className.includes("opacity-50")
+    && part.className.includes("pointer-events-none"));
+  expect(states[0]).toBe(states[1]);
+  return states[0]!;
+}
+
 /** Let the open form's edits settle, as a pause after the last keystroke does. */
 function pause(): void {
   act(() => { vi.advanceTimersByTime(PREVIEW_PAUSE_MS); });
@@ -698,12 +710,14 @@ test("an edit is read once it settles, as its Save would send it, under the capt
   expect(bandOutline(factsBand(), warnings)).toEqual(["warnings", "unsaved", "message", "caveat"]);
   await waitFor(() => expect(screen.getByTitle(word("preview.frameTitle")).getAttribute("srcdoc")).toContain(rendered.html));
   await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+  expect(standsIn()).toBe(false);
 
-  // A second edit settles over the first one's preview: that stays, under the unsaved caption, unread.
+  // A second edit settles over the first one's preview: that stays, under the unsaved caption, dimmed, unread.
   const reads = previewReads(requests).length;
   fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
   expect(within(factsBand()).getByText(word("preview.unsaved"))).toBeTruthy();
   expect(within(factsBand()).getByText(rendered.subject)).toBeTruthy();
+  expect(standsIn()).toBe(true);
   expect(busyPane().getAttribute("aria-busy")).toBe("true");
   expect(previewReads(requests)).toHaveLength(reads);
 });
@@ -775,6 +789,9 @@ test("after a save the Preview shows the saved row at once, said to be busy unti
   await waitFor(() => expect(within(factsBand()).getByText(word("preview.saved"))).toBeTruthy());
   expect(within(factsBand()).getByText(before.subject)).toBeTruthy();
   expect(busyPane().getAttribute("aria-busy")).toBe("true");
+  // It is the saved row's own last answer, read again, not another read's: busy, and not dimmed, as a list
+  // reading its rows again keeps them.
+  expect(standsIn()).toBe(false);
   act(() => reread.release());
   await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
   expect(previewReads(requests).at(-1)).toEqual({ template: ROW.passwordReset });
@@ -805,6 +822,9 @@ test("answers released out of order never show a preview of edits the form no lo
   fireEvent.change(within(form).getByLabelText(word("field.layout")), { target: { value: "" } });
   pause();
   await waitFor(() => expect(held.has(editsKey(refused.patch))).toBe(true));
+  // While its read is held, the saved row's answer stands in for it, dimmed beside the caption for the edits.
+  expect(within(factsBand()).getByText(word("preview.unsaved"))).toBeTruthy();
+  expect(standsIn()).toBe(true);
 
   // The later answer first: Save would refuse the edits the form holds.
   act(() => held.get(editsKey(refused.patch))!.release());
@@ -812,6 +832,7 @@ test("answers released out of order never show a preview of edits the form no lo
   // The earlier answer last renders edits the form no longer holds: it never shows.
   await act(async () => { held.get(editsKey(subject.patch))!.release(); });
   await waitFor(() => expect(busyPane().getAttribute("aria-busy")).toBeNull());
+  expect(standsIn()).toBe(false);
   expect(screen.getByText(word("preview.unsavedRefused"))).toBeTruthy();
   expect(screen.queryByText(subject.result.rendered!.subject)).toBeNull();
   expect(screen.queryByTitle(word("preview.frameTitle"))).toBeNull();

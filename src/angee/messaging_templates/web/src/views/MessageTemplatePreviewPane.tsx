@@ -13,6 +13,7 @@ import {
   RecordIssues,
   SegmentedControl,
   Select,
+  cn,
   errorMessage,
   textRoleVariants,
   useFormViewValues,
@@ -113,9 +114,10 @@ function useSettledPatch(form: RecordPanelContext["form"]): { patch: string | nu
  * The HTML is only ever in the framework's sandboxed message frame, which runs no
  * script, has no same origin and loads remote images only when asked; the frame's
  * own body styles sit under the mail, so a mail client may space and size it
- * slightly differently, which the pane says beside a frame. Until the preview on
- * screen is the one for the kit and the edits now chosen, while newer edits settle
- * or another preview loads, the earlier one stays and the pane says it is busy.
+ * slightly differently, which the pane says beside a frame. While newer edits
+ * settle, or a preview for another kit or other edits loads, the earlier one stays
+ * dimmed and inert under the caption for what was asked for; while the shown one is
+ * read again, as after a save, it stays as it is. The pane says it is busy throughout.
  *
  * The pane fills the height its record tab is given. The brand kit select and the
  * HTML or plain-text switch are its pane toolbar's (`PaneToolbar`, in the host the
@@ -170,6 +172,9 @@ export function MessageTemplatePreviewPane({
   const issues = previewIssues(result?.warnings ?? [], rendered !== null);
   // Save would refuse the edits; else, with edits, Save would keep them but the sample does not render them.
   const saveRefused = result?.warnings.some((warning) => warning.code === "SAVE_REFUSED") ?? false;
+  // What is on screen stands in for a preview not yet read (newer edits settle, or a new read shows the last
+  // answer meanwhile): dimmed and inert as a list keeping its previous rows is, beside saying it is busy.
+  const standIn = cn((settling || preview.isPlaceholderData) && "pointer-events-none opacity-50");
   const framed = rendered !== null && format === "html";
   const dir = rendered ? TEXT_DIRECTION[rendered.direction] : undefined;
 
@@ -215,7 +220,7 @@ export function MessageTemplatePreviewPane({
     body = (
       <div tabIndex={0} role="region"
         aria-label={saveRefused ? t("preview.unsavedRefusedRegion") : t("preview.refusedRegion")}
-        className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4">
+        className={cn("grid min-h-0 flex-1 content-start gap-3 overflow-y-auto p-4", standIn)}>
         <EmptyState icon="triangle-alert" className="min-h-0 p-6" title={saveRefused ? t("preview.unsavedRefused")
           : patch === null ? t("preview.refused") : t("preview.unsavedUnrendered")} />
         <RecordIssues items={issues} onFocusField={focusField} />
@@ -224,14 +229,14 @@ export function MessageTemplatePreviewPane({
   } else if (format === "text") {
     body = (
       <div lang={rendered.language} dir={dir} tabIndex={0} role="region" aria-label={t("preview.text")}
-        className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 text-sm text-fg">
+        className={cn("min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 text-sm text-fg", standIn)}>
         {rendered.plain_text}
       </div>
     );
   } else {
     body = (
       <MessageHtmlFrame html={rendered.html} title={t("preview.frameTitle")} lang={rendered.language}
-        className="h-auto min-h-0 flex-1 rounded-none border-0" />
+        className={cn("h-auto min-h-0 flex-1 rounded-none border-0", standIn)} />
     );
   }
 
@@ -241,7 +246,8 @@ export function MessageTemplatePreviewPane({
       {toolbar}
       {result || preview.error ? (
         <div tabIndex={0} role="region" aria-label={t("preview.factsRegion")}
-          className="grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-2">
+          className={cn("grid max-h-[40%] flex-none content-start gap-3 overflow-y-auto border-b border-border-subtle px-4 py-2",
+            standIn)}>
           {facts}
         </div>
       ) : null}
