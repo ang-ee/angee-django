@@ -1548,17 +1548,21 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   next send, and the caller only says what happened. The owner reads a thrown
   answer itself and a resolved one through `send`'s `outcome`
   (`formSubmitOutcome` for a submit's result, whose conflict carries its
-  `code`), so a conflict ends the draft whether thrown or returned. A
-  dialog takes its draft as `idempotencyScope`. Never hold a key in component
+  `code`), so a conflict ends the draft whether thrown or returned. A lost
+  answer must reach `send` thrown: a returned result cannot say it may have
+  been written, and the draft would forget it. A dialog takes its draft as
+  `idempotencyScope`. Never hold a key in component
   state, and promise "it will not go out twice" only from this page.
 - One draft scope belongs to one surface at a time: two holding it at once
   would send one key for two writes. A surface that holds a draft says so with
-  `useIdempotencyDraftOwner` (the dialogs, the record form and the composers
-  do), and development fails at once, naming the scope, when two hold it. A
-  create form names its draft under the surface hosting it (`useDraftScope`):
-  the record form provides its own scope, and a relation field's dialog its
+  `useIdempotencyDraftOwner` (the keyed dialogs, every create form and the
+  composers do), and development fails at once, naming the scope and both
+  holders, when two hold it; a production build logs it once. A create form
+  names its draft under the surface hosting it (`useDraftScope`): the record
+  form provides its own scope, and a relation field's dialog its
   `relation:<field>` slot, so a create opened from another form, or from
-  another relation field to the same resource, never shares a draft with it. Name a scope after its target, never after a component.
+  another relation field to the same resource, never shares a draft with it.
+  Name a scope after its target, never after a component.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:
