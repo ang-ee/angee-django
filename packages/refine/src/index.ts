@@ -1,5 +1,6 @@
 export { refineFieldsFromPaths } from "./selections";
 export { ServerConnection, ServerUnavailableError, type ServerConnectionStatus } from "./server-connection";
+export { failedWriteOutcome, type FailedWriteOutcome } from "./write-outcome";
 export {
   groupRowsDocument,
   listQueryMeta,
@@ -89,6 +90,7 @@ export {
   useAuthoredQueryBatch,
   useSetAuthoredQueryData,
   useInvalidateAuthoredModels,
+  AuthoredEnvelopeError,
   errorFromAuthoredEnvelope,
   authoredOperationData,
   authoredQueryKey,

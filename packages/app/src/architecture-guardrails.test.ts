@@ -50,6 +50,12 @@ const CONSUMER_ADDON_ROOTS = [
 // Parsing every framework, tooling, and addon source file grows with the tree,
 // not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
 const FULL_TREE_SCAN_TIMEOUT_MS = 30_000;
+/**
+ * The testing entries a story imports. A story bundles the whole entry into the workshop, where a
+ * test runner loaded beside Storybook's own breaks it, so these are held to the published rule
+ * (no test runner reached at load) instead of the testing entries' exemption.
+ */
+const STORY_TESTING_ENTRIES: readonly string[] = ["@angee/app/testing", "@angee/refine/testing/wire", "@angee/ui/testing/shell"];
 
 test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
   const path = join(MONOREPO_ROOT, "src", "angee", "tsconfig.base.json");
@@ -276,6 +282,14 @@ describe("React architecture guardrails", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test(
+    "the testing entries stories import reach no test runner at load",
+    () => {
+      expect(publishedVitestViolations(repositoryPackageRoots(), STORY_TESTING_ENTRIES)).toEqual([]);
+    },
+    FULL_TREE_SCAN_TIMEOUT_MS,
+  );
 
   test("relative package escape detection reports a seeded violation", () => {
     const root = join(PACKAGES_ROOT, "ui");
@@ -1011,12 +1025,14 @@ function angeeModuleResolver(packages: readonly PackageRoot[]) {
   return { extensions, isSourceTarget, owners, entries, targets };
 }
 
-function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
+/** What reaches vitest among the published entries (`only`: those entries alone, each of which must exist). */
+function publishedVitestViolations(packages: readonly PackageRoot[], only?: readonly string[]): string[] {
   const { extensions, isSourceTarget, owners, entries, targets } = angeeModuleResolver(packages);
   const graph = new Map<string, { importsVitest: boolean; targets: string[] }>();
   const violations = new Set<string>();
-  const reachesVitest = (file: string, visited: Set<string>): boolean => {
-    if (visited.has(file)) return false;
+  // The module that imports vitest on a path from `file`, if any.
+  const reachesVitest = (file: string, visited: Set<string>): string | null => {
+    if (visited.has(file)) return null;
     visited.add(file);
     let node = graph.get(file);
     if (!node) {
@@ -1035,21 +1051,29 @@ function publishedVitestViolations(packages: readonly PackageRoot[]): string[] {
     }
     // Visit all dependencies so every direct runner owner gets its peer checked.
     const children = node.targets.map((target) => reachesVitest(target, visited));
-    return node.importsVitest || children.some(Boolean);
+    return node.importsVitest ? file : children.find((importer) => importer !== null) ?? null;
   };
   for (const entry of entries) {
+    if (only && !only.includes(entry.specifier)) continue;
     const files = entry.targets.flatMap((target) => target.includes("*")
       // Wildcard source exports also match tests that the package build excludes.
       ? ts.sys.readDirectory(entry.owner.root, extensions, undefined, [target])
         .filter((file) => !isTestFile(file))
       : isSourceTarget(target) ? [target] : []);
-    const importsVitest = files.map((file) => reachesVitest(file, new Set())).some(Boolean);
-    // The app's config entry is test tooling, just like public testing helpers.
-    const testing = entry.key === "./testing" || entry.key.startsWith("./testing/")
-      || entry.specifier === "@angee/app/vitest";
-    if (importsVitest && !testing) {
+    const importer = files.map((file) => reachesVitest(file, new Set())).find((found) => found !== null) ?? null;
+    // The app's config entry is test tooling, just like public testing helpers; a testing entry
+    // stories import is not.
+    const story = STORY_TESTING_ENTRIES.includes(entry.specifier);
+    const testing = !story && (entry.key === "./testing" || entry.key.startsWith("./testing/")
+      || entry.specifier === "@angee/app/vitest");
+    if (importer && story) {
+      violations.add(`${entry.specifier} is a testing entry stories import, and it reaches vitest through ${workspaceRelative(importer)}`);
+    } else if (importer && !testing) {
       violations.add(`${entry.specifier} is a non-testing published entry that reaches vitest`);
     }
+  }
+  for (const specifier of only ?? []) {
+    if (!entries.some((entry) => entry.specifier === specifier)) violations.add(`${specifier} is no published entry`);
   }
   return [...violations].sort();
 }

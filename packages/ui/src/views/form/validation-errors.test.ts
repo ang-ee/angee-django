@@ -17,6 +17,7 @@ import {
   directDottedPathMessages,
   formErrorsFromForm,
   formSubmitError,
+  formSubmitOutcome,
   invalidFormSubmit,
   jsonSchemaErrorMessage,
   lineRowErrorsFromDottedPaths,
@@ -29,6 +30,7 @@ import {
   validationErrorMap,
   validationErrorMessages,
   validationErrorsFromError,
+  type FormSubmitResult,
 } from "./validation-errors";
 
 const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
@@ -505,12 +507,55 @@ test("normalized action outcomes retain their transport-owned validation map", (
   expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit({ fieldErrors: outcome.validationErrors, formErrors: ["Review"] }));
 });
 
-test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT"])("decodes %s as the shared form conflict", (code) => {
+test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT"] as const)("decodes %s as the shared form conflict, carrying its code", (code) => {
   const error = { graphQLErrors: [{ message: "Record changed", extensions: { code } }] };
-  expect(formSubmitError(error)).toEqual({ status: "conflict", message: "Record changed" });
+  expect(formSubmitError(error)).toEqual({ status: "conflict", code, message: "Record changed" });
 });
 
-test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
+test("an action outcome refused with a conflict code is a conflict carrying it; any other code stays a refusal", () => {
+  expect(actionOutcomeSubmitResult({ ok: false, code: "CREATION_KEY_CONFLICT", message: "Created earlier." }))
+    .toEqual({ status: "conflict", code: "CREATION_KEY_CONFLICT", message: "Created earlier." });
+  expect(actionOutcomeSubmitResult({ ok: false, code: "VALIDATION", message: "Review" }))
+    .toEqual(invalidFormSubmit({ fieldErrors: {}, formErrors: ["Review"] }));
+});
+
+test.each<[string, FormSubmitResult<unknown>, ReturnType<typeof formSubmitOutcome>]>([
+  ["an accepted result confirms the key", { status: "ok", data: null }, null],
+  ["a creation-key conflict says the key is spent", { status: "conflict", code: "CREATION_KEY_CONFLICT", message: "x" }, "conflict"],
+  ["a stale revision refuses it", { status: "conflict", code: "STALE_REVISION", message: "x" }, "refused"],
+  ["a bare conflict is a stale one and refuses it", { status: "conflict", message: "x" }, "refused"],
+  ["a validation refusal refuses it", { status: "invalid", issues: { fieldErrors: {}, formErrors: ["x"] } }, "refused"],
+  ["issues marked unconfirmed keep it as possibly written", { status: "invalid", issues: { fieldErrors: {}, formErrors: ["x"] }, outcome: "unconfirmed" }, "unconfirmed"],
+])("what a submit's result tells its key: %s", (_name, result, outcome) => {
+  expect(formSubmitOutcome(result)).toBe(outcome);
+});
+
+test.each([
+  ["with the surface's sentence", "It may have been sent.", ["It may have been sent."]],
+  ["without one, reading what the transport tells", undefined, ["Request failed."]],
+])("a lost answer converted to a result is marked unconfirmed, %s", (_name, answerLost, formErrors) => {
+  const result = formSubmitError(boundedGraphQLTransportError(new TypeError("Failed to fetch")), "Could not create.", answerLost);
+  expect(result).toMatchObject({ status: "invalid", outcome: "unconfirmed", issues: { fieldErrors: {} } });
+  expect(result.status === "invalid" && result.issues.formErrors.slice(0, 1)).toEqual(formErrors);
+  expect(formSubmitOutcome(result)).toBe("unconfirmed");
+});
+
+test("a caller's own refusal worded from its message is no lost answer", () => {
+  const result = formSubmitError("Could not create.", undefined, "It may have been sent.");
+  expect(result).toEqual(invalidFormSubmit({ fieldErrors: {}, formErrors: ["Could not create."] }));
+  expect(formSubmitOutcome(result)).toBe("refused");
+});
+
+test("a creation-key conflict does not lock a draft as a stale edit does: its form error is its own type", () => {
+  const { result } = renderHook(() => useForm<Record<string, unknown>>());
+  act(() => { applyFormErrors(result.current, { status: "conflict", code: "CREATION_KEY_CONFLICT", message: "Created earlier." }); });
+  expect(result.current.getFieldState("root.server").error?.type).toBe("creationKeyConflict");
+  act(() => { applyFormErrors(result.current, { status: "conflict", message: "Record changed" }); });
+  expect(result.current.getFieldState("root.server").error?.type).toBe("conflict");
+});
+
+test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} },
+  { status: "invalid", issues: { fieldErrors: {}, formErrors: [] }, outcome: "refused" }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
   const { result } = renderHook(() => useForm<Record<string, unknown>>());
   expect(() => {
     try {

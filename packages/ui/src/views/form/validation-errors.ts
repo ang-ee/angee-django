@@ -1,7 +1,8 @@
 import * as React from "react";
 import type { ErrorObject } from "ajv";
 import {
-  extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+  extractActionOutcome, failedWriteOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+  type FailedWriteOutcome,
 } from "@angee/refine";
 import { get, set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
@@ -169,11 +170,35 @@ export function markMemberErrors<TErrors extends object>(
   return errors;
 }
 
-/** A save either acknowledges data, reports validation issues, or rejects a stale edit. */
+/** The server's code for a conflict: a stale revision, or an idempotency key spent on other content. */
+export type FormSubmitConflictCode = "STALE_REVISION" | "CREATION_KEY_CONFLICT";
+
+/**
+ * A save either acknowledges data, reports validation issues, or rejects it for a conflict: a
+ * stale edit (`code` `STALE_REVISION`, or none: a custom submit's bare conflict is a stale one),
+ * or a create whose idempotency key an earlier version spent (`CREATION_KEY_CONFLICT`). Issues
+ * marked `outcome: "unconfirmed"` report a lost answer: the save may have been written.
+ */
 export type FormSubmitResult<TData> =
   | { status: "ok"; data: TData; message?: string }
-  | { status: "invalid"; issues: ValidationErrors }
-  | { status: "conflict"; message: string; field?: string };
+  | { status: "invalid"; issues: ValidationErrors; outcome?: "unconfirmed" }
+  | { status: "conflict"; message: string; field?: string; code?: FormSubmitConflictCode };
+
+const CONFLICT_CODES: ReadonlySet<unknown> = new Set<FormSubmitConflictCode>(["STALE_REVISION", "CREATION_KEY_CONFLICT"]);
+
+/**
+ * What a submit's result tells its draft's idempotency key (`useIdempotencyKeys().send`'s
+ * `outcome`): an accepted result confirms it (null), a conflict with the creation-key code says
+ * the key is spent, issues marked unconfirmed keep it as possibly written, and every other
+ * refusal refuses it. The record form and both dialogs pass it.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function formSubmitOutcome(result: FormSubmitResult<unknown>): FailedWriteOutcome | null {
+  if (result.status === "ok") return null;
+  if (result.status === "invalid") return result.outcome ?? "refused";
+  return result.code === "CREATION_KEY_CONFLICT" ? "conflict" : "refused";
+}
 
 /** Decode a wire action response through the transport owner.
  * @kind null
@@ -188,6 +213,9 @@ export function actionFormSubmitResult(data: unknown, root: string): FormSubmitR
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefined): FormSubmitResult<ActionOutcome> {
+  if (outcome && !outcome.ok && CONFLICT_CODES.has(outcome.code)) {
+    return { status: "conflict", code: outcome.code as FormSubmitConflictCode, message: outcome.message };
+  }
   return outcome?.ok
     ? { status: "ok", data: outcome, message: outcome.message }
     : invalidFormSubmit({
@@ -212,22 +240,31 @@ export function savedFormSubmitResult<TData>(data: TData | null | undefined, mis
   return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
 }
 
-/** Decode a transport failure; contract violations remain developer errors.
+/** Decode a transport failure, or word a caller's own refusal from its message; contract
+ * violations remain developer errors. A lost answer (`failedWriteOutcome` says `unconfirmed`: no
+ * answer says whether it was written) is marked so on its result, returned or thrown alike, and
+ * reads `answerLost` when the surface gives the sentence it reads there.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
+export function formSubmitError(cause: unknown, fallback?: string, answerLost?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
-  if (publicGraphQLErrorsFromUnknown(cause).some((item) =>
-    item.extensions.code === "STALE_REVISION" || item.extensions.code === "CREATION_KEY_CONFLICT")) {
-    return { status: "conflict", message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
+  if (typeof cause !== "string" && failedWriteOutcome(cause) === "unconfirmed") {
+    const issues = answerLost === undefined ? validationErrorsFromError(cause, fallback) : { fieldErrors: {}, formErrors: [answerLost] };
+    return { status: "invalid", issues, outcome: "unconfirmed" };
+  }
+  const codes = publicGraphQLErrorsFromUnknown(cause).map((item) => item.extensions.code);
+  // A spent key outranks a stale revision: it is what the next attempt must change.
+  const code = codes.includes("CREATION_KEY_CONFLICT") ? "CREATION_KEY_CONFLICT" : codes.includes("STALE_REVISION") ? "STALE_REVISION" : null;
+  if (code) {
+    return { status: "conflict", code, message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
   }
   return invalidFormSubmit(validationErrorsFromError(cause, fallback));
 }
 
 class FormSubmitContractError extends TypeError {
   constructor() {
-    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues }, or { status: "conflict", message }.');
+    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues, outcome? }, or { status: "conflict", message, code? }.');
     this.name = "FormSubmitContractError";
   }
 }
@@ -264,7 +301,9 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
   } = {},
 ): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
   let issues: ValidationErrors;
-  let type: "server" | "conflict";
+  // A stale edit is a `conflict` (its surface locks the draft); a spent key is not (its next
+  // attempt is a new draft): its own type, which the record form's banner words.
+  let type: "server" | "conflict" | "creationKeyConflict";
   if (result == null || typeof result !== "object") throw new FormSubmitContractError();
   switch (result.status) {
     case "ok":
@@ -272,7 +311,8 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       return false;
     case "invalid":
       if (!result.issues || !isStringListMap(result.issues.fieldErrors)
-        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")) {
+        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")
+        || (result.outcome !== undefined && result.outcome !== "unconfirmed")) {
         throw new FormSubmitContractError();
       }
       issues = result.issues;
@@ -280,8 +320,9 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       break;
     case "conflict":
       if (typeof result.message !== "string" || (result.field !== undefined && typeof result.field !== "string")) throw new FormSubmitContractError();
+      if (result.code !== undefined && !CONFLICT_CODES.has(result.code)) throw new FormSubmitContractError();
       issues = { fieldErrors: result.field ? { [result.field]: [result.message] } : {}, formErrors: [result.message] };
-      type = "conflict";
+      type = result.code === "CREATION_KEY_CONFLICT" ? "creationKeyConflict" : "conflict";
       break;
     default:
       return assertNeverResult(result);

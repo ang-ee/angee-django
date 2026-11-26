@@ -15,9 +15,9 @@ and the form-level reason, the one that explains the rest, was not seen.
 - With field reasons only, the first shown field takes focus, as before.
 
 `applyFormErrors` decides which, for a surface that passes it `focus` and a
-`fieldSummary`: today the record form. A surface that passes no `focus` moves
-none, and one that passes no `fieldSummary` shows no line naming the fields;
-the two dialogs pass neither yet, so their list and their focus are unchanged.
+`fieldSummary`: the record form, `MutationDialog` and the typed-args action
+dialog. A surface that passes no `focus` moves none, and one that passes no
+`fieldSummary` shows no line naming the fields.
 The `focus` option, added in this release as `true`, is now the surface's way
 of focusing its banner: a function, given by the new
 `useRefusalBannerFocus(messages)`, whose `banner` props are spread on the
