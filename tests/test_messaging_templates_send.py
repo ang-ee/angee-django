@@ -595,6 +595,23 @@ def test_a_keyed_test_send_replays_its_one_message_and_another_request_under_the
         MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="retry-1")
 
 
+def test_a_key_names_one_press_so_an_edit_of_the_rows_text_or_sample_is_another_request(system_channel: Any) -> None:
+    """A reused key after an edit conflicts instead of replaying the first, now stale, mail."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-edited-retrier")
+    row = _sampled()
+    first = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="edited-1")
+    assert MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="edited-1").pk == first.pk
+    for column, value in (("source", "Hello again, {{ name }}."), ("sample", {**SAMPLE, "name": "Bea"})):
+        edited = MessageTemplate._base_manager.get(pk=row.pk)
+        setattr(edited, column, value)
+        with system_context(reason="tests.messaging_templates.send.edit"):
+            edited.save()
+        with pytest.raises(CreationKeyConflict):
+            MessageTemplate.objects.send_test(edited, actor=tester, idempotency_key="edited-1")
+
+
 def test_a_keyed_retry_of_a_test_whose_message_was_trashed_is_refused_as_discarded(system_channel: Any) -> None:
     """Messaging's replay rule, not a success naming the trashed row."""
 

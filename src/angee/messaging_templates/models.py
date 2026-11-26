@@ -740,13 +740,20 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         (``PermissionDenied`` before anything else is read, then the row's side,
         :meth:`MessageTemplate.send_refusal`); an account with no email address
         (``no_test_address``); with ``idempotency_key``, a claim of it for
-        ``actor``, the request being the row and the kit, through provenance's
-        keyed creation (``claim_created``), so a retry of the same request
+        ``actor``, the request being the row (its id, its ``content_hash`` and its
+        ``sample``) and the kit's id, through provenance's keyed creation
+        (``claim_created``), so a retry of the same request
         returns the message it first sent, neither rendered nor sent again,
         unless that message was trashed since, which messaging's replay rule
         refuses (``MessageManager.replay_claimed``: ``discarded`` under
         ``idempotency_key``), and the same key for another request raises
-        ``CreationKeyConflict``; then
+        ``CreationKeyConflict``. A key names one press: mint one per press and
+        reuse it only to retry that press. So an edit of the row's text or sample
+        between two calls makes the second another request (a conflict, never a
+        stale replay), while an edit of a row it includes or of the kit does not;
+        after an address change a replay names the mail sent to the old address;
+        an omitted kit and the default kit named are two requests; and a first
+        message deleted outright leaves the key ``unavailable``. Then
         the render, inside the system context, and ``compose_as_system``, the
         subject after :data:`TEST_SUBJECT_PREFIX`, refusing as they do. A
         refused test writes no message row. A keyed one runs in a transaction of
@@ -784,7 +791,10 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 sent = changeset_model().objects.claim_created(
                     f"messaging_templates.message_template.send_test:{to_subject_ref(actor)}",
                     idempotency_key,
-                    values={"template": row.sqid, "brand_kit": None if kit is None else kit.sqid},
+                    values={
+                        "template": row.sqid, "content": row.content_hash, "sample": row.sample,
+                        "brand_kit": None if kit is None else kit.sqid,
+                    },
                     model=messages,
                     unavailable=ValidationError({"idempotency_key": ValidationError(
                         "The claimed test send is unavailable.", code="unavailable",

@@ -302,11 +302,18 @@ join). In order:
    channel or mail settings; then the row's side, as above;
 2. an account with no email address: `no_test_address`;
 3. with an `idempotency_key`, its claim for `actor` through provenance's keyed
-   creation (`claim_created`), the request being the row and the kit: a retry of
+   creation (`claim_created`), the request being the row (its id, its
+   `content_hash` and its `sample`) and the kit's id: a retry of
    the same request returns the message the first one sent, neither rendered nor
    sent again, unless that message was trashed since, which messaging's replay
    rule refuses (`replay_claimed`: `discarded`, under `idempotency_key`), and the
-   same key for another request raises `CreationKeyConflict`;
+   same key for another request raises `CreationKeyConflict`. A key names one
+   press: mint one per press and reuse it only to retry that press. So an edit of
+   the row's text or sample between two calls makes the second another request
+   (a conflict, never a stale replay), while an edit of a row it includes or of
+   the kit does not; after an address change a replay names the mail sent to the
+   old address; an omitted kit and the default kit named are two requests; and a
+   first message deleted outright leaves the key `unavailable`;
 4. the render inside the system context and `compose_as_system`, as for any send
    (steps 3 and 4 above), with the rendered subject after `[Test] `
    (`TEST_SUBJECT_PREFIX`).
