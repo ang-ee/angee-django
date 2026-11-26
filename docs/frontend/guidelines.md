@@ -1355,7 +1355,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `formSubmitError` (VALIDATION and STALE_REVISION). Do not add another in-band
   form transport. Adapt ActionResult wire responses with
   `actionFormSubmitResult(data, root)` and normalized outcomes with
-  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  `actionOutcomeSubmitResult(outcome)`: field reasons stay under their keys, the
+  non-field ones (`__all__`) are the form-level reasons, and the outcome's
+  message, which joins every reason (a refused target's is the verb's summary),
+  stands in only when the outcome carries no reason, the rule `runActionResult`
+  applies. A dialog thus says each reason once: under the field it names when it
+  shows that field ([shownFields](../../packages/ui/src/views/form/form-view-model.ts)),
+  on its banner otherwise; a reason under a name only a `content` editor holds
+  shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
@@ -1367,9 +1374,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
   the line naming the refused fields, so one focused place says everything;
-  with field reasons only, the first shown field takes focus. A surface gives
-  its banner's focus through `useRefusalBannerFocus`, never an effect of its
-  own. Save stays focusable while a save runs.
+  with field reasons only, the first shown field takes focus where it can: the
+  form library focuses it as the answer lands, so a field disabled or replaced
+  while the submit runs (a native input of a schema-driven or definition
+  `ActionFormDialog`, held in a fieldset it disables; a checkbox or switch
+  still takes it) cannot take it, and the banner, which names the field but
+  does not repeat its reason, takes focus instead. A surface gives its
+  banner's focus through `useRefusalBannerFocus`,
+  never an effect of its own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.

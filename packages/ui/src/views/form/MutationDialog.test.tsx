@@ -20,7 +20,7 @@ import {
   type MutationDialogProps,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
-import { MEMBER_ERRORS, formSubmitError, type FormSubmitResult } from "./validation-errors";
+import { MEMBER_ERRORS, actionOutcomeSubmitResult, formSubmitError, type FormSubmitResult } from "./validation-errors";
 import type { DescriptorField } from "./DescriptorFieldList";
 import { createUiTestProviders } from "../../testing";
 
@@ -1190,6 +1190,80 @@ test("a refusal bound to a field is reported once: under the field, with no bann
   expect(screen.queryByText("Could not subscribe to the calendar feed.")).toBeNull();
   // The dialog runs the call with refine's generic error notification off: no toast repeats it.
   expect(mutation).toHaveBeenCalledExactlyOnceWith({ url: "webcal://127.0.0.1/feed.ics" }, { errorNotification: false });
+});
+
+describe("an action's refusal, as the server answers it, says each reason once and lands where the reason is", () => {
+  // The server's `message` joins every reason (`ActionResult.from_error`); non-field ones sit under
+  // `__all__`, and a refused target's message is the verb's summary. A text field stays enabled
+  // while the submit runs, so focus can reach it.
+  const TO = "Enter one email address.";
+  const SUBJECT = "Write a subject.";
+  const CHANNEL = "The channel cannot send now.";
+  const TOKEN = "The token has expired.";
+  const DENIED = "You are not allowed to modify this task.";
+  const fields: readonly DescriptorField[] = [
+    { name: "to", label: "To", widget: "text" },
+    { name: "subject", label: "Subject", widget: "text" },
+    { name: "token", label: "Token", hidden: true },
+  ];
+  async function refuse(refusal: { message: string; validationErrors: Record<string, string[]> }) {
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog open onOpenChange={() => undefined} title="New message" fields={fields}
+        initialValues={{ to: "ana", subject: "", token: "t" }} submitLabel="Send" parseValues={parseRawValues}
+        mutation={async () => ({ ok: false, ...refusal })} mutationResult={actionOutcomeSubmitResult} />
+    </AppRuntimeProvider>);
+    const send = screen.getByRole<HTMLButtonElement>("button", { name: "Send" });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    // A real click puts focus on the button; the dialog opened with it on its first field, so
+    // without this a row that expects focus there passes with nothing moving it.
+    send.focus();
+    fireEvent.click(send);
+  }
+  const banner = () => screen.getByRole("dialog", { name: "New message" }).querySelector<HTMLElement>("[role='alert']");
+  /** The banner's lines: one message is its body, several a list. */
+  const bannerLines = () => {
+    const node = banner();
+    const items = [...node?.querySelectorAll("li") ?? []];
+    return items.length ? items.map((item) => item.textContent) : node ? [node.textContent] : [];
+  };
+
+  test("one refused field: its reason once, under it; the banner names the field without repeating it, and focus is on the field", async () => {
+    await refuse({ message: TO, validationErrors: { to: [TO] } });
+    expect(await screen.findAllByText(TO)).toHaveLength(1);
+    const to = screen.getByRole("textbox", { name: "To" });
+    expect(to.getAttribute("aria-invalid")).toBe("true");
+    expect(to.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText(TO).id);
+    expect(bannerLines()).toEqual(["Please fix the highlighted fields: To."]);
+    await waitFor(() => expect(document.activeElement).toBe(to));
+  });
+
+  test("two refused fields: focus on the first in the dialog's order, not the server's", async () => {
+    await refuse({ message: `${SUBJECT}; ${TO}`, validationErrors: { subject: [SUBJECT], to: [TO] } });
+    expect(await screen.findAllByText(TO)).toHaveLength(1);
+    expect(screen.getAllByText(SUBJECT)).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "To" })));
+  });
+
+  test("a refused field and a non-field reason: that reason on the banner, beside the line naming the field, and focus on the banner", async () => {
+    await refuse({ message: `${TO}; ${CHANNEL}`, validationErrors: { to: [TO], __all__: [CHANNEL] } });
+    expect(await screen.findAllByText(TO)).toHaveLength(1);
+    expect(bannerLines()).toEqual([CHANNEL, "Please fix the highlighted fields: To."]);
+    await waitFor(() => expect(document.activeElement).toBe(banner()));
+  });
+
+  test("a reason under a hidden field, which the dialog does not render, shows once on the banner, by its key, and the banner takes focus", async () => {
+    await refuse({ message: TOKEN, validationErrors: { token: [TOKEN] } });
+    await waitFor(() => expect(bannerLines()).toEqual([`token: ${TOKEN}`]));
+    expect(screen.getAllByText(TOKEN, { exact: false })).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(banner()));
+  });
+
+  test("a refused target: its reason on the banner, not the verb's summary", async () => {
+    await refuse({ message: "Send failed.", validationErrors: { __all__: [DENIED] } });
+    expect(await screen.findByText(DENIED)).toBeTruthy();
+    expect(bannerLines()).toEqual([DENIED]);
+    expect(screen.queryByText("Send failed.", { exact: false })).toBeNull();
+  });
 });
 
 test("validate and onSubmit get the call options that keep refine from toasting what the dialog renders", async () => {

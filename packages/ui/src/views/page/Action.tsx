@@ -62,9 +62,11 @@ export interface ActionFormDefinition {
   size?: DialogSize;
   defaultValues?: Record<string, unknown>;
   resolver?: Resolver<Record<string, unknown>>;
-  /** All possible fields, including inactive branches, for server issue binding. */
-  fieldNames?: readonly string[];
-  /** Consumer editors rendered inside the same React Hook Form provider. */
+  /**
+   * Consumer editors rendered inside the same React Hook Form provider. The dialog binds a refusal's
+   * reasons to the `fields` it renders; a reason under a name only these editors hold also shows
+   * on its banner.
+   */
   content?: ReactNode;
 }
 

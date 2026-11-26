@@ -1,8 +1,8 @@
 import * as React from "react";
 import type { ErrorObject } from "ajv";
 import {
-  extractActionOutcome, failedWriteOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
-  type FailedWriteOutcome,
+  actionOutcomeReasons, extractActionOutcome, failedWriteOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome,
+  type AuthoredMutateOptions, type FailedWriteOutcome,
 } from "@angee/refine";
 import { get, set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
@@ -208,7 +208,12 @@ export function actionFormSubmitResult(data: unknown, root: string): FormSubmitR
   return actionOutcomeSubmitResult(extractActionOutcome(data, root));
 }
 
-/** Adapt an already normalized action outcome without decoding it again.
+/** Adapt an already normalized action outcome without decoding it again. A refusal with a
+ * conflict code is that conflict. Any other keeps its field reasons under their keys, for the form
+ * to bind, and its non-field reasons (Django's `__all__` key) are its form-level reasons, as they
+ * are. Its `message` stands in only when it carries no reason at all (`actionOutcomeReasons`, as
+ * `runActionResult` reads it): the server joins every reason into it, and a refused target's is
+ * only the verb's summary.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -216,12 +221,12 @@ export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefi
   if (outcome && !outcome.ok && CONFLICT_CODES.has(outcome.code)) {
     return { status: "conflict", code: outcome.code as FormSubmitConflictCode, message: outcome.message };
   }
-  return outcome?.ok
-    ? { status: "ok", data: outcome, message: outcome.message }
-    : invalidFormSubmit({
-        fieldErrors: outcome?.validationErrors ?? {},
-        formErrors: outcome?.message ? [outcome.message] : [],
-      });
+  if (outcome?.ok) return { status: "ok", data: outcome, message: outcome.message };
+  const { __all__: nonField = [], ...fieldErrors } = outcome?.validationErrors ?? {};
+  return invalidFormSubmit({
+    fieldErrors,
+    formErrors: outcome && actionOutcomeReasons(outcome) ? nonField : outcome?.message ? [outcome.message] : [],
+  });
 }
 
 /**

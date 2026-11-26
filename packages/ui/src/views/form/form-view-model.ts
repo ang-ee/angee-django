@@ -585,12 +585,23 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
 }
 
 /**
+ * The fields a form shows a control of for `values`, in its order: those visible for them,
+ * resolved against them (`visibleFields`, which applies `showWhen` once), that are not hidden:
+ * `isFieldControlVisible` for a whole list, each field resolved first. A refusal's binder claims
+ * the reasons of these (the record form's save and both form dialogs), and the rule checks ask
+ * only these.
+ */
+export function shownFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
+  return visibleFields(fields, values).filter((field) => !field.hidden);
+}
+
+/**
  * A record form's errors for the rules its `fields` fail (the fields its save can write,
  * `pathWritable`, and the record does not redact, `fieldIsRedacted`, of those the form displays
  * for the record, `displayedFormFields`, and the rail rows `displayedRailGroups` holds), each
  * field's found by `fieldRuleErrors` and worded by `fieldErrorsFromRules`. As a dialog's check
  * (`dialogRuleErrors`) does, it asks only the fields whose descriptor is shown for `values`
- * (`isFieldControlVisible`: neither hidden nor conditionally excluded) and not read-only, and
+ * (`shownFields`: neither hidden nor conditionally excluded) and not read-only, and
  * leaves the others to the server; a field only a group the record does not display declares, one
  * the save cannot write and one the record redacts are not among `fields`, so they are not asked,
  * whatever their widget.
@@ -608,8 +619,8 @@ export function formRuleErrors(
   requiredFieldNames: ReadonlySet<string>,
   t: UiTranslate,
 ): FieldErrors<FormValues> {
-  return fieldErrorsFromRules(visibleFields(fields, values)
-    .filter((field) => isFieldControlVisible(field, values) && !field.readOnly)
+  return fieldErrorsFromRules(shownFields(fields, values)
+    .filter((field) => !field.readOnly)
     .flatMap((field) => fieldRuleErrors(
       field,
       { value: dottedValue(values, field.name), present: hasDottedValue(values, field.name) },

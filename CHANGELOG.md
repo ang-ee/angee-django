@@ -10,6 +10,58 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed contract.** An action or mutation dialog the server
+  refuses says each reason once, where the reason is (a `content` editor's
+  reason excepted). The server joins every reason into the outcome's message (a
+  refused target's message is the verb's summary), and the dialog showed that
+  message on its banner beside the reasons it joins. Now, in a `MutationDialog`
+  fed an action
+  outcome and in an `ActionFormDialog`, typed or schema-driven:
+  a refusal of one field shows its sentence under the field only and the banner
+  names the field ("Please fix the highlighted fields: To.") without repeating
+  it. Focus goes to that field (with several, the first in the dialog's order)
+  when it is a text field of a `MutationDialog` or of a typed-argument
+  `ActionFormDialog`; a schema-driven or definition `ActionFormDialog` holds
+  its fields in a fieldset it disables while the submit runs, so a browser
+  cannot focus a native input there and focus goes to the banner naming the
+  field (a checkbox or switch still takes it). A refusal of a field and a
+  reason about the whole action shows that
+  reason on the banner, without the `__all__:` prefix it carried, beside the
+  line naming the field, and the banner takes focus; a reason about the whole
+  action alone shows once; a refused
+  target shows its reason ("You are not allowed to modify this task.") instead
+  of the verb's summary ("Send failed."); a refusal that carries only a
+  message, a domain refusal in band included, still shows that message. A
+  reason under a field the dialog does not render (a hidden field, a field its
+  `showWhen` hides for the values, a field of another schema branch than the
+  one chosen) shows on the banner once, as `key: reason`; before, an
+  `ActionFormDialog` bound it to the field nobody saw, so only the server's
+  joined message told it, and a `MutationDialog` said it twice. A reason under
+  a name only an `ActionFormDialog`'s `content` editor holds shows under that
+  editor and on the banner. A row's direct submit (`useDescriptorRowActions`
+  with `valuesFromRow`) refused for its fields only toasts under the verb's
+  label, not its id (the id still stands in when the label is not text). The
+  adapter, `actionOutcomeSubmitResult`, keeps field
+  reasons under their keys,
+  moves the `__all__` reasons to the form level as they are, and uses the
+  message only when the outcome carries no reason, the rule `runActionResult`
+  applies; `ActionFormDialog` tells the binder the fields it renders when the
+  answer lands. `ActionFormDefinition.fieldNames` is removed and
+  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.fieldNames`
+  also takes a function of the form's values. Unchanged: a record form's save
+  refusal, which the server already splits into field and form reasons and
+  which never passes through the adapter, and the record bar's toast for a
+  refused verb, titled by the verb's label, whose body is the outcome's
+  reasons, or its message when it carries none.
+  Not in this change: focus reaching a field that is disabled or replaced while
+  the submit runs: a native input of a schema-driven or definition
+  `ActionFormDialog`, and a select, combobox, date, time, tag or relation input
+  in any dialog; nor a member of a rows, object or list field, which has no
+  control of its own to focus. Until then the banner takes focus, which names
+  the field but no longer repeats its reason.
+  Nor inline action forms that claim no field (`useActionForm`'s empty
+  default), whose banner still repeats a field's reason as `key: reason`, nor a
+  raised domain error reading "Request failed." or its code.
 - `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
   Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
   `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
