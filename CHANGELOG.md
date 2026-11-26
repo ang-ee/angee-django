@@ -55,6 +55,12 @@ live in code docstrings.
     `angee.iam_messaging.auth.SignInLinkBackend`; Django otherwise raises
     `ImportError` at the first sign-in.
   - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
+  seal's own remedy, which a refused fragment's error carries; it no longer gives every
+  seal one hint that names a record's own read. Messaging's `messaging.E003` and
+  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
+  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
+  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
 - `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account verbs are an
   open set another addon extends: `User.account_verbs()` names the verbs
   `account_actions` offers, in offer order, and it and

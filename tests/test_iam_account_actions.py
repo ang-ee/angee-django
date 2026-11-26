@@ -454,6 +454,8 @@ def test_fragments_extend_the_disclosures_only_through_their_union_points(tmp_pa
         assert error.id == "angee.iam.E004"
         assert f"auth/user#{permission}" in error.msg
         assert "disclosure_contrib" in error.msg
+        assert "active_account_granted" in error.hint and "nonstaff_account_granted" in error.hint
+        assert "record" not in error.hint
 
 
 def test_the_installed_composition_keeps_the_disclosures_and_iam_registers_their_seal_once() -> None:
