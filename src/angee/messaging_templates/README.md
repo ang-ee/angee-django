@@ -284,27 +284,43 @@ fragments.
 
 ### A test send
 
-`MessageTemplate.objects.send_test(row, *, actor, kit=None)` is an
-administrator's check of a row before it goes out: the row rendered with its
-`sample` and sent to `actor`'s own account address. It is decided by `preview`
-alone, as a preview is, and it is a user's request, so its render runs as
-`actor` and is never elevated:
+`MessageTemplate.objects.send_test(row, *, actor, kit=None, idempotency_key=None)`
+is an administrator's check of a row before it goes out: the row rendered with
+its `sample` and sent to `actor`'s own account address. The administrator
+presses for it and the system writes the mail: the pressing is decided by the
+row's `preview` alone, as a preview is, and the mail is named system work on
+`send_as_system`'s one path, under the reason
+`messaging_templates.message_template.send_test`, with `actor` recorded as who
+caused it (the message's `created_by`, and the actor of the changeset its rows
+join). In order:
 
-1. `MessageTemplate.send_test_refusal()`: without `preview`, `PermissionDenied`
-   before the verb reads anything else, whatever the host's channel or mail
-   settings; then the row's side, as above;
+1. `MessageTemplate.send_test_refusal()`, under `actor`: without `preview`,
+   `PermissionDenied` before the verb reads anything else, whatever the host's
+   channel or mail settings; then the row's side, as above;
 2. an account with no email address: `no_test_address`;
-3. the render, under `actor`'s own scope (every row and kit a render reads is
-   readable by any signed-in reader), so a test refused for its permission, its
-   address or its render writes no permission audit row;
-4. `compose_as_system` under the reason
-   `messaging_templates.message_template.send_test`, with the rendered subject
-   after `[Test] ` (`TEST_SUBJECT_PREFIX`); it refuses as its docstring says.
+3. with an `idempotency_key`, its claim for `actor` through provenance's keyed
+   creation (`claim_created`), the request being the row and the kit: a retry of
+   the same request returns the message the first one sent, neither rendered nor
+   sent again, and the same key for another request raises
+   `CreationKeyConflict`;
+4. the render inside the system context and `compose_as_system`, as for any send
+   (steps 3 and 4 above), with the rendered subject after `[Test] `
+   (`TEST_SUBJECT_PREFIX`).
 
-It stores what any send stores (above), with `actor` as `created_by` and the
-thread titled `[Test] <subject>`; the recipient is the administrator's existing
-handle for the address when there is one. The mail holds the row's sample values
-and the administrator's address. Its readers are the system channel's
+A test refused for its permission or its address writes nothing, not even a
+permission audit row; one refused at its render or by compose leaves the
+render's audit row, as any send does. No message row is written before a
+refusal. A keyed test runs in the claim's own transaction, so its refusal rolls
+back the claim and everything after it, the render's audit row among them, and
+the key stays free. The render reads what the administrator's own preview of the row
+reads: every signed-in reader reads every message template and brand kit, the
+render never reads an included row's sample, and the values are the sample of
+the row as the caller loaded it.
+
+It stores what any send stores (above), the thread titled `[Test] <subject>`;
+the recipient is the administrator's existing handle for the address when there
+is one. The mail holds the row's sample values and the administrator's address.
+Its readers are the system channel's
 ([System mail](../messaging/README.md#system-mail)); through every verb those
 are administrators, who already read every sample and account address, and
 their inbox lists its thread.
@@ -459,11 +475,18 @@ page.
 named kit or the default one, to a caller who may preview it. It refuses as the
 verbs do: a signed-out caller gets the session's GraphQL error, and a caller who
 reads the row but may not preview it a `PERMISSION_DENIED` GraphQL error.
+Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
+(`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
+says), which a page sets as `dir` on the subject, preheader and plain text it
+shows outside the mail's frame, rather than guessing from their first letter.
 
-`send_message_template_test(template, brand_kit)` is the test send
+`send_message_template_test(template, brand_kit, idempotency_key)` is the test send
 ([A test send](#a-test-send)) of a row, in the named kit or the default one, to
 the caller's own address; it returns an `ActionResult` whose `id` is the
-message's. It reads the row and a named kit first, both readable by any
+message's. With an `idempotency_key`, a retry of the same request (the row and
+the kit) answers with the message the first one sent, and another request under
+the same key is a `CREATION_KEY_CONFLICT` GraphQL error. It reads the row and a
+named kit first, both readable by any
 signed-in reader, then refuses as the verbs do: a signed-out caller gets the
 session's GraphQL error and a caller who may not preview the row a
 `PERMISSION_DENIED` GraphQL error. The rest comes back in band (`ok: false`)
@@ -476,7 +499,3 @@ a refusal raised as a list, as `invalid_values` is, so its `code` is null. A
 row projects `can_send_test`, what the verb asks first; it rides the list's
 statement, and it is the row's side alone, so a test it admits may still be
 refused in band for the account, the channel or the sample.
-Its `rendered` message carries `direction`, a `MessageTemplateTextDirection`
-(`RTL` or `LTR` on the wire, whose lower-case value is what the HTML's `dir`
-says), which a page sets as `dir` on the subject, preheader and plain text it
-shows outside the mail's frame, rather than guessing from their first letter.

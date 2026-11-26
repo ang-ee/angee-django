@@ -576,9 +576,10 @@ the mail's, and the caller's own gate authorised the send. See
 [sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
 
 **Test send** — an administrator's send of a message template with its sample
-to their own account address, rendered under them and recorded on messaging's
-system channel with a `[Test] ` subject (`MessageTemplateManager.send_test`);
-decided by `preview` alone, and projected as `can_send_test`. See
+to their own account address (`MessageTemplateManager.send_test`): decided by
+the row's `preview` alone and projected as `can_send_test`, then sent as named
+system work on messaging's system channel with a `[Test] ` subject, the
+administrator recorded as who caused it. See
 [a test send](../src/angee/messaging_templates/README.md#a-test-send).
 
 **Layout / template / block / part** — a message template's four kinds, written

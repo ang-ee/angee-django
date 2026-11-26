@@ -32,15 +32,21 @@ live in code docstrings.
     parts and their content-addressed fragments, which outlive the message) is
     read by the system channel's readers, whom messaging's README names.
   - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
-    kit=None)` sends a row with its `sample` to `actor`'s own account address on
-    the system channel, the subject after `[Test] ` (`TEST_SUBJECT_PREFIX`). It
-    is decided by `preview` alone (`MessageTemplate.send_test_refusal()`, which
-    then asks `send_refusal()`), refuses an account with no address
-    (`no_test_address`), and renders under `actor`, never elevated, so its
-    render writes no permission audit row. The console gets
-    `send_message_template_test(template, brand_kit)`, an `ActionResult` naming
-    the message (a signed-out caller gets the session's error, a caller who may
-    not preview the row `PERMISSION_DENIED`, the rest in band with its code), and
+    kit=None, idempotency_key=None)` sends a row with its `sample` to `actor`'s
+    own account address on the system channel, the subject after `[Test] `
+    (`TEST_SUBJECT_PREFIX`). The administrator presses and the system writes the
+    mail: the pressing is decided by `preview` alone
+    (`MessageTemplate.send_test_refusal()`, which then asks `send_refusal()`), an
+    account with no address is refused (`no_test_address`), and the mail is named
+    system work on `send_as_system`'s one path, the administrator recorded as who
+    caused it. With an `idempotency_key` the request (the row and the kit) is
+    claimed through provenance's `claim_created`: a retry returns the first
+    message, sent once, and another request under the key raises
+    `CreationKeyConflict`. The console gets
+    `send_message_template_test(template, brand_kit, idempotency_key)`, an
+    `ActionResult` naming the message (a signed-out caller gets the session's
+    error, a caller who may not preview the row `PERMISSION_DENIED`, a key reused
+    for another request `CREATION_KEY_CONFLICT`, the rest in band with its code), and
     `MessageTemplateType.can_send_test`, what it asks first, riding the list's
     statement. A test's thread and message are the system channel's, read as
     messaging's README says. **Upgrade:** regenerate the console schema and its

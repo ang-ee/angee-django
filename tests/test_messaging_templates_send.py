@@ -17,7 +17,15 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import PermissionDenied, actor_context, anonymous_actor, current_actor, is_sudo, system_context
+from rebac import (
+    PermissionDenied,
+    actor_context,
+    anonymous_actor,
+    current_actor,
+    is_sudo,
+    system_context,
+    to_subject_ref,
+)
 from rebac.models import PermissionAuditEvent
 
 from angee.brandkit.testing.models import BrandKit
@@ -28,6 +36,8 @@ from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Handle, Message, Part, Recipient
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker
+from angee.provenance.context import changeset_model
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_platform_admin, create_user
 from tests.messaging_campaign import grant
 from tests.test_messaging_compose import _refused
@@ -38,6 +48,8 @@ from tests.test_messaging_templates_render import plain as plain
 
 ADDRESS = "reader@example.test"
 REASON = "tests.messaging_templates.send"
+TEST_SEND_REASON = "messaging_templates.message_template.send_test"
+"""The reason a test send's system work is audited under."""
 GREETING = {"name": "The recipient's name.", "title": "What the mail is about."}
 """The variables of :func:`_greeting`, a template reading a name in its body and a title in its subject."""
 
@@ -436,7 +448,8 @@ def _sampled(**values: Any) -> Any:
 
 
 def test_an_administrators_test_send_reaches_their_own_handle_marked_as_a_test(system_channel: Any, kit: Any) -> None:
-    """Rendered from the sample under the administrator, recorded on the system channel, read by administrators."""
+    """Rendered from the sample as named system work, recorded on the system channel with the administrator as who
+    caused it, read by administrators."""
 
     tester = create_platform_admin("messaging-templates-tester", email="Test.Admin@example.test")
     other = create_platform_admin("messaging-templates-other-admin")
@@ -445,8 +458,10 @@ def test_an_administrators_test_send_reaches_their_own_handle_marked_as_a_test(s
         handle = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value="test.admin@example.test")
     row = _sampled()
     rendered = _render(row, SAMPLE, kit)
+    audits = _audits()
     message = MessageTemplate.objects.send_test(row, actor=tester)
     assert message.actor() is None
+    assert _audits()[len(audits)] == (PermissionAuditEvent.KIND_SUDO_BYPASS, TEST_SEND_REASON)
     with system_context(reason="tests.messaging_templates.send.read"):
         stored: Any = Message._base_manager.select_related("thread").get(pk=message.pk)
         recipients = list(Recipient._base_manager.filter(message=stored).values_list("role", "handle_id"))
@@ -491,10 +506,10 @@ def test_a_non_administrator_learns_nothing_and_causes_no_render_read_or_audit_r
     assert (walked, looked_up) == ([], [])
 
 
-def test_an_account_with_no_address_or_a_sample_that_does_not_render_is_refused_with_nothing_elevated(
+def test_an_account_with_no_address_writes_nothing_and_a_refused_render_leaves_the_system_works_audit_row(
     system_channel: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The render runs as the administrator, so a refused test writes no permission audit row at all."""
+    """The address is refused before the system's work starts; the render is that work, audited at once."""
 
     del system_channel
     addressless = create_platform_admin("messaging-templates-addressless", email="")
@@ -503,8 +518,66 @@ def test_an_account_with_no_address_or_a_sample_that_does_not_render_is_refused_
     walked, audits = _walks(monkeypatch), _audits()
     with _refused(ValidationError) as refusal:
         MessageTemplate.objects.send_test(row, actor=addressless)
-    assert (refusal.value.code, walked) == ("no_test_address", [])
+    assert (refusal.value.code, walked, _audits()) == ("no_test_address", [], audits)
     with _refused(ValidationError) as refusal:
         MessageTemplate.objects.send_test(unrenderable, actor=tester)
     assert [item.code for item in refusal.value.error_list] == ["invalid_values"]
-    assert _audits() == audits
+    assert _audits() == [*audits, (PermissionAuditEvent.KIND_SUDO_BYPASS, TEST_SEND_REASON)]
+
+
+def _claim(key: str, actor: Any) -> Any:
+    """The changeset that claims ``key`` for ``actor``'s test sends, or ``None``."""
+
+    scope = f"messaging_templates.message_template.send_test:{to_subject_ref(actor)}"
+    return changeset_model()._base_manager.filter(scope=scope, key=key).first()
+
+
+def test_a_keyed_test_send_replays_its_one_message_and_another_request_under_the_key_conflicts(
+    system_channel: Any, sent: list[str], django_capture_on_commit_callbacks: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry after a lost answer is one mail; the key names one request (the row and the kit) for one actor."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-retrier")
+    colleague = create_platform_admin("messaging-templates-retrier-colleague")
+    row, other = _sampled(), _sampled(key="tests.other")
+    with system_context(reason="tests.messaging_templates.send.kit"):
+        named = BrandKit.objects.create(**{**ANGEE, "name": "Other", "is_default": False})
+    with django_capture_on_commit_callbacks(execute=True):
+        first = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="retry-1")
+    claim = _claim("retry-1", tester)
+    assert (claim.created_row, claim.actor_ref, sent) == (first, str(to_subject_ref(tester)), [DELIVER_MESSAGE_TASK])
+    walked, messages = _walks(monkeypatch), Message._base_manager.count()
+    with django_capture_on_commit_callbacks(execute=True):
+        again = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="retry-1")
+    assert (again.pk, walked, Message._base_manager.count(), sent) == (first.pk, [], messages, [DELIVER_MESSAGE_TASK])
+    with pytest.raises(CreationKeyConflict):
+        MessageTemplate.objects.send_test(other, actor=tester, idempotency_key="retry-1")
+    with pytest.raises(CreationKeyConflict):
+        MessageTemplate.objects.send_test(row, actor=tester, kit=named, idempotency_key="retry-1")
+    assert Message._base_manager.count() == messages
+    theirs = MessageTemplate.objects.send_test(row, actor=colleague, idempotency_key="retry-1")
+    assert theirs.pk != first.pk
+
+
+def test_a_test_send_to_an_address_the_transport_cannot_carry_is_refused_and_its_claim_rolled_back(
+    system_channel: Any,
+) -> None:
+    """Refused by compose under ``to`` before any message row is written; a keyed refusal leaves its key free."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-uncarried", email="tëster@example.test")
+    row = _sampled()
+    with _refused(ValidationError, key="to", code="cannot_carry"):
+        MessageTemplate.objects.send_test(row, actor=tester)
+    audits = _audits()
+    with pytest.raises(ValidationError) as refused:
+        MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="uncarried-1")
+    assert refused.value.error_dict["to"][0].code == "cannot_carry"
+    # The claim's own transaction rolls back the claim and the render's audit row with it.
+    assert (_claim("uncarried-1", tester), _audits()) == (None, audits)
+    tester.email = "tester@example.test"
+    with system_context(reason="tests.messaging_templates.send.address"):
+        tester.save(update_fields=["email"])
+    message = MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="uncarried-1")
+    assert _claim("uncarried-1", tester).created_row == message
