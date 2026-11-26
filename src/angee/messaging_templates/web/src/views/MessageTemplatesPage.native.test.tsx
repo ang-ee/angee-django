@@ -120,7 +120,9 @@ function refusedIdentities(): [string, Readonly<Record<string, string>>, string]
       : []);
 }
 
-test.each(refusedIdentities())("New refuses the identity %s in the Save failed banner, in the server's words", async (
+// A shipped default's identity, one the deployment has, and a new language seeded from a row whose includes nest
+// past the depth: each refused before any field, in the banner, which takes focus.
+test.each(refusedIdentities())("New refuses %s in the Save failed banner, in the server's words, and focuses it", async (
   _key, object, message,
 ) => {
   render(<MessageTemplateStory open="new" />);
@@ -128,6 +130,8 @@ test.each(refusedIdentities())("New refuses the identity %s in the Save failed b
   fireEvent.click(screen.getByRole("button", { name: ui("form.create") }));
   await screen.findByText(ui("form.saveFailed"));
   expect(await screen.findByText(message)).toBeTruthy();
+  await waitFor(() => expect(document.activeElement?.getAttribute("role")).toBe("alert"));
+  expect(document.activeElement?.textContent).toContain(message);
   expect(screen.getByRole("textbox", { name: "Name" })).toBeTruthy();
 });
 
@@ -234,8 +238,8 @@ test("Delete on a block another row includes shows the server's refusal", async 
 
 test("a save the server refuses shows its row-wide reasons in the Save failed banner and each field's under the field", async () => {
   const calls: MessageTemplateFixtureCall[] = [];
-  const refusal = RECORDED.save[0]!;
-  render(<MessageTemplateStory open={ROW.passwordReset} refuseSave onCall={(call) => calls.push(call)} />);
+  const refusal = RECORDED.save.layout;
+  render(<MessageTemplateStory open={ROW.passwordReset} refuseSave="layout" onCall={(call) => calls.push(call)} />);
   // The list's kind groups share their names with fields ("Layout"), so the field is looked up in the form.
   const form = await recordForm();
   await within(form).findByLabelText(word("field.layout"));
@@ -251,6 +255,66 @@ test("a save the server refuses shows its row-wide reasons in the Save failed ba
   // The refused save brings the person to the field it refused.
   await waitFor(() => expect(document.activeElement).toBe(within(form).getByLabelText(word("field.layout"))));
   expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([refusal.set]);
+});
+
+test("a declared path or description over its length is refused at the variables editor, which takes focus", async () => {
+  for (const why of ["variablePath", "variableDescription"] as const) {
+    const words = RECORDED.save[why].error.extensions.validationErrors!.variables![0]!;
+    render(<MessageTemplateStory open={ROW.quote} refuseSave={why} />);
+    const form = await recordForm();
+    // The editor types through its code editor; the save is answered as the server refused that value.
+    fireEvent.change(within(form).getByLabelText(word("field.description")), { target: { value: "Edited." } });
+    fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+    const field = (await within(form).findByText(word("field.variables"))).parentElement!.parentElement!;
+    expect(await within(field).findByText(words)).toBeTruthy();
+    await waitFor(() => expect(field.contains(document.activeElement)).toBe(true));
+    cleanup();
+  }
+});
+
+test("a source pasted with carriage returns saves as the server keeps it, and Default updated stays off", async () => {
+  const calls: MessageTemplateFixtureCall[] = [];
+  const pasted = RECORDED.saved.find((entry) => entry.id === ROW.passwordReset)!;
+  render(<MessageTemplateStory open={ROW.passwordReset} onCall={(call) => calls.push(call)} />);
+  const form = await recordForm();
+  fireEvent.change(await within(form).findByLabelText(word("field.source")), { target: { value: pasted.set.source } });
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+
+  await screen.findByText(ui("form.updateSuccess"));
+  expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([pasted.set]);
+  // The server keeps newlines, and the row still overrides a current default.
+  await waitFor(() => expect(within(form).getByLabelText<HTMLTextAreaElement>(word("field.source")).value)
+    .toBe(pasted.reread.source));
+  expect(screen.queryByText(word("notice.defaultUpdated"), { exact: false })).toBeNull();
+  expect(screen.getByText(word("notice.live"), { exact: false })).toBeTruthy();
+});
+
+test("an override whose default changed still says so after a save and the read that follows it", async () => {
+  const calls: MessageTemplateFixtureCall[] = [];
+  const kept = RECORDED.saved.find((entry) => entry.id === ROW.recordCard)!;
+  render(<MessageTemplateStory open={ROW.recordCard} onCall={(call) => calls.push(call)} />);
+  await screen.findByText(word("notice.defaultUpdated"));
+  const reads = argsOf(calls, "message_templates_by_pk").length;
+  fireEvent.change(screen.getByLabelText(word("field.description")), { target: { value: kept.set.description } });
+  fireEvent.click(screen.getByRole("button", { name: ui("form.save") }));
+
+  await screen.findByText(ui("form.updateSuccess"));
+  expect(argsOf(calls, "update_message_templates_by_pk").map((args) => args._set)).toEqual([kept.set]);
+  // The form reads the row again after the save, as a reload does, and the server still says the default changed.
+  await waitFor(() => expect(argsOf(calls, "message_templates_by_pk").length).toBeGreaterThan(reads));
+  expect(kept.reread.has_updated_default).toBe(true);
+  expect(screen.getByText(word("notice.defaultUpdated"))).toBeTruthy();
+});
+
+test("a template whose include sits inside a condition renders with that value empty", async () => {
+  const preview = RECORDED.previews[ROW.conditionalInclude]!;
+  const row = RECORDED.rows.find((candidate) => candidate.id === ROW.conditionalInclude)!;
+  expect(Object.keys(row.sample as object)).not.toContain("booking_url");
+  expect(preview.rendered).not.toBeNull();
+  render(<MessageTemplateStory open={ROW.conditionalInclude} />);
+  const frame = await screen.findByTitle(word("preview.frameTitle"));
+  await waitFor(() => expect(frame.getAttribute("srcdoc")).toContain(preview.rendered!.html));
+  expect(screen.queryByText(word("preview.refused"))).toBeNull();
 });
 
 /** The plain-text source in the record form, or null where the form does not show it. */

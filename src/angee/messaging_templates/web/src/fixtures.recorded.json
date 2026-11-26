@@ -34,6 +34,14 @@
     "language": "en"
    },
    {
+    "display_name": "Reminder",
+    "id": "mtl_template_example_reminder_en",
+    "is_overridden": false,
+    "key": "example.reminder",
+    "kind": "TEMPLATE",
+    "language": "en"
+   },
+   {
     "display_name": "Welcome (Arabic)",
     "id": "mtl_template_example_welcome_ar",
     "is_overridden": false,
@@ -64,6 +72,7 @@
   "mtl_block_record_card_en": [],
   "mtl_template_example_invoice_sent_en": [],
   "mtl_template_example_password_reset_en": [],
+  "mtl_template_example_reminder_en": [],
   "mtl_template_example_welcome_ar": [],
   "mtl_template_example_welcome_en_shipped": []
  },
@@ -231,6 +240,35 @@
     "updated": []
    }
   },
+  "mtl_template_example_reminder_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_template_example_reminder_en"
+    ],
+    "rows": []
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_template_example_reminder_en",
+     "object_label": "Reminder"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
   "mtl_template_example_welcome_ar": {
    "changes": {
     "backlinks": {},
@@ -393,6 +431,27 @@
     "language": "en",
     "name": "Bad key"
    }
+  },
+  {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [
+      "parts/chain2: includes nest over 3 deep"
+     ],
+     "validationErrors": {}
+    },
+    "message": "parts/chain2: includes nest over 3 deep",
+    "path": [
+     "insert_message_templates_one"
+    ]
+   },
+   "object": {
+    "key": "nested",
+    "kind": "part",
+    "language": "de",
+    "name": "Nested"
+   }
   }
  ],
  "keep": {
@@ -546,6 +605,34 @@
    ],
    "sample": null
   },
+  "mtl_part_chain0_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain1_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain2_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain3_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
   "mtl_part_greeting_en_shipped": {
    "can_override": false,
    "permissions": [],
@@ -580,6 +667,13 @@
   },
   "mtl_part_ignore_notice_es_shipped": {
    "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_nested_en": {
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -628,6 +722,13 @@
   },
   "mtl_template_example_password_reset_en_shipped": {
    "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_reminder_en": {
    "permissions": [],
    "redacted_fields": [
     "sample"
@@ -3256,6 +3357,7 @@
  },
  "opened": {
   "button": "mtl_block_button_en_shipped",
+  "conditionalInclude": "mtl_template_example_reminder_en",
   "invoiceSent": "mtl_template_example_invoice_sent_en",
   "notice": "mtl_block_notice_en",
   "passwordReset": "mtl_template_example_password_reset_en",
@@ -3414,6 +3516,17 @@
      "detail": "Nothing reads support_url."
     }
    ]
+  },
+  "mtl_template_example_reminder_en": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>A reminder from Angee</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">Your booking is tomorrow.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"A reminder from Angee\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p>Hi Ana,</p>\n<p>Your booking is tomorrow.</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+    "language": "en",
+    "plain_text": "Angee\n\nHi Ana,\n\nYour booking is tomorrow.\n\nAngee\n",
+    "preheader": "Your booking is tomorrow.",
+    "subject": "A reminder from Angee"
+   },
+   "warnings": []
   },
   "mtl_template_example_welcome_ar": {
    "rendered": {
@@ -3915,6 +4028,138 @@
   },
   {
    "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 0",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain0_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain0",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 0",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain1\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 1",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain1_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain1",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 1",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain2\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 2",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain2_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain2",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 2",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain3\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 3",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain3_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain3",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 3",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "The end of the chain.",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
    "can_override": true,
    "carries_message_fields": false,
    "created_at": "2026-11-24T09:00:00+00:00",
@@ -4077,6 +4322,39 @@
    "redacted_fields": [],
    "sample": {},
    "source": "Si no esperabas este correo, puedes ignorarlo.",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Nested",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_nested_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "nested",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Nested",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain0\" only %}",
    "subject": "",
    "text_source": "",
    "updated_at": "2026-11-24T09:00:00+00:00",
@@ -4326,6 +4604,46 @@
    "can_override": false,
    "carries_message_fields": true,
    "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent the day before a booking; its button only where there is a page to open.",
+   "display_name": "Reminder",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_template_example_reminder_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "example.reminder",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Reminder",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "Your booking is tomorrow.",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    }
+   },
+   "source": "<p>Hi {{ person.first_name }},</p>\n<p>Your booking is tomorrow.</p>\n{% if booking_url %}{% include \"blocks/button\" with label=\"See the booking\" url=booking_url only %}{% endif %}",
+   "subject": "A reminder from {{ brand.name }}",
+   "text_source": "Hi {{ person.first_name }},\n\nYour booking is tomorrow.\n\n{% if booking_url %}{% include \"blocks/button\" with label=\"See the booking\" url=booking_url only %}{% endif %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "booking_url": "Where the booking is read; may be empty, and then the mail has no button.",
+    "person.first_name": "The recipient's first name; may be empty."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
    "description": "",
    "display_name": "Welcome (Arabic)",
    "format": "MARKDOWN",
@@ -4398,8 +4716,8 @@
    }
   }
  ],
- "save": [
-  {
+ "save": {
+  "layout": {
    "error": {
     "extensions": {
      "code": "VALIDATION",
@@ -4421,6 +4739,237 @@
    "set": {
     "format": "html",
     "layout": ""
+   }
+  },
+  "variableDescription": {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [],
+     "validationErrors": {
+      "variables": [
+       "Describe author in at most 1000 characters."
+      ]
+     }
+    },
+    "message": "Describe author in at most 1000 characters.",
+    "path": [
+     "update_message_templates_by_pk"
+    ]
+   },
+   "id": "mtl_block_quote_en",
+   "set": {
+    "variables": {
+     "author": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "body": "What they said, as plain text."
+    }
+   }
+  },
+  "variablePath": {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [],
+     "validationErrors": {
+      "variables": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa… is over 200 characters: name the value in fewer."
+      ]
+     }
+    },
+    "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa… is over 200 characters: name the value in fewer.",
+    "path": [
+     "update_message_templates_by_pk"
+    ]
+   },
+   "id": "mtl_block_quote_en",
+   "set": {
+    "variables": {
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "A value nothing reads.",
+     "author": "Who said it.",
+     "body": "What they said, as plain text."
+    }
+   }
+  }
+ },
+ "saved": [
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "reread": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": true,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Sent when a person asks to choose a new password.",
+    "display_name": "Password reset",
+    "format": "MARKDOWN",
+    "has_updated_default": false,
+    "id": "mtl_template_example_password_reset_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en",
+    "layout": "base",
+    "name": "Password reset",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "person": {
+      "first_name": "Ana"
+     },
+     "reset_url": "https://app.example.test/reset/abc",
+     "support_url": "https://app.example.test/help"
+    },
+    "source": "{% include \"parts/greeting\" with person=person only %}\n\nSomeone asked to reset the password of your {{ brand.name }} account.\n\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\n\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\n\n{% include \"parts/signature\" only %}",
+    "subject": "Reset your {{ brand.name }} password",
+    "text_source": "",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "person.first_name": "The recipient's first name; may be empty.",
+     "reset_url": "Where the person chooses a new password.",
+     "support_url": "Where to ask for help."
+    }
+   },
+   "row": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": true,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Sent when a person asks to choose a new password.",
+    "display_name": "Password reset",
+    "format": "MARKDOWN",
+    "has_updated_default": false,
+    "id": "mtl_template_example_password_reset_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en",
+    "layout": "base",
+    "name": "Password reset",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "person": {
+      "first_name": "Ana"
+     },
+     "reset_url": "https://app.example.test/reset/abc",
+     "support_url": "https://app.example.test/help"
+    },
+    "source": "{% include \"parts/greeting\" with person=person only %}\n\nSomeone asked to reset the password of your {{ brand.name }} account.\n\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\n\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\n\n{% include \"parts/signature\" only %}",
+    "subject": "Reset your {{ brand.name }} password",
+    "text_source": "",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "person.first_name": "The recipient's first name; may be empty.",
+     "reset_url": "Where the person chooses a new password.",
+     "support_url": "Where to ask for help."
+    }
+   },
+   "set": {
+    "source": "{% include \"parts/greeting\" with person=person only %}\r\n\r\nSomeone asked to reset the password of your {{ brand.name }} account.\r\n\r\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\r\n\r\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\r\n\r\n{% include \"parts/signature\" only %}"
+   }
+  },
+  {
+   "id": "mtl_block_record_card_en",
+   "reread": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": false,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Kept as it is until the new card is read.",
+    "display_name": "Record card",
+    "format": "HTML",
+    "has_updated_default": true,
+    "id": "mtl_block_record_card_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "record_card",
+    "kind": "BLOCK",
+    "language": "en",
+    "layout": "",
+    "name": "Record card",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "kind": "Task",
+     "status": "In progress",
+     "title": "Book the piano tuner"
+    },
+    "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:14px 16px;border:1px solid {{ brand.light.border }}\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}\">{{ kind }}</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}\">{{ title }}</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ status }}</p></td></tr></table>",
+    "subject": "",
+    "text_source": "{{ kind }}: {{ title }} ({{ status }})",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "kind": "What the record is, such as Task, Invoice or Event.",
+     "status": "Its current state.",
+     "title": "Its title."
+    }
+   },
+   "row": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": false,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Kept as it is until the new card is read.",
+    "display_name": "Record card",
+    "format": "HTML",
+    "has_updated_default": true,
+    "id": "mtl_block_record_card_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "record_card",
+    "kind": "BLOCK",
+    "language": "en",
+    "layout": "",
+    "name": "Record card",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "kind": "Task",
+     "status": "In progress",
+     "title": "Book the piano tuner"
+    },
+    "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:14px 16px;border:1px solid {{ brand.light.border }}\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}\">{{ kind }}</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}\">{{ title }}</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ status }}</p></td></tr></table>",
+    "subject": "",
+    "text_source": "{{ kind }}: {{ title }} ({{ status }})",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "kind": "What the record is, such as Task, Invoice or Event.",
+     "status": "Its current state.",
+     "title": "Its title."
+    }
+   },
+   "set": {
+    "description": "Kept as it is until the new card is read."
    }
   }
  ]

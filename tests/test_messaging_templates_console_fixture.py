@@ -7,7 +7,11 @@ host enabling the addon alone emits it, the library's rows as an administrator r
 them and what a member reads differently, the brand kits, and, for the rows the
 stories open, their backlinks, previews and delete previews and what Override, Keep
 override, the insert and a refused save answer, each with what it changed in the
-library, and what Keep override answers on an override another session deleted.
+library, what Keep override answers on an override another session deleted, and two
+saves the server keeps with what a reload then reads. The checks the console relies
+on are asserted as they are recorded: a pasted source with carriage returns saves as
+newlines and leaves "Default updated" as it was, and an override whose default changed
+still says so after a save and a reload.
 Public ids are stable aliases (:func:`_alias`), also inside the server's words, and
 timestamps fixed, so an unchanged server records the same file.
 
@@ -141,6 +145,30 @@ _WELCOME_AR: dict[str, Any] = {
     "sample": {"sign_in_url": "https://app.example.test/sign-in"},
 }
 
+_REMINDER: dict[str, Any] = {
+    "name": "Reminder",
+    "description": "Sent the day before a booking; its button only where there is a page to open.",
+    "subject": "A reminder from {{ brand.name }}",
+    "preheader": "Your booking is tomorrow.",
+    "format": "html",
+    "source": (
+        "<p>Hi {{ person.first_name }},</p>\n<p>Your booking is tomorrow.</p>\n"
+        '{% if booking_url %}{% include "blocks/button" with label="See the booking" url=booking_url only %}'
+        "{% endif %}"
+    ),
+    "text_source": (
+        "Hi {{ person.first_name }},\n\nYour booking is tomorrow.\n\n"
+        '{% if booking_url %}{% include "blocks/button" with label="See the booking" url=booking_url only %}'
+        "{% endif %}"
+    ),
+    "variables": {
+        "person.first_name": "The recipient's first name; may be empty.",
+        "booking_url": "Where the booking is read; may be empty, and then the mail has no button.",
+    },
+    # No booking_url: the include inside the condition does not make it required.
+    "sample": {"person": {"first_name": "Ana"}},
+}
+
 OPENED = {
     "welcome": ("template", "example.welcome", "en", True),
     "welcomeArabic": ("template", "example.welcome", "ar", False),
@@ -150,6 +178,7 @@ OPENED = {
     "quote": ("block", "quote", "en", False),
     "recordCard": ("block", "record_card", "en", False),
     "notice": ("block", "notice", "en", False),
+    "conditionalInclude": ("template", "example.reminder", "en", False),
 }
 """The rows the stories and native tests open, by the name they use, as (kind, key, language, shipped)."""
 
@@ -160,6 +189,8 @@ _INSERTS = (
     {"kind": "layout", "key": "base", "language": "en", "name": "Base"},
     {"kind": "block", "key": "notice", "language": "en", "name": "Notice"},
     {"kind": "block", "key": "Not A Key", "language": "en", "name": "Bad key"},
+    # Refused before any field: a new language seeded from a row whose includes nest past the depth.
+    {"kind": "part", "key": "nested", "language": "de", "name": "Nested"},
 )
 
 _ROW = (
@@ -192,6 +223,7 @@ _UPDATE = (
     "mutation($id: String!, $set: message_templates_set_input!) "
     f"{{ update_message_templates_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ {_ROW} }} }}"
 )
+_BY_PK = f"query($id: String!) {{ message_templates_by_pk(id: $id) {{ {_ROW} }} }}"
 _SAVED_AT = "2026-11-24T09:00:00+00:00"
 
 
@@ -246,6 +278,15 @@ def _library(model: Any, kit_model: Any) -> None:
         _save(model, kind="block", key="notice", language="en", **_NOTICE)
         _save(model, kind="template", key="example.welcome", language="ar", format="markdown", layout="base",
               description="", **_WELCOME_AR)
+        _save(model, kind="template", key="example.reminder", language="en", layout="base", **_REMINDER)
+        # Rows stored before the include depth was limited, written past clean() as such rows were: a part whose
+        # includes nest one level past the depth, which a new language of its key is seeded from.
+        for index in (3, 2, 1, 0):
+            source = f'{{% include "parts/chain{index + 1}" only %}}' if index < 3 else "The end of the chain."
+            model.objects.create(kind="part", key=f"chain{index}", language="en", name=f"Chain {index}",
+                                 format="markdown", source=source)
+        model.objects.create(kind="part", key="nested", language="en", name="Nested", format="markdown",
+                             source='{% include "parts/chain0" only %}')
         shipped = {(row.kind, row.key): row for row in model.objects.filter(is_baseline=True, language="en")}
 
         def override(kind: str, key: str, **changes: Any) -> None:
@@ -444,12 +485,34 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
             assert state["rows"][0] == _settled(inserted.data["insert_message_templates_one"])
             inserts.append(_aliased({"object": object_, "changes": state}, new_ids()))
 
-    # A save the walker and two constraints refuse at once: a template in HTML with no plain-text form and no layout.
-    saves = []
-    for id_, set_ in ((opened["passwordReset"], {"format": "html", "layout": ""}),):
+    # Saves the server refuses, by what they show: a template in HTML with no plain-text form and no layout; a
+    # declared path over its 200 characters; a description over its 1,000.
+    quote_variables = initial[opened["quote"]]["variables"]
+    saves = {}
+    for why, id_, set_ in (
+        ("layout", opened["passwordReset"], {"format": "html", "layout": ""}),
+        ("variablePath", opened["quote"], {"variables": {**quote_variables, "a" * 201: "A value nothing reads."}}),
+        ("variableDescription", opened["quote"], {"variables": {**quote_variables, "author": "x" * 1001}}),
+    ):
         with _rolled_back():
             refused = execute_schema(schema, _UPDATE, {"id": id_, "set": set_}, user=admin)
-            saves.append({"id": id_, "set": set_, "error": _error(refused)})
+            saves[why] = {"id": id_, "set": set_, "error": _error(refused)}
+
+    # Saves the server keeps, each with what a reload then reads: a source pasted with carriage returns on a current
+    # override, and a description on an override whose shipped default changed.
+    saved = []
+    for name, set_ in (
+        ("passwordReset", {"source": initial[opened["passwordReset"]]["source"].replace("\n", "\r\n")}),
+        ("recordCard", {"description": "Kept as it is until the new card is read."}),
+    ):
+        with _rolled_back():
+            answer = read(_UPDATE, {"id": opened[name], "set": set_}, "update_message_templates_by_pk")
+            reread = read(_BY_PK, {"id": opened[name]}, "message_templates_by_pk")
+            saved.append({"id": opened[name], "set": set_, "row": _settled(answer), "reread": _settled(reread)})
+    pasted, kept = saved
+    assert "\r" not in pasted["row"]["source"] and "\r" not in pasted["reread"]["source"], pasted
+    assert pasted["row"]["has_updated_default"] is pasted["reread"]["has_updated_default"] is False, pasted
+    assert kept["row"]["has_updated_default"] is kept["reread"]["has_updated_default"] is True, kept
 
     assert set(initial) == {row["id"] for row in read(list_document, {}, "message_templates")}
     return _aliased({
@@ -467,6 +530,7 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
         "keepRefused": keep_refusals,
         "insert": inserts,
         "save": saves,
+        "saved": saved,
     }, ids)
 
 
