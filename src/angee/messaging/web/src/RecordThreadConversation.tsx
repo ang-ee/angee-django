@@ -3,7 +3,7 @@ import type { RecordMessagePostKind } from "@angee/gql/console/graphql";
 import { holdsPermission } from "@angee/metadata";
 import * as React from "react";
 import {
-  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, errorMessage, textRoleVariants, useIdempotencyKeys, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
+  Avatar, Banner, Button, Checkbox, Chip, EmptyState, ErrorBanner, FieldRoot, Glyph, InlineTextAction, Input, LoadingPanel, MessageActions, MessageAttachmentChip, MessageFeed, MessagePartsView, MessageRow, ReactionBar, ReactionPicker, AbsoluteTime, RemovableChip, RemovedDisclosure, RemovedItem, SearchInput, SegmentedControl, Select, avatarInitials, cn, errorMessage, textRoleVariants, useIdempotencyDraftOwner, useIdempotencyKeys, useReactionGroups, useConfirm, useRuntimeViewAs, useTrashPrompt, useUiT,
 } from "@angee/ui";
 import {
   StorageUploadTasks,
@@ -228,6 +228,7 @@ export function RecordThreadConversation({
   // the server writes it once; an edit after an earlier version was written answers a conflict.
   const keys = useIdempotencyKeys();
   const postScope = `messaging.record-message:${modelLabel}:${recordId}`;
+  useIdempotencyDraftOwner(canPost && !readOnly ? postScope : null);
 
   const recipientOptions = React.useMemo(
     () =>

@@ -2,6 +2,7 @@ import * as React from "react";
 import { failedWriteOutcome, type FailedWriteOutcome } from "@angee/refine";
 
 import { createClientKey } from "./client-key";
+import { developmentMode } from "./development-mode";
 
 /** What a draft whose key is kept can tell the person. */
 export interface IdempotencyKeyState {
@@ -59,6 +60,8 @@ export class IdempotencyKeyStore {
   private actor: string | null = null;
   private readonly drafts = new Map<string, Draft>();
   private readonly listeners = new Map<string, Set<() => void>>();
+  /** The surfaces holding each draft scope now, by what each is told of a clash (`useIdempotencyDraftOwner`). */
+  private readonly owners = new Map<string, Set<{ clash: (error: Error) => void }>>();
 
   /** Hold the drafts of `actor`: another person forgets them all. */
   setActor(actor: string): void {
@@ -111,6 +114,31 @@ export class IdempotencyKeyStore {
     this.notify(scope);
   }
 
+  /**
+   * Hold `scope` for one surface until the returned release. Two surfaces holding one scope would
+   * send one key for two writes: in development each is told `clash`, naming the scope, if more
+   * than one holds it once the commit's mounts and releases have run, so a strict-mode remount or
+   * a form replacing its predecessor in one commit holds it once.
+   */
+  own(scope: string, clash: (error: Error) => void): () => void {
+    const owner = { clash };
+    const owners = this.owners.get(scope) ?? new Set();
+    owners.add(owner);
+    this.owners.set(scope, owners);
+    if (developmentMode()) {
+      queueMicrotask(() => {
+        const live = this.owners.get(scope);
+        if (!live || live.size < 2) return;
+        const error = new Error(`Two mounted surfaces hold the idempotency draft scope "${scope}", so both would send one key for two writes: nest one under its host (useDraftScope, DraftScopeProvider) or give it a scope of its own.`);
+        live.forEach((held) => held.clash(error));
+      });
+    }
+    return () => {
+      owners.delete(owner);
+      if (owners.size === 0 && this.owners.get(scope) === owners) this.owners.delete(scope);
+    };
+  }
+
   private notify(scope: string): void {
     this.listeners.get(scope)?.forEach((listener) => listener());
   }
@@ -137,9 +165,10 @@ function requireStore(store: IdempotencyKeyStore | null): IdempotencyKeyStore {
  * nothing possibly written (`discard`). What an error says never releases it: a retry of the
  * draft, edited or not, carries the same key, and the server writes it, replays it (the same
  * content under a key it spent), or answers `conflict` (other content under it), after which the
- * draft's next send starts a new draft. In memory, per signed-in person: sending again writes
- * once from this page only. It needs the app's `AppRuntimeProvider`, and says so when a keyed
- * write is sent without one.
+ * draft's next send starts a new draft. One scope belongs to one surface at a time
+ * (`useIdempotencyDraftOwner`). In memory, per signed-in person: sending again writes once from
+ * this page only. It needs the app's `AppRuntimeProvider`, and says so when a keyed write is sent
+ * without one.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -179,3 +208,44 @@ export function useIdempotencyKeyState(scope: string): IdempotencyKeyState | nul
   return React.useSyncExternalStore(subscribe, read, read);
 }
 
+/**
+ * Hold the draft `scope` names for this surface while it is mounted (null: it holds none now, as a
+ * closed dialog). One scope belongs to one surface at a time: two holding it would send one key for
+ * two writes, so in development both throw at their next render, naming the scope, once the commit
+ * that mounted them has settled. A strict-mode remount, or a form replacing its predecessor in one
+ * commit, holds it once.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useIdempotencyDraftOwner(scope: string | null): void {
+  const store = React.useContext(IdempotencyKeyStoreContext);
+  const [clash, setClash] = React.useState<Error | null>(null);
+  React.useEffect(() => (store && scope !== null ? store.own(scope, setClash) : undefined), [scope, store]);
+  if (clash) throw clash;
+}
+
+const DraftScopeContext = React.createContext<string | null>(null);
+
+/**
+ * The draft scope of a surface: `own` (what it writes to) under the scope its host names
+ * ({@link DraftScopeProvider}), joined by `/`. A create form opened from a relation field of
+ * another form is so named by its chain of hosts and slots, and two surfaces open at once never
+ * share one by construction.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useDraftScope(own: string): string {
+  const host = React.useContext(DraftScopeContext);
+  return host === null ? own : `${host}/${own}`;
+}
+
+/**
+ * Name the scope the drafts below are nested under ({@link useDraftScope}): a host's own draft
+ * scope, or one of its slots (`relation:<field>`). With none, the host's own host's stays.
+ * @kind null
+ * @reason Provider infrastructure: the enclosing draft scope.
+ */
+export function DraftScopeProvider({ scope, children }: { scope?: string | null; children?: React.ReactNode }): React.ReactElement {
+  const host = React.useContext(DraftScopeContext);
+  return React.createElement(DraftScopeContext.Provider, { value: scope ?? host }, children);
+}

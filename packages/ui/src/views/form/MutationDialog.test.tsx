@@ -6,7 +6,7 @@ import { boundedGraphQLTransportError } from "@angee/refine";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { testDataResource } from "@angee/metadata/testing";
 
-import { useState, type ReactElement, type ReactNode } from "react";
+import { Component, useState, type ReactElement, type ReactNode } from "react";
 import { ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type WidgetMap } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
@@ -30,6 +30,14 @@ const { Provider, clearClients } = createUiTestProviders({
 
 // The app's providers a form dialog renders under: the router it guards and the ModalsHost it asks through.
 const app = createUiTestProviders({ router: true });
+
+/** Catch what a surface throws as it renders, as an app's error boundary does. */
+class Caught extends Component<{ children?: ReactNode; caught: (error: Error) => void }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  override componentDidCatch(error: Error) { this.props.caught(error); }
+  override render() { return this.state.failed ? null : this.props.children; }
+}
 const AppProviders = ({ children }: { children?: ReactNode }) => <app.Provider><ToastProvider>{children}</ToastProvider></app.Provider>;
 const render = (ui: ReactElement) => testingRender(ui, { wrapper: AppProviders });
 const router = () => app.routers.at(-1)!;
@@ -540,6 +548,29 @@ describe("MutationDialog", () => {
     expect(sent[3]).not.toBe(sent[0]);
   });
 
+  test("one draft scope belongs to one open dialog: two open at once fail in development, naming it; a closed one holds none", async () => {
+    const caught: Error[] = [];
+    // A trigger-owned dialog stays mounted while closed: it holds its scope only once opened.
+    const dialog = (open: boolean | "closed") => <MutationDialog
+      {...(open === "closed" ? { trigger: <button type="button">New dashboard</button> } : { open, onOpenChange: vi.fn() })}
+      title="Create" fields={[]} submitLabel="Create"
+      parseValues={parseRawValues} idempotencyScope="dashboards.create-personal" onSubmit={() => ({ status: "ok", data: null })} />;
+    const page = (second: boolean) => <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <Caught caught={(error) => caught.push(error)}>{dialog(true)}{dialog(second ? true : "closed")}</Caught>
+    </AppRuntimeProvider>;
+    const spied = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      let view!: ReturnType<typeof render>;
+      await act(async () => { view = render(page(false)); await Promise.resolve(); });
+      expect(screen.getByRole("dialog", { name: "Create" })).toBeTruthy();
+      expect(caught).toEqual([]);
+      await act(async () => { view.rerender(page(true)); await Promise.resolve(); });
+    } finally {
+      spied.mockRestore();
+    }
+    expect(caught[0]?.message).toContain('Two mounted surfaces hold the idempotency draft scope "dashboards.create-personal"');
+  });
+
   test("a keyed dialog's submission is typed with its draft's key; an unkeyed one is called with none", () => {
     const keyed: KeyedMutationDialogProps<Record<string, unknown>> = {
       title: "Create", fields: [], submitLabel: "Create", parseValues: parseRawValues, idempotencyScope: "scope",
@@ -593,7 +624,7 @@ describe("MutationDialog", () => {
     await act(async () => { resolve({ status: "ok", data: "msg_1", message: "Message queued for delivery." }); });
     expect(await screen.findByText("Message queued for delivery.")).toBeTruthy();
     expect(onSubmitted).toHaveBeenCalledOnce();
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Send" })).toBeNull());
     expect(screen.queryByRole("button", { name: "New message" })).toBeNull();
   });
 

@@ -12,6 +12,7 @@ import { ControlBandProvider } from "../../layouts/ControlBand";
 import { CommandBand } from "../resource/CommandBand";
 import { cn } from "../../lib/cn";
 import { ContainerOutlet } from "../../lib/container-outlet";
+import { DraftScopeProvider } from "../../lib/idempotency-key";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { EmptyState } from "../../fragments/EmptyState";
 import type { RecordHeaderProps } from "../../fragments/RecordHeader";
@@ -149,7 +150,10 @@ export const FormView = Object.assign(FormViewComponent, {
 
 function FormViewInstance(props: FormViewProps): React.ReactElement {
   const surface = useFormViewSurface(props);
-  return <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>;
+  // A create form inside this form (a relation field's, an embedded list's) names its draft under this one's.
+  return <DraftScopeProvider scope={surface.draftScope}>
+    <ActionFormProvider {...surface.form}><FormViewContent {...props} surface={surface} /></ActionFormProvider>
+  </DraftScopeProvider>;
 }
 
 function FormViewContent({ surface, ...props }: FormViewProps & {

@@ -197,8 +197,9 @@ interface ActionBinding {
    * The draft a keyed `submit` writes, named for the record it acts on (`useIdempotencyKeys`): the
    * action dialog holds one idempotency key for it from its first attempt until an `ok` answer,
    * gives it to `submit` as `context.idempotencyKey`, and gives the draft up when the person
-   * dismisses the dialog with nothing possibly written. Null when the context names no draft (no
-   * record to act on): the dialog then gives `submit` no key, and a keyed `submit` refuses to send.
+   * dismisses the dialog with nothing possibly written. While open, the dialog holds the scope
+   * (`useIdempotencyDraftOwner`). Null when the context names no draft (no record to act on): the
+   * dialog then gives `submit` no key, and a keyed `submit` refuses to send.
    */
   idempotencyScope?: (context: ActionFormContext) => string | null;
 }

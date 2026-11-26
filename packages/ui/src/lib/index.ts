@@ -32,6 +32,9 @@ export * from "./color-scheme";
 export { useContainerQuery } from "./use-container-query";
 export { createClientKey } from "./client-key";
 export {
+  DraftScopeProvider,
+  useDraftScope,
+  useIdempotencyDraftOwner,
   useIdempotencyKeys,
   useIdempotencyKeyState,
   type IdempotencyKeys,

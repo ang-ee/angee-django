@@ -13,6 +13,7 @@ import { useCreate, type BaseRecord, type HttpError } from "@refinedev/core";
 
 import { useUiT } from "../../i18n";
 import { ControlBandProvider } from "../../layouts/ControlBand";
+import { DraftScopeProvider, useDraftScope } from "../../lib/idempotency-key";
 import { modelDisplayLabel } from "../../lib/labels";
 import { Dialog } from "../../ui/dialog";
 import { SegmentedControl } from "../../ui/toggle-group";
@@ -155,6 +156,9 @@ export function RelationRecordDialog({
   onEdited?: (id: string) => void;
 }): ReactElement {
   const t = useUiT();
+  // The form it opens names its draft in the relation slot of the surface hosting the field, so it
+  // never shares one with a create form of the same resource open beside it.
+  const draftScope = useDraftScope("relation");
   return (
     <Dialog.Root
       open={dialog !== null}
@@ -174,6 +178,7 @@ export function RelationRecordDialog({
             </div>
           </Dialog.Header>
           <Dialog.Body>
+            <DraftScopeProvider scope={draftScope}>
             {dialog?.mode === "create" && create ? (
               <RelationCreateForm
                 create={create}
@@ -196,6 +201,7 @@ export function RelationRecordDialog({
                 }}
               />
             ) : null}
+            </DraftScopeProvider>
           </Dialog.Body>
         </Dialog.Content>
       </Dialog.Portal>

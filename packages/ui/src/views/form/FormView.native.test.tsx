@@ -17,6 +17,7 @@ import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } 
 import gql from "graphql-tag";
 import { useList, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
+import { useDraftScope } from "../../lib/idempotency-key";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
@@ -305,6 +306,22 @@ test("registry widgets receive live sibling values in record forms", async () =>
   await waitFor(() => expect(screen.getByLabelText("Sibling title").textContent).toBe("First"));
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
   expect(screen.getByLabelText("Sibling title").textContent).toBe("Changed");
+});
+
+test("a form names its draft to the surfaces inside it: a create form of its resource embedded in it is a draft of its own", async () => {
+  // As a list of the form's own resource, embedded in it, names its inline create form's draft.
+  function Embedded(): React.ReactElement {
+    return <output aria-label="Embedded draft">{useDraftScope("record.create:console:notes.Note")}</output>;
+  }
+  const read: WidgetDefinition["read"] = () => <Embedded />;
+  const f = await fixture({ publicView: true, widgets: { embedded: { read, edit: read } } });
+  const viewFields: FieldDescriptor[] = [{ name: "title", label: "Title" }, { name: "body", widget: "embedded" }];
+  f.rerender({ viewFields });
+  await waitFor(() => expect(screen.getByLabelText("Embedded draft").textContent)
+    .toBe("record.edit:console:notes.Note:note-1/record.create:console:notes.Note"));
+  f.rerender({ recordId: null, viewFields });
+  await waitFor(() => expect(screen.getByLabelText("Embedded draft").textContent)
+    .toBe("record.create:console:notes.Note/record.create:console:notes.Note"));
 });
 
 test("header extras render from the same live record context as the title", async () => {

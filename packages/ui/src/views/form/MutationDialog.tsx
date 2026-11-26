@@ -21,7 +21,7 @@ import { useLateAnswerReport } from "./late-answer";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
-import { useIdempotencyKeys } from "../../lib/idempotency-key";
+import { useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 
 export {
   LabeledDescriptorField,
@@ -149,7 +149,7 @@ interface MutationDialogScope {
    * The draft a keyed write's submission writes (`useIdempotencyKeys`): the dialog holds one
    * idempotency key for it from its first attempt until an accepted answer, passes it to its
    * submission, and gives the draft up when the person dismisses it with nothing possibly
-   * written.
+   * written. While open, the dialog holds the scope (`useIdempotencyDraftOwner`).
    */
   idempotencyScope: string;
 }
@@ -352,6 +352,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   );
   const reportLate = useLateAnswerReport();
   const keys = useIdempotencyKeys();
+  useIdempotencyDraftOwner(open && idempotencyScope !== undefined ? idempotencyScope : null);
   const footer = ({ dismiss, dismissRefusal }: DialogFormFooterContext) => (
     <>
       <Button

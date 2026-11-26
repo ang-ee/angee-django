@@ -29,7 +29,7 @@ import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-q
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
-import { useIdempotencyKeys } from "../../lib/idempotency-key";
+import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { asWidgetDefinition, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import {
@@ -194,6 +194,11 @@ export interface UseFormViewSaveProps {
 export interface FormViewSaveSurface {
   form: FormViewForm;
   history: FormHistory;
+  /**
+   * The form's draft scope (`useDraftScope`): the new record it creates, or the record it edits,
+   * under the scope of the surface hosting it. The form names it to the drafts below it.
+   */
+  draftScope: string;
   displayRecord: Row | null;
   loading: boolean;
   /** Native detail-query failure; cached record data remains available during refresh failures. */
@@ -307,9 +312,12 @@ export function useFormViewSave({
   const mutationFields = React.useMemo(() => selectRevision && !refineFields.includes("revision")
     ? [...refineFields, "revision"] : refineFields, [refineFields, selectRevision]);
   // A new record of this resource is one draft: its key is minted at the first create attempt and
-  // lasts until one is accepted, so a retry, edited or not, is written once.
+  // lasts until one is accepted, so a retry, edited or not, is written once. The form names its
+  // draft under the surface hosting it (a relation field's create of another form), and holds it.
   const idempotencyKeys = useIdempotencyKeys();
-  const createScope = `record.create:${resource}`;
+  const provider = dataResource?.schemaName ?? "default";
+  const draftScope = useDraftScope(isCreate ? `record.create:${provider}:${resource}` : `record.edit:${provider}:${resource}:${String(id)}`);
+  useIdempotencyDraftOwner(isCreate ? draftScope : null);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],
@@ -630,7 +638,7 @@ export function useFormViewSave({
         }
       };
       // A refused create keeps the draft and its key; an accepted one ends it.
-      const result = keyed ? await idempotencyKeys.send(createScope, write, (answer) => answer.status === "ok") : await write(null);
+      const result = keyed ? await idempotencyKeys.send(draftScope, write, (answer) => answer.status === "ok") : await write(null);
       if (result.status === "ok") {
         // Started, not awaited: the form shows its own record, which the write's answer carries. A read
         // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
@@ -666,7 +674,7 @@ export function useFormViewSave({
       saveOperation.target,
       submitOwner,
       idempotencyKeys,
-      createScope,
+      draftScope,
     ],
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
@@ -989,7 +997,7 @@ export function useFormViewSave({
     if (isCreate) {
       localAcknowledgementRef.current = null;
       // The person gives the new record up: its draft ends, unless an attempt may have created it.
-      idempotencyKeys.discard(createScope);
+      idempotencyKeys.discard(draftScope);
     }
     presetMemory.clear();
     reset(isCreate ? emptyValues : values, { keepDirtyValues: false, keepDirty: false });
@@ -998,7 +1006,7 @@ export function useFormViewSave({
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
     onDiscarded?.();
-  }, [createScope, displayRecord, emptyValues, idempotencyKeys, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
+  }, [draftScope, displayRecord, emptyValues, idempotencyKeys, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
     (path: string) => {
       startHistory(path);
@@ -1019,6 +1027,7 @@ export function useFormViewSave({
   return {
     form: { ...form, registerFieldValidation },
     history,
+    draftScope,
     displayRecord,
     loading,
     loadError,

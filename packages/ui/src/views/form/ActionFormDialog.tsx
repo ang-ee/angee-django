@@ -9,7 +9,7 @@ import { errorMessage } from "../../feedback";
 import { Button } from "../../ui/button";
 import { useUiT } from "../../i18n";
 import { titleCase } from "../../lib/titleCase";
-import { useIdempotencyKeys } from "../../lib/idempotency-key";
+import { useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { relationIdList, relationValueId } from "../../widgets/types";
 import { useRuntimeViewAs } from "../../runtime";
 import { emptyValueForField } from "./field-values";
@@ -107,6 +107,7 @@ function ActionArgsDialog({
   // An action declaring the draft it writes holds one idempotency key for it, from its first attempt.
   const keys = useIdempotencyKeys();
   const draftScope = action.idempotencyScope?.(context) ?? null;
+  useIdempotencyDraftOwner(open || inline ? draftScope : null);
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),

@@ -11,6 +11,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import { defaultWidgets } from "../../widgets";
+import { FormView } from "../form/FormView";
 import { RelationFieldWidget } from "./RelationFieldWidget";
 import { RelationMultiFieldWidget } from "./RelationMultiFieldWidget";
 import { useRelationForms } from "./RelationRecordDialog";
@@ -39,6 +40,16 @@ const organization = kind("parties.Organization", "organizations", "legal_name")
 const person = kind("parties.Person", "people", "given_name");
 const tag = testDataResource("tags.Tag", { recordRepresentation: "name", fields: [id, text("name")] });
 const resources = [party, organization, person, tag];
+
+/** A self-related, keyed resource: a node's parent is a node, and its create takes an idempotency key. */
+const node = testDataResource("tree.Node", {
+  recordRepresentation: "name",
+  createArguments: [{ name: "idempotency_key", type: "String" }],
+  fields: [id, text("name"), {
+    name: "parent", kind: "relation", scalar: "ID", relationModelLabel: "tree.Node", relationObject: true, readable: true,
+    aggregatable: false, creatable: true, updatable: true, requiredOnCreate: false,
+  }],
+});
 
 const partyRelation = { resource: "parties.Party", labelField: "display_name", canCreate: false };
 const tagRelation = { resource: "tags.Tag", labelField: "name", canCreate: true };
@@ -164,4 +175,51 @@ test("a model without concrete kinds opens its own create form with no kind swit
   // The typed query names the new record.
   expect(await within(dialog).findByLabelText("Name")).toHaveProperty("value", "Follow up");
   expect(within(dialog).queryByRole("group", { name: "Kind" })).toBeNull();
+});
+
+test("a create form opened from a relation field names its draft under the form hosting the field: a chain of one resource's creates sends one key each", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  render(<Wrapper><FormView resource="tree.Node" id={null} fields={[{ name: "name" }, { name: "parent", kind: "relation", widget: "many2one" }]} /></Wrapper>);
+
+  // The page's create form, the parent's create form over it, and the grandparent's over that: all open at once.
+  const createParent = async (within_: ReturnType<typeof within>, query: string) => {
+    fireEvent.click(within_.getByRole("combobox", { name: "Parent" }));
+    fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: query } });
+    fireEvent.click(await screen.findByText(`Create “${query}”`));
+  };
+  await createParent(within(document.body), "Child");
+  const [parent] = await screen.findAllByRole("dialog", { name: "New node" });
+  await createParent(within(parent!), "Grand");
+  // The parent's dialog is hidden from the accessibility tree, unnamed, while the grandparent's is over it.
+  await waitFor(() => expect(screen.getAllByRole("dialog", { hidden: true })).toHaveLength(2));
+  const grandparent = screen.getByRole("dialog", { name: "New node" });
+  expect(within(grandparent).getByLabelText("Name")).toHaveProperty("value", "Grand");
+
+  fireEvent.click(within(grandparent).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  await waitFor(() => expect(screen.getAllByRole("dialog", { hidden: true })).toHaveLength(1));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "New node" })).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+  const keys = create.mock.calls.map(([call]) => (call as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key);
+  expect(keys).toEqual([expect.any(String), expect.any(String)]);
+  expect(keys[1]).not.toBe(keys[0]);
+}, 20_000);
+
+test("a relation field's create outside any form is a draft of its own beside a create form of the same resource", async () => {
+  const { create, Wrapper } = harness([...resources, node]);
+  const nodeRelation = { resource: "tree.Node", labelField: "name", canCreate: true };
+  // A page's create form of a node, and a picker of nodes outside it (a toolbar's, a filter's): both open at once.
+  render(<Wrapper>
+    <FormView resource="tree.Node" id={null} fields={[{ name: "name" }]} />
+    <RelationFieldWidget value={null} relation={nodeRelation} aria-label="Related node" />
+  </Wrapper>);
+  fireEvent.click(screen.getByRole("combobox", { name: "Related node" }));
+  fireEvent.change(await screen.findByPlaceholderText("Search…"), { target: { value: "Leaf" } });
+  fireEvent.click(await screen.findByText("Create “Leaf”"));
+  const dialog = await screen.findByRole("dialog", { name: "New node" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect((create.mock.calls[0]?.[0] as { meta?: { gqlVariables?: { idempotency_key?: string } } }).meta?.gqlVariables?.idempotency_key)
+    .toEqual(expect.any(String));
 });

@@ -2066,6 +2066,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "DraftScopeProvider",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Provider infrastructure: the enclosing draft scope.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "Drawer",
     "source": "packages/ui/src/ui/drawer.tsx",
     "kind": "primitive",
@@ -8197,6 +8206,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useDraftScope",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDraggable",
     "source": "packages/ui/src/lib/dnd.ts",
     "kind": null,
@@ -8311,6 +8329,15 @@
     "source": "packages/ui/src/chrome/icon-registry.ts",
     "kind": "primitive",
     "owner": "@angee/ui:Glyph",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyDraftOwner",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

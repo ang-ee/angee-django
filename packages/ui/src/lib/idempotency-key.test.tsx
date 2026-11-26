@@ -2,11 +2,13 @@
 
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { AuthoredEnvelopeError, ServerUnavailableError, boundedGraphQLTransportError, type FailedWriteOutcome } from "@angee/refine";
-import type { ReactNode } from "react";
+import { Component, StrictMode, type ReactNode } from "react";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { AppRuntimeProvider, type RuntimeAuthState, type RuntimeViewAs } from "../runtime";
-import { useIdempotencyKeys, useIdempotencyKeyState, type IdempotencyKeys } from "./idempotency-key";
+import {
+  DraftScopeProvider, useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys, useIdempotencyKeyState, type IdempotencyKeys,
+} from "./idempotency-key";
 
 afterEach(cleanup);
 
@@ -251,5 +253,61 @@ describe("useIdempotencyKeys", () => {
   test("a keyed write sent outside any app runtime says what it needs", async () => {
     const { result } = renderHook(() => useIdempotencyKeys());
     await expect(result.current.send("x", async () => "ok")).rejects.toThrow("useIdempotencyKeys must be used under AppRuntimeProvider.");
+  });
+});
+
+/** Catch what a surface throws as it renders, as an app's error boundary does. */
+class Caught extends Component<{ children?: ReactNode; caught: (error: Error) => void }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  override componentDidCatch(error: Error) { this.props.caught(error); }
+  override render() { return this.state.failed ? null : this.props.children; }
+}
+
+function Holder({ scope }: { scope: string | null }): ReactNode {
+  useIdempotencyDraftOwner(scope);
+  return null;
+}
+
+describe("useIdempotencyDraftOwner", () => {
+  async function mount(tree: ReactNode): Promise<{ errors: Error[]; rerender: (next: ReactNode) => Promise<void> }> {
+    const errors: Error[] = [];
+    const wrap = (node: ReactNode) => <AppRuntimeProvider runtime={{}}><Caught caught={(error) => errors.push(error)}>{node}</Caught></AppRuntimeProvider>;
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(wrap(tree)); await Promise.resolve(); });
+    return { errors, rerender: async (next) => { await act(async () => { view.rerender(wrap(next)); await Promise.resolve(); }); } };
+  }
+
+  test("two mounted surfaces holding one scope fail in development, naming it", async () => {
+    const { errors } = await mount(<><Holder scope="record.create:default:tasks.Task" /><Holder scope="record.create:default:tasks.Task" /></>);
+    expect(errors[0]?.message).toContain('Two mounted surfaces hold the idempotency draft scope "record.create:default:tasks.Task"');
+  });
+
+  test("a strict-mode remount, a surface replacing its predecessor in one commit, or a surface holding none is one holder", async () => {
+    const view = await mount(<StrictMode><Holder key="first" scope="box" /><Holder scope={null} /><Holder scope={null} /></StrictMode>);
+    await view.rerender(<StrictMode><Holder key="next" scope="box" /><Holder scope={null} /><Holder scope={null} /></StrictMode>);
+    expect(view.errors).toEqual([]);
+  });
+});
+
+describe("useDraftScope", () => {
+  test("a surface's scope is its own under the scope its host names; a provider naming none keeps its host's", () => {
+    const scopes: string[] = [];
+    function Probe({ own }: { own: string }): ReactNode { scopes.push(useDraftScope(own)); return null; }
+    function Host({ own, children }: { own: string; children?: ReactNode }): ReactNode {
+      return <DraftScopeProvider scope={useDraftScope(own)}>{children}</DraftScopeProvider>;
+    }
+    render(<>
+      <Probe own="record.create:default:tasks.Task" />
+      <Host own="record.create:default:tasks.Task">
+        <Host own="relation"><Probe own="record.create:default:tasks.Task" /></Host>
+        <DraftScopeProvider scope={null}><Probe own="record.create:default:tags.Tag" /></DraftScopeProvider>
+      </Host>
+    </>);
+    expect(scopes).toEqual([
+      "record.create:default:tasks.Task",
+      "record.create:default:tasks.Task/relation/record.create:default:tasks.Task",
+      "record.create:default:tasks.Task/record.create:default:tags.Tag",
+    ]);
   });
 });

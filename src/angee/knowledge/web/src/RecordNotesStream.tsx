@@ -1,7 +1,7 @@
 import { holdsPermission } from "@angee/metadata";
 import { RecordThreadStream, type StreamChildItem, type StreamCreateAction } from "@angee/messaging";
 import { failedWriteOutcome, useAuthoredQuery } from "@angee/refine";
-import { useAuthoredResourceMutation, useIdempotencyKeys, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
+import { useAuthoredResourceMutation, useIdempotencyDraftOwner, useIdempotencyKeys, ErrorBanner, Skeleton, SkeletonStatus, SkeletonText, errorMessage, type ChatterTabContent, type ContainerChild } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
@@ -54,10 +54,12 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
   const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
+  const canCompose = canBind && writableVault && holdsPermission(writableVault, "write");
   // The record's note box is one draft: every attempt until one is saved carries its key, so the
   // server inserts the note once; an edit after an earlier version was saved answers a conflict.
   const keys = useIdempotencyKeys();
   const noteScope = `knowledge.record-note:${target.modelLabel}:${target.recordId}:${role}`;
+  useIdempotencyDraftOwner(canCompose ? noteScope : null);
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />
@@ -77,7 +79,6 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
     }] : [])
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
 
-  const canCompose = canBind && writableVault && holdsPermission(writableVault, "write");
   const createAction: StreamCreateAction | undefined = canCompose ? {
     id: "knowledge.add-note",
     label: composer?.submitLabel ?? t("notes.add"),
