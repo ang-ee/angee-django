@@ -10,6 +10,89 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.parties`: **Changed behaviour.** An email handle is one address whatever
+  its letter case or domain spelling. A handle has a spelling key,
+  `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
+  address trimmed and lower-cased, its domain's punycode labels read as
+  Unicode; `""` on every other platform, where the value itself is the
+  address, and for a value with no `@`, which is no address), and a live
+  email handle is unique by it (`uq_handle_spelling_key`;
+  `ix_handle_spelling_key` serves the lookup of merged-away rows).
+  `HandleManager.find_identities`, and so `find_identity`, `upsert`,
+  `claim_control` and every compose, calendar and sync lookup, lands an email
+  address on the row owning its exact value, else on the live handle owning its
+  spelling key, else on the survivor of the oldest merged-away row owning it;
+  the handle keeps the spelling first written as its `value`, what a message to
+  it is addressed to. A save that would keep a second live handle of an address
+  (an insert, a history revert, a resource load, a rewrite behind an
+  `external_id`) is refused before it writes with
+  `angee.parties.managers.ValueOwned`, a `ValidationError` on `value`
+  (`Handle.value_owner`); `upsert` and `reidentify` land where that owner is.
+  `upsert` no longer writes a key on a hit, and behind a matched `external_id`
+  it no longer rewrites `value` for another letter case or domain spelling of
+  the row's own address (`Handle.spells`). `Handle.normalized_value` is the
+  person-matching key, which finds and suggests a person and never decides
+  which handle an address lands on: a provider's alias (a Gmail dot or
+  plus-tag) stays a handle of its own; its outputs are unchanged but for an
+  email value whose domain carries surrounding whitespace (`a.b@ gmail.com` is
+  now `ab@gmail.com`). A person's merge of handles (`Handle.validate_merge`)
+  compares that key as the rule computes it from each value, so a row the key
+  repair has not reached compares as it will, and two phone handles whose
+  numbers the rule reads only as their digits (`Handle.is_fallback_key`:
+  `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
+  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2. A consumer rule
+  bound to an email handle now meets that handle for mail from every letter
+  case and domain spelling of its address, and an account signing in with
+  another letter case of a contact's address takes that handle as its own, as
+  it already did for the exact spelling. `Handle.email_value` now decides
+  nothing and is removed with its callers in a following change.
+  `renormalize_handles` folds each live email handle that spells the address
+  of an older one into it (`KeyRepair.folded`) and reports a fold the merge
+  refuses (`KeyRepair.refused`); its log lines are "Saved the keys of N
+  handle(s) again.", "Folded N handle(s) into the older handle of the same
+  address; each is kept as a redirect.", "N handle(s) spell an address another
+  handle owns and could not be folded; the log names each and why." and "The
+  keys of N handle(s) could not be saved; ...". **Upgrade:**
+  - A host whose own resource files seed two spellings of one email address
+    changes them first: that load is now refused and the provision stops.
+  - After compose, run `uv run --no-sync python manage.py makemigrations
+    parties` and commit it: it adds `spelling_key` with a database default of
+    `""` to the handle and its history table, the constraint and the index.
+  - Before provisioning, count what will fold, on the new code, in
+    `uv run --no-sync python manage.py shell` (it reads only `value`, so it
+    runs before the column exists); it is an upper bound, since a refused fold
+    cannot be predicted:
+
+    ```python
+    from collections import Counter
+    from django.apps import apps
+    Handle = apps.get_model("parties", "Handle")
+    live = Handle._base_manager.filter(platform="email", merged_into__isnull=True)
+    groups = Counter(Handle.spelling_key_of("email", value) for value in live.values_list("value", flat=True).iterator())
+    print(sum(count - 1 for count in groups.values() if count > 1), "handle(s) will fold at most")
+    ```
+
+  - Provision with services held. The repair saves every handle once
+    (`updated_at` stamped, one history version each) and folds each live
+    email handle that spells the address of an older one into it, kept as a
+    redirect. Afterwards there is one handle per address; messages and
+    recipients stay on the handle they used, so a held message keeps its
+    spelling; a contact's statements, calendar attendees and reactions on a
+    folded handle move to the survivor; where two contacts held two
+    spellings, one now holds the address and the same-person review proposes
+    the two; a rule that confers nothing on a merge survivor stops applying
+    to the folded handle; a two-way directory contact whose handle was folded
+    is written back with the survivor's spelling on its next push. A fold the
+    merge refuses (a seeded row, a row under an unfinished workflow run) is
+    logged once per provision, its row left live and unkeyed and still found
+    by its exact spelling; the workflows demo's former pair of spellings, on a
+    host that loaded it, is one such row (the demo now seeds a pair of phone
+    spellings instead).
+  - Rollback: deploy the older code; the column's database default admits its
+    inserts, which stay unkeyed until this code's next provision keys and
+    folds them. Leaving for good removes the column and the constraint with a
+    reviewed migration.
+  - No `rebac sync` and no SDL change.
 - `angee.parties`: **Changed behaviour.** A person's merge of handles
   (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
   addresses only for a contact administrator, an effective member of
@@ -19,7 +102,7 @@ live in code docstrings.
   their own address and receive other people's later mail to it. Anyone else
   merging two different addresses is refused with a `ValidationError` that names
   who can and says to merge their contacts instead, which moves no address.
-  Merging another spelling of an address (the same platform and comparison key)
+  Merging another spelling or alias of an address (the same platform and person-matching key)
   is unchanged for whoever holds the merge's permissions, messages already
   written keep their addresses, and the system's `fold` (`HandleManager.reidentify`)
   is unchanged. A contact administrator can now complete a handle merge at all:
@@ -76,11 +159,7 @@ live in code docstrings.
     header would not carry as read (a NUL byte, which failed the write on
     PostgreSQL after it began, a control character, or an encoded-word opener,
     which a mail library decodes into another address or name), is refused,
-    never re-read. **Known limit:** `compose` lands every address in lower
-    case, as inbound mail does, and finds its handle by that exact value, so a
-    contact another writer stored with a capital is a handle row of its own,
-    grouped with the lower-case one by the handle owner's comparison key
-    wherever a person is looked up; ending that split is the handle owner's. A caller
+    never re-read. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
     (default 50, the strictest common provider's per-message limit; each new
@@ -105,8 +184,8 @@ live in code docstrings.
     decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
     fields it only fills while blank (a fill locks and reads the row again, so
-    it never overwrites a value another transaction has just written), and `Handle.email_value` is the one form an
-    email address is stored in on a handle. `PartManager.attach_files` attaches
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the lower-cased
+    form compose and inbound mail pass. `PartManager.attach_files` attaches
     several files under one message lock. `HandleManager.find_identities` (and so
     `find_identity`, `upsert` and every compose lookup) names the platform in each
     arm of its one statement, so the `(platform, value)` key's index serves it; it
@@ -160,7 +239,7 @@ live in code docstrings.
     deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
-    `Handle.is_email_address` accepts, in the form `Handle.email_value` stores. A
+    `Handle.is_email_address` accepts, in the form `Handle.email_value` gives. A
     channel's default sender lands on the handle its lower-cased address names.
     A name typed with a recipient address fills only a handle that has none.
     Inbound mail joins a thread by its subject only when the thread was grouped
@@ -1719,7 +1798,7 @@ live in code docstrings.
   passes the domain rule of Django's `EmailValidator`, and no longer than an
   address may be or the handle's value holds. Both spellings of an
   internationalised domain are one address: `Handle.normalize_value` reads a
-  domain's punycode labels (`xn--`) as Unicode in the comparison key, while
+  domain's punycode labels (`xn--`) as Unicode in the person-matching key, while
   `value` keeps what was typed. The rule for a domain is one function,
   `Handle.normalize_email_domain`, and the organization-domain suggestion
   reads the handle's domain and `Organization.domain` (stored as typed)
@@ -1746,7 +1825,7 @@ live in code docstrings.
   without case and the public id, the pointer aside); the verb reads it, and a
   consumer compares the references `standing_claims()` returns with its own
   the same way. No resource or permission change. Upgrade: a handle stores
-  the comparison key its rule gave when it was last saved, so a change of the
+  the key its rule gave when it was last saved, so a change of the
   rule leaves stored keys behind. The rule now has a version,
   `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
   `Handle.normalize_email_domain` returns something else (a test pins the
@@ -1770,14 +1849,14 @@ live in code docstrings.
   kept under heavy load (load average 75 to 87). The repair saves in batches
   of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
   an interrupted provision keeps what it saved and the next one resumes. The
-  provision log prints "Saved the comparison key of N handle(s) again." A row
+  provision log prints "Saved the keys of N handle(s) again." A row
   whose save raises is rolled back alone, logged with its error, counted in
-  "The comparison key of N handle(s) could not be saved; ..." and tried again
+  "The keys of N handle(s) could not be saved; ..." and tried again
   by the next run, while the rest are saved. `manage.py renormalize_handles
   --limit N` saves a share instead, and only then prints "Stopped at the cap
   of N handle(s); M more await the next provision or renormalize_handles
   run". Once no row is behind, the repair is one indexed query per provision
-  and prints "Saved the comparison key of 0 handle(s) again." A handle stored
+  and prints "Saved the keys of 0 handle(s) again." A handle stored
   with a punycode-domain key is found by its Unicode spelling after that
   first provision. A row newer code stamped with a later version is selected
   too, so a rollback keys it again by the older rule. The PostgreSQL lane
@@ -1785,12 +1864,9 @@ live in code docstrings.
   (`tests/test_parties_handle_keys_concurrency.py`): a row another process
   deletes, and one it saves, after the repair selected its key and before
   the repair holds its lock.
-  Limits: two callers that meet two spellings of
-  one new address at once each make its row, and so its person, which the
-  pairing job then proposes; a handle is unique by its value as typed, not by
-  its comparison key, so writers that key on the exact value can still make
-  two rows of one address, which every lookup by the key reads together; a
-  number that is no valid international number is read as its digits. The
+  Limits: a number that is no valid international
+  number is read as its digits (an email address's letter case and domain
+  spelling are one handle since the spelling key, above). The
   domain codec is the standard library's, IDNA 2003: a punycode label that
   carries `ß`, `ς` or a joiner does not read back and stays as typed.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,

@@ -496,6 +496,17 @@ and confirmations publish to a card. Other sources remain inferences even at
 full confidence. Reads follow Party authorization, with separate Handle and
 evidence gates.
 
+**Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
+for an email address, its letter case folded and its domain in one spelling; on
+any other platform, none, since the value itself is the address. A live email
+handle is unique by it.
+
+**Person-matching key** — a handle's `normalized_value`: its value folded to find
+a person, trimmed and lower-cased on every platform, an email address's domain in
+one spelling with Gmail's dots and plus-tags dropped, a phone number in E.164. It
+is read where a person is looked up or suggested, never to decide which handle a
+message is addressed to.
+
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
 
