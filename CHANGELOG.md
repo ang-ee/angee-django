@@ -10,6 +10,27 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed contract.** A list keeps its whole sort order in the
+  URL and in a saved view. Both kept only the first key, so on a list grouped
+  by status and ordered by status then rank, a press on Rank turned it
+  descending and the URL cut the order back to status alone: Rank showed "not
+  sorted" and the order was lost on reload, on a shared link and in a saved
+  view. The URL's `sort` now holds every key as a comma list
+  (`sort=status:asc,rank:desc`); a one-key link reads as before, and a link
+  whose order cannot be read (an empty or three-part key, a field the resource
+  cannot sort by, or one named twice) reads nothing and offers the reset. A
+  saved view's `sort`, a shipped view's and `ResourceViewInitialState.sort` are
+  one `{ field, dir }` or a list of them; a list is written only for several
+  keys, so a one-key view is stored byte for byte as before, and a view saved
+  over several keys shows active right after saving and restores them all. The
+  grouping keys stay in the stored order as the table holds it: in the browser
+  their direction orders the groups. The favorites document
+  (`resource-view.favorites`) is version 2: a version 1 document reads and is
+  written as version 2 at its next change, and a tab on an earlier bundle reads
+  a version 2 document as unknown once it receives it (a live update or a
+  reload), so it then shows no saved views and writes none rather than dropping
+  a view whose order it cannot read.
+
 - `@angee/ui`: **Changed contract.** An action or mutation dialog the server
   refuses says each reason once, where the reason is (a `content` editor's
   reason excepted). The server joins every reason into the outcome's message (a

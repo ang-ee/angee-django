@@ -59,10 +59,10 @@ function taskResource(order: Order, rowModel: "server" | "client" = "server") {
 
 /**
  * A task list over a resource whose default order is `order`, its view state starting from
- * `initialState`, held by the list (`local`) or by the URL (`route`).
+ * `initialState`, held by the list (`local`) or by the URL (`route`, opened at `path`).
  */
-function renderList(order: Order, { columns = titleAndRank, initialState = {}, rowModel = "server", scope = "local" }: {
-  columns?: typeof withStatus; initialState?: ResourceViewInitialState; rowModel?: "server" | "client"; scope?: "local" | "route";
+function renderList(order: Order, { columns = titleAndRank, initialState = {}, rowModel = "server", scope = "local", path = "/tasks" }: {
+  columns?: typeof withStatus; initialState?: ResourceViewInitialState; rowModel?: "server" | "client"; scope?: "local" | "route"; path?: string;
 } = {}) {
   const resource = taskResource(order, rowModel);
   // A held read answers once `release` runs.
@@ -90,16 +90,24 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
       </OperationDocumentsProvider>
     </Provider>
   );
+  let router: ReturnType<typeof createRouter> | null = null;
   if (scope === "route") {
     const root = createRootRoute({ component: () => tree });
     const tasks = createRoute({ getParentRoute: () => root, path: "tasks" });
-    render(<RouterProvider router={createRouter({ routeTree: root.addChildren([tasks]), history: createMemoryHistory({ initialEntries: ["/tasks"] }) })} />);
+    router = createRouter({ routeTree: root.addChildren([tasks]), history: createMemoryHistory({ initialEntries: [path] }) });
+    render(<RouterProvider router={router} />);
   } else render(tree);
   const keys = (order: Record<string, string> | undefined) => Object.entries(order ?? {}).map(([field, direction]) => `${field} ${direction}`);
   const groupsRead = () => custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as {
     order_by?: { field: string; direction: string }[]; rows_order_by?: Record<string, string>;
   } | undefined;
   return {
+    /** The route list's address: its path and search, as a reload or a shared link opens it. */
+    href: () => router!.state.location.href,
+    /** The `sort` key the route list's address holds. */
+    urlSort: () => (router!.state.location.search as { sort?: unknown }).sort,
+    /** How many reads of the list's records were made. */
+    reads: () => getList.mock.calls.length,
     /** The order the last read of the list's records asked for, key by key. */
     readOrder: () => keys((getList.mock.calls.at(-1)?.[0].meta?.gqlVariables as { order_by?: Record<string, string> } | undefined)?.order_by),
     /** The order the last groups read asked for its groups. */
@@ -363,11 +371,45 @@ test("a client list seeded with a two-key order keeps it, and a press on its tie
   expect(shown("Title", "Rank")).toEqual({ Title: "none", Rank: "ascending" });
 });
 
-test.fails("on a list whose state lives in the URL, a press on the shown key behind a grouping key turns it descending and the read asks for it", async () => {
+test("on a list whose state lives in the URL, a press on the shown key behind a grouping key turns it descending and the read asks for it", async () => {
   const list = renderList([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { scope: "route", columns: withStatus,
     initialState: { groupStack: [{ field: "status" }], sorting: [{ id: "status", desc: false }, { id: "rank", desc: false }] } });
   await screen.findByText("Charlie");
   expect(shown("Rank")).toEqual({ Rank: "ascending" });
   press("Rank");
   await waitFor(() => expect([list.groupRowsOrder(), shown("Rank")]).toEqual([["status asc", "rank desc"], { Rank: "descending" }]));
+  // The URL holds the whole order, grouping key first.
+  expect(list.urlSort()).toBe("status:asc,rank:desc");
+});
+
+const statusThenRank: Order = [{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }];
+test.each(["server", "client"] as const)("a reload of a %s-grouped route list restores the whole order the press left", async (rowModel) => {
+  const initialState = { groupStack: [{ field: "status" }], sorting: [{ id: "status", desc: false }, { id: "rank", desc: false }] };
+  const list = renderList(statusThenRank, { scope: "route", rowModel, columns: withStatus, initialState });
+  await waitFor(() => expect(shown("Rank")).toEqual({ Rank: "ascending" }));
+  press("Rank");
+  await waitFor(() => expect(list.urlSort()).toBe("status:asc,rank:desc"));
+  const href = list.href();
+  cleanup(); clearClients();
+
+  const reloaded = renderList(statusThenRank, { scope: "route", rowModel, columns: withStatus, initialState, path: href });
+  await waitFor(() => expect(shown("Status", "Rank")).toEqual({ Status: "none", Rank: "descending" }));
+  if (rowModel === "server") expect(reloaded.groupRowsOrder()).toEqual(["status asc", "rank desc"]);
+});
+
+test("a route list opened at a link holding several keys reads in that whole order", async () => {
+  const list = renderList(statusThenRank, { scope: "route", path: "/tasks?sort=rank%3Adesc%2Ctitle%3Aasc" });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  expect(shown("Rank", "Title")).toEqual({ Rank: "descending", Title: "none" });
+});
+
+test.each([
+  ["a trailing comma", "rank%3Aasc%2C"],
+  ["a key of three parts", "rank%3Aasc%3Atitle"],
+  ["a padded field", "status%3Aasc%2C%20rank%3Adesc"],
+  ["a duplicate field", "rank%3Aasc%2Crank%3Adesc"],
+])("a route list opened at a link whose order has %s reads nothing and offers its reset", async (_name, sort) => {
+  const list = renderList(statusThenRank, { scope: "route", path: `/tasks?sort=${sort}` });
+  expect(await screen.findByRole("button", { name: "Reset filters, sorting and grouping" })).toBeTruthy();
+  expect(list.reads()).toBe(0);
 });

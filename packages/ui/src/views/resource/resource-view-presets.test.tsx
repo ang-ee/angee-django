@@ -12,6 +12,7 @@ import { useResourceSearch } from "./search/use-resource-search";
 import { useSearchCatalog } from "./search/catalog";
 import { RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY } from "./resource-view-favorites";
 import { favoriteFromResourceView, resourceViewPresetDefaults, validateResourceViewPreset, type ResourceViewPreset } from "./model/favorites";
+import { createResourceViewState } from "./model/state";
 import { useResourceViewQueryFacts, useResourceViewTableState } from "./surface/table-state";
 
 const resource = testDataResource("notes.Note", {
@@ -262,8 +263,17 @@ test.each([
   { filter: { status: { absent: "x" } } },
   { groupStack: [{ field: "absent" }] },
   { sort: { field: "absent", dir: "asc" as const } },
+  { sort: [{ field: "title", dir: "asc" as const }, { field: "absent", dir: "asc" as const }] },
+  { sort: [{ field: "title", dir: "asc" as const }, { field: "title", dir: "desc" as const }] },
   { columnVisibility: { absent: false } },
   { pageSize: 0 },
 ])("shipped view validation rejects unsupported query intent: %j", (invalid) => {
   expect(() => validateResourceViewPreset({ ...open, ...invalid }, model)).toThrow();
+});
+
+test("a shipped view may declare its whole order as a list, which it checks and seeds in order", () => {
+  const ordered: ResourceViewPreset = { ...open, sort: [{ field: "status", dir: "asc" }, { field: "title", dir: "desc" }] };
+  expect(() => validateResourceViewPreset(ordered, model)).not.toThrow();
+  expect(createResourceViewState(resourceViewPresetDefaults({ sorting: [{ id: "owner", desc: false }] }, ordered)).sorting)
+    .toEqual([{ id: "status", desc: false }, { id: "title", desc: true }]);
 });

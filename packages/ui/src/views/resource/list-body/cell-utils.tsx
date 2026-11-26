@@ -123,9 +123,8 @@ function followedSorting<TRow extends Row>(table: TableModel<TRow>): SortingStat
  * lose its order: the table orders them by the pressed column's value on each group, a text
  * column by each group's first record), except in the toggle's own case: a press on the order's last
  * key, unless it only breaks ties, flips or removes that key in place and keeps the keys
- * ahead of it, where the list's state holds several keys. A list whose state lives in the
- * URL keeps only the first of them (`model/search.ts`), as a saved view does
- * (`model/favorites.ts`).
+ * ahead of it. The URL (`model/search.ts`) and a saved view (`model/favorites.ts`) keep the
+ * whole order.
  */
 export function headerSort<TRow extends Row>(
   column: TableColumn<TRow, unknown>,

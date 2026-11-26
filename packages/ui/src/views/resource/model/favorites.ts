@@ -6,7 +6,7 @@ import { RESOURCE_VIEW_SORT_DIRECTIONS, isResourceViewKind } from "./capabilitie
 import type { ResourceViewKind } from "./capabilities";
 import { Filter } from "./filter";
 import type { ResourceViewSort, ResourceViewInitialState } from "./filter";
-import { createResourceViewState, type ResourceViewState } from "./state";
+import { createResourceViewState, querySortFromSorting, resourceViewSortFromSorting, sortingFromResourceViewSort, type ResourceViewState } from "./state";
 import { isCalendarSourceKey, normaliseGroupStack } from "./search";
 export interface ResourceViewFavorite {
   id: string;
@@ -14,7 +14,8 @@ export interface ResourceViewFavorite {
   /** Put this saved filter in the list's quick filter row. */
   pinned?: boolean;
   pageSize?: number;
-  sort?: ResourceViewSort | null;
+  /** The view's order: one key, or the whole order as a list (`favoriteFromResourceView` writes a list only for several keys). */
+  sort?: ResourceViewSort | readonly ResourceViewSort[] | null;
   /** Opaque persisted intent; parsed by its query owner when applied. */
   filter?: unknown;
   groupStack?: unknown;
@@ -70,7 +71,8 @@ export const ResourceViewFavoriteSchema = v.object({
   label: v.string(),
   pinned: v.optional(v.boolean()),
   pageSize: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
-  sort: v.optional(v.nullable(ResourceViewSortSchema)),
+  // In a saved or shipped view `null` is the one spelling of "cleared": a list holds at least one key.
+  sort: v.optional(v.nullable(v.union([ResourceViewSortSchema, v.pipe(v.array(ResourceViewSortSchema), v.minLength(1))]))),
   filter: v.optional(v.unknown()),
   groupStack: v.optional(v.unknown()),
   view: v.optional(v.custom<ResourceViewKind>((value) => typeof value === "string" && isResourceViewKind(value))),
@@ -90,7 +92,7 @@ export function validateResourceViewPreset(preset: ResourceViewPreset, model: Mo
   query.filterFrom(preset.filter);
   query.filterFrom(preset.fixedFilter);
   query.groupsFrom(preset.groupStack ?? []);
-  query.sortFrom(preset.sort ? [{ field: preset.sort.field, direction: preset.sort.dir === "desc" ? "DESC" : "ASC" }] : []);
+  query.sortFrom(querySortFromSorting(sortingFromResourceViewSort(preset.sort ?? null)));
   for (const field of Object.keys(preset.columnVisibility ?? {})) {
     if (!model.fields[field] && !model.resource.query.fields[field]) {
       throw new Error(`Resource view "${preset.id}" references unknown column "${field}".`);
@@ -187,20 +189,24 @@ function slugifyFavoriteLabel(label: string): string {
 }
 
 
-/** Preserve favorites v1 while live table state uses TanStack's own types. */
+/**
+ * A saved view keeps its stored vocabulary while live table state uses TanStack's own types:
+ * the whole order, as one `{ field, dir }` for one key (so a one-key view reads as it always
+ * has) and as a list of them for several.
+ */
 export function favoriteFromResourceView(
   state: import("./state").ResourceViewState,
   label: string,
   existing: readonly ResourceViewFavorite[] = [],
 ): ResourceViewFavorite {
-  const sort = state.sorting?.[0];
+  const sort = resourceViewSortFromSorting(state.sorting ?? []);
   return {
     id: nextResourceViewFavoriteId(label, existing),
     label,
     pageSize: state.pagination.pageSize,
     ...(state.preset ? { preset: state.preset } : {}),
     ...(Object.keys(state.columnVisibility).length ? { columnVisibility: state.columnVisibility } : {}),
-    ...(sort ? { sort: { field: sort.id, dir: sort.desc ? "desc" as const : "asc" as const } } : {}),
+    ...(sort ? { sort } : {}),
     ...(Filter.from(state.filter).hasEntries() ? { filter: state.filter } : {}),
     ...(state.groupStack.length > 0 ? { groupStack: state.groupStack } : {}),
     ...(state.view !== "list" ? { view: state.view } : {}),

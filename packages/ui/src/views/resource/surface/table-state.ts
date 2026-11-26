@@ -12,6 +12,7 @@ import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
+import { querySortFromSorting } from "../model/state";
 import type { ListRecordFacts, ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
@@ -245,7 +246,7 @@ export function useResourceViewTableState<TRow extends Row>({
   // The whole order, which a browser-sorted surface sorts its rows by; a header shows only the
   // key the rows visibly follow (`headerSort`).
   const sorting = React.useMemo<SortingState>(() => {
-    const declared = resourceView.state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" }));
+    const declared = resourceView.state.sorting && querySortFromSorting(resourceView.state.sorting);
     return (query ?? queryForColumns(columns, modelMetadata, groupStack)).sortFrom(declared ?? sortOrder)
       .map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
   }, [query, columns, modelMetadata, groupStack, resourceView.state.sorting, sortOrder]);

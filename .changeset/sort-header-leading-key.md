@@ -39,10 +39,8 @@ keeps asking for the groups in their own order, so the groups do not move; it
 asks for each group's records in `status desc` alone, so they no longer follow
 the rank tie-breaker, and the Rank header turns to "not sorted".
 
-A press on the order's last key behind a grouping key flips that key in place
-where the list's state holds several keys. A list whose state lives in the URL
-keeps one sort key, as a saved view does, so there the press keeps only the
-grouping key and the pressed column reads "not sorted"; this is unchanged.
+A press on the order's last key behind a grouping key flips that key in place,
+and the URL and a saved view keep the whole order it leaves.
 
 What does not change: the table's sorting holds the whole order, so every read
 asks for each key and a list sorted in the browser keeps its tie-breakers; no
