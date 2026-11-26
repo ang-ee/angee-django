@@ -1,7 +1,9 @@
-"""PostgreSQL: composes racing on one claim, one blank handle, or the same handles in opposite orders."""
+"""PostgreSQL: composes racing on one claim, one blank handle, or the same handles in other orders or spellings."""
 
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from email.utils import parseaddr
 from typing import Any
 
 import pytest
@@ -87,13 +89,54 @@ def test_a_typed_name_waits_on_a_fill_of_the_blank_handle_and_keeps_what_it_wrot
     assert Handle._base_manager.get(pk=blank.pk).display_name == "Directory Name"
 
 
+def _compose_both(monkeypatch: pytest.MonkeyPatch, channel: Any, one: list[str], two: list[str]) -> list[Any]:
+    """Run two composes at once, each paused after its first recipient's handle until the other has one.
+
+    Taken in different orders, the two then wait on each other's handle and PostgreSQL aborts one of them.
+    """
+
+    upsert = HandleManager.upsert
+    named = {Handle.spelling_key_of("email", parseaddr(entry)[1]) for entry in (*one, *two)}
+    first: dict[int, threading.Event] = {}
+    arrived = (threading.Event(), threading.Event())
+
+    def pausing(self: Any, **fields: Any) -> Any:
+        handle = upsert(self, **fields)
+        recipient = Handle.spelling_key_of("email", fields["value"]) in named
+        mine = first.pop(threading.get_ident(), None) if recipient else None
+        if mine is not None:
+            mine.set()
+            next(event for event in arrived if event is not mine).wait(timeout=3)
+        return handle
+
+    monkeypatch.setattr(HandleManager, "upsert", pausing)
+
+    def compose(event: threading.Event, to: list[str]) -> Callable[[], Any]:
+        def run() -> Any:
+            first[threading.get_ident()] = event
+            # Its own text: a body two composes share is one content-addressed row, which the second would wait on.
+            return Message.objects.compose(channel=channel, to=to, text=f"To {to}.", actor=channel.owner)
+        return run
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [submit(pool, compose(event, to))[0] for event, to in zip(arrived, (one, two), strict=True)]
+        return [future.result(timeout=30) for future in futures]
+
+
+def _recipient_keys(messages: list[Any]) -> list[list[str]]:
+    """Return each message's recipients' spelling keys in the order its compose named them."""
+
+    rows = Recipient._base_manager.order_by("pk")
+    return [list(rows.filter(message=message).values_list("handle__spelling_key", flat=True)) for message in messages]
+
+
 @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
 def test_two_composes_naming_the_same_addresses_in_opposite_orders_take_their_handles_in_one_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Each compose pauses after its first handle until the other has one: taken in entry order, they deadlock.
+    """Taken in the order each compose names them, the two handles deadlock.
 
-    The order is the handles' identity key, so it holds between two composes; it cannot order a
+    The order is the handles' spelling key, so it holds between two composes; it cannot order a
     compose against another writer that takes the same handles.
     """
 
@@ -101,34 +144,27 @@ def test_two_composes_naming_the_same_addresses_in_opposite_orders_take_their_ha
         "compose-order", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
     )
     Message.objects.compose(channel=channel, to=["warm@example.test"], text="Warm.", actor=channel.owner)
-    upsert = HandleManager.upsert
-    first: dict[int, threading.Event] = {}
-    arrived = {"a": threading.Event(), "b": threading.Event()}
-
-    def pausing(self: Any, **fields: Any) -> Any:
-        handle = upsert(self, **fields)
-        mine = first.pop(threading.get_ident(), None)
-        if mine is not None:
-            mine.set()
-            other = next(event for event in arrived.values() if event is not mine)
-            other.wait(timeout=3)
-        return handle
-
-    monkeypatch.setattr(HandleManager, "upsert", pausing)
-
-    def compose(name: str, to: list[str]) -> Any:
-        def run() -> Any:
-            first[threading.get_ident()] = arrived[name]
-            return Message.objects.compose(channel=channel, to=to, text=f"From {name}.", actor=channel.owner)
-        return run
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        one, _pid = submit(pool, compose("a", ["Zed <z@example.test>", "Ann <y@example.test>"]))
-        two, _pid = submit(pool, compose("b", ["Ann <y@example.test>", "Zed <z@example.test>"]))
-        messages = [one.result(timeout=30), two.result(timeout=30)]
+    messages = _compose_both(
+        monkeypatch, channel, ["Zed <z@example.test>", "Ann <y@example.test>"],
+        ["Ann <y@example.test>", "Zed <z@example.test>"],
+    )
     # The recipient rows keep the order each compose named them in.
-    assert [
-        list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("handle__value", flat=True))
-        for message in messages
-    ] == [["z@example.test", "y@example.test"], ["y@example.test", "z@example.test"]]
+    assert _recipient_keys(messages) == [["z@example.test", "y@example.test"], ["y@example.test", "z@example.test"]]
     assert Handle._base_manager.filter(value__in=("y@example.test", "z@example.test")).count() == 2
+
+
+@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+def test_two_composes_naming_one_address_in_two_letter_cases_take_their_handles_in_one_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As typed, ``Zed@`` sorts before ``alice@`` and ``zed@`` after it; their spelling key sorts both after it."""
+
+    channel: Any = make_integration(
+        "compose-spellings", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
+    )
+    Message.objects.compose(channel=channel, to=["warm@example.test"], text="Warm.", actor=channel.owner)
+    messages = _compose_both(
+        monkeypatch, channel, ["Zed@example.test", "alice@example.test"], ["zed@example.test", "alice@example.test"],
+    )
+    assert _recipient_keys(messages) == [["zed@example.test", "alice@example.test"]] * 2
+    assert Handle._base_manager.filter(spelling_key__in=("alice@example.test", "zed@example.test")).count() == 2

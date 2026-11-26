@@ -1178,6 +1178,18 @@ def test_a_new_recipient_is_stored_and_sent_as_typed_and_every_other_spelling_la
     assert _wire(desk, message)["To"] == _wire(desk, later)["To"] == "Ada@Example.com"
 
 
+def test_one_new_address_typed_twice_in_one_compose_is_stored_and_sent_once_as_first_typed(desk: Any) -> None:
+    """Compose takes its handles by spelling key, which keeps the typed order among spellings of one address."""
+
+    message = Message.objects.compose(
+        channel=desk, to=["ada@twice.example", "Ada@TWICE.example"], text="Hi.", actor=desk.owner,
+    )
+    with system_context(reason="tests.messaging.compose.twice"):
+        handles = set(Recipient._base_manager.filter(message=message).values_list("handle__value", flat=True))
+    assert handles == {"ada@twice.example"}
+    assert _wire(desk, message)["To"] == "ada@twice.example"
+
+
 def test_a_channels_sender_is_landed_as_configured(db: None, settings: Any) -> None:
     """The desk's configured address is its sender handle's spelling, written on the wire as configured."""
 

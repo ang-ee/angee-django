@@ -3482,10 +3482,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``HandleManager.find_identities``); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
         only a handle that has none and never renames a shared one. Those writes
-        take the handles in one order, by their identity key, so two composes
-        naming the same addresses in different orders take their row locks in the
-        same order and do not deadlock each other; another writer that takes the
-        same handles in its own order still can.
+        take the handles in one order, by their spelling key
+        (``Handle.spelling_key_of``), so two composes naming the same addresses in
+        different orders or spellings take their row locks in the same order and
+        do not deadlock each other; another writer that takes the same handles in
+        its own order still can. Spellings of one address keep the order given, so
+        a new address is stored as it was first given.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3493,7 +3495,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         found = handle_model.objects.find_identities(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+        for addressee in sorted(recipients, key=lambda each: handle_model.spelling_key_of(email, each.address)):
             if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
                 found[(email, addressee.address)] = handle_model.objects.upsert(
                     platform=email, value=addressee.address, display_name=addressee.name,
