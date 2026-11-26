@@ -458,10 +458,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins, unless the declaration that
-  supplies the theme sets `themeLocked`: then that theme and its options win
-  within the app, the person's color scheme still applies, their saved theme
-  is kept for other apps, and Appearance says why. A lock travels with the theme
+  default, its options ranked as [host and user precedence](appearance.md#host-and-user-precedence)
+  says. The person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked` (what a lock does is
+  [host and user precedence](appearance.md#host-and-user-precedence)). A lock travels with the theme
   it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
@@ -2406,7 +2406,10 @@ has one provider stack — appearance, data, toasts and modals.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
-fixture transports with live queries disabled. The `@angee/storybook/host` entry
+fixture transports with live queries disabled. The workshop's toolbar is the host's
+appearance, so the fixture leaves the composed addons' run-time `hostAppearance`
+source out and a workshop answers none of its reads; a story about that source
+passes `hostAppearanceSource`. The `@angee/storybook/host` entry
 exposes the stack's emitted addons and schema loader; it adds no product registry.
 `resourceSnapshotOperations` supplies small read-only sample collections through
 metadata-owned filters, relations and grouping. Product packages own their sample

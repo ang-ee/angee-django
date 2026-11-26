@@ -693,6 +693,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
@@ -703,6 +706,15 @@ importers:
       '@angee/storybook':
         specifier: workspace:*
         version: link:../../../../packages/storybook
+      '@angee/theme-angee':
+        specifier: workspace:*
+        version: link:../../theme_angee/web
+      '@angee/theme-stock':
+        specifier: workspace:*
+        version: link:../../theme_stock/web
+      '@tanstack/react-query':
+        specifier: ^5.102.0
+        version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
