@@ -17,10 +17,11 @@ live in code docstrings.
   pending occurrences skipped. A rule change still disables it, with "Trigger
   configuration changed; enable it again."; a new row still installs disabled. The
   rule's fields are named once, `Trigger.rule_fields`, and `Trigger.changes_rule_of`
-  compares them, for `Trigger.clean` and the adapter. The load locks each re-applied
-  trigger's workflow, then the trigger, before any import
-  (`TriggerResource.lock_imports`), so an operator's enable or disable and the load
-  serialize. The workflows README names the open gap: a changed workflow row installs
+  compares them, for `Trigger.clean` and the adapter. The adapter reads the activation
+  it keeps under the re-applied trigger's workflow lock, then its row lock, the order
+  `Trigger.save` and the operator's verbs take, so an operator's enable or disable and
+  the load serialize; a row the load leaves unchanged is never locked. The workflows
+  README names the open gap: a changed workflow row installs
   its declared `draft` over a draft staff saved, whatever `publish` says.
   **Upgrade:** at the next load a re-applied trigger an operator enabled stays
   enabled; nothing migrates.

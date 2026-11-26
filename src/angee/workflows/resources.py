@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from django.apps import apps
@@ -137,32 +137,22 @@ class TriggerResource(AngeeResource):
     (``Trigger.changes_rule_of``), which disables it with its reason.
     """
 
-    @classmethod
-    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]]) -> None:
-        """Lock each re-applied trigger's workflow, then the trigger, as ``Trigger.save`` and its verbs do.
-
-        An operator's enable or disable then finishes before the load reads the
-        activation it keeps, or waits for the load.
-        """
-        batches = [(group.dataset, resource) for group, resource in loaded_groups if isinstance(resource, cls)]
-        resolved, _ = cls.resolve_existing(batches)
-        triggers: list[Any] = [found.instance for found in resolved.values() if found.instance is not None]
-        if not triggers:
-            return
-        model: Any = batches[0][1]._meta.model
-        for workflow_id in sorted({trigger.workflow_id for trigger in triggers}):
-            model.objects.lock_grants(workflow_id)
-        rows = model.system_queryset().filter(pk__in=[trigger.pk for trigger in triggers]).order_by("pk")
-        list(rows.lock_if_supported(no_key=True))
-
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
         """Treat activation as operator state, never declaration input."""
         row.update(enabled=False, disabled_reason="")
         super().before_import_row(row, **kwargs)
 
     def before_save_instance(self, instance: Any, row: Mapping[str, Any], **kwargs: Any) -> None:
-        """Install a new declaration disabled; keep a re-applied one's activation unless its rule changes."""
-        stored = None if instance._state.adding else type(instance).system_queryset().get(pk=instance.pk)
+        """Install a new declaration disabled; keep a re-applied one's activation unless its rule changes.
+
+        The stored row is read under the locks ``Trigger.save`` and the operator's
+        verbs take, the workflow's and then the trigger's, so an enable or disable
+        finishes first or waits; a row the load leaves unchanged is never locked.
+        """
+        stored = None
+        if not instance._state.adding:
+            type(instance).objects.lock_grants(instance.workflow_id)
+            stored = type(instance).system_queryset().filter(pk=instance.pk).lock_if_supported(no_key=True).get()
         if stored is not None and not instance.changes_rule_of(stored):
             instance.enabled, instance.disabled_reason = stored.enabled, stored.disabled_reason
         else:
