@@ -1,4 +1,4 @@
-"""Canonical JSON serialization, JSON value comparison and JSON-safe coercion for runtime subsystems."""
+"""Canonical JSON serialization and decoding, JSON value comparison and bounds, and JSON-safe coercion."""
 
 from __future__ import annotations
 
@@ -41,6 +41,112 @@ def canonical_json(value: Any) -> str:
         ensure_ascii=False,
         allow_nan=False,
     )
+
+
+MAX_JSON_DEPTH = 64
+"""How many arrays and objects may enclose a member of a JSON value Angee accepts.
+
+The deepest values addons accept sit well inside it: a dashboard snapshot
+whose widget filter uses all ten of its logical levels nests 28, a web form
+definition with panels at their three-deep cap 14. The bound keeps the
+recursive walks an accepted value meets (strawberry-django-hasura's input
+reduction, Django's ``JSONField``, JSON Schema validation) far inside Python's
+recursion limit.
+"""
+
+MAX_JSON_MEMBERS = 1_000_000
+"""How many members a JSON value Angee accepts may hold, as an expanding walk counts them.
+
+A member is an object's value or an array's item at any level, and a container
+reached through several references counts once for each. The largest value an
+addon's own caps admit, a web form definition of 200 questions with 200
+two-language choices each, holds about 200,000 members and fills a request
+body; a tree in Django's default 2.5 MiB body holds at most 1,310,720. So the
+bound refuses a tree only when it is a near-body-sized flat array, and stops
+shared references from multiplying the work of the walks that expand a value
+later.
+"""
+
+_JSON_CONTAINERS = (dict, list, tuple)
+
+
+def json_bound_violation(
+    value: Any, *, depth: int = MAX_JSON_DEPTH, members: int | None = MAX_JSON_MEMBERS,
+) -> str | None:
+    """Return how ``value`` exceeds a JSON bound, as a phrase, or ``None`` within them.
+
+    ``depth`` bounds how many arrays and objects may enclose a member, an
+    object's value or an array's item. ``members``, unless ``None``, bounds how
+    many members the value holds as an expanding walk meets them: a container
+    reached through several references counts once for each. Tuples are arrays.
+    An explicit stack measures each distinct container once, so neither nesting
+    nor shared references make the walk recurse or repeat its work.
+    """
+
+    if not isinstance(value, _JSON_CONTAINERS):
+        return None
+    deeper = f"nests deeper than {depth} levels"
+    larger = f"holds more than {members} members"
+    finished: dict[int, tuple[int, int]] = {}
+    total = 0
+
+    def opened(container: Any, level: int) -> list[Any] | str:
+        """Count a container's members, which sit at ``level``, and frame its nested containers."""
+
+        nonlocal total
+        held = container.values() if isinstance(container, dict) else container
+        total += len(held)
+        if held and level > depth:
+            return deeper
+        if members is not None and total > members:
+            return larger
+        # A frame is [container, its unread nested containers, height, members held at any level].
+        return [container, iter([item for item in held if isinstance(item, _JSON_CONTAINERS)]), 0, len(held)]
+
+    root = opened(value, 1)
+    if isinstance(root, str):
+        return root
+    frames = [root]
+    while frames:
+        frame = frames[-1]
+        for child in frame[1]:
+            measured = finished.get(id(child))
+            if measured is None:
+                entered = opened(child, len(frames) + 1)
+                if isinstance(entered, str):
+                    return entered
+                frames.append(entered)
+                break
+            height, held = measured
+            total += held
+            if len(frames) + height > depth:
+                return deeper
+            if members is not None and total > members:
+                return larger
+            frame[2] = max(frame[2], height + 1)
+            frame[3] += held
+        else:
+            frames.pop()
+            height = frame[2] or (1 if frame[3] else 0)
+            finished[id(frame[0])] = (height, frame[3])
+            if frames:
+                frames[-1][2] = max(frames[-1][2], height + 1)
+                frames[-1][3] += frame[3]
+    return None
+
+
+def decode_json(data: str | bytes, **options: Any) -> Any:
+    """``json.loads`` ``data``, refusing a document nested past the decoder's stack as malformed.
+
+    CPython's decoder raises ``RecursionError`` for such a document; this
+    raises ``json.JSONDecodeError`` instead, so a caller that answers a
+    malformed body as a client error answers this one the same way.
+    """
+
+    try:
+        return json.loads(data, **options)
+    except RecursionError:
+        raise json.JSONDecodeError("JSON nests too deeply to decode", "", 0) from None
 
 
 def json_equal(left: Any, right: Any) -> bool:

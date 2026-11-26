@@ -25,7 +25,9 @@ from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.resources import model_resource_type
 from strawberry.extensions import SchemaExtension
+from strawberry.scalars import JSON
 from strawberry.schema.schema_converter import GraphQLCoreConverter
+from strawberry.schema.types.scalar import DEFAULT_SCALAR_REGISTRY
 from strawberry.tools import merge_types
 from strawberry.types.arguments import convert_argument
 from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
@@ -42,6 +44,7 @@ from angee.base.exceptions import DomainError, classify_error, validation_error
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
+from angee.base.serialization import json_bound_violation
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -61,12 +64,16 @@ from graphql import (
     GraphQLError,
     GraphQLObjectType,
     GraphQLSchema,
+    ListValueNode,
+    ObjectValueNode,
     Undefined,
+    ValueNode,
     VariableNode,
     assert_input_type,
     coerce_input_value,
     validate_input_value,
     value_from_ast,
+    value_from_ast_untyped,
 )
 
 DEFAULT_SCHEMA_NAME = "public"
@@ -96,6 +103,54 @@ SCHEMA_PART_KEYS: tuple[str, ...] = (
 
 _NON_ROOT_KEYS = {"types", "extensions", "type_extensions", "input_extensions"}
 _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _NON_ROOT_KEYS}
+
+
+def _bounded_json(value: Any, node: ValueNode | None = None) -> Any:
+    """Return a ``JSON`` input value unchanged once it is within Angee's JSON bounds."""
+
+    violation = json_bound_violation(value)
+    if violation:
+        raise GraphQLError(f"JSON input {violation}.", node, extensions={"code": "BAD_USER_INPUT"})
+    return value
+
+
+def _parse_json_literal(node: ValueNode, variables: dict[str, Any] | None = None) -> Any:
+    """Bound a ``JSON`` literal; one that embeds a variable is refused, located at that variable.
+
+    A literal is coerced once for each field that carries it, so a variable it
+    embeds would be measured, and expanded downstream, once per aliased field;
+    a whole variable is coerced once per operation. The parser bounds a
+    literal's nesting, and this walk keeps an explicit stack all the same.
+    """
+
+    del variables
+    pending = [node]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, VariableNode):
+            raise GraphQLError(
+                "A JSON literal cannot embed a variable: pass the whole value as a variable.",
+                item, extensions={"code": "BAD_USER_INPUT"},
+            )
+        if isinstance(item, ListValueNode):
+            pending.extend(item.values)
+        elif isinstance(item, ObjectValueNode):
+            pending.extend(field.value for field in item.fields)
+    return _bounded_json(value_from_ast_untyped(node), node)
+
+
+JSON_SCALAR: ScalarDefinition = replace(
+    DEFAULT_SCALAR_REGISTRY[JSON], parse_value=_bounded_json, parse_literal=_parse_json_literal,
+)
+"""Strawberry's ``JSON`` scalar, its input held to ``MAX_JSON_DEPTH`` and ``MAX_JSON_MEMBERS``.
+
+Every schema ``GraphQLSchemas`` builds maps ``strawberry.scalars.JSON`` to it.
+A variable or literal past either bound (``angee.base.serialization``), and a
+literal that embeds a variable, are refused as ``BAD_USER_INPUT`` while the
+request is validated or coerced, so no resolver, permission check or query runs
+for them; a literal's refusal names its location. Output serialization and the
+printed SDL stay Strawberry's own.
+"""
 
 
 class AngeeSchema(strawberry.Schema):
@@ -495,15 +550,8 @@ class GraphQLSchemas:
         extensions, scalar coercion, public IDs and expression aliases are the
         same ones used by its GraphQL list field; callers supply their own scope.
         """
-        pending = [(value, 0)]
-        while pending:
-            node, depth = pending.pop()
-            if depth > max_depth:
-                raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
-            if isinstance(node, dict):
-                pending.extend((child, depth + 1) for child in node.values())
-            elif isinstance(node, list):
-                pending.extend((child, depth + 1) for child in node)
+        if json_bound_violation(value, depth=max_depth, members=None):
+            raise ValidationError(f"Resource conditions exceed nesting depth {max_depth}.")
         for name in sorted(self.names(), key=lambda name: (name != "console", name)):
             for surface in self.parts[name].query:
                 for contribution in data_resource_contributions(surface):
@@ -588,7 +636,7 @@ class GraphQLSchemas:
                     RebacDjangoOptimizerExtension,
                 ],
             ),
-            config=hasura_config(),
+            config=replace(hasura_config(), scalar_map={JSON: JSON_SCALAR}),
         )
         resources = finalize_data_resources(
             schema._schema,
