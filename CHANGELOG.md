@@ -61,7 +61,8 @@ live in code docstrings.
       django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
       Nothing was applied, the addon's initial migration included. Delete the
       rows on that database and run `migrate` (or `provision`) again; the links
-      cannot move, so declaring the drop loses them the same way. Under
+      cannot move, so declaring the drop loses them the same way. On a stack, a
+      refused `provision` holds Django stopped until the rows are deleted. Under
       0.1.0.dev13 that `migrate` dropped the table without a word.
   - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
     under this heading, so the framework release that brings either brings both.
@@ -70,7 +71,8 @@ live in code docstrings.
     (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
     people sign in again).
   - The stale `iam.signinlink` content type can be removed with
-    `manage.py remove_stale_contenttypes`.
+    `manage.py remove_stale_contenttypes`, which also deletes that model's
+    `auth.Permission` rows; it lists what it deletes and asks first.
   - Projects that author `AUTHENTICATION_BACKENDS` replace
     `angee.iam.auth.SignInLinkBackend` with
     `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
