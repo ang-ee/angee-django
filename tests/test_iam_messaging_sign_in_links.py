@@ -380,8 +380,9 @@ def test_issue_refuses_ineligible_accounts_and_sends_nothing(deliverable, iam_ad
     target = User.objects.create_user("ineligible", **{"email": "ineligible@example.com", **attrs})
     with actor_context(iam_admin), pytest.raises(ValidationError, match=refusal) as refused:
         target.with_actor(iam_admin).issue_sign_in_link()
-    if "email" in attrs:  # the account's own words, which name no address
+    if "email" in attrs:  # the account's own words, which name no address, and messaging's left behind
         assert refused.value.messages == [SIGN_IN_LINK_NO_ADDRESS_MESSAGE]
+        assert refused.value.__suppress_context__ and refused.value.__cause__ is None
     with system_context(reason=READ):
         assert not SignInLink._base_manager.exists() and not Message._base_manager.exists()
 
@@ -1448,18 +1449,27 @@ def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
     assert SECRET not in caplog.text
 
 
+def _failing_digest(key_salt: str, value: str, **kwargs: Any) -> Any:
+    raise RuntimeError("The digest failed.")
+
+
+@pytest.mark.parametrize("depth", ["the-links-read", "the-digest"])
 @pytest.mark.parametrize("entry", ["the-manager", "the-backend"])
 def test_an_error_report_of_a_failing_redemption_shows_the_token_in_no_frame(
-    deliverable, iam_admin, sent, settings, monkeypatch, entry,
+    deliverable, iam_admin, sent, settings, monkeypatch, entry, depth,
 ):
-    """A read of the account's links fails; each entry that takes the token is marked, so nothing from it down shows
-    it (this test's own frame holds the token, so the report is read from the entry down)."""
+    """A read of the account's links fails, or the secret's digest does, whose own frame holds the account's pk and
+    the secret: each entry that takes the token hides every local, so nothing from it down shows it (this test's own
+    frame holds the token, so the report is read from the entry down)."""
 
     settings.DEBUG = False
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
     target = _person("guest-redemption-report")
     sent(target, iam_admin)
-    with _failing(_link_read), pytest.raises(DatabaseError) as failed:
+    if depth == "the-digest":
+        monkeypatch.setattr("angee.iam_messaging.models.salted_hmac", _failing_digest)
+    failing = _failing(_link_read) if depth == "the-links-read" else nullcontext()
+    with failing, pytest.raises(DatabaseError if depth == "the-links-read" else RuntimeError) as failed:
         if entry == "the-manager":
             SignInLink.objects.redeem(f"{target.public_id}.{SECRET}")
         else:
