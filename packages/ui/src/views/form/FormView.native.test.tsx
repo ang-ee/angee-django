@@ -1666,7 +1666,8 @@ test("CREATION_KEY_CONFLICT keeps the draft and renews the next attempt's key", 
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Conflict", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveConflict).toBe(true);
+  // A spent key is no stale edit: the stale banner and its reload are not offered.
+  expect(f.surface().saveConflict).toBe(false);
   expect(f.surface().form.getValues("title")).toBe("My record");
   const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
   await act(async () => f.surface().submitForm());

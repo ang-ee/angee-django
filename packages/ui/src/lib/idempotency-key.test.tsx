@@ -43,14 +43,14 @@ function keysUnderRuntime(): { current: IdempotencyKeys; state: (scope: string) 
 }
 
 /** Send the draft `scope` once with `answer` (a value, or an error to throw) and return the key it carried. */
-async function send(keys: IdempotencyKeys, scope: string, answer: unknown, confirmed?: (answer: unknown) => boolean): Promise<string> {
+async function send(keys: IdempotencyKeys, scope: string, answer: unknown, outcome?: (answer: unknown) => FailedWriteOutcome | null): Promise<string> {
   let sent = "";
   await act(async () => {
     await keys.send(scope, async (key) => {
       sent = key;
       if (answer instanceof Error) throw answer;
       return answer;
-    }, confirmed).catch(() => undefined);
+    }, outcome).catch(() => undefined);
   });
   return sent;
 }
@@ -83,14 +83,25 @@ describe("useIdempotencyKeys", () => {
     expect(await send(keys.current, "chatter:task-1", { ok: true })).toBe(first);
   });
 
-  test("a result its owner does not confirm keeps the key as refused; a confirmed answer ends the draft", async () => {
+  test("a result its owner reads as refused keeps the key; a confirmed answer ends the draft", async () => {
     const keys = keysUnderRuntime();
-    const isOk = (answer: unknown) => (answer as { ok: boolean }).ok;
-    const first = await send(keys.current, "clone:vlt_1", { ok: false, message: "Name is taken." }, isOk);
+    const read = (answer: unknown) => ((answer as { ok: boolean }).ok ? null : "refused" as const);
+    const first = await send(keys.current, "clone:vlt_1", { ok: false, message: "Name is taken." }, read);
     expect(keys.state("clone:vlt_1")).toEqual({ outcome: "refused", uncertain: false });
-    expect(await send(keys.current, "clone:vlt_1", { ok: true }, isOk)).toBe(first);
+    expect(await send(keys.current, "clone:vlt_1", { ok: true }, read)).toBe(first);
     expect(keys.state("clone:vlt_1")).toBeNull();
-    expect(await send(keys.current, "clone:vlt_1", { ok: true }, isOk)).not.toBe(first);
+    expect(await send(keys.current, "clone:vlt_1", { ok: true }, read)).not.toBe(first);
+  });
+
+  test("a returned answer the owner reads as a conflict ends the draft at its next send, as a thrown one does: no caller rethrows", async () => {
+    const keys = keysUnderRuntime();
+    const read = (answer: unknown) => (answer as { outcome: FailedWriteOutcome | null }).outcome;
+    const lost = await send(keys.current, "dialog:returned", new TypeError("Failed to fetch"));
+    expect(await send(keys.current, "dialog:returned", { outcome: "conflict" }, read)).toBe(lost);
+    expect(keys.state("dialog:returned")).toEqual({ outcome: "conflict", uncertain: true });
+    const next = await send(keys.current, "dialog:returned", { outcome: null }, read);
+    expect(next).not.toBe(lost);
+    expect(keys.state("dialog:returned")).toBeNull();
   });
 
   test("a lost send, an edit and a resend carry the same key: the draft is the key's owner, not its content", async () => {

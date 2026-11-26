@@ -19,14 +19,16 @@ export interface IdempotencyKeyState {
 /** The keyed writes of one app runtime, by draft scope ({@link useIdempotencyKeys}). */
 export interface IdempotencyKeys {
   /**
-   * Send the draft `scope` names with its idempotency key, minted at its first attempt. A
-   * confirmed answer (`confirmed`, by default any it resolves) ends the draft and its key. Any
-   * other outcome keeps the key, so the next attempt of the draft carries it, whatever its
-   * content became; its outcome is the draft's state. A `conflict` (the key is spent on an
-   * earlier version the server wrote) ends the draft at its next send, which mints a new key:
-   * the caller says what happened and leaves the rest to the owner. Every error is rethrown.
+   * Send the draft `scope` names with its idempotency key, minted at its first attempt. What an
+   * answer tells is read from it: an error by {@link failedWriteOutcome}, a resolved answer by
+   * `outcome` (null: confirmed; by default any resolved answer is). A confirmed answer ends the
+   * draft and its key. Any other outcome keeps the key, so the next attempt of the draft carries
+   * it, whatever its content became; its outcome is the draft's state. A `conflict` (the key is
+   * spent on an earlier version the server wrote), thrown or returned, ends the draft at its
+   * next send, which mints a new key: the caller only says what happened. Every error is
+   * rethrown, and every answer returned.
    */
-  send: <T>(scope: string, fire: (key: string) => Promise<T>, confirmed?: (answer: T) => boolean) => Promise<T>;
+  send: <T>(scope: string, fire: (key: string) => Promise<T>, outcome?: (answer: T) => FailedWriteOutcome | null) => Promise<T>;
   /** The person gives the draft up: it ends, unless an attempt may have been written or is still on its way (its key then stays for the scope). */
   discard: (scope: string) => void;
 }
@@ -175,7 +177,7 @@ function requireStore(store: IdempotencyKeyStore | null): IdempotencyKeyStore {
 export function useIdempotencyKeys(): IdempotencyKeys {
   const held = React.useContext(IdempotencyKeyStoreContext);
   return React.useMemo<IdempotencyKeys>(() => ({
-    send: async (scope, fire, confirmed = () => true) => {
+    send: async (scope, fire, outcome = () => null) => {
       const store = requireStore(held);
       const draft = store.draft(scope);
       draft.inFlight += 1;
@@ -188,7 +190,7 @@ export function useIdempotencyKeys(): IdempotencyKeys {
         throw error;
       }
       draft.inFlight -= 1;
-      store.settle(scope, draft, confirmed(answer) ? null : "refused");
+      store.settle(scope, draft, outcome(answer));
       return answer;
     },
     discard: (scope) => requireStore(held).discard(scope),

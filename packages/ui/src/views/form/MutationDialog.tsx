@@ -13,7 +13,7 @@ import { emptyValueForField, fieldRuleErrors, refusesSeed } from "./field-values
 import { isFieldControlVisible, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
-  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formErrorsFromForm, formSubmitError, invalidFormSubmit,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formErrorsFromForm, formSubmitError, formSubmitOutcome, invalidFormSubmit,
   markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
@@ -406,7 +406,7 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       sent = true;
       const submitted = (idempotencyKey?: string) => submitMutationDialog(dialog, submittedValues, errorOptions.fallback, idempotencyKey);
       const result = idempotencyScope
-        ? await keys.send(idempotencyScope, submitted, (answer) => answer.status === "ok")
+        ? await keys.send(idempotencyScope, submitted, formSubmitOutcome)
         : await submitted();
       if (!current()) {
         // The dialog went away while the write ran: its answer is still reported, so nobody

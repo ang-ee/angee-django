@@ -22,7 +22,7 @@ import { useActionForm } from "./use-action-form";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import { visibleFields } from "./form-view-model";
-import { actionOutcomeSubmitResult, markMemberErrors } from "./validation-errors";
+import { actionOutcomeSubmitResult, formSubmitOutcome, markMemberErrors } from "./validation-errors";
 import type { ActionArg, ActionArgs, ActionDescriptor, ActionFormContext, ActionFormDefinition } from "../page";
 
 export interface ActionFormDialogProps {
@@ -130,7 +130,7 @@ function ActionArgsDialog({
         const result = await action.submit?.(values, idempotencyKey ? { ...context, idempotencyKey } : context, options);
         return result && "status" in result ? result : actionOutcomeSubmitResult(result);
       };
-      return draftScope ? keys.send(draftScope, submitted, (result) => result.status === "ok") : submitted();
+      return draftScope ? keys.send(draftScope, submitted, formSubmitOutcome) : submitted();
     },
     onSuccess: (_values, outcome) => {
       if (!inline) accepted.current = true;

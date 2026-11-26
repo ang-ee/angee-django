@@ -1544,9 +1544,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   says never releases the key: a resend, edited or not, carries it. The server
   replays the write for the same content and answers `CREATION_KEY_CONFLICT` for
   other content under a spent key; the owner then starts a new draft at the
-  next send, and the caller only says what happened. That conflict must reach
-  `send` as a thrown conflict: a caller that words it rethrows it as an
-  `AuthoredEnvelopeError` with the code, never returns it as an answer. A
+  next send, and the caller only says what happened. The owner reads a thrown
+  answer itself and a resolved one through `send`'s `outcome`
+  (`formSubmitOutcome` for a submit's result, whose conflict carries its
+  `code`), so a conflict ends the draft whether thrown or returned. A
   dialog takes its draft as `idempotencyScope`. Never hold a key in component
   state, and promise "it will not go out twice" only from this page.
 - One draft scope belongs to one surface at a time: two holding it at once

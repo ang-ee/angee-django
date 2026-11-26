@@ -1,6 +1,6 @@
 import { useCallback, type ReactElement } from "react";
 
-import { AuthoredEnvelopeError, extractActionOutcome, failedWriteOutcome } from "@angee/refine";
+import { extractActionOutcome, failedWriteOutcome } from "@angee/refine";
 
 import {
   Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
@@ -47,9 +47,8 @@ export function KnowledgeSettingsPage(): ReactElement {
         return extractActionOutcome(data, "create_vault_from");
       } catch (cause) {
         if (failedWriteOutcome(cause) !== "conflict") throw cause;
-        // An earlier attempt created a vault under this draft's key. Still a conflict, so the dialog's
-        // draft ends and the next attempt is a new one, in this action's words.
-        throw new AuthoredEnvelopeError(t("vault.clonedEarlier"), "CREATION_KEY_CONFLICT");
+        // An earlier attempt created a vault under this draft's key, in this action's words.
+        return { ok: false, code: "CREATION_KEY_CONFLICT", message: t("vault.clonedEarlier") };
       }
     },
     [createFrom, t],

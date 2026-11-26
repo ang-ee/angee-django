@@ -2,7 +2,7 @@
 
 import { render } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { AuthoredEnvelopeError, boundedGraphQLTransportError, failedWriteOutcome } from "@angee/refine";
+import { boundedGraphQLTransportError, type ActionOutcome } from "@angee/refine";
 import type { ActionDescriptor } from "@angee/ui";
 import type { AuthoredMutationOptions } from "@angee/refine";
 import type { DocumentType } from "@angee/gql/console";
@@ -44,7 +44,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   DrawerResourceList: ({ children }: { children?: ReactNode }) => <>{children}</>,
 }));
 
-import { AppRuntimeProvider } from "@angee/ui";
+import { AppRuntimeProvider, actionOutcomeSubmitResult, formSubmitOutcome } from "@angee/ui";
 import { KnowledgeSettingsPage } from "./KnowledgeSettingsPage";
 
 /** Under an app runtime, as a page is: it holds the clone draft's idempotency key. */
@@ -73,14 +73,13 @@ test("the clone dialog of one template is one draft: it declares its scope, and 
     { template: "vlt_template", name: "Copy", owned: true, idempotency_key: "draft-key" }, { errorNotification: false });
 });
 
-test("an earlier attempt that already created the vault says so, and stays the conflict the dialog's draft ends on", async () => {
+test("an earlier attempt that already created the vault says so, returned as the conflict the dialog's draft ends on", async () => {
   mocks.mutation.mockRejectedValueOnce(boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
     message: "Already created.", extensions: { code: "CREATION_KEY_CONFLICT" } }] } }));
   render(<KnowledgeSettingsPage />, { wrapper: AppRuntime });
-  const refusal = await submit("Copy").catch((error: unknown) => error);
-  expect(refusal).toBeInstanceOf(AuthoredEnvelopeError);
-  expect(refusal).toMatchObject({ message: "An earlier attempt already created a vault from this template.", code: "CREATION_KEY_CONFLICT" });
-  expect(failedWriteOutcome(refusal)).toBe("conflict");
+  const refusal = await submit("Copy");
+  expect(refusal).toEqual({ ok: false, code: "CREATION_KEY_CONFLICT", message: "An earlier attempt already created a vault from this template." });
+  expect(formSubmitOutcome(actionOutcomeSubmitResult(refusal as ActionOutcome))).toBe("conflict");
 });
 
 test("without a template there is no draft and nothing to send, nor without the dialog's key", async () => {

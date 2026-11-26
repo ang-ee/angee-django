@@ -9,7 +9,7 @@ pending write and typed values.
 
 - `useIdempotencyKeys()` (`@angee/ui`, beside `createClientKey`) keeps one
   idempotency key per draft of a keyed write, for the app runtime:
-  `send(scope, fire, confirmed?)` and `discard(scope)`. A draft is named by its
+  `send(scope, fire, outcome?)` and `discard(scope)`. A draft is named by its
   scope (the surface and what it writes to); its key is minted at its first
   attempt and lasts until a confirmed answer ends it, or the person discards it
   with nothing possibly written (no attempt lost, none on its way). No error
@@ -42,6 +42,16 @@ pending write and typed values.
   keyed one's key. An action takes `idempotencyScope`, which may
   answer `null` when the context names no draft (no record to act on), and its
   `submit` reads `context.idempotencyKey`.
+- `FormSubmitResult`'s conflict carries the server's optional `code`
+  (`FormSubmitConflictCode`: `STALE_REVISION` or `CREATION_KEY_CONFLICT`), set
+  by `formSubmitError` and `actionOutcomeSubmitResult`; a bare conflict stays
+  a stale one. `formSubmitOutcome(result)` says what a submit's result tells
+  its draft's key, and the record form and both dialogs pass it to `send`, so
+  a submission may return its conflict as well as throw it. A creation-key
+  conflict does not lock a dialog's draft as a stale one does: the next
+  attempt is a new draft. `@angee/refine`'s `ActionOutcome` carries a
+  refusal's `code` when the answer has one, and a caller's own refusal may set
+  it.
 - `@angee/refine`: `errorFromAuthoredEnvelope` (and so `useAuthoredMutation`'s
   `errorFrom`) throws an `AuthoredEnvelopeError` carrying the envelope's `code`,
   where it threw a plain `Error`. `boundedGraphQLTransportError` keeps
@@ -98,10 +108,9 @@ Upgrade:
   `{ initialEntries }`, kept in `routers`): a component test that opens a real
   dialog passes `router`.
 - A keyed `MutationDialog` submission reads its third argument as a `string`;
-  one that asserted it drops the assertion. A caller that turned a
-  `CREATION_KEY_CONFLICT` into an answer rethrows it (an
-  `AuthoredEnvelopeError` with the code and its own words), and one that
-  called `restart` after a conflict drops the call. Two surfaces holding one
+  one that asserted it drops the assertion, and one that called `restart`
+  after a conflict drops the call: a conflict, thrown or returned with its
+  `code`, ends the draft at the owner. Two surfaces holding one
   draft scope at once fail in development: give one its own scope, or nest it
   under its host with `useDraftScope`.
 - A test that dismissed a dialog mid-submission finds it open; one that

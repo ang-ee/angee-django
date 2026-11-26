@@ -1,8 +1,8 @@
 import * as React from "react";
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { AuthoredEnvelopeError, failedWriteOutcome, useAuthoredQuery } from "@angee/refine";
+import { failedWriteOutcome, useAuthoredQuery, type ActionOutcome } from "@angee/refine";
 import {
-  DropdownMenu, RecordActionBar, parseFormSpec, useActionOutcomeMutation, useActionResultRun, useIdempotencyKeys,
+  DropdownMenu, RecordActionBar, actionOutcomeSubmitResult, formSubmitOutcome, parseFormSpec, useActionOutcomeMutation, useActionResultRun, useIdempotencyKeys,
   useAppRuntime, useRecordChromeContext, type ActionDescriptor, type ActionFormContext,
 } from "@angee/ui";
 import { modelChain } from "@angee/ui/runtime";
@@ -36,7 +36,7 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
       const schema = parseFormSpec(published.input_schema);
       // Starting one workflow on one record is one draft: every attempt until a run starts carries its key.
       const scope = `workflows.start:${workflow.id}:${chrome.resource}:${chrome.recordId}`;
-      const startWith = async (values: Record<string, unknown>, requestKey: string) => {
+      const startWith = async (values: Record<string, unknown>, requestKey: string): Promise<ActionOutcome | null | undefined> => {
         let outcome;
         try {
           outcome = await start(workflow.id, {
@@ -44,9 +44,8 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
           });
         } catch (cause) {
           if (failedWriteOutcome(cause) !== "conflict") throw cause;
-          // An earlier attempt started a run with other input under this draft's key. Still a conflict, so
-          // the draft ends and the next attempt is a new one, in this action's words.
-          throw new AuthoredEnvelopeError(t("action.startedEarlier"), "CREATION_KEY_CONFLICT");
+          // An earlier attempt started a run with other input under this draft's key, in this action's words.
+          return { ok: false, code: "CREATION_KEY_CONFLICT", message: t("action.startedEarlier") };
         }
         // The dialog's schema fields live inside the mutation's JSON input envelope.
         if (outcome?.validationErrors) return { ...outcome, validationErrors: Object.fromEntries(
@@ -63,7 +62,7 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
             ? startWith(values, context.idempotencyKey) : { ok: false, message: t("action.startFailed") },
           idempotencyScope: () => scope,
         } : { run: async () => {
-          await settle(() => keys.send(scope, (key) => startWith({}, key), (outcome) => outcome?.ok === true));
+          await settle(() => keys.send(scope, (key) => startWith({}, key), (outcome) => formSubmitOutcome(actionOutcomeSubmitResult(outcome))));
         } }),
       }];
     }), [workflows.data, chrome.resource, chrome.recordId, keys, start, settle, t, widgets]);

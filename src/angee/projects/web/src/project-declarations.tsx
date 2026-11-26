@@ -11,6 +11,8 @@ import {
   useEnumOptions,
   mutationDialogValueCodecs,
   relationValueId,
+  actionOutcomeSubmitResult,
+  formSubmitOutcome,
   useActionOutcomeMutation,
   useActionResultMutation,
   useActionResultRun,
@@ -86,7 +88,7 @@ export function useProjectFormDeclaration(
     const scope = `projects.project-from-template:${id}`;
     await settleCreation(async () => {
       try {
-        return await keys.send(scope, (key) => createFromTemplate(id, { idempotency_key: key }), (outcome) => outcome?.ok === true);
+        return await keys.send(scope, (key) => createFromTemplate(id, { idempotency_key: key }), (outcome) => formSubmitOutcome(actionOutcomeSubmitResult(outcome)));
       } catch (cause) {
         if (failedWriteOutcome(cause) !== "conflict") throw cause;
         // An earlier attempt created a project under this draft's key: the next one is a new draft.

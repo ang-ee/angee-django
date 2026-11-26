@@ -20,7 +20,7 @@ import {
   type MutationDialogProps,
 } from "./MutationDialog";
 import { deserializeFormSpec } from "./form-spec";
-import { MEMBER_ERRORS, type FormSubmitResult } from "./validation-errors";
+import { MEMBER_ERRORS, formSubmitError, type FormSubmitResult } from "./validation-errors";
 import type { DescriptorField } from "./DescriptorFieldList";
 import { createUiTestProviders } from "../../testing";
 
@@ -546,6 +546,30 @@ describe("MutationDialog", () => {
     expect(sent[0]).toEqual(expect.any(String));
     expect(sent.slice(0, 3)).toEqual([sent[0], sent[0], sent[0]]);
     expect(sent[3]).not.toBe(sent[0]);
+  });
+
+  test("a keyed dialog whose submission returns its failures as results ends a spent key's draft: lost, then conflict, then a new key", async () => {
+    const sent: string[] = [];
+    const conflict = boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [{
+      message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] } });
+    const answers: unknown[] = [boundedGraphQLTransportError(new TypeError("Failed to fetch")), conflict];
+    render(<AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <MutationDialog trigger={<button type="button">New dashboard</button>} title="Create" fields={[]} submitLabel="Create"
+        parseValues={parseRawValues} idempotencyScope="dashboards.create-personal" closeOnSubmit={false}
+        onSubmit={(_values, _options, idempotencyKey) => {
+          sent.push(idempotencyKey);
+          const cause = answers.shift();
+          // The dialog's own result type for a failure, returned rather than thrown.
+          return cause === undefined ? { status: "ok", data: null } : formSubmitError(cause, "Could not create.");
+        }} />
+    </AppRuntimeProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "New dashboard" }));
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+      await waitFor(() => expect(sent).toHaveLength(attempt));
+    }
+    expect(sent[1]).toBe(sent[0]);
+    expect(sent[2]).not.toBe(sent[0]);
   });
 
   test("one draft scope belongs to one open dialog: two open at once fail in development, naming it; a closed one holds none", async () => {

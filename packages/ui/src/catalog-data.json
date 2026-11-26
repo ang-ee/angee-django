@@ -6256,6 +6256,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "formSubmitOutcome",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "formVariants",
     "source": "packages/ui/src/ui/form.tsx",
     "kind": "token",

@@ -46,8 +46,8 @@ live in code docstrings.
   one is missing; `createUiTestProviders` and `ShellPageTestProviders` render
   one app shell (`AppShellTestProviders`), which provides `ModalsHost`;
   `ShellPageTestProviders` renders under a memory router unless one is already
-  above, and `createUiTestProviders` takes `router`; a keyed dialog's submission drops any assertion of its key,
-  and a caller that turned a key conflict into an answer rethrows it.
+  above, and `createUiTestProviders` takes `router`; a keyed dialog's
+  submission drops any assertion of its key.
 - `angee.workflows`: a manual start that reuses a request key for a different
   request raises `CreationKeyConflict`, as the other keyed creates do, rather
   than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,

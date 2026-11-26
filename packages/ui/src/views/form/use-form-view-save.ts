@@ -67,7 +67,7 @@ import {
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, formErrorsFromForm, formSubmitError, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalBannerFocus, type FormSubmitResult,
+  applyFormErrors, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalBannerFocus, type FormSubmitResult,
 } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
@@ -641,7 +641,7 @@ export function useFormViewSave({
         }
       };
       // A refused create keeps the draft and its key; an accepted one ends it.
-      const result = keyed ? await idempotencyKeys.send(draftScope, write, (answer) => answer.status === "ok") : await write(null);
+      const result = keyed ? await idempotencyKeys.send(draftScope, write, formSubmitOutcome) : await write(null);
       if (result.status === "ok") {
         // Started, not awaited: the form shows its own record, which the write's answer carries. A read
         // elsewhere (a list of a dependent model, the record's chrome) that is slow, fails or never
