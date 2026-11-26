@@ -401,7 +401,7 @@ live in code docstrings.
     userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
     `sms:` or `webcal:` link); the one character set, `utf-8`; no control
     character in a row's text, a carriage return written as a newline by
-    `clean()`, and none in a value, which drops them with the bidirectional
+    every save, and none in a value, which drops them with the bidirectional
     overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
     holding outputs and notes, no tag; end tags held to the element list; link
     attributes on the elements they link on; at most ten operators in a
@@ -413,8 +413,14 @@ live in code docstrings.
     a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
     digits, `None` where the column is not null; and a template with no layout,
     under `layout`. A walk also stops once what its rows' checks read passes
-    600,000 characters of forms or 4,000 spans, comments included, and a saving
-    walk resolves a level's include targets in one query. A layout alone
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, counts each level from its rows'
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
+    on a save resolves a level's include targets in one query. A Markdown row's
+    link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
     writes the doctype and Outlook's conditional comments, static and balanced,
     their markup checked. A Markdown link takes its label and its target from
     values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
@@ -465,14 +471,16 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
     `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row

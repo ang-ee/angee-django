@@ -41,13 +41,13 @@ from tests.conftest import create_platform_admin, create_user
 from tests.messaging_campaign import grant
 from tests.test_messaging_templates import _UPDATE, _row, _schema
 from tests.test_messaging_templates_layout import library as library
-from tests.test_messaging_templates_render import TIMED, _recording
+from tests.test_messaging_templates_render import TIMED, _recording, _text_read
 from tests.test_messaging_templates_render import kit as kit
 from tests.test_messaging_templates_send import installed as installed
 from tests.test_messaging_templates_send import mailing as mailing
 from tests.test_messaging_templates_send import sent as sent
 
-_LAYOUT = {
+_LAYOUT: dict[str, Any] = {
     "source": "<div>{% block content %}{% endblock %}</div>",
     "text_source": "{% block content %}{% endblock %}",
 }
@@ -726,6 +726,157 @@ def test_a_new_template_sits_in_a_layout_whichever_row_seeds_it(library: dict[st
             row.full_clean()
     (error,) = execute_schema(_schema(), _UPDATE, {"id": created["id"], "set": {"layout": ""}}, user=admin).errors
     assert (error.extensions["code"], list(error.extensions["validationErrors"])) == ("VALIDATION", ["layout"])
+
+
+def _stored_past_save(row: Any, **columns: str) -> None:
+    """Write ``columns`` into ``row``'s stored row in SQL, as rows stored before every save wrote newlines hold them."""
+
+    quote = connection.ops.quote_name
+    assignments = ", ".join(f"{quote(column)} = %s" for column in columns)
+    table = quote(MessageTemplate._meta.db_table)
+    with connection.cursor() as cursor:
+        cursor.execute(f"UPDATE {table} SET {assignments} WHERE id = %s", [*columns.values(), row.pk])
+
+
+_RENDERED = """
+query($id: ID!) { message_template_preview(template: $id) { rendered { subject preheader html plain_text } } }
+"""
+
+
+def test_a_row_seeded_from_text_stored_with_carriage_returns_stores_newlines(library: dict[str, Any]) -> None:
+    """A key's row stored with carriage returns, before every save wrote newlines, seeds a new language: the new row
+    stores newlines, has the content hash of the same text typed with newlines, and previews as that text does."""
+
+    del library
+    admin = create_platform_admin("messaging-templates-console-paster")
+    pasted = {"subject": "Hi\r\nthere", "preheader": "pre\rheader", "source": "Hello,\r\nfriend."}
+    typed: dict[str, Any] = {column: text.replace("\r\n", "\n").replace("\r", "\n") for column, text in pasted.items()}
+    _stored_past_save(_template("tests.pasted", "Hello."), **pasted)
+    twin = _row("template", "tests.typed", "de", **typed)
+    created = result_data(_insert(admin, "template", "tests.pasted", "de", name="Neu"))["insert_message_templates_one"]
+    (german,) = [row for row in _rows("template", "tests.pasted") if row.language == "de"]
+    assert {column: getattr(german, column) for column in pasted} == typed
+    assert german.content_hash == german.compute_content_hash() == twin.content_hash
+    previews = [
+        result_data(execute_schema(_schema(), _RENDERED, {"id": row_id}, user=admin))["message_template_preview"]
+        for row_id in (created["id"], public_id_of(twin))
+    ]
+    assert previews[0]["rendered"] is not None and previews[0] == previews[1]
+    assert previews[0]["rendered"]["subject"] == "Hi there"
+
+
+def test_an_insert_seeded_from_a_row_past_the_include_depth_reads_no_further(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new language of a key whose row includes a chain past the include depth is refused in the tree's words, after
+    as many queries for a chain of five as for one of 900; a member is refused create before any of it is read."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-chainer")
+    member = create_user("messaging-templates-console-unchained")
+    for index in range(900):
+        _row("part", f"chain{index}", source="x" if index == 899 else _include(f"parts/chain{index + 1}"))
+    queries = {}
+    for length in (5, 900):
+        _row("part", f"deep{length}", source=_include(f"parts/chain{900 - length}"))
+        with CaptureQueriesContext(connection) as captured:
+            (error,) = _insert(admin, "part", f"deep{length}", "de").errors
+        assert (error.extensions["code"], error.extensions["formErrors"]) == (
+            "VALIDATION", [f"parts/chain{902 - length}: includes nest over 3 deep"]), error.extensions
+        queries[length] = len(captured)
+    assert queries == DEEP_INSERT_QUERIES, queries
+    checked: list[str] = []
+    _recording(monkeypatch, TemplateWalker, "_check", lambda walker, row, name: checked.append(name))
+    (error,) = _insert(member, "part", "deep900", "de").errors
+    assert (error.extensions["code"], checked) == ("PERMISSION_DENIED", [])
+    assert [row.language for row in _rows("part", "deep900")] == ["en"]
+
+
+DEEP_INSERT_QUERIES = {5: 168, 900: 168}
+"""An administrator's insert of a new language seeded from a row including a chain past the include depth: the same
+for any chain, since the gather reads no level past the depth. 156 before a level's text was read after its sizes: that
+read, through the reader's scope, adds four statements to each of the three levels."""
+
+
+def test_an_insert_seeded_from_a_row_past_the_source_limit_reads_none_of_its_text(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new language of a key whose row includes 600 parts of 48,999 characters is refused at the level's count,
+    before any of the level's text is read; a member is refused create before any of it is read."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-widener")
+    member = create_user("messaging-templates-console-unwidened")
+    for index in range(600):
+        _row("part", f"wide{index}", source="\n".join(["a" * 999] * 49))
+    wide = "\n".join("".join(_include(f"parts/wide{index}") for index in range(line, line + 25))
+                     for line in range(0, 600, 25))
+    _row("part", "wide", format="html", source=wide, text_source="x")
+    read = _text_read(monkeypatch)
+    with CaptureQueriesContext(connection) as captured:
+        (error,) = _insert(admin, "part", "wide", "de").errors
+    assert (error.extensions["code"], error.extensions["formErrors"], read) == (
+        "VALIDATION", ["parts/wide: the rows it reaches hold over 150000 characters of source"], []), error.extensions
+    assert len(captured) == WIDE_INSERT_QUERIES, len(captured)
+    (error,) = _insert(member, "part", "wide", "de").errors
+    assert (error.extensions["code"], read) == ("PERMISSION_DENIED", [])
+    assert [row.language for row in _rows("part", "wide")] == ["en"]
+
+
+WIDE_INSERT_QUERIES = 132
+"""An administrator's insert of a new language seeded from a row whose level is past the source limit: the level is
+counted from its sizes and refused, and no text read follows."""
+
+
+def test_an_insert_seeded_from_a_row_past_the_variables_limit_reads_none_of_them(
+    db: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new language of a key whose row includes 400 parts stored past clean() with a 40,000-character description
+    each is refused at the level's count, before any of the level's variables are read; a member is refused create
+    before any of it is read."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-overdeclarer")
+    member = create_user("messaging-templates-console-undeclared")
+    for index in range(400):
+        _row("part", f"described{index}", source="x", variables={"a": "d" * 40_000})
+    described = "\n".join("".join(_include(f"parts/described{index}") for index in range(line, line + 25))
+                          for line in range(0, 400, 25))
+    _row("part", "described", format="html", source=described, text_source="x")
+    read = _text_read(monkeypatch)
+    with CaptureQueriesContext(connection) as captured:
+        (error,) = _insert(admin, "part", "described", "de").errors
+    assert (error.extensions["code"], error.extensions["formErrors"], read) == (
+        "VALIDATION", ["parts/described: the rows it reaches declare over 100000 characters of variables"], [],
+    ), error.extensions
+    assert len(captured) == DECLARED_INSERT_QUERIES, len(captured)
+    (error,) = _insert(member, "part", "described", "de").errors
+    assert (error.extensions["code"], read) == ("PERMISSION_DENIED", [])
+    assert [row.language for row in _rows("part", "described")] == ["en"]
+
+
+DECLARED_INSERT_QUERIES = 130
+"""An administrator's insert of a new language seeded from a row whose level declares past the variables limit: the
+level is counted from its sizes and refused, and none of its variables is read."""
+
+
+def test_the_console_refuses_a_declared_path_or_description_over_its_length(db: None) -> None:
+    """An administrator's update declaring a path over 200 characters or a description over 1,000 is refused under
+    ``variables`` in the declaration's own words, and nothing is written."""
+
+    del db
+    admin = create_platform_admin("messaging-templates-console-declarer")
+    part = _row("part", "declared", variables={"name": "The person's name."})
+    for variables, message in (
+        ({"a" * 201: "x"}, f"{'a' * 40}… is over 200 characters: name the value in fewer."),
+        ({"name": "d" * 1_001}, "Describe name in at most 1000 characters."),
+    ):
+        written = {"id": public_id_of(part), "set": {"variables": variables}}
+        (error,) = execute_schema(_schema(), _UPDATE, written, user=admin).errors
+        assert (error.extensions["code"], error.extensions["validationErrors"]) == (
+            "VALIDATION", {"variables": [message]}), error.extensions
+    with system_context(reason="tests.messaging_templates.console.read"):
+        assert MessageTemplate.objects.get(pk=part.pk).variables == {"name": "The person's name."}
 
 
 def test_a_shipped_identity_is_overridden_never_created(library: dict[str, Any]) -> None:

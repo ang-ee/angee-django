@@ -247,10 +247,11 @@ def test_declared_variables_are_judged_in_linear_time() -> None:
     ]
     started = time.process_time()
     for variables in hostile:
-        with pytest.raises(ValidationError):
-            validate_variables(variables)
+        for lengths in (True, False):  # an author's row; a stored one, as a walk judges it
+            with pytest.raises(ValidationError):
+                validate_variables(variables, lengths=lengths)
     admitted = ".".join(["a" * 10_000] * 7)
-    validate_variables({f"{admitted}.v{index}": "" for index in range(50)})
+    validate_variables({f"{admitted}.v{index}": "" for index in range(50)}, lengths=False)
     assert time.process_time() - started < 2
 
 

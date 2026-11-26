@@ -56,23 +56,36 @@ writing direction, the subject and the preheader), and Django's template engine 
 MAX_VARIABLE_SEGMENTS = 8
 """The most names a declared path joins, so following a declared path stays a short walk."""
 
+MAX_VARIABLE_PATH_LENGTH = 200
+"""The most characters an author's declared path holds."""
+
+MAX_VARIABLE_DESCRIPTION_LENGTH = 1_000
+"""The most characters an author's description of a declared path holds: with :data:`MAX_VARIABLE_PATH_LENGTH`, a
+row's own declaration holds at most about 60,400 characters as JSON, under the walk's ``WALK_VARIABLES_LIMIT``."""
+
 _VARIABLE_PATH = re.compile(r"[a-z][a-z0-9_]*(?:\.(?:[a-z][a-z0-9_]*|\*))*")
 
 
-def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
+def validate_variables(variables: Any, *, max_paths: int = 50, lengths: bool = True) -> None:
     """Refuse ``variables`` that are not an object of declared paths to their descriptions.
 
     Each key is a dotted path of at most :data:`MAX_VARIABLE_SEGMENTS` lower-case
     names (``order.total``) whose later segments may be ``*``, every item of a list
-    (``tags.*`` is a list of scalars); each value is a string describing it. There
+    (``tags.*`` is a list of scalars); each value is a string describing it. With
+    ``lengths``, as an author's row is judged, a path holds at most
+    :data:`MAX_VARIABLE_PATH_LENGTH` characters and a description at most
+    :data:`MAX_VARIABLE_DESCRIPTION_LENGTH`; a walk judges a stored row's grammar
+    without them, so a row stored longer still renders, its declaration counted by
+    the walk's own cap. There
     are at most ``max_paths`` keys: a row's own declaration takes the default, and a
     caller judging several rows' declarations together passes its own limit. No
     path is a proper prefix of another (``order`` and ``order.total`` are not both
     declared), no path reads one value both as a list and as an object
     (``items.*`` beside ``items.pop``), and no path starts with a name in
     :data:`RESERVED_VARIABLE_ROOTS`. The first offending key is named. The check
-    takes time linear in the number and length of the keys, since a console insert
-    runs it before it checks who may insert.
+    takes time linear in the number and length of the keys: every save through
+    ``full_clean()`` runs it on what its author wrote, and every walk runs it on each
+    row it reaches, rows stored past ``clean()`` among them.
     """
 
     if not isinstance(variables, dict):
@@ -84,6 +97,11 @@ def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
             code="too_many_variables", params={"limit": max_paths, "path": extra},
         )
     for path, description in variables.items():
+        if lengths and isinstance(path, str) and len(path) > MAX_VARIABLE_PATH_LENGTH:
+            raise ValidationError(
+                "%(path)s… is over %(limit)s characters: name the value in fewer.",
+                code="variable_path_too_long", params={"path": path[:40], "limit": MAX_VARIABLE_PATH_LENGTH},
+            )
         if isinstance(path, str) and path.count(".") >= MAX_VARIABLE_SEGMENTS:
             raise ValidationError(
                 "%(path)s joins more than %(limit)s names.",
@@ -97,6 +115,11 @@ def validate_variables(variables: Any, *, max_paths: int = 50) -> None:
         if not isinstance(description, str):
             raise ValidationError(
                 "Describe %(path)s in words.", code="invalid_variable_description", params={"path": path},
+            )
+        if lengths and len(description) > MAX_VARIABLE_DESCRIPTION_LENGTH:
+            raise ValidationError(
+                "Describe %(path)s in at most %(limit)s characters.",
+                code="variable_description_too_long", params={"path": path, "limit": MAX_VARIABLE_DESCRIPTION_LENGTH},
             )
         if path.split(".", 1)[0] in RESERVED_VARIABLE_ROOTS:
             raise ValidationError(
@@ -171,6 +194,12 @@ class HtmlFormatHandler(MessageTemplateFormatHandler):
 
 MARKDOWN_BRACKETS_PER_LINE = 30
 """The most ``[`` a line of Markdown holds: markdown-it scans each link label to the end of its line."""
+
+MARKDOWN_LABEL_SCAN_LIMIT = 50_000
+"""The most characters a row's link and image labels may make the Markdown pass scan: for each ``[`` (a ``![`` among
+them), the characters after it in its paragraph, list item or heading, where markdown-it's label scan stops at the
+latest, walking it token by token. A row's cost grows with that sum, not with its brackets or its length: one ``[``
+before a paragraph dense with emphasis delimiters re-reads all of it. 50,000 is one such full paragraph."""
 
 _TEMPLATE_LINK = "\x00template-link:"
 """Marks a link whose destination is one output, in the token's ``href``."""
@@ -424,12 +453,27 @@ class MarkdownFormatHandler(MessageTemplateFormatHandler):
     parser: ClassVar[MarkdownIt] = _markdown()
 
     def source_refusals(self, source: str) -> list[str]:
-        """Refuse a line holding over :data:`MARKDOWN_BRACKETS_PER_LINE` ``[``."""
+        """Refuse a line holding over :data:`MARKDOWN_BRACKETS_PER_LINE` ``[``, then a row whose label scans would
+        cover over :data:`MARKDOWN_LABEL_SCAN_LIMIT` characters, found from markdown-it's block pass alone."""
 
-        return [
+        refusals = [
             f"a Markdown line holds over {MARKDOWN_BRACKETS_PER_LINE} [ (line {number})"
             for number, line in enumerate(source.split("\n"), 1) if line.count("[") > MARKDOWN_BRACKETS_PER_LINE
         ][:1]
+        if refusals or "[" not in source:
+            return refusals
+        blocks: list[MarkdownToken] = []
+        self.parser.block.parse(source, self.parser, {}, blocks)
+        scanned = 0
+        for token in blocks:
+            content, index = token.content if token.type == "inline" else "", -1
+            while (index := content.find("[", index + 1)) >= 0:
+                scanned += len(content) - index - 1
+        if scanned > MARKDOWN_LABEL_SCAN_LIMIT:
+            return [f"the [ of this Markdown row open link or image labels the Markdown pass would scan across "
+                    f"{scanned} characters, over {MARKDOWN_LABEL_SCAN_LIMIT}: put a link in a shorter paragraph, "
+                    "or write a literal [ as &#91;"]
+        return []
 
     def forms(self, row: FormedRow) -> RowForms:
         """Return the styled HTML render and the text render of one parse of ``row.source``."""
