@@ -1,7 +1,7 @@
 import * as v from "valibot";
 import { GroupSpecsSchema, ResourceQuery, type ModelMetadata, type QueryFilter } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
-import type { VisibilityState } from "@tanstack/react-table";
+import type { SortingState, VisibilityState } from "@tanstack/react-table";
 import { RESOURCE_VIEW_SORT_DIRECTIONS, isResourceViewKind } from "./capabilities";
 import type { ResourceViewKind } from "./capabilities";
 import { Filter } from "./filter";
@@ -34,19 +34,24 @@ export interface ResourceViewPreset extends ResourceViewFavorite {
   fixedFilter?: QueryFilter;
 }
 
-/** Selected presets own fixed scope; other favorites match their declared query facts. */
-export function resourceViewFavoriteIsActive(favorite: ResourceViewFavorite, state: ResourceViewState): boolean {
+/**
+ * Selected presets own fixed scope; other favorites match their declared query facts. A
+ * favorite with no `sort` of its own matches the order it inherits (`inherited`, the one
+ * `inheritedResourceViewSorting` gives for the state's preset), as applying it sets.
+ */
+export function resourceViewFavoriteIsActive(favorite: ResourceViewFavorite, state: ResourceViewState, inherited?: SortingState): boolean {
   if (favorite.id === state.preset) return true;
   try {
     const expected = createResourceViewState({
       ...favorite,
       filter: Filter.from(favorite.filter).value,
       groupStack: normaliseGroupStack(favorite.groupStack ?? []),
+      sorting: inherited,
     });
     return (favorite.preset ?? undefined) === (state.preset || undefined)
       && stableSerialize(expected.filter) === stableSerialize(state.filter)
       && (favorite.groupStack === undefined || stableSerialize(expected.groupStack) === stableSerialize(state.groupStack))
-      && (favorite.sort === undefined || stableSerialize(expected.sorting) === stableSerialize(state.sorting ?? []))
+      && stableSerialize(expected.sorting) === stableSerialize(state.sorting)
       && (favorite.view === undefined || expected.view === state.view)
       && (favorite.columnVisibility === undefined || stableSerialize(expected.columnVisibility) === stableSerialize(state.columnVisibility))
       && (favorite.pageSize === undefined || expected.pagination.pageSize === state.pagination.pageSize)
@@ -138,6 +143,18 @@ export function resourceViewPresetDefaults(
 }
 
 /**
+ * The order a saved or shipped view without a `sort` of its own keeps: the one the collection
+ * declares under the view's preset (`resourceViewPresetDefaults`), so applying such a view, opening
+ * its preset and matching it agree. Only an explicit `sort: null` clears the order.
+ */
+export function inheritedResourceViewSorting(
+  initial: ResourceViewInitialState | undefined,
+  preset: ResourceViewPreset | undefined,
+): SortingState | undefined {
+  return createResourceViewState(resourceViewPresetDefaults(initial, preset)).sorting;
+}
+
+/**
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -199,14 +216,14 @@ export function favoriteFromResourceView(
   label: string,
   existing: readonly ResourceViewFavorite[] = [],
 ): ResourceViewFavorite {
-  const sort = resourceViewSortFromSorting(state.sorting ?? []);
   return {
     id: nextResourceViewFavoriteId(label, existing),
     label,
     pageSize: state.pagination.pageSize,
     ...(state.preset ? { preset: state.preset } : {}),
     ...(Object.keys(state.columnVisibility).length ? { columnVisibility: state.columnVisibility } : {}),
-    ...(sort ? { sort } : {}),
+    // An inherited order stores no sort, so the view keeps inheriting; a cleared one stores null.
+    ...(state.sorting === undefined ? {} : { sort: resourceViewSortFromSorting(state.sorting) }),
     ...(Filter.from(state.filter).hasEntries() ? { filter: state.filter } : {}),
     ...(state.groupStack.length > 0 ? { groupStack: state.groupStack } : {}),
     ...(state.view !== "list" ? { view: state.view } : {}),

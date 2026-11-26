@@ -147,6 +147,7 @@ An addon can specialize existing copy and declare named resource views:
 
 A shipped view's `sort` is one `{ field, dir }`, or a list of them for an order of
 several keys (`sort: [{ field: "status", dir: "asc" }, { field: "title", dir: "asc" }]`).
+A view without `sort` keeps the order the list declares; `sort: null` opens it unordered.
 A shipped view opening on `board` or `gallery` draws the model's registered card
 when the page declares none. An addon registers that card once, for a model it
 may not own; the composer refuses a second card for the same model, besides the

@@ -10,6 +10,26 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
+  order the list declares, and only an explicit `sort: null` clears it.
+  Applying such a view cleared the order, opening the same shipped view as a
+  route default kept it, and the view showed active under any order. Now
+  applying it sets the order the collection declares under the view's preset
+  (`inheritedResourceViewSorting`: the shipped view's own `sort`, else the
+  list's declared order), opening its preset gives the same, and it shows
+  active only while the list holds that order (`inheritedSorting` on the view
+  context, read by the search model's active items), so a view of the
+  inherited order and an unordered one are never active together. A view saved
+  while the list's view holds no order of its own stores no `sort` and keeps
+  inheriting; a list mounted by `ListView` or `ResourceList` seeds its declared
+  order, so a view saved there stores it; one saved over a cleared order stores
+  `null`. Upgrade, no code needed: a shipped
+  view without a `sort`, picked in the switcher, keeps the list's declared
+  order; a view saved from a cleared order stores `sort: null`; a view without
+  a `sort` is active only on the inherited order; and a view saved before this
+  change from a cleared list now restores the declared order (clear the order
+  and save it again to keep it unordered).
+
 - `@angee/ui`: **Changed contract.** A list keeps its whole sort order in the
   URL and in a saved view. Both kept only the first key, so on a list grouped
   by status and ordered by status then rank, a press on Rank turned it

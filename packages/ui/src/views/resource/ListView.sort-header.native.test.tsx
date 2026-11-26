@@ -16,6 +16,7 @@ import { ListView } from "./ListView";
 import { RowsListView } from "./RowsListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
 import { buildColumns, ListHeaderCell } from "./resource-view-list-body";
+import { favoriteFromResourceView, resourceViewFavoriteIsActive, resourceViewFavoritesFromUnknown } from "./model/favorites";
 import type { ResourceViewGroup, ResourceViewInitialState } from "./resource-view-model";
 import { useResourceViewSurface } from "./resource-view-surface";
 
@@ -79,11 +80,14 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
     }),
     totalCount: 2,
   } }));
+  const view: { current?: ResourceViewContextValue } = {};
+  function ViewState() { view.current = useResourceView(); return null; }
   const tree = (
     <Provider resources={[resource]} dataProvider={{ getList, custom }} queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
       <OperationDocumentsProvider documents={{ console: { groups: { "notes.Task": "query Groups { tasks_groups { key } totalCount }" } } }}>
         <ToastProvider>
           <ResourceViewProvider resource={resource.modelLabel} scope={scope} initialState={initialState}>
+            <ViewState />
             <ListView resource={resource.modelLabel} scope="inherit" columns={columns} />
           </ResourceViewProvider>
         </ToastProvider>
@@ -102,6 +106,8 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
     order_by?: { field: string; direction: string }[]; rows_order_by?: Record<string, string>;
   } | undefined;
   return {
+    /** The list's view state and commands, as its toolbar and saved views use them. */
+    view: () => view.current!,
     /** The route list's address: its path and search, as a reload or a shared link opens it. */
     href: () => router!.state.location.href,
     /** The `sort` key the route list's address holds. */
@@ -412,4 +418,45 @@ test.each([
   const list = renderList(statusThenRank, { scope: "route", path: `/tasks?sort=${sort}` });
   expect(await screen.findByRole("button", { name: "Reset filters, sorting and grouping" })).toBeTruthy();
   expect(list.reads()).toBe(0);
+});
+
+const rankThenTitle: Order = [{ field: "rank", direction: "DESC" }, { field: "title", direction: "ASC" }];
+test("a saved view of a list in its inherited order stores no order, and applying it restores the order the list declares", async () => {
+  // The list's state declares no order: it inherits the resource's, rank then title.
+  const list = renderList(rankThenTitle, { scope: "route" });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  const [saved] = resourceViewFavoritesFromUnknown([JSON.parse(JSON.stringify(favoriteFromResourceView(list.view().state, "Declared")))]);
+  expect(saved).not.toHaveProperty("sort");
+  press("Title");
+  await waitFor(() => expect(list.readOrder()).toEqual(["title asc"]));
+
+  act(() => list.view().applyFavorite(saved!));
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  expect([shown("Rank", "Title"), list.urlSort()]).toEqual([{ Rank: "descending", Title: "none" }, undefined]);
+});
+
+test("a saved view whose order is an explicit null clears the list's order", async () => {
+  const list = renderList(rankThenTitle, { scope: "route", initialState: { sorting: [{ id: "rank", desc: true }, { id: "title", desc: false }] } });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  act(() => list.view().applyFavorite({ id: "favorite:unordered", label: "Unordered", sort: null }));
+  await waitFor(() => expect(list.readOrder()).toEqual([]));
+  expect([shown("Rank", "Title"), list.urlSort()]).toEqual([{ Rank: "none", Title: "none" }, ""]);
+});
+
+test("on a list whose view inherits its order, a view of the inherited order and an unordered view are never active together", async () => {
+  const list = renderList(rankThenTitle, { scope: "route" });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  const [inherited] = resourceViewFavoritesFromUnknown([JSON.parse(JSON.stringify(favoriteFromResourceView(list.view().state, "Declared")))]);
+  const unordered = { id: "favorite:unordered", label: "Unordered", sort: null };
+  // What the search model shows active (`activeItems`): the match given the list's inherited order.
+  const active = () => [inherited!, unordered].filter((view) => resourceViewFavoriteIsActive(view, list.view().state, list.view().inheritedSorting)).map(({ label }) => label);
+  expect(active()).toEqual(["Declared"]);
+
+  act(() => list.view().applyFavorite(unordered));
+  await waitFor(() => expect(list.readOrder()).toEqual([]));
+  expect(active()).toEqual(["Unordered"]);
+
+  act(() => list.view().applyFavorite(inherited!));
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  expect(active()).toEqual(["Declared"]);
 });

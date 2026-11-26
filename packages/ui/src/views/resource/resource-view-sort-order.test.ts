@@ -6,8 +6,12 @@ import { ResourceQuery } from "@angee/metadata";
 import type { SortingState } from "@tanstack/react-table";
 import { describe, expect, test } from "vitest";
 
+import { AppRuntimeProvider } from "../../runtime";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
-import { favoriteFromResourceView, resourceViewFavoriteIsActive, resourceViewFavoritesFromUnknown } from "./model/favorites";
+import {
+  favoriteFromResourceView, inheritedResourceViewSorting, resourceViewFavoriteIsActive, resourceViewFavoritesFromUnknown,
+  resourceViewPresetDefaults, type ResourceViewPreset,
+} from "./model/favorites";
 import { validateResourceViewState } from "./model/state";
 import {
   createResourceViewState,
@@ -115,5 +119,55 @@ describe("a saved view keeps the whole order", () => {
     act(() => result.current.applyFavorite(stored!));
     expect(result.current.state.sorting).toEqual(sorting);
     expect(resourceViewFavoriteIsActive(stored!, result.current.state)).toBe(true);
+  });
+});
+
+describe("a saved view with no sort of its own inherits the order the collection declares; only null clears", () => {
+  const declared = order("rank desc", "title asc");
+  // A shipped view with no order of its own, and one ordering by status.
+  const plain: ResourceViewPreset = { id: "notes.plain", preset: "notes.plain", label: "Plain", resource: "notes.Note", filter: {} };
+  const byStatus: ResourceViewPreset = { id: "notes.by-status", preset: "notes.by-status", label: "By status", resource: "notes.Note",
+    sort: { field: "status", dir: "asc" } };
+  function renderView() {
+    return renderHook(() => useResourceView(), { wrapper: ({ children }: { children: ReactNode }) =>
+      createElement(AppRuntimeProvider, { runtime: { resourceViews: { [plain.id]: plain, [byStatus.id]: byStatus } }, children:
+        createElement(ResourceViewProvider, { scope: "local", resource: "notes.Note", initialState: { sorting: declared }, children }) }) });
+  }
+
+  test("a list in its inherited order saves no sort; a cleared order saves null", () => {
+    expect(favoriteFromResourceView(createResourceViewState({}), "Inherited")).not.toHaveProperty("sort");
+    expect(favoriteFromResourceView(createResourceViewState({ sorting: [] }), "Cleared").sort).toBeNull();
+  });
+
+  test.each([
+    ["no preset", undefined, declared],
+    ["a shipped view with no order of its own", plain, declared],
+    ["a shipped view with its own order", byStatus, order("status asc")],
+  ] as const)("under %s, applying, opening the shipped view and matching agree", (_name, preset, inherited) => {
+    const view = renderView();
+    // Opening the shipped view: its defaults.
+    expect(createResourceViewState(resourceViewPresetDefaults({ sorting: declared }, preset)).sorting).toEqual(inherited);
+    expect(inheritedResourceViewSorting({ sorting: declared }, preset)).toEqual(inherited);
+    // Applying a saved view with no sort, after the person sorted the list otherwise.
+    const favorite = { id: "favorite:saved", label: "Saved", ...(preset ? { preset: preset.id } : {}) };
+    act(() => view.result.current.setSorting(order("title desc")));
+    expect(resourceViewFavoriteIsActive(favorite, view.result.current.state, view.result.current.inheritedSorting)).toBe(false);
+    act(() => view.result.current.applyFavorite(favorite));
+    expect(view.result.current.state.sorting).toEqual(inherited);
+    expect(view.result.current.inheritedSorting).toEqual(inherited);
+    // Matching: active while the list holds the inherited order, and not once it sorts otherwise.
+    expect(resourceViewFavoriteIsActive(favorite, view.result.current.state, view.result.current.inheritedSorting)).toBe(true);
+    act(() => view.result.current.setSorting(order("title desc")));
+    expect(resourceViewFavoriteIsActive(favorite, view.result.current.state, view.result.current.inheritedSorting)).toBe(false);
+  });
+
+  test("an explicit null clears the order when applied, and matches only an unordered list", () => {
+    const view = renderView();
+    const unordered = { id: "favorite:unordered", label: "Unordered", sort: null };
+    act(() => view.result.current.applyFavorite(unordered));
+    expect(view.result.current.state.sorting).toEqual([]);
+    expect(resourceViewFavoriteIsActive(unordered, view.result.current.state, view.result.current.inheritedSorting)).toBe(true);
+    act(() => view.result.current.setSorting(declared));
+    expect(resourceViewFavoriteIsActive(unordered, view.result.current.state, view.result.current.inheritedSorting)).toBe(false);
   });
 });

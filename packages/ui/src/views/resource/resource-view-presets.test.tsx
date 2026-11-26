@@ -105,6 +105,9 @@ test("switcher applies shipped views without writable preferences and URLs resto
   expect(f.view.state).toMatchObject({ view: "list", pagination: { pageSize: 10 }, groupStack: [], filter: {}, columnVisibility: {} });
   expect(f.facts.mergedFilter).toEqual(archived.fixedFilter);
   expect(f.router.state.location.search).toMatchObject({ preset: archived.id });
+  // The shipped view declares no order: it keeps the one the list inherits, and the URL names none.
+  expect(f.view.state.sorting).toBeUndefined();
+  expect(f.router.state.location.search).not.toHaveProperty("sort");
   const href = f.router.state.location.href;
   f.unmount();
   const restored = fixture(href);
