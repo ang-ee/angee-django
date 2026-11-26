@@ -10,6 +10,13 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: The Links pane says it is empty when it is. A related group
+  with neither rows nor a verb is left out, and the pane showed its empty
+  state only when no group was eligible; a record whose eligible groups were
+  all left out showed "Links 0" over a blank panel. Each group now tells the
+  pane whether it has rows or a verb, and the pane shows the empty state when
+  none does. A group still counting is taken to show something, so the empty
+  state does not flash while counts load.
 - `@angee/ui`: **Changed API.** A record action bound with
   `useRecordActionMutation` is toasted by one owner, the action bar. The
   hook's second path (taken with `settle` or `linkTo`), which handed the

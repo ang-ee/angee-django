@@ -2192,7 +2192,8 @@ metadata the backend derives from each edge's schema target relations. Timeline
 sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
 "unavailable" or offer writes on a type whose schema declares no arm. A section
-with neither rows nor a verb is absent, not empty.
+with neither rows nor a verb is absent, not empty; when every eligible group
+is absent the pane shows its empty state.
 
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
