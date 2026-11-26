@@ -10,7 +10,8 @@ override, the insert and a refused save answer, each with what it changed in the
 library, what Keep override answers on an override another session deleted, two saves
 the server keeps with what a reload then reads, and three previews of unsaved edits: one
 that renders, one that saves but does not render with its sample, and the refused save's
-own. The checks the console relies on are asserted as they are recorded: a pasted source
+own, which a deployment that lets nobody write a layout answers as a failed query instead.
+The checks the console relies on are asserted as they are recorded: a pasted source
 with carriage returns saves as newlines and leaves "Default updated" as it was, and an
 override whose default changed still says so after a save and a reload.
 Public ids are stable aliases (:func:`_alias`), also inside the server's words, and
@@ -34,7 +35,7 @@ from typing import Any
 from django.apps import apps
 from django.db import transaction
 from django_compose.components import enabled_apps
-from rebac import system_context
+from rebac import system_context, to_object_ref, to_subject_ref
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.schema import GraphQLSchemas
@@ -42,6 +43,7 @@ from angee.graphql.testing.documents import execute_schema, result_data
 from angee.messaging_templates.models import MessageTemplateKind
 from angee.resources.testing.models import Resource
 from tests.conftest import create_platform_admin, create_user
+from tests.test_messaging_templates_console import _narrowed
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "src/angee/messaging_templates/web/src/fixtures.recorded.json"
@@ -401,6 +403,11 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
     with _system():
         ids = {public_id_of(row): _row_alias(row) for row in model.objects.all()}
         ids.update({public_id_of(kit): f"bkt_{kit.name.lower()}" for kit in kit_model.objects.all()})
+        # The permission library's refusals name the row and the reader by their database ids.
+        ids.update({str(ref): f"{ref.resource_type}:{_row_alias(row)}"
+                    for row in model.objects.all() for ref in (to_object_ref(row),)})
+    ids.update({str(ref): f"{ref.object.resource_type}:{name}"
+                for name, user in (("admin", admin), ("member", member)) for ref in (to_subject_ref(user),)})
 
     def read(document: str, variables: dict[str, Any], root: str, user: Any = admin) -> Any:
         return result_data(execute_schema(schema, document, variables, user=user))[root]
@@ -526,6 +533,14 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
     assert pasted["row"]["has_updated_default"] is pasted["reread"]["has_updated_default"] is False, pasted
     assert kept["row"]["has_updated_default"] is kept["reread"]["has_updated_default"] is True, kept
 
+    # The refused save's edit where the deployment lets nobody write a layout: the preview asks the gates of the
+    # columns the edit changes before it validates, so validation's refusals give way to a failed query.
+    with _narrowed("write__layout"):
+        denied = execute_schema(schema, _PREVIEW, {"template": opened["passwordReset"], "patch": _REFUSED_SET},
+                                user=admin)
+    layout_gated = [{"id": opened["passwordReset"], "patch": _REFUSED_SET, "error": _error(denied)}]
+    assert layout_gated[0]["error"]["extensions"].get("code") == "PERMISSION_DENIED", layout_gated
+
     assert set(initial) == {row["id"] for row in read(list_document, {}, "message_templates")}
     return _aliased({
         "metadata": resources,
@@ -547,6 +562,7 @@ def _record() -> dict[str, Any]:  # noqa: PLR0915 -- one recording, read top to 
             {"id": opened["passwordReset"], "patch": patch, "result": preview(opened["passwordReset"], patch=patch)}
             for patch in _UNSAVED
         ],
+        "unsavedPreviewsLayoutGated": layout_gated,
     }, ids)
 
 

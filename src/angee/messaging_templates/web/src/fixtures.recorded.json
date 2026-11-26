@@ -5058,5 +5058,23 @@
     ]
    }
   }
+ ],
+ "unsavedPreviewsLayoutGated": [
+  {
+   "error": {
+    "extensions": {
+     "code": "PERMISSION_DENIED"
+    },
+    "message": "Denied: auth/user:admin cannot write__layout messaging_templates/message_template:mtl_template_example_password_reset_en (field 'layout' requires write__layout)",
+    "path": [
+     "message_template_preview"
+    ]
+   },
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "format": "html",
+    "layout": ""
+   }
+  }
  ]
 }
