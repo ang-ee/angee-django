@@ -32,7 +32,7 @@ from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import BridgeSyncError, CursorInvalid, advance_stream, open_stream
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.managers import AUTOMATED_MAIL_HEADERS
-from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Participant, Thread
+from angee.messaging.testing.models import Handle, Message, MessageEdge, Part, Recipient, Thread
 from angee.messaging_integrate_imap import backend as imap_backend
 from angee.messaging_integrate_imap import parser as imap_parser
 from angee.messaging_integrate_imap.backend import _SEARCH_UID_WINDOW as WINDOW
@@ -2195,7 +2195,9 @@ def test_channel_sync_lands_threads_parts_and_attachments(
     assert attachment.file.filename == attachment.name
     assert attachment.file.size_bytes == len(b"AGREED TERMS")
 
-    assert Participant._base_manager.filter(message=reply).count() == 2  # from + to
+    # The sender is the message's own; its one recipient row is the addressee.
+    assert list(Recipient._base_manager.filter(message=reply).values_list("role", flat=True)) == ["to"]
+    assert Handle._base_manager.get(pk=reply.sender_id).value == "bob@example.com"
 
     channel.refresh_from_db()
     assert current_stream(channel, "messages", "INBOX").cursor == {"uidvalidity": 100, "last_uid": 3}

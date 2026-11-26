@@ -17,7 +17,7 @@ export const INBOX_MODELS = [
   "messaging.Message",
   "messaging.Thread",
   "messaging.Part",
-  "messaging.Participant",
+  "messaging.Recipient",
   "messaging.MessageEdge",
   "messaging.MessageStar",
   "parties.Handle",

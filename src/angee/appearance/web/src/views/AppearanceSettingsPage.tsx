@@ -55,7 +55,8 @@ export function AppearanceSettingsPage(): ReactElement {
       </RadioGroupRoot>
     </SettingsSection>
     {OptionsEditor && !themeLocked ? <SettingsSection title={t("options.title")} description={t("options.description")}>
-      <OptionsEditor definition={appearance.theme!.definition} value={appearance.currentPreferences.options} disabled={saving || readOnly} onChange={(options) => { void appearance.setOptions(options); }} />
+      {/* It starts from the options worn: the person's own, else the app default's (the build's or the host source's). */}
+      <OptionsEditor definition={appearance.theme!.definition} value={appearance.effectiveOptions} disabled={saving || readOnly} onChange={(options) => { void appearance.setOptions(options); }} />
     </SettingsSection> : null}
     {appearance.theme ? <SettingsSection title={t("preview.title")} description={t("preview.description")}>
       <div className="grid gap-4 lg:grid-cols-2">{(["light", "dark"] as const).map((scheme) => <FullThemePreview key={scheme} theme={appearance.theme!} scheme={scheme} options={appearance.effectiveOptions} />)}</div>

@@ -33,6 +33,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
+from angee.base.permissions import require_save_allowed
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -119,6 +120,8 @@ class ProductManager[ProductT: Product](AngeeHistoryManager[ProductT]):
                 owner_id=locked_project.lead_id,
                 originated_from_id=locked_project.pk,
             )
+            # Decided first: a project writer without the portfolio role runs none of its field validators.
+            require_save_allowed(product)
             product.full_clean(validate_unique=False, validate_constraints=False)
             try:
                 with transaction.atomic():
@@ -427,6 +430,8 @@ class UpdateManager[UpdateT: Update](_UpdateManagerBase[UpdateT]):
             raise ValidationError({"target": "A saved project or initiative is required."})
         self.model.validate_target(target)
         report = self.model(health=health, body=body, **generic_target(target).lookups(self.model, "target"))
+        # Decided first: a caller who may not write the target runs none of its field validators.
+        require_save_allowed(report)
         report.full_clean(validate_unique=False, validate_constraints=False)
         return self.insert(report)
 

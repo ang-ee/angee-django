@@ -143,7 +143,7 @@ def test_outbound_email_keeps_native_sender_over_source_fallback(header_message)
         message.sender = handle
     transport = AnymailEmailChannelBackend(message.channel)
     with actor_context(owner):
-        assert transport._sender(message, []) == "live@example.test"
+        assert transport._sender(message) == "live@example.test"
 
 
 def test_source_header_fallback_preserves_an_explicit_system_reader(header_message):
@@ -167,7 +167,7 @@ def test_default_sender_is_one_validated_identity(config: object, expected: tupl
     backend = AnymailEmailChannelBackend(SimpleNamespace(config=config))
     assert backend.outbound_sender() == expected
     unaddressed = SimpleNamespace(sender_id=None, source_header_values=lambda _name: ())
-    assert backend._sender(unaddressed, []) == f"{expected[0]} <{expected[1]}>"
+    assert backend._sender(unaddressed) == f"{expected[0]} <{expected[1]}>"
 
 
 @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
@@ -311,7 +311,7 @@ def test_an_email_reply_is_addressed_titled_and_threaded_so_the_answer_lands_on_
     reply = Message.objects.compose_reply(request, body="Which team are you on?", sender=desk, actor=channel.owner)
     assert "@" in reply.external_id and "<" not in reply.external_id
     with system_context(reason="tests.messaging.email_reply.render"):
-        assert list(reply.participants.values_list("handle_id", "role")) == [(request.sender_id, "to")]
+        assert list(reply.recipients.values_list("handle_id", "role")) == [(request.sender_id, "to")]
         # The thread title is the normalised subject, so the reply's prefix never stacks.
         assert reply.title() == "Re: Access request"
         wire = channel.backend.email_message(reply).message()
@@ -385,7 +385,7 @@ def test_an_email_reply_goes_to_the_parents_reply_to_over_its_sender(mail_desk):
     )
     reply = Message.objects.compose_reply(relayed, body="Thanks, which start date?", sender=desk, actor=channel.owner)
     with system_context(reason="tests.messaging.email_reply.reply_to"):
-        (addressee,) = Handle.objects.filter(participations__message=reply, participations__role="to")
+        (addressee,) = Handle.objects.filter(recipient_rows__message=reply, recipient_rows__role="to")
         wire = channel.backend.email_message(reply).message()
     # The address lands on the same handle a received message from it would use.
     assert (addressee.value, addressee.display_name) == ("applicant@example.test", "Applicant")
@@ -456,5 +456,5 @@ def test_a_reply_of_another_kind_keeps_its_client_token_and_writes_no_envelope(d
     reply = Message.objects.compose_reply(question, body="Yes.", sender=desk, actor=channel.owner)
     UUID(reply.external_id)
     with system_context(reason="tests.messaging.chat_reply.read"):
-        assert not reply.participants.exists()
+        assert not reply.recipients.exists()
         assert list(reply.parts.values_list("role", flat=True)) == ["body"]

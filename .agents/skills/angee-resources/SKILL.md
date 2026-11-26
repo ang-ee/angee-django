@@ -24,7 +24,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 | `src/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin`, `is_catalogue_model`, `check`, `after_resource_load` |
 | `src/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)` and its target-model compatibility; ledger writes for imports and owner-bound identities; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource`, `Resource.require_target_model`; `retired_seed_keys`, `seeded_record_merge_guard`, `ResourceManager`, `upsert_target`, `bind_instance`, `load_addons`, `load_xref`, `_check_load_tiers`, `_excluded_entry_keys`, `_check_xref_collisions` |
 | `src/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups` and the module docstring; `Command` |
-| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` |
+| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` at authoring, `check_plan_drops` at `migrate` |
 
 ## Reuse first
 
@@ -41,6 +41,9 @@ description: "Declares and loads an addon's master, install and demo data: pypro
   `FormResource` (`src/angee/webforms/resources.py`: a form, published or `publish: false`, its xref-named config records resolved
   through `Resource.objects.resolve_config_references`); non-row declarations use `ResourceEntryKind`
   (`src/angee/resources/kinds.py`).
+- Shipped baselines beside deployment-authored rows: `BaselineResource` (`loader.py`) sets the
+  flag on every loaded row and refuses a row that states it or a derived column (`Dashboard` in
+  `src/angee/dashboards/models.py`, `MessageTemplateResource` in `src/angee/messaging_templates/resources.py`).
 
 ## Steps
 

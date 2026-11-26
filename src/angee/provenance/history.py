@@ -23,6 +23,7 @@ from simple_history.models import HistoricalRecords
 from simple_history.signals import pre_create_historical_record
 from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
 
+from angee.base.fields.implementation import ImplClassField
 from angee.provenance.bases import ChangesetHistory as ChangesetHistory
 from angee.provenance.context import changeset, changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
@@ -480,10 +481,15 @@ class ModelHistory(HistoricalRecords):
         return options
 
     def copy_fields(self, model: type[models.Model]) -> dict[str, models.Field]:
-        """Copy MTI identity as a regular historical relation, not an inheritance link."""
+        """Copy MTI identity as a regular historical relation, not an inheritance link.
+
+        An implementation key's copy records the key its row saved, refusing none.
+        """
 
         fields = super().copy_fields(model)
         for name, field in fields.items():
+            if isinstance(field, ImplClassField):
+                field.refuses_unknown_keys = False
             source = model._meta.get_field(name)
             if not isinstance(source, models.ForeignKey):
                 continue

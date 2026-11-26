@@ -161,7 +161,7 @@ class MessageInbox:
         self.parties = self.collection("parties", "Party")
         self.threads = self.collection("messaging", "Thread").inbox()
         self.parts = self.parts_for()
-        self.participants = self.collection("messaging", "Participant")
+        self.recipients = self.collection("messaging", "Recipient")
 
     @staticmethod
     def eligible(through: str = "") -> Q:
@@ -252,25 +252,19 @@ class MessageInbox:
         return rows
 
     def involving_handles(self, rows: Any, handles: Any) -> Any:
-        """Authorship or explicit message recipients; thread membership is insufficient.
+        """Authorship (``Message.sender``) or any recipient row of the message.
 
         A handle merge keeps messages and recipients on the retired handle, so each
         handle selects its survivor's redirect group.
         """
 
         ids = handles.model._base_manager.redirect_groups(Subquery(handles.survivor_ids())).values("pk")
-        recipients = self.participants.filter(handle_id__in=Subquery(ids), role__in=("to", "cc", "bcc"))
-        # Keep the two indexed access paths separate. A correlated recipient
-        # EXISTS inside an OR makes PostgreSQL estimate almost every message as
-        # a match, then evaluate shared-content predicates across the corpus.
-        # Build membership from the authorized corpus, then intersect the caller's
-        # scope once. Reusing rows inside each branch recursively duplicates its
-        # earlier sender/circle predicates when an exact-handle filter is added.
-        authored = self.messages.filter(sender_id__in=Subquery(ids)).order_by().values("pk")
-        addressed = (
-            self.messages.filter(pk__in=Subquery(recipients.order_by().values("message_id"))).order_by().values("pk")
-        )
-        return rows.filter(pk__in=Subquery(authored.union(addressed)))
+        # Membership is built from the authorized corpus, then intersects the
+        # caller's scope once: reusing rows inside each arm recursively duplicates
+        # its earlier sender/circle predicates when an exact-handle filter is added.
+        return rows.filter(pk__in=MessageQuerySet.ids_involving_handles(
+            ids, messages=self.messages, recipients=self.recipients,
+        ))
 
     def selection(self, *, sender: str = "", circle: str = "") -> InboxSelection | None:
         """Resolve selection labels and commands through the authorized record owner."""

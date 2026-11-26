@@ -74,16 +74,19 @@ export function InboxRelatedPane({ navigation }: { navigation: InboxNavigation }
 function ConnectionRow({ row, navigation }: { row: InboxConnectionRow; navigation: InboxNavigation }) {
   const t = useNexusT();
   const href = useResourceRecordHrefLookup();
-  // A handle row's role is its platform; a participant row's role is its envelope role.
   const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
-  const participantRoles = useEnumOptions("messaging.Participant", "role", { casing: "upper" });
+  const recipientRoles = useEnumOptions("messaging.Recipient", "role", { casing: "upper" });
+  // A row's role is a recipient's envelope role or the pane token `sender`, which the pane's own copy
+  // labels; a row without one is labelled by its handle's platform, or not at all.
+  const detail = row.role ? connectionLabel(t, "role", row.role) ?? optionLabel(recipientRoles, row.role)
+    : row.handle ? optionLabel(platforms, row.handle.platform) : undefined;
   const message = row.message;
   if (message) return <MessagePaneRow message={message}
     {...(message.id === navigation.relatedFrom ? { detail: t("inbox.source") } : {})}
     onOpenConversation={message.thread ? () => navigation.conversation(message.thread!.id, message.id) : undefined}
     onOpen={() => navigation.read(message.id, row.part?.id)} />;
   // Connection roles and provenance are server tokens: each reads through its label, or not at all.
-  if (row.handle) return <PaneRow icon="user" title={row.label} detail={optionLabel(platforms, row.role)} sub={row.handle.value}
+  if (row.handle) return <PaneRow icon="user" title={row.label} detail={detail} sub={row.handle.value}
     href={href("parties.Handle", row.handle.id)} verb={t("graph.openRecord")} />;
   if (row.src && row.dst) return <PaneRows>
     <PaneLabel>{connectionLabel(t, "relation", row.label) ?? row.label}</PaneLabel>
@@ -94,5 +97,5 @@ function ConnectionRow({ row, navigation }: { row: InboxConnectionRow; navigatio
         onOpen={() => navigation.read(message.id)} />
     </li>)}
   </PaneRows>;
-  return <PaneRow icon="link" title={row.label} detail={optionLabel(participantRoles, row.role)} />;
+  return <PaneRow icon="link" title={row.label} detail={detail} />;
 }

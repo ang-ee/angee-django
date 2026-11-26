@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
@@ -13,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.query import EmptyQuerySet
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
 from rebac.backends import backend
 from rebac.managers import RebacQuerySet
@@ -441,3 +441,35 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
     required = frozenset(relation_dependencies(schema, resource_type, action))
     relationships = proposed_forward_relationships(instance, definition, required_relations=required)
     return CandidateRelationships(resource_type, definition, required, relationships)
+
+
+def require_save_allowed(instance: models.Model, *, update_fields: Iterable[str] | None = None) -> None:
+    """Refuse a save its REBAC gates deny, before anything validates or writes it.
+
+    REBAC's ``check_save`` rehearses ``instance.save(update_fields=...)`` (the
+    model's own ``save()``, then its gates) in a transaction it rolls back; a
+    refused verdict raises ``PermissionDenied`` with the save's own denial text.
+    A verb calls this before it validates the row, so a caller the save would
+    refuse runs none of the row's field validators, ``clean()``, uniqueness or
+    constraint checks.
+
+    The rule's limit: validation a model performs in its own ``save()``,
+    before the save gate, runs before the decision and answers the caller as
+    it would from the save; a model that needs the guarantee moves that
+    validation to ``clean()``. An unscoped instance (sudo, a system context)
+    has no gate to ask, and a model without REBAC write gates no save to refuse.
+
+    The raising form is REBAC's to own: it moves there with REBAC deciding a
+    save before validating and writing it, which retires this rehearsal.
+    """
+
+    # This module loads before Django setup, and REBAC defines its mixins with its models.
+    from rebac import RebacMixin, RebacTrackedMixin
+
+    if not isinstance(instance, RebacTrackedMixin):
+        return
+    if isinstance(instance, RebacMixin) and instance.effective_actor()[1]:
+        return
+    verdict = instance.check_save(update_fields=update_fields)
+    if not verdict.allowed:
+        raise PermissionDenied(verdict.reason)

@@ -461,10 +461,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins, unless the declaration that
-  supplies the theme sets `themeLocked`: then that theme and its options win
-  within the app, the person's color scheme still applies, their saved theme
-  is kept for other apps, and Appearance says why. A lock travels with the theme
+  default, its options ranked as [host and user precedence](appearance.md#host-and-user-precedence)
+  says. The person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked` (what a lock does is
+  [host and user precedence](appearance.md#host-and-user-precedence)). A lock travels with the theme
   it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
@@ -536,9 +536,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and keep any callbacks they close over stable; when a callback wraps
   Refine/query mutation objects that may refresh identity, expose a stable
   callback that reads the latest execution context from a ref (`useLatestRef`).
-  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
-  navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Context another
+  Explorer pages over a scoped tree (storage, knowledge) compose
+  `ScopedExplorerPane`, which owns the primary-pane navigator publication plus the
+  root loading/empty gate; addons provide row projection, route transitions, DnD
+  policy, and domain actions. An explorer page whose navigator is another surface
+  (the iam schema explorer, the agents session rail) renders it with
+  `PrimaryPanePublisher`. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list. The left pane never
   describes the record (see the shell's regions below). Page tests use
@@ -749,6 +752,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   through variants — `data-[pressed]:selected`, `aria-[current=true]:selected`,
   `data-[active]:selected` — by trees, toggles, tabs, pagers, section nav, pane rows
   and pressed chips. Never spell `bg-brand-soft text-brand-soft-text` by hand.
+- **A class composed through a variant is a registered utility.** `styles/index.css`
+  declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
+  Tailwind gives a variant to a registered utility only, and a plain class in
+  `@layer utilities` compiles to nothing under one, silently
+  ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
   `EmptyState` and `InlineEmpty` own every other error and empty surface. Owner story:
@@ -1793,10 +1801,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
+  `Explorer` is removed.** The console body and a list's split placement compose
+  `Workbench` over `page/SplitPanes` (v4) — `primary` is the navigator pane,
+  `children` the content, `secondary` the aside, with size/collapse persistence via
+  `autoSave`. Explorer pages do not compose it: they publish their navigator into the
+  console's primary pane (the shell-published surfaces rule above).
+  A pane scrolls its content: the library sets `overflow: auto` on it
+  ([`SplitPane`](../../packages/ui/src/page/SplitPanes.tsx)). Do not
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
@@ -2409,7 +2420,10 @@ has one provider stack — appearance, data, toasts and modals.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
-fixture transports with live queries disabled. The `@angee/storybook/host` entry
+fixture transports with live queries disabled. The workshop's toolbar is the host's
+appearance, so the fixture leaves the composed addons' run-time `hostAppearance`
+source out and a workshop answers none of its reads; a story about that source
+passes `hostAppearanceSource`. The `@angee/storybook/host` entry
 exposes the stack's emitted addons and schema loader; it adds no product registry.
 `resourceSnapshotOperations` supplies small read-only sample collections through
 metadata-owned filters, relations and grouping. Product packages own their sample

@@ -65,11 +65,16 @@ export { resourceSnapshotOperations } from "../resource-snapshots";
 
 /** Full product pages use the production composition root and native memory history.
  * The caller owns stable fixture input, including every schema's isolated transport.
+ * The workshop's toolbar is the host's appearance, so the composed addons' run-time
+ * `hostAppearance` source is left out, and its reads need no handler, unless the story
+ * is about that source (`hostAppearanceSource`).
  * Set angeeOwnRuntime so the global decorator does not mount a second provider stack.
  */
-export function ComposedRuntimeFixture({ input, initialEntry }: {
+export function ComposedRuntimeFixture({ input, initialEntry, hostAppearanceSource = false }: {
   input: CreateAppInput;
   initialEntry: string;
+  /** Install the composed addons' run-time host appearance source; the story's transports then answer its reads. */
+  hostAppearanceSource?: boolean;
 }) {
   const app = useMemo(() => {
     for (const [name, schema] of Object.entries(input.schemas)) {
@@ -77,8 +82,9 @@ export function ComposedRuntimeFixture({ input, initialEntry }: {
         throw new Error(`Story schema ${name} needs a fixture fetch and live subscriptions disabled.`);
       }
     }
-    return createApp({ ...input, history: createMemoryHistory({ initialEntries: [initialEntry] }) });
-  }, [input, initialEntry]);
+    const addons = hostAppearanceSource ? input.addons : input.addons.map(({ hostAppearance: _source, ...addon }) => addon);
+    return createApp({ ...input, addons, history: createMemoryHistory({ initialEntries: [initialEntry] }) });
+  }, [input, initialEntry, hostAppearanceSource]);
   return <RouterProvider router={app.router} />;
 }
 

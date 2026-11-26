@@ -9,11 +9,14 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import pytest
+from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
+from rebac import system_context
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.hooks import resolve_hook, resolve_hooks
@@ -30,7 +33,7 @@ from angee.base.schemas.forms import config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import OAuthClient, VcsBridge
+from tests.conftest import OAuthClient, VcsBridge, Vendor
 from tests.tables import model_tables
 
 
@@ -402,6 +405,75 @@ def test_impl_save_leaves_untouched_config_and_selector_deferred(django_assert_n
         assert stored.label == "after"
         assert stored.config == {"retries": 7}
         assert stored.adapter == "typed"
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_model_naming_its_configuration_column_stores_it_validated_and_refuses_under_that_name() -> None:
+    """``impl_config_field`` names the column: every save stores the validated value there, system work included."""
+
+    class NamedConfigRecord(ImplDefaultsMixin):
+        impl_config_field = "settings"
+        adapter = ImplClassField(_BaseImpl)
+        settings = models.JSONField(default=dict)
+        label = models.CharField(max_length=50, default="")
+
+        class Meta:
+            app_label = "tests"
+
+    assert NamedConfigRecord.check() == []
+    with model_tables((NamedConfigRecord,)):
+        record = NamedConfigRecord.objects.create(adapter="typed", settings={"retries": "2"})
+        stored = NamedConfigRecord.objects.get(pk=record.pk)
+        assert stored.settings == {"endpoint": "https://example.test", "retries": 2}
+
+        record.settings = {"retries": "many"}
+        with pytest.raises(ValidationError) as refused:
+            record.save()
+        assert list(refused.value.message_dict) == ["settings.retries"]
+        assert NamedConfigRecord.objects.get(pk=record.pk).settings["retries"] == 2
+
+        untouched = NamedConfigRecord.objects.only("label").get(pk=record.pk)
+        untouched.label = "renamed"
+        untouched.save(update_fields=["label"])
+        assert "settings" not in untouched.__dict__
+
+        assert record.apply_config_patch({"retries": 5}) == {"settings"}
+        with pytest.raises(ValidationError) as patched:
+            record.apply_config_patch(["retries"])
+        assert list(patched.value.message_dict) == ["settings"]
+
+        seeded = NamedConfigRecord(adapter="typed")
+        assert seeded.materialize_impl_defaults(_TypedConfigImpl) == {"settings"}
+        assert seeded.settings == {"endpoint": "https://example.test"}
+
+
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_model_without_the_column_it_names_fails_the_typed_config_check() -> None:
+    class MissingConfigRecord(ImplDefaultsMixin):
+        impl_config_field = "settings"
+        adapter = ImplClassField(_BaseImpl)
+        config = models.JSONField(default=dict)
+
+        class Meta:
+            app_label = "tests"
+
+    (error,) = MissingConfigRecord.check()
+
+    assert (error.id, error.msg) == ("angee.E046", "MissingConfigRecord has no field named 'settings'")
+
+
+def test_the_configuration_column_stays_config_for_every_composer_that_names_none() -> None:
+    from angee.agents.testing.models import InferenceProvider
+    from angee.integrate.testing.integration import Integration
+
+    assert ImplDefaultsMixin.impl_config_field == "config"
+    for model in (Integration, OAuthClient, InferenceProvider, VcsBridge):
+        assert model.impl_config_field == "config"
+        assert [error.id for error in model.check() if error.id in {"angee.E046", "angee.E047"}] == []
+    assert VcsBridge._config_field().name == "config"
 
 
 def test_effective_defaults_merges_along_mro() -> None:
@@ -1313,3 +1385,43 @@ def test_optional_cross_addon_hooks_are_inactive_when_unset(settings, name):
         assert _verifier() is None
     elif name == "ANGEE_PROFILING_PERMISSION":
         assert not profiling_permitted(object())
+
+
+def _registry_without(field: ImplClassField, key: str) -> dict[str, dict[str, str]]:
+    """The field's registry setting with ``key`` taken out, as when its providing addon leaves."""
+
+    registry = getattr(settings, field.registry_setting)
+    return {field.registry_setting: {name: path for name, path in registry.items() if name != key}}
+
+
+@pytest.mark.django_db
+def test_a_stored_row_saves_its_key_after_the_registry_drops_it() -> None:
+    """Only a new row's key is refused: a stored row saves, fully or in part, as it always did."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.stale.create"):
+        row = backend_model.objects.create(slug="stale", label="Stale", backend_class="local")
+    with override_settings(**_registry_without(backend_model._meta.get_field("backend_class"), "local")):
+        with system_context(reason="test.impl.stale.save"):
+            row.label = "Renamed"
+            row.save()
+            row.save(update_fields=["label"])
+    assert backend_model._base_manager.get(pk=row.pk).label == "Renamed"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("registered", (True, False), ids=("registered", "dropped"))
+def test_a_config_only_save_is_validated_against_the_rows_implementation(registered: bool) -> None:
+    """Writing only ``config`` still validates it, whether or not the key's implementation is still registered."""
+
+    with system_context(reason="test.impl.config.create"):
+        Vendor.objects.get_or_create(slug="github", defaults={"display_name": "GitHub"})
+        row = VcsBridge.objects.create_capability(display_name="Config bridge", backend_class="github")
+    stored = VcsBridge._base_manager.get(pk=row.pk).config
+    dropped = {} if registered else _registry_without(VcsBridge._meta.get_field("backend_class"), "github")
+    with override_settings(**dropped), system_context(reason="test.impl.config.save"):
+        loaded = VcsBridge._base_manager.get(pk=row.pk)
+        loaded.config = {"not_a_github_option": 1}
+        with pytest.raises((ValidationError, ImproperlyConfigured)):
+            loaded.save(update_fields=["config"])
+    assert VcsBridge._base_manager.get(pk=row.pk).config == stored

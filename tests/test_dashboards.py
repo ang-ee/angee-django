@@ -22,6 +22,7 @@ from angee.dashboards.models import Dashboard as AbstractDashboard
 from angee.dashboards.models import DashboardWidget as AbstractDashboardWidget
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.entries import ResourceEntry, ResourceGroup
+from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from tests.conftest import create_user
 
@@ -250,3 +251,26 @@ def test_resource_reload_preserves_unchanged_installed_reads_without_tuples(
         assert not active_relationship_model().objects.filter(
             resource_type="dashboards/dashboard", resource_id=str(dashboard.pk), relation="shared"
         ).exists()
+
+
+def test_a_resource_row_never_states_the_baseline_flag(dashboard_tables: None) -> None:
+    """Every loaded dashboard is a baseline, ownerless; a row that states the flag is refused whole."""
+
+    addon = apps.get_app_config("portfolio")
+    entry = ResourceEntry(
+        addon=addon,
+        tier=Resource.Tier.INSTALL,
+        source_value="resources/install/dashboard.yaml",
+        model=DashboardTarget._meta.label,
+    )
+    dataset = tablib.Dataset(
+        ["stated", "Stated", "addon", "stated", "false"],
+        headers=["_xref", "name", "scope", "scope_key", "is_baseline"],
+    )
+    group = ResourceGroup(entry, DashboardTarget._meta.label, dataset, [1])
+    with pytest.raises(ResourceLoadError, match="resources always install baselines"):
+        DashboardResourceLedger.objects._import_groups(
+            (entry,), (group,), (), dry_run=False, addon_aliases={addon.label: addon.name}
+        )
+    with system_context(reason="tests.dashboards.read"):
+        assert not DashboardTarget.objects.filter(scope_key="stated").exists()

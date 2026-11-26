@@ -3,7 +3,7 @@ import { STATUS_TONES } from "@angee/ui/widgets/status-tones";
 
 import { resolveContainer } from "@angee/ui/runtime";
 
-import { composeAddons, defineAddon } from "./define-addon";
+import { composeAddons, defineAddon, type AddonManifest, type ComposedAddons } from "./define-addon";
 
 const IDENTITY_CANONICALIZER = {
   canonicalModelLabel: (spelling: string) => spelling,
@@ -259,14 +259,19 @@ describe("composeAddons", () => {
     expect(ids(resolveContainer(containers, "shell#drawers-bottom"))).toEqual(["a.logs"]);
   });
 
-  test("at most one installed addon provides the dashboard store", () => {
-    const store = {} as NonNullable<Parameters<typeof defineAddon>[0]["dashboardStore"]>;
-    expect(composeAddons([defineAddon({ id: "a", dashboardStore: store })], IDENTITY_CANONICALIZER).dashboards.store).toBe(store);
-    expect(composeAddons([defineAddon({ id: "a" })], IDENTITY_CANONICALIZER).dashboards.store).toBeNull();
-    expect(() => composeAddons([
-      defineAddon({ id: "a", dashboardStore: store }),
-      defineAddon({ id: "b", dashboardStore: store }),
-    ], IDENTITY_CANONICALIZER)).toThrow(/"a", "b" each provide the dashboard store/);
+  // The install-one keys share one rule: one provider is composed, none is null, two fail composition.
+  const store = {} as NonNullable<AddonManifest["dashboardStore"]>;
+  const source = {} as NonNullable<AddonManifest["hostAppearance"]>;
+  test.each([
+    { label: "dashboard store", contribution: store, provider: (id: string) => defineAddon({ id, dashboardStore: store }),
+      composed: (runtime: ComposedAddons) => runtime.dashboards.store },
+    { label: "host appearance", contribution: source, provider: (id: string) => defineAddon({ id, hostAppearance: source }),
+      composed: (runtime: ComposedAddons) => runtime.hostAppearance },
+  ])("at most one installed addon provides the $label", ({ label, contribution, provider, composed }) => {
+    expect(composed(composeAddons([provider("a"), defineAddon({ id: "b" })], IDENTITY_CANONICALIZER))).toBe(contribution);
+    expect(composed(composeAddons([defineAddon({ id: "a" })], IDENTITY_CANONICALIZER))).toBeNull();
+    expect(() => composeAddons([provider("a"), provider("b"), defineAddon({ id: "c" })], IDENTITY_CANONICALIZER))
+      .toThrow(new RegExp(`^Addons "a", "b" each provide the ${label}; install one\\.$`));
   });
 
   test("rejects two addons that declare the same widget key", () => {

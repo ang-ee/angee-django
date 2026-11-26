@@ -73,10 +73,10 @@ from angee.messaging.testing.models import (
     MessageSubtype,
     Organization,
     Part,
-    Participant,
     Party,
     Person,
     Reaction,
+    Recipient,
     Thread,
     ThreadAttachment,
     ThreadFollower,
@@ -89,7 +89,7 @@ from angee.provenance.statements import (
     StatementSourceMixin,
 )
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
-from tests.conftest import Backend, Drive, MimeType, make_integration
+from tests.conftest import Backend, Drive, MimeType, create_platform_admin, make_integration
 from tests.conftest import (
     File as StorageFile,
 )
@@ -2083,7 +2083,7 @@ def test_ingest_dedup_is_channel_scoped(channel: Any) -> None:
     assert thread.message_count == 1
 
 
-def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(channel: Any) -> None:
+def test_group_ingest_resolves_visibility_and_accumulates_unique_recipients(channel: Any) -> None:
     """GROUP ingest keeps one thread while each message contributes its envelope."""
 
     alice = ParsedHandle(platform="whatsapp", value="+15550001", display_name="Alice")
@@ -2123,14 +2123,14 @@ def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(ch
     assert thread.modality == Thread.Modality.GROUP
     assert thread.visibility == Thread.Visibility.RESTRICTED
     assert {message.thread_id for message in landed} == {thread.pk}
+    # The sender is the message's own; the recipient rows are the rest of its envelope.
+    assert [message.sender.value for message in landed] == ["+15550001", "+15550003"]
     assert list(
-        Participant._base_manager.filter(thread=thread)
+        Recipient._base_manager.filter(thread=thread)
         .order_by("message__external_id", "role", "handle__value")
         .values_list("message__external_id", "role", "handle__value")
     ) == [
-        ("group-1-message-1", "from", "+15550001"),
         ("group-1-message-1", "to", "+15550002"),
-        ("group-1-message-2", "from", "+15550003"),
         ("group-1-message-2", "to", "+15550002"),
     ]
 
@@ -2156,13 +2156,13 @@ def test_group_ingest_resolves_visibility_and_accumulates_unique_participants(ch
     assert thread.modality == Thread.Modality.GROUP
     assert thread.visibility == Thread.Visibility.RESTRICTED
 
-    duplicate = Participant._base_manager.get(
+    duplicate = Recipient._base_manager.get(
         message=landed[0],
-        role=Participant.ParticipantRole.FROM,
+        role=Recipient.RecipientRole.TO,
     )
     with system_context(reason="test group messaging constraints"):
         with pytest.raises(IntegrityError), transaction.atomic():
-            Participant._base_manager.create(
+            Recipient._base_manager.create(
                 message=landed[0],
                 thread=thread,
                 handle=duplicate.handle,
@@ -3229,7 +3229,7 @@ def test_handle_upsert_converges_a_value_collision_on_the_external_id_refresh_pa
 
 
 def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any) -> None:
-    """Untitled chats read as who they are with; outbound senders are the account holder."""
+    """Untitled chats read as who they are with, from ``Message.sender``; outbound senders are the account holder."""
 
     def said(external_id: str, thread: ParsedThread, name: str, *, outbound: bool = False) -> ParsedMessage:
         sender = ParsedHandle(platform="email", value=f"{name.lower()}@example.com", display_name=name)
@@ -3270,6 +3270,39 @@ def test_conversation_labels_name_untitled_threads_by_their_people(channel: Any)
         f"chat:{scope}:room-2": "Weekend plans",
         f"chat:{scope}:dm-silent": "",
     }
+
+
+@pytest.mark.parametrize("viewer", ["administrator", "channel-owner"])
+def test_conversation_labels_never_name_the_sender_of_a_trashed_message(channel: Any, viewer: str) -> None:
+    """A trashed inbound message names no one, even to a reader who may still read it.
+
+    Both cases may read a trashed message (``withheld_keeper``: an admin, a channel
+    manager), so each fails without the rule. A plain thread reader is not a case:
+    ``Message.read`` already withholds a trashed message from them, so their label
+    would pass with or without the rule.
+    """
+
+    room = ParsedThread(external_id="room-trash", modality="group")
+    _ingest(
+        [
+            replace(
+                _parsed(external_id, subject=""),
+                thread=room,
+                sender=ParsedHandle(platform="email", value=f"{name.lower()}@example.com", display_name=name),
+                recipients=(),
+            )
+            for external_id, name in (("trash-1", "Tim"), ("trash-2", "Anna"))
+        ],
+        channel=channel,
+    )
+    actor = create_platform_admin("label-admin") if viewer == "administrator" else channel.owner
+    thread = Thread._base_manager.get(external_id=f"chat:{channel.pk}:room-trash")
+    trashed = Message._base_manager.filter(channel=channel, external_id="trash-2")
+    for is_trashed, label in ((True, "Tim"), (False, "Tim, Anna")):
+        with system_context(reason="test conversation label trash"):
+            trashed.update(is_trashed=is_trashed)
+        with actor_context(actor):
+            assert Thread.objects.filter(pk=thread.pk).conversation_labels() == {thread.pk: label}
 
 
 def test_integration_reader_reads_channel_messages_and_parts_without_write(channel: Any) -> None:

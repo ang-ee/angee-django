@@ -326,14 +326,15 @@
 }
 
 /* Soft focus rings — namespaced `focus-ring` to avoid colliding with
-   Tailwind's auto-generated `ring-brand` utility. */
-@layer utilities {
-  .focus-ring {
-    box-shadow: var(--ring);
-  }
-  .focus-ring-danger {
-    box-shadow: var(--ring-danger);
-  }
+   Tailwind's auto-generated `ring-brand` utility. Declared as utilities so
+   variants compose them (`focus-visible:focus-ring`, `focus-within:focus-ring`):
+   Tailwind gives a variant to a registered utility only, and a plain class in
+   `@layer utilities` compiles to nothing under one. */
+@utility focus-ring {
+  box-shadow: var(--ring);
+}
+@utility focus-ring-danger {
+  box-shadow: var(--ring-danger);
 }
 
 /* The one selected / active / pressed surface (a tree row, a pressed toggle, a

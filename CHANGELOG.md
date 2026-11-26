@@ -199,6 +199,47 @@ live in code docstrings.
   `saveBanner`. **Upgrade:** replace
   `focus: true` with that hook's `focusBanner` and spread its `banner` on the
   surface's `ErrorBanner`.
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+  The default brand kit's colours dress the app at run time, on every page inside
+  it, signed in or not.
+  - `@angee/app` gains the install-one manifest key `hostAppearance`, a
+    `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
+    per render of its session frame; two providers fail composition, as two dashboard
+    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps each
+    person's first paint, and the boot cache, where they wear the host's options, until
+    the source's first read answers, fails or pauses; a person's own saved theme or
+    customisation is painted at once, and after the first paint every choice applies
+    at once, a draft's included. Only the session frame sets it, and
+    `CreateAppInput.appearance` takes none.
+    Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
+    precedence".
+  - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
+    colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
+  - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
+    of any kit, through the new public root `default_brand_kit_colors`
+    (`BrandKitColors`), under `read_colors`, a deliberate disclosure on the kit's own
+    `is_default` column (`brandkit/brand_kit` at schema revision 2; no tuple). Console
+    reads stay signed-in.
+  - The Appearance page's customisation editor starts from the options the person
+    wears, so customising while following the app default keeps its other choices.
+  - **Upgrade:** the console root `default_brand_kit` is removed; read
+    `default_brand_kit_colors` on the public schema, or `BrandKit.objects.default()` in
+    Python. Provision applies the permission revision through `rebac sync`; until it
+    has, the public root answers `null` with no error and the app wears the build's
+    colours. Once the addon is provisioned a default kit always exists, so on a host with
+    `angee.brandkit`: a project on the stock theme (the full profile's default) wears
+    the shipped Angee kit's colours; a project on another customisable theme, such as
+    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
+    states in `appearance_options` show only on a device's first visit, before the read
+    answers; and every app of a deployment with per-app themes wears the kit's palette,
+    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
+    hosts without the addon, and a theme that ships its own default kit stating its own
+    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+  - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
+    (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
+    because the workshop's toolbar is the host's appearance there; a story about the
+    source passes `hostAppearanceSource`.
+
 - `@angee/ui`: The Links pane says it is empty when it is. A related group
   with neither rows nor a verb is left out, and the pane showed its empty
   state only when no group was eligible; a record whose eligible groups were
@@ -247,6 +288,26 @@ live in code docstrings.
   of a bulk trash or restore (it showed only the first). **Upgrade:** code
   that matched the thrown error's text against the outcome's `message` finds
   the reasons there when the refusal carries any.
+- `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
+  applied: the panel library (react-resizable-panels) sets `overflow: auto`
+  inline on the element that takes a pane's class, and an inline style wins
+  over any class that is not `!important`, so a pane scrolls its content.
+  Nothing computed changes. A record in the document presentation that a list
+  opens in its split placement scrolls in the content pane of the list's own
+  workbench, as one opened inline scrolls in the list's record sheet; a record
+  in the workspace presentation, or with a full-bleed pane active, scrolls
+  inside the form in either placement. The pane's docstring says so; the
+  frontend guide's `Workbench` rule names what composes it (the console body
+  and a list's split placement), and its explorer-page rule covers the pages
+  that publish their navigator with `PrimaryPanePublisher`. A test holds, for
+  both placements, which element is the open record's nearest overflow rule
+  and the classes that size it and the list's root; it computes no layout, so
+  `Views/ResourceList`, the first story of a split list, shows a tall record
+  split and inline for a browser to measure the rest. Known, not changed:
+  `Workbench`'s `scrollMode` does nothing (both values compute the same
+  layout, since the library's inline styles override the class it adds); its
+  docstring says so, the console layout no longer passes its default, and
+  removing the prop waits on callers outside the framework.
 - `@angee/refine`: A write's refresh no longer leaves an unanswered first read
   idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
   that a request sent before the write cannot commit after it, and awaited the
@@ -338,6 +399,62 @@ live in code docstrings.
   every change. A class instance would now be sent as a plain copy without its
   methods, and a value holding a function would throw. No widget or form holds
   such a value, and no declared form saves such a pair today.
+- Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
+  behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
+  which judged only what `makemigrations` autodetects, now also judges the plan
+  `migrate`, and so `provision`, is about to run, before any operation and also
+  under `--skip-checks`: a pending removal in the project's own history is refused
+  where it would destroy stored data, delete a table another model still owns, or
+  where the guard cannot prove that it would not. A migration declares a drop it
+  intends with `django_compose.operations.IntendedRemoveField` or
+  `IntendedDeleteModel`. The migration templates that drop data now declare it:
+  `joined_at` and `left_at` in messaging's `participants_to_recipients.py`,
+  `Folder.source_href` in parties' `addressbook_links.py`, and `recurrence` on the
+  task and its history in projects' `task_recurrence_due_rule.py`.
+  **Upgrade:**
+  - A host needs no action unless a pending migration drops data. Where one does,
+    `migrate` and `provision` stop before anything is migrated with `unsafe
+    migration drop:` (or `cannot prove migration drop safe:`), naming each
+    migration, operation, column or table and its row count, then the remedy;
+    `provision` stays `in_progress`. Review each named removal: keep the storage,
+    or move its data and write the removal as
+    `IntendedRemoveField(model_name=..., name=...)` or `IntendedDeleteModel(name=...)`
+    in that migration, then run `provision` again. A table another model still
+    owns is refused even when declared: keep it, or change that owner first.
+  - A copy of one of the three templates above that is not applied yet and was
+    taken before this change removes those columns undeclared, and is refused
+    while they hold data: copy the template again, keeping its dependencies. The
+    two copies differ only in the class that declares each drop, so their state
+    and operations are the same and a database that applied the earlier copy
+    needs nothing. A copy that subclasses the template's `Migration` inherits the
+    declarations. No framework code wrote messaging's `joined_at` or `left_at`, so
+    a copy of that template is refused only where something else did. A copy
+    already applied needs nothing; the guard judges only pending migrations.
+  - Before any database work, `provision` refuses an installed app's own `migrate`
+    command, which would run without the guard, and any unsilenced failure of the
+    `commands` system checks, such as `django_compose.E002` for an app's own
+    `makemigrations`: remove that command, or make it subclass django-compose's
+    command of the same name.
+- `@angee/ui`: **The keyboard focus ring is drawn.** `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) were plain classes inside
+  `@layer utilities`; Tailwind gives a variant to a registered utility only,
+  so `focus-visible:focus-ring`, `focus:focus-ring`, `focus-within:focus-ring`
+  and `data-[popup-open]:focus-ring` compiled to nothing, and no link, button,
+  input or other control that asks for a ring showed a focus indicator. Both
+  are declared with `@utility` now, as `selected` is. A visible change
+  everywhere the stylesheet is used: the 3px ring (`--ring`, `--ring-danger`
+  on an invalid control) appears on every control that asked for one. A test
+  compiles the workshop's stylesheet entry with Tailwind and holds a rule for
+  each variant the packages spell (`packages/storybook/scripts/styles.test.mjs`).
+  No other plain class of the framework or its products is composed through a
+  variant. Known, not changed: a ring is cut where its control touches the
+  edge of a container that clips (tabs in a tab list, the path buttons of a
+  breadcrumb, a pane's resize handle); a control with its own ring inside a
+  field that rings on focus within shows two; a tab panel and the code editor
+  take focus with no indicator; and the stock ring is the brand colour at 30
+  percent, about 1.5 to 1 against its surface. **Upgrade:** check your own
+  screens with the keyboard; a class of your own composed through a variant
+  needs `@utility` too.
 - `@angee/ui`, `angee.base`: A field descriptor carries the declared format of
   a value held as text: `FieldDescriptor.format`, one of `"date"`,
   `"date-time"` or `"time"`, the JSON Schema `format` of a string. It is the
@@ -376,6 +493,101 @@ live in code docstrings.
   artifact changes. **Upgrade:** a hand-written descriptor that
   carries a date, a date and time or a time as text declares its `format`; a
   test that pins a projected date member whole finds `format` beside `widget`.
+- `angee.graphql`, `angee.base`, `angee.integrate`, `angee.projects`, `angee.knowledge`,
+  `angee.portfolio`, `angee.intake`, `angee.dashboards`, `angee.provenance`, `angee.storage`,
+  `angee.calendar`: **Changed behaviour.**
+  A generic GraphQL insert, and the verbs that validate a row before saving it (an
+  integration's creation, a scheduled record task, a page title saved with its body,
+  a product promoted from a project, a project or initiative report, a captured need),
+  now ask REBAC whether the caller may make that save before validating the row
+  (`angee.base.permissions.require_save_allowed`, over REBAC's `check_save`); a caller
+  it refuses gets the save's `PermissionDenied` text, and no field validator, `clean()`,
+  uniqueness check or constraint check runs for them. A dashboard snapshot validates its
+  widget queries only once its write is decided.
+  - The rule's limit: validation a model performs in its own `save()`, before the save
+    gate, runs before the decision and still answers a refused caller. A model that
+    needs the guarantee moves that validation to `clean()`. REBAC deciding a save before
+    validating and writing it will close the limit and retire the rehearsal.
+  - For a caller who may save, a `ValidationError` a model's `save()` raises now comes
+    before the field errors `full_clean` reports, and an admitted insert rehearses its
+    save once more.
+  - An implementation key outside its field's choices is refused when a new row is
+    validated or inserted, as a field error naming the key; a stored row saves its key
+    as before. An integration's creation decides its caller before it reports a seeded
+    default whose catalogue row is missing.
+  - An idempotency key's earlier creation is still replayed while the caller can read
+    it, looked up before the create is decided again; a first attempt is decided before
+    its key is claimed. The key's content is the request's input as sent, which the
+    provenance adapter no longer decodes, so a backend that fills values before it
+    inserts still replays its retry. `AngeeHasuraWriteBackend.creation_values` is
+    removed, and a key an Angee backend claimed before the upgrade answers its retry
+    with `CREATION_KEY_CONFLICT`. An anonymous caller's key is refused as a field error
+    on `idempotency_key`: anonymous callers share one actor.
+  - **Upgrade:** a write backend that overrides `insert` or `_create_row` accepts
+    `*, claim=None` and, where it decides, asks `claim()` before it writes, returning
+    the row it returns as the earlier creation. Otherwise a keyed insert into it raises
+    `TypeError`, or `RuntimeError` when the override accepts `claim` but never asks it;
+    either way nothing is kept, and a keyless insert is served as before.
+
+- `angee.messaging`, `angee.nexus`: **Renamed and removed.** A message has a
+  sender, `Message.sender`, and recipients: what was left of `messaging.Participant`
+  is `messaging.Recipient`, one row per handle a message is addressed to, in its
+  envelope role `to`, `cc` or `bcc`. The `from` role, the row without a message
+  (a thread membership nothing wrote or read) with its constraint
+  `uq_participant_thread_handle_role`, and `joined_at` and `left_at` are gone;
+  `message` is required, the one unique constraint is
+  `uq_recipient_message_handle_role`, and public ids take the prefix `rcp_`
+  (were `ptp_`), so a stored `ptp_` id no longer resolves. Renamed with it:
+  `ParticipantRole` to `Recipient.RecipientRole`; the reverse names
+  `Message.participants` and `Thread.participants` to `recipients`, and
+  `Handle.participations` to `recipient_rows`; `MessageInbox.participants` to
+  `recipients`; the `participants=` keyword of `MessageQuerySet.ids_involving_handles`
+  and `ids_involving_parties` to `recipients=`; the model label in resource
+  metadata and live invalidation to `messaging.Recipient`; the REBAC type
+  `messaging/participant` to `messaging/recipient` (schema revision 27), without
+  the `membership_thread`, `editor` and `reader` relations, so a recipient row is
+  read through its message or thread and created and changed through its message:
+  creating one is no longer open to every signed-in user. In the
+  console GraphQL schema, `ParticipantType` is `RecipientType`, without
+  `joined_at` and `left_at`; the `participants`, `participants_by_pk` and
+  `participants_aggregate` roots and their inputs are `recipients…`;
+  `MessageType.participants` is `recipients`; the subscription
+  `participantChanged` is `recipientChanged`; the role enum is `RecipientRole`,
+  without `FROM`; and `ThreadType.participants` is removed. The inbox
+  Participants pane keeps its name and lists the sender, labelled From, then the
+  recipients, each labelled by its role. `InboxConnection.role` holds one
+  vocabulary, a recipient's role or `sender` for the message's sender: a Handles
+  row's is now empty, its platform being its `handle.platform`.
+  **Upgrade:** copy the migration template
+  `src/angee/messaging/compose_migrations/messaging/participants_to_recipients.py`
+  into `runtime/messaging/migrations/` as its docstring says, run `makemigrations
+  messaging` until it reports no changes, then migrate with the services stopped,
+  as provision does: the migration locks the recipient table for its whole run and
+  the message table for its last moments, and the previous release reads the old
+  table. Allow on the order of ten seconds per million messages, most of it one
+  rewrite of the recipient table. The template first refuses, changing nothing,
+  while a row without a message exists, and names the statement that deletes those
+  rows; then it renames the model with its table and rows, gives a message without
+  a sender the handle of its `from` row, logs how many `from` rows named someone
+  other than their message's sender (each message's source keeps its `From`
+  header) and deletes the `from` rows. A migration `makemigrations` writes without
+  the template deletes `Participant` and creates `Recipient`, which would drop the
+  recipient rows, a projection of each message's stored envelope: the drop guard
+  refuses it where the participant table holds rows, at `makemigrations` and, for
+  one generated on an empty database, at `migrate`. Provision prunes the
+  retired REBAC type `messaging/participant`; grants written directly on its
+  `editor` or `reader` relations, which no framework surface wrote, are not
+  carried over. On a stack whose `operator-schema` job does not wait for
+  `provision`, the first chained restart after this upgrade can fail `rebac.E009`
+  on the retired `messaging/participant` type until provision's sync has run; run
+  the chain once more. If a provision run stops before its sync (for example at
+  its migration check, when a newly enabled addon has no migrations yet), the same
+  check stops every management command, `makemigrations` included; author the
+  pending migrations with `--skip-checks` until provision has synced. Upgrade
+  cutoff: the template ships through the 3.x releases and is removed in 4.0, and
+  `angee.base.querysets.MergeableQuerySet.survivor_id` stays while retained
+  migrations import it; a host upgrading from an earlier release applies the
+  template through a 3.x release first.
 - `@angee/ui`: A record form's create no longer displays a field its save
   cannot write that holds an empty object. What a record form displays reads
   its own fact, `holdsNothingToDisplay` (`form-view-model.ts`: no value, a
@@ -429,6 +641,69 @@ live in code docstrings.
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and
   expected `0` finds the number's own control.
+- **Message templates: the new addon `angee.messaging_templates`.**
+  - **What it holds.** A message template (`MessageTemplate`) is one row of one
+    kind for one key and one language: a message template of the kind `template`
+    (a mail, with its `subject`, `preheader` and the `layout` it sits in), a
+    message template layout (HTML that wraps templates), a message template block
+    or a message template part (pieces rows include). The kind is written once
+    (`MessageTemplateKind`); what differs by kind is its handler's
+    (`MessageTemplateKind.handler`, a `MessageTemplateKindHandler`) or a
+    declarative constraint naming the kind. A row's `source` is Markdown or HTML
+    (`MessageTemplateFormat`); an HTML row also has its plain-text form,
+    `text_source`. `language` is an ISO 639 code as parties stores one
+    (`LanguageCodeField`), any language parties knows, `zh` included.
+    `variables` declares the values a row reads as dotted paths to descriptions,
+    at most 50 paths of at most 8 names, checked by `validate_variables`;
+    `sample` holds preview values. The addon renders nothing and ships no rows.
+  - **Shipped defaults and overrides.** Addons ship rows in their `install`
+    resources as baselines (`BaselineResource`), which only loads write.
+    `MessageTemplate.objects.override(baseline)` starts the deployment's override,
+    copying the baseline; deleting the override resets to the default, and
+    reverting that delete brings it back as it was. `content_hash` fingerprints a
+    row's kind and what it renders, on every save; rows are written one at a
+    time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
+    When a release changes a baseline, its override has an updated default until
+    `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
+    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
+    and as console filters.
+  - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
+    `effective(kind, key, ...)` pick the row a recipient reads: the language asked
+    for or the person's languages, then the default language (`LANGUAGE_CODE`'s
+    primary subtag), an override before its baseline; else the language of a
+    baseline, English first. A template's layout must resolve when it is set or
+    changed, judged through the reader's own scope, and a row other rows use
+    cannot be deleted while its key would stop resolving without it.
+  - **Access.** Every signed-in actor reads message templates; platform admins
+    create, edit and delete the deployment's own rows and overrides and read
+    every sample (`messaging_templates/message_template`). The console gets the
+    `message_templates` resource and the `override_message_template` and
+    `keep_message_template_override` mutations. They refuse as the framework's
+    actions do: a signed-out caller gets the session's GraphQL error, a caller
+    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
+    and a row that is not a shipped default (`not_a_baseline`) or overrides none
+    (`no_baseline`) an in-band `ok: false`.
+  - **New projects.** A project rendered from the web project template with the
+    `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
+    `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
+    requires `angee-messaging-templates`. `angee.messaging` never imports it.
+  - **Upgrade.** An existing project adds `angee.messaging_templates` to its
+    roster (`INSTALLED_APPS` in `settings.yaml`), writes its migration with
+    `makemigrations messaging_templates`, and provisions, which migrates and
+    synchronizes the permission schema.
+- `angee.parties`: `LanguageCodeField` stores one language as parties stores a
+  person's languages, and `normalize_language_code()` is its one rule;
+  `normalize_language_codes()` and `LanguageCodesField` spell each entry through
+  it and behave as before.
+- `angee.resources`: `BaselineResource` installs every row a load creates as a
+  baseline and refuses a row that states the flag or a column the model derives.
+  `Dashboard` loads through it, storing the same rows and ledger entries as
+  before; `angee.dashboards.resources` and its `DashboardResource` are removed.
+  Upgrade: nothing, unless code imported `DashboardResource`; it imports
+  `BaselineResource` from `angee.resources.loader` instead. A row that states an
+  auto-managed stamp (`created_at`) now loads into a model whose queryset closes
+  collection edits (`ClosedUpdateQuerySet`): the loader restores the stamp
+  through `owner_update`.
 - `@angee/ui`: A record form mounts a pane the same way whether it has one
   pane or several (`FormView`: every pane is a panel of the form's one `Tabs`
   root, keyed by its id; a lone pane's panel renders the plain region through
@@ -446,6 +721,186 @@ live in code docstrings.
   that loses the selection and is not kept mounted is unmounted, as any
   inactive pane is. A create that is saved still mounts its form again, as
   before.
+- `angee.messaging`, `angee.webforms_messaging`: the move of forms out of
+  messaging channels is removed: the bridge's migration template
+  (`compose_migrations/messaging/webform_channels_to_forms.py`), its
+  `check_webform_channels` command, and messaging's guard that refused a
+  removal of the channel's form columns ahead of the move
+  (`angee.messaging.webform_columns`, its `pre_migrate` receiver and its database
+  check). This changes the earlier statement in this file that "the template
+  ships through the 3.x releases and is removed in 4.0": it is removed now. The
+  move landed on main after `v0.2.0` and was in no release. The guard's planned
+  replacement by django-compose's `IntendedRemoveField` is retired with it; a
+  host's `makemigrations` still refuses an autodetected removal of a table or
+  column that holds data. `angee.messaging.webforms` keeps `default_webform_schema` alone,
+  because every initial messaging migration authored while the channel's form
+  columns existed imports it at each `migrate`; `FORM_COLUMNS`, `holds_form`,
+  `channels_holding_forms`, `channel_public_id` and `is_move` are gone.
+  Check ids: `angee.E054` is retired and is never reused.
+  Upgrade:
+  - A host on `v0.2.0` or earlier, or on a commit from before the move, whose
+    messaging channels still hold forms upgrades first through the marker tag
+    `forms-on-channels-move-last`, commit
+    `fc5a0fce49a54d545f5a621ef7244bed61514b9c` (a marker, not a release; it
+    publishes nothing), and moves its forms there as that commit's notes say.
+  - A host that applied its own copy of the template edits that copy once: its
+    imports of `FORM_COLUMNS`, `channel_public_id`, `channels_holding_forms` and
+    `holds_form` no longer resolve (`default_webform_schema` and the
+    `validate_publishable` and `validate_version` it imports from
+    `angee.webforms.validators` still do). Keep the file's name and its
+    `dependencies` exactly as they are, and make the rest:
+
+    ```python
+    from django.db import migrations
+
+
+    class Migration(migrations.Migration):
+        # The move of webform channels to forms, applied: its data step is retired, its schema steps stay.
+        dependencies = [...]  # unchanged
+        operations = [
+            migrations.RemoveConstraint("channel", "uq_messaging_channel_webform_slug"),
+            migrations.RemoveField("channel", "slug"),
+            migrations.RemoveField("channel", "is_published"),
+            migrations.RemoveField("channel", "form_schema_version"),
+            migrations.RemoveField("channel", "form_schema"),
+            migrations.RemoveField("channel", "max_body_bytes"),
+            migrations.RemoveField("channel", "max_field_bytes"),
+        ]
+    ```
+
+    This is the one case where an applied migration is edited, and it is safe:
+    the file keeps the same schema operations, so the migration state is the
+    same and no database operation changes. A database that applied it runs
+    nothing again, `makemigrations messaging` reports no changes, and a fresh
+    database replays it as the removal of the columns its initial migration
+    created. Emptying the file instead would leave those columns in the state,
+    and `makemigrations` would author their removal again.
+  - Every other host needs nothing.
+- `angee.messaging`, `angee.nexus`: **Changed behaviour.** A message's sender is
+  read from `Message.sender` alone. Ingest no longer writes a `from` participant
+  row beside it, so a message's participant rows are its recipients (`to`, `cc`,
+  `bcc`) and the GraphQL `participants` of a message ingested from now on no
+  longer lists its sender; a message ingested before still lists its `from` row
+  until the follow-up that renames recipients deletes those rows. Every read that
+  found a sender through that row reads the message instead: a party's and a
+  circle's correspondence timeline (`CorrespondenceKind`) and its invalidation,
+  untitled thread labels (`ThreadQuerySet.conversation_labels`), the inbox
+  Participants pane, which lists the sender first and then the recipients, and the
+  email envelope's `From`. Mail sent from here, whose messages never had a `from`
+  row, now appears on the sender's timeline and in their party reads. A trashed
+  inbound message no longer names an untitled thread, for any reader.
+  **Upgrade:** `MessageQuerySet.involving_parties` is removed; select
+  `pk__in=MessageQuerySet.ids_involving_parties(parties, handles=..., messages=...,
+  recipients=...)`, the ids of the messages given parties sent or received, built
+  on `MessageQuerySet.ids_involving_handles` (the same for given handles), or test
+  `.exists()` on it with the eligibility inside `messages`.
+  `MessageQuerySet.involving_parties_filter(parties, handles=..., participants=...)`
+  is removed too; filter with `pk__in=MessageQuerySet.ids_involving_parties(parties,
+  handles=..., messages=..., recipients=...)` instead.
+  `MessageQuerySet.involved_handle_ids` is the reverse, the handles that sent or
+  received given messages. Read a message's sender from `Message.sender`, never
+  from its recipients.
+- `angee.base`: `MergeableQuerySet.redirect_groups` given a subquery selects
+  `pk IN` the `UNION ALL` of its two indexed arms, the survivors and the rows
+  redirecting to them, where it compiled to `pk IN (…) OR merged_into_id IN (…)`.
+  PostgreSQL cannot estimate that disjunction and planned it as a scan of most of
+  the table, under every party-membership read (a party's correspondence timeline,
+  the inbox's sender and handle scopes). A performance fix: the rows selected are
+  the same for every input, and values keep the disjunction, which the indexes
+  serve.
+- **Brand kits: the new addon `angee.brandkit`.**
+  - **What it holds.** A brand kit (`BrandKit`) states one brand: its name; ten
+    colours, one per hex input of theme customisation and named as the theme
+    runtime names them (`brand`, `accent`, `neutral`, `canvas`, `surface`,
+    `rail`, `success`, `warning`, `danger`, `info`), as light values; a heading
+    and a body font stack (`font_heading`, `font_body`); a logo for light and one
+    for dark backgrounds; the organization and postal address a mail footer shows
+    (`footer_organization`, `footer_address`); and a voice note for people and AI
+    drafts. Every signed-in actor reads kits; platform admins create, edit and
+    delete them (`brandkit/brand_kit`).
+  - **Font stacks** are a field, `FontStackField`, that checks every write
+    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
+    family names of letters, digits, spaces and hyphens, bare or single-quoted,
+    closed by an unquoted generic family. A bare family with a word that starts
+    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
+    refused. Double quotes are stored as single quotes.
+  - **Logos** are images storage's `FileManager.ingest_image` put on its image
+    drive; `BrandKit.clean` refuses any other file when a logo changes. The
+    console reads the logos and writes neither.
+  - **Exactly one default kit.** Once any kit exists, writes through `save()` and
+    `clean()` keep one: the first kit saved becomes the default, saving another
+    kit as the default takes the flag from the previous one, and the default can
+    be neither unticked nor deleted, on any delete path. A conditional unique
+    constraint refuses a second default written past the save.
+    `BrandKit.objects.default()` returns it, or `None` before any kit exists,
+    after a write past `save()` and `clean()`, and for an actor who reads no kit.
+  - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
+    layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
+    `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's
+    seeds, as the theme runtime derives the app's tokens, with at least 4.5:1 for
+    every text pair in both schemes; every colour is a lower-case `#rrggbb`.
+    `BrandKit.contrast_warnings()` names the roles it had to move far from their
+    seeds; they are advice about mail, shown on the kit form, and never refuse a
+    save. The derivation also lives in `packages/ui/src/theme/runtime.mjs`; tests
+    read the runtime's colour names, inks and mix weights and fail on drift.
+  - **The shipped kit.** The install tier ships one kit stating the Angee brand:
+    the Angee theme's customisation defaults and its sans stack. It states no
+    default, so on a fresh install it becomes the default by being the first kit
+    saved, and every seeded field is `create_only`. A shipped kit that is not the
+    default may be deleted; the next load recreates it as an ordinary kit.
+  - **Console.** Settings gains a Brand kits page, shown to those who may create
+    kits: the list of kits and the registered kit form, whose contrast warnings
+    focus the colour they name.
+  - **New projects.** A project rendered from the web project template with the
+    `full` addons profile lists `angee.brandkit` in its `settings.yaml`
+    `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
+    requires `angee-brandkit`.
+  - **Upgrade.** An existing project adds `angee.brandkit` to its roster
+    (`INSTALLED_APPS` in `settings.yaml`), writes its migration with
+    `makemigrations brandkit`, and provisions, which migrates, synchronizes the
+    permission schema and loads the install tier with the Angee kit.
+- `angee.webforms_messaging`: a form's channel is never blank and is stored
+  without the spaces around its id. A whitespace-only channel is refused under
+  `target_config.channel`, for an acting user before anyone asks whether they may
+  write on it (it was a permission refusal) and for system work (it was stored);
+  a padded id is stored stripped, so a second form on the same channel and slug is
+  refused even when its id was given with spaces. The configuration's JSON
+  schema is unchanged. Upgrade: no migration; a form stored with a blank channel
+  is refused at delivery as `config_invalid` (it was `channel_missing`) until its
+  channel is set.
+- `angee.webforms`: a form stores its target's configuration as the target's
+  `config_model` validates it. `Form` composes `ImplDefaultsMixin` with
+  `target_config` as its configuration column: every save normalizes it, system
+  work and a declared form's resource row included, so a configuration the model
+  refuses is not stored, and `Form.clean` leaves the validated value on the form
+  before it compares it with the stored one or the target's own `clean` reads it.
+  A refusal is reported under the member it is about (`target_config.slug`), from
+  `clean`, `save` and a resource load alike, where `clean` used to put every
+  message under `target_config`. A form made with no configuration for a target
+  whose `config_model` has defaults now stores those defaults, where it stored
+  `{}`. A response whose form's stored configuration no longer validates (its
+  target's `config_model` tightened since the form was saved) is refused as
+  `config_invalid`, for every target: kept by its code alone and not tried
+  again; staff correct the form's target configuration, then deliver it again.
+  Upgrade: no migration. A form whose stored configuration its target's model
+  refuses is refused at delivery as `config_invalid`, and an edit that saves its
+  configuration must correct it; a save of other fields with `update_fields`
+  leaves it alone. From the release that carries the declared form (the entry
+  "An addon declares a web form as one resource row" below): a consumer whose
+  resource files already declare a `webforms.Form` row, with its versions and
+  aliases in files of their own, moves the served version's content into the
+  row's `version`, its aliases into `aliases`, lists `retention_days` under the
+  entry's `create_only`, and deletes the other files; until then the load
+  refuses the form's file. The row keeps its xref and path, so the form is not
+  made again: when the declared content equals what the form serves, no new
+  version is made, and a published form stays published.
+- `angee.base`: a model composing `ImplDefaultsMixin` names its configuration
+  column in `impl_config_field` (default `config`). Every save stores the
+  selected implementation's validated configuration in that column, system work
+  included; a refusal is reported under the column's name, with the same path
+  below it (`settings.retries` for a column named `settings`); the configuration
+  defaults seed that column; the model check (`angee.E046`) looks for it. Models
+  that name none keep `config` and behave as before. Upgrade: nothing.
 - `@angee/ui`: **Changed behaviour.** A record form decides in one place
   whether its save can write a field, and its check, its controls and what a
   create displays read that. `pathWritable` (`form-view-model.ts`) holds the

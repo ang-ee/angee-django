@@ -29,11 +29,20 @@ statement, and a kept-separate decision splits the redirect and refuses a later
 fold. The pair rule principal is granted read and write on threads and messages
 like the parties statement sources.
 
+Whom a message is addressed to is one concept at two levels. As addresses it is
+the message's `Recipient` rows, one per handle and envelope role (`to`, `cc`,
+`bcc`) beside its one sender, `Message.sender`; as accounts it is chatter's direct
+addressees, `recipient_user_ids` when a comment is posted and
+`suggested_recipients` when one is composed. A project whose migration history
+still has messaging's `Participant` copies the template
+`compose_migrations/messaging/participants_to_recipients.py`, which renames the
+model with its rows; `CHANGELOG.md` gives the steps.
+
 An authoritative source audience correction uses
 `Message.objects.correct_source_thread(message, channel=..., expected_thread=..., thread=...)`.
 The native owner compares the locked previous thread, requires the envelope and
 both threads to belong to that channel, and refuses locally authored messages.
-It preserves content and repairs participants and both physical thread counters.
+It preserves content and repairs recipients and both physical thread counters.
 `ingest(..., explicit_thread=..., expected_thread=...)` composes the same command
 with envelope ingestion; absent the exact precondition, changing an explicit
 source thread remains refused. Historical ingestion suppresses live message
@@ -42,7 +51,7 @@ events while retaining native content history and counter updates.
 `Message.objects.compose_reply(parent, *, body, sender, actor, ...)` writes a reply
 on its parent's thread and channel under the channel's `reply` grant; the reply's
 `parent` is its In-Reply-To. An email reply (the parent's kind is `email`) is a
-complete envelope: `to` participants naming the parent's `Reply-To` addresses
+complete envelope: `to` recipients naming the parent's `Reply-To` addresses
 when it carries any (`Message.reply_addresses`, the one reader of that header),
 else the handle it was sent from (RFC 5322 §3.6.2); the
 subject `Re: <thread title>` (the title is the normalized subject, so prefixes
@@ -210,26 +219,7 @@ its capability child. Takeout and export backends declare `SourceKind.IMPORT` an
 assert as the channel's `integration_ptr`, the same row that owns the takeout's
 `SyncStream` and observed `RecordLink`s.
 
-A channel held a public form in six columns of its own (`slug`, `is_published`,
-`form_schema`, `form_schema_version`, `max_body_bytes`, `max_field_bytes`) until
-web forms took forms over. Messaging no longer declares them, and each project
-removes them in its own migration history: with its copy of the web forms
-bridge's template where channels hold a form, which carries each form to a
-`webforms.Form` first, and with an ordinary autodetected removal where none
-does. [`webforms.py`](webforms.py) keeps what those retained migrations import:
-`default_webform_schema`, the column names, and the one judgment of "this
-channel holds a form" (`holds_form`, `channels_holding_forms`), which the
-template uses to move and messaging uses to refuse.
-
-Messaging refuses to let the columns go full
-([`webform_columns.py`](webform_columns.py)). Its `pre_migrate` receiver stops a
-`migrate` run, also under `provision`, whose plan removes one of them with a
-migration that neither declares itself the move (`moves_webform_channels = True`
-on its `Migration`) nor follows it, while a webform channel of that database
-holds a form; nothing is applied, and the refusal names the migration, counts
-the channels and gives the remedy. `check --database` says the same as
-`angee.E054`. It reads `RemoveField` on the channel, also inside
-`SeparateDatabaseAndState`; a column dropped by `RunSQL`, or renamed and then
-removed, is not seen. Interim: deleted once the framework pins django-compose
-0.1.0.dev14, whose drop guard judges pending removals at migrate time; the
-module's docstring says what the bridge's template changes with that pin.
+A channel held a public form in columns of its own until web forms took forms
+over. [`webforms.py`](webforms.py) keeps `default_webform_schema` alone, the
+default that `Channel.form_schema` named, because every initial messaging
+migration authored while those columns existed imports it.

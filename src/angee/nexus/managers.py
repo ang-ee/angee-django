@@ -626,7 +626,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         redirect: a merged handle keeps its messages and recipients.
         """
 
-        participant_model = apps.get_model("messaging", "Participant")
+        recipient_model = apps.get_model("messaging", "Recipient")
         message_model = apps.get_model("messaging", "Message")
         edge_model = apps.get_model("messaging", "MessageEdge")
         public = apps.get_model("messaging", "Thread").Modality.PUBLIC_THREAD
@@ -644,11 +644,11 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
             return rows
 
         addressed = pairs(
-            participant_model._base_manager.filter(
+            recipient_model._base_manager.filter(
                 message_id__in=published,
                 role__in=(
-                    participant_model.ParticipantRole.TO,
-                    participant_model.ParticipantRole.CC,
+                    recipient_model.RecipientRole.TO,
+                    recipient_model.RecipientRole.CC,
                 ),
                 message__thread__attachments__isnull=True,
             ).exclude(message__thread__modality=public),
