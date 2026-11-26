@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   AuthoredEnvelopeError,
+  extractActionOutcome,
   failedWriteOutcome,
   useAuthoredMutation,
   useInvalidateAuthoredModels,
@@ -9,7 +10,7 @@ import {
   type DocumentData,
   type FailedWriteOutcome,
 } from "@angee/refine";
-import type { IdempotencyKeyState } from "@angee/ui";
+import { actionOutcomeSubmitResult, formSubmitOutcome, type IdempotencyKeyState } from "@angee/ui";
 
 import { MessagingComposeMessage } from "./documents";
 import { useMessagingT } from "./i18n";
@@ -53,15 +54,20 @@ export function useComposeMessage(): ComposeMessage {
       return await compose(variables, options);
     } catch (cause) {
       if (failedWriteOutcome(cause) !== "conflict") throw cause;
-      invalidate(COMPOSE_MODELS);
+      // The refresh is not awaited: the earlier version shows when it lands, and the conflict is told now.
+      void invalidate(COMPOSE_MODELS);
       throw new AuthoredEnvelopeError(t("compose.sentEarlier"), "CREATION_KEY_CONFLICT");
     }
   }, [compose, invalidate, t]);
 }
 
-/** What a resolved answer tells the draft's key (`useIdempotencyKeys().send`'s `outcome`): written, or refused in band. */
+/**
+ * What a resolved answer tells the draft's key (`useIdempotencyKeys().send`'s `outcome`), through the
+ * one mapping every keyed surface passes (`formSubmitOutcome`): written, a conflict should a code say
+ * so in band, else refused.
+ */
 export function composeOutcome(data: ComposeData | undefined): FailedWriteOutcome | null {
-  return data?.compose_message?.ok === true ? null : "refused";
+  return formSubmitOutcome(actionOutcomeSubmitResult(extractActionOutcome(data, "compose_message")));
 }
 
 /**

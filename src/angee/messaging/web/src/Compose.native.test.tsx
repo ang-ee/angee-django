@@ -9,6 +9,7 @@ import {
   MESSAGE, RECORDED, recordedSend, type ComposerFixture, type ComposerFixtureCall, type ComposerSeat,
 } from "./compose.fixtures.test-support";
 import { enMessagingMessages as M } from "./i18n";
+import { composeOutcome } from "./compose";
 
 // The virtualizer's windowing needs a real layout happy-dom lacks: every row renders.
 vi.mock("@tanstack/react-virtual", () => ({
@@ -304,6 +305,14 @@ test("a denial after a lost answer says, in the dialog too, that an earlier atte
   if (!("error" in denied)) throw new Error("The revoked send was recorded as an answer.");
   expect(await within(dialog).findByText(denied.error.message)).toBeTruthy();
   expect(within(dialog).getByText(word("compose.mayAlreadyBeSent")).closest("[role=status]")).toBeTruthy();
+});
+
+test("a resolved answer tells the key's owner through the shared mapping: written, a conflict whatever carries it, else refused", () => {
+  const answer = (fields: Record<string, unknown>) => ({ compose_message: { ok: false, message: "Message not sent.", code: null, validation_errors: null, id: null, ...fields } });
+  expect(composeOutcome(answer({ ok: true, message: "Message queued for delivery.", id: "msg_1" }))).toBeNull();
+  expect(composeOutcome(answer({ code: "CREATION_KEY_CONFLICT" }))).toBe("conflict");
+  expect(composeOutcome(answer({ validation_errors: { to: ["ana is not one email address."] } }))).toBe("refused");
+  expect(composeOutcome(undefined)).toBe("refused");
 });
 
 // --- The reply box ---------------------------------------------------------------------------
