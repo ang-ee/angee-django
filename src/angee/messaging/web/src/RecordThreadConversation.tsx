@@ -228,7 +228,7 @@ export function RecordThreadConversation({
   // the server writes it once; an edit after an earlier version was written answers a conflict.
   const keys = useIdempotencyKeys();
   const postScope = `messaging.record-message:${modelLabel}:${recordId}`;
-  useIdempotencyDraftOwner(canPost && !readOnly ? postScope : null);
+  useIdempotencyDraftOwner(canPost && !readOnly ? postScope : null, `the chatter box of ${modelLabel} ${recordId}`);
 
   const recipientOptions = React.useMemo(
     () =>

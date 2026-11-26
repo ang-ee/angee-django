@@ -352,7 +352,8 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   );
   const reportLate = useLateAnswerReport();
   const keys = useIdempotencyKeys();
-  useIdempotencyDraftOwner(open && idempotencyScope !== undefined ? idempotencyScope : null);
+  useIdempotencyDraftOwner(open && idempotencyScope !== undefined ? idempotencyScope : null,
+    typeof title === "string" ? `the dialog "${title}"` : "a MutationDialog");
   const footer = ({ dismiss, dismissRefusal }: DialogFormFooterContext) => (
     <>
       <Button

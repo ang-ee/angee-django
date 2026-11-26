@@ -62,8 +62,10 @@ export class IdempotencyKeyStore {
   private actor: string | null = null;
   private readonly drafts = new Map<string, Draft>();
   private readonly listeners = new Map<string, Set<() => void>>();
-  /** The surfaces holding each draft scope now, by what each is told of a clash (`useIdempotencyDraftOwner`). */
-  private readonly owners = new Map<string, Set<{ clash: (error: Error) => void }>>();
+  /** The surfaces holding each draft scope now: what each is called, and what it is told of a clash (`useIdempotencyDraftOwner`). */
+  private readonly owners = new Map<string, Set<{ holder: string; clash: (error: Error) => void }>>();
+  /** The scopes whose clash a production build has logged: once each. */
+  private readonly reported = new Set<string>();
 
   /** Hold the drafts of `actor`: another person forgets them all. */
   setActor(actor: string): void {
@@ -117,23 +119,25 @@ export class IdempotencyKeyStore {
   }
 
   /**
-   * Hold `scope` for one surface until the returned release. Two surfaces holding one scope would
-   * send one key for two writes: in development each is told `clash`, naming the scope, if more
-   * than one holds it once the commit's mounts and releases have run, so a strict-mode remount or
-   * a form replacing its predecessor in one commit holds it once.
+   * Hold `scope` for one surface, called `holder`, until the returned release. Two surfaces holding
+   * one scope would send one key for two writes. The check runs as the second holds it: a commit
+   * runs every release before its holds, so a strict-mode remount or a form replacing its
+   * predecessor in one commit holds it once. In development both holders are told `clash`,
+   * naming the scope and the two of them; a production build logs it once per scope and goes on.
    */
-  own(scope: string, clash: (error: Error) => void): () => void {
-    const owner = { clash };
+  own(scope: string, holder: string, clash: (error: Error) => void): () => void {
+    const owner = { holder, clash };
     const owners = this.owners.get(scope) ?? new Set();
+    const first = [...owners][0];
     owners.add(owner);
     this.owners.set(scope, owners);
-    if (developmentMode()) {
-      queueMicrotask(() => {
-        const live = this.owners.get(scope);
-        if (!live || live.size < 2) return;
-        const error = new Error(`Two mounted surfaces hold the idempotency draft scope "${scope}", so both would send one key for two writes: nest one under its host (useDraftScope, DraftScopeProvider) or give it a scope of its own.`);
-        live.forEach((held) => held.clash(error));
-      });
+    if (first) {
+      const error = new Error(`Two mounted surfaces hold the idempotency draft scope "${scope}": ${first.holder} and ${holder}, so both would send one key for two writes. Nest one under its host (useDraftScope, DraftScopeProvider) or give it a scope of its own.`);
+      if (developmentMode()) owners.forEach((held) => held.clash(error));
+      else if (!this.reported.has(scope)) {
+        this.reported.add(scope);
+        console.error(error.message);
+      }
     }
     return () => {
       owners.delete(owner);
@@ -211,18 +215,18 @@ export function useIdempotencyKeyState(scope: string): IdempotencyKeyState | nul
 }
 
 /**
- * Hold the draft `scope` names for this surface while it is mounted (null: it holds none now, as a
- * closed dialog). One scope belongs to one surface at a time: two holding it would send one key for
- * two writes, so in development both throw at their next render, naming the scope, once the commit
- * that mounted them has settled. A strict-mode remount, or a form replacing its predecessor in one
- * commit, holds it once.
+ * Hold the draft `scope` names for this surface, called `holder` in what a clash says, while it is
+ * mounted (null: it holds none now, as a closed dialog). One scope belongs to one surface at a
+ * time: two holding it would send one key for two writes, so in development both throw at their
+ * next render, naming the scope and the two holders; a production build logs it once per scope. A
+ * strict-mode remount, or a form replacing its predecessor in one commit, holds it once.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function useIdempotencyDraftOwner(scope: string | null): void {
+export function useIdempotencyDraftOwner(scope: string | null, holder: string): void {
   const store = React.useContext(IdempotencyKeyStoreContext);
   const [clash, setClash] = React.useState<Error | null>(null);
-  React.useEffect(() => (store && scope !== null ? store.own(scope, setClash) : undefined), [scope, store]);
+  React.useEffect(() => (store && scope !== null ? store.own(scope, holder, setClash) : undefined), [holder, scope, store]);
   if (clash) throw clash;
 }
 

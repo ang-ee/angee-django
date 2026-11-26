@@ -107,7 +107,7 @@ function ActionArgsDialog({
   // An action declaring the draft it writes holds one idempotency key for it, from its first attempt.
   const keys = useIdempotencyKeys();
   const draftScope = action.idempotencyScope?.(context) ?? null;
-  useIdempotencyDraftOwner(open || inline ? draftScope : null);
+  useIdempotencyDraftOwner(open || inline ? draftScope : null, `the form of action "${action.id}"`);
   const argNames = React.useMemo(
     () => new Set(definition?.fieldNames ?? (definition && typeof definition.fields !== "function"
       ? definition.fields.map((field) => field.name) : args.map((arg) => arg.name))),

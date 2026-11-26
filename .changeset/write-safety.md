@@ -29,11 +29,14 @@ pending write and typed values.
   once (`formSubmitError`'s `answerLost`; chatter and notes in their own
   words); the dashboards' create and duplicate tell a spent key in their own
   words.
-- One draft scope belongs to one surface at a time. `useIdempotencyDraftOwner(scope)`
-  holds it while the surface is mounted (an open dialog, the record form's
-  create, a composer that can post), and in development two surfaces holding
-  one scope throw at their next render, naming it; a strict-mode remount or a
-  form replacing its predecessor in one commit holds it once.
+- One draft scope belongs to one surface at a time. `useIdempotencyDraftOwner(scope, holder)`
+  holds it while the surface is mounted (an open keyed dialog, a composer that
+  can post, and every create form, keyed or not), and in development two
+  surfaces holding one scope throw at their next render, naming the scope and
+  both holders, so two create forms of one resource mounted at once, neither
+  nested under the other, fail there; a production build logs it once per
+  scope and goes on. A strict-mode remount or a form replacing its predecessor
+  in one commit holds it once.
   `useDraftScope(own)` names a surface's scope under the one its host provides
   (`DraftScopeProvider`): the record form provides its own
   (`record.create:<provider>:<resource>`, or `record.edit:…:<id>`), and a
@@ -114,6 +117,9 @@ Upgrade:
   `createUiTestProviders` renders under one when given `router: true` (or
   `{ initialEntries }`, kept in `routers`): a component test that opens a real
   dialog passes `router`.
+- `createMutationDialogTestDouble` sends a keyed dialog's submission one key
+  per draft, kept through refusals until an accepted answer or a spent key, as
+  the dialog does; it minted one per submit.
 - A keyed `MutationDialog` submission reads its third argument as a `string`;
   one that asserted it drops the assertion, and one that called `restart`
   after a conflict drops the call: a conflict, thrown or returned with its

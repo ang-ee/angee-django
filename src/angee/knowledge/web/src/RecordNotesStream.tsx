@@ -59,7 +59,7 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   // server inserts the note once; an edit after an earlier version was saved answers a conflict.
   const keys = useIdempotencyKeys();
   const noteScope = `knowledge.record-note:${target.modelLabel}:${target.recordId}:${role}`;
-  useIdempotencyDraftOwner(canCompose ? noteScope : null);
+  useIdempotencyDraftOwner(canCompose ? noteScope : null, `the ${role} box of ${target.modelLabel} ${target.recordId}`);
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus loadingLabel={t("notes.loading")} className="space-y-3 p-4">
     <Skeleton size="lg" /><SkeletonText lines={2} size="lg" /><SkeletonText lines={2} size="lg" />

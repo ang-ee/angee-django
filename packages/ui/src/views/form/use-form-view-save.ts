@@ -319,7 +319,7 @@ export function useFormViewSave({
   const idempotencyKeys = useIdempotencyKeys();
   const provider = dataResource?.schemaName ?? "default";
   const draftScope = useDraftScope(isCreate ? `record.create:${provider}:${resource}` : `record.edit:${provider}:${resource}:${String(id)}`);
-  useIdempotencyDraftOwner(isCreate ? draftScope : null);
+  useIdempotencyDraftOwner(isCreate ? draftScope : null, `the create form of ${resource}`);
   const emptyValues = React.useMemo(
     () => emptyDraft(formFields, defaultValues),
     [defaultValues, formFields],

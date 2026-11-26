@@ -11,6 +11,7 @@ import {
   type RefineTestDataProvider,
   type RefineTestProviderOptions,
 } from "@angee/refine/testing";
+import { failedWriteOutcome } from "@angee/refine";
 import {
   ModelMetadataProvider,
   refineResourcesFromDataResources,
@@ -30,7 +31,7 @@ import type {
   MutationDialogValues,
 } from "./views/form/MutationDialog";
 import { submitMutationDialog } from "./views/form/MutationDialog";
-import { SURFACE_RENDERS_FAILURE } from "./views/form/validation-errors";
+import { SURFACE_RENDERS_FAILURE, formSubmitOutcome } from "./views/form/validation-errors";
 
 type UiModule = typeof import("./index");
 export type UiTestDoubles = Partial<Record<keyof UiModule, unknown>>;
@@ -194,7 +195,9 @@ export interface MutationDialogTestDoubleOptions {
  * declarations rather than its interaction ceremony. Callers spread the real
  * `@angee/ui` module in their mock, so codecs and every unrelated UI owner stay
  * production-accurate. Like the dialog, a submit runs the declared `validate`
- * first, with the same quiet call options, and submits nothing it refuses.
+ * first, with the same quiet call options, and submits nothing it refuses; and a keyed one sends
+ * one key per draft, as the dialog's owner holds it: minted at the draft's first submit and kept
+ * through every retry until an accepted answer or a spent key ends it.
  */
 export function createMutationDialogTestDouble({
   capture,
@@ -203,6 +206,7 @@ export function createMutationDialogTestDouble({
 }: MutationDialogTestDoubleOptions = {}): (
   props: MutationDialogTestDoubleProps,
 ) => React.ReactElement | null {
+  const draftKeys = new Map<string, string>();
   return function MutationDialogTestDouble(
     props: MutationDialogTestDoubleProps,
   ): React.ReactElement | null {
@@ -236,9 +240,18 @@ export function createMutationDialogTestDouble({
           void Promise.resolve(props.validate?.(parsed, SURFACE_RENDERS_FAILURE))
             .then(async (validation) => {
               if (validation) return;
-              // A keyed dialog's submission gets a key, as the dialog's draft gives it one.
-              const key = props.idempotencyScope === undefined ? undefined : createClientKey(props.idempotencyScope);
-              const result = await submitMutationDialog(props, parsed, String(props.errorFallback ?? ""), key);
+              // A keyed dialog's submission gets its draft's key.
+              const scope: string | undefined = props.idempotencyScope;
+              const key = scope === undefined ? undefined : draftKeys.get(scope) ?? createClientKey(scope);
+              if (scope !== undefined && key !== undefined) draftKeys.set(scope, key);
+              let result;
+              try {
+                result = await submitMutationDialog(props, parsed, String(props.errorFallback ?? ""), key);
+              } catch (cause) {
+                if (scope !== undefined && failedWriteOutcome(cause) === "conflict") draftKeys.delete(scope);
+                throw cause;
+              }
+              if (scope !== undefined && formSubmitOutcome(result) !== "refused") draftKeys.delete(scope);
               if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
             });
         }}

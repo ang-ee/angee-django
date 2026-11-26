@@ -275,8 +275,8 @@ class Caught extends Component<{ children?: ReactNode; caught: (error: Error) =>
   override render() { return this.state.failed ? null : this.props.children; }
 }
 
-function Holder({ scope }: { scope: string | null }): ReactNode {
-  useIdempotencyDraftOwner(scope);
+function Holder({ scope, name = "a surface" }: { scope: string | null; name?: string }): ReactNode {
+  useIdempotencyDraftOwner(scope, name);
   return null;
 }
 
@@ -290,8 +290,11 @@ describe("useIdempotencyDraftOwner", () => {
   }
 
   test("two mounted surfaces holding one scope fail in development, naming it", async () => {
-    const { errors } = await mount(<><Holder scope="record.create:default:tasks.Task" /><Holder scope="record.create:default:tasks.Task" /></>);
-    expect(errors[0]?.message).toContain('Two mounted surfaces hold the idempotency draft scope "record.create:default:tasks.Task"');
+    const { errors } = await mount(<>
+      <Holder scope="record.create:default:tasks.Task" name="the page's create form" />
+      <Holder scope="record.create:default:tasks.Task" name="the embedded list's create form" />
+    </>);
+    expect(errors[0]?.message).toContain('Two mounted surfaces hold the idempotency draft scope "record.create:default:tasks.Task": the page\'s create form and the embedded list\'s create form');
   });
 
   test("a strict-mode remount, a surface replacing its predecessor in one commit, or a surface holding none is one holder", async () => {
