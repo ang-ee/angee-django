@@ -95,7 +95,8 @@ live in code docstrings.
   a composed account action offered twice or not declared on `auth/user`
   (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
   does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
-  backend marks a genuine but spent credential with
+  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
+  (`sign_in_account`) and marks a genuine but spent credential with
   `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
   `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
   `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the

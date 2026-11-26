@@ -50,6 +50,13 @@ A credential backend's caller passes it to ``login(request, user, backend=...)``
 so the session outlives that backend's removal or rename.
 """
 
+SIGN_IN_ACCOUNT = "sign_in_account"
+"""The ``authenticate()`` keyword that names, unmasked, the account a credential other than a password signs in.
+
+``axes_username`` records the attempt under it and ``spent_credential`` reads
+the account a spent mark names from it.
+"""
+
 _SPENT_CREDENTIAL = "angee_iam_spent_credential"
 """Request attribute holding the account a credential backend just refused as genuine but spent."""
 
@@ -84,15 +91,15 @@ def axes_username(request: Any, credentials: Any) -> str | None:
     """``AXES_USERNAME_CALLABLE``: the account a credential names, else axes' own username lookup.
 
     A credential other than a password passes the account it names as
-    ``sign_in_account``, unmasked, so its attempt is recorded under that
+    :data:`SIGN_IN_ACCOUNT`, unmasked, so its attempt is recorded under that
     account (the string it carries, for an account that does not exist),
     never under an empty username.
     """
 
     from axes.helpers import get_username_from_data
 
-    if credentials and credentials.get("sign_in_account"):
-        return str(credentials["sign_in_account"])
+    if credentials and credentials.get(SIGN_IN_ACCOUNT):
+        return str(credentials[SIGN_IN_ACCOUNT])
     return get_username_from_data(credentials if credentials else getattr(request, "data", request.POST))
 
 
@@ -113,7 +120,7 @@ def spent_credential(request: Any, credentials: Any) -> bool:
     """``AXES_WHITELIST_CALLABLE``: exempt the failure of a genuine but spent credential, and nothing else.
 
     Only credentials naming the account :func:`mark_spent_credential` marked
-    (``sign_in_account``) are exempt, and the mark is cleared when read;
+    (:data:`SIGN_IN_ACCOUNT`) are exempt, and the mark is cleared when read;
     :func:`authenticate_once` also clears it when the attempt ends, so it
     cannot exempt another attempt.
     """
@@ -121,7 +128,7 @@ def spent_credential(request: Any, credentials: Any) -> bool:
     if request is None or not credentials:
         return False
     account = vars(request).get(_SPENT_CREDENTIAL)
-    if not account or credentials.get("sign_in_account") != account:
+    if not account or credentials.get(SIGN_IN_ACCOUNT) != account:
         return False
     del vars(request)[_SPENT_CREDENTIAL]
     return True

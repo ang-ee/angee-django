@@ -9,9 +9,10 @@ from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import RequestFactory
-from django.test.utils import override_settings
+from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context
 
+from angee.base.testing.queries import statement_startswith
 from angee.iam_messaging.auth import sign_in_credentials
 from angee.iam_messaging.testing.models import SignInLink
 from tests.iam_campaign import iam_admin as iam_admin
@@ -100,3 +101,18 @@ def test_two_issues_within_the_cooldown_store_one_link_and_send_one_mail(iam_adm
     assert outcomes == [False, True]
     assert SignInLink._base_manager.filter(user=target).count() == 1
     assert [message.to for message in mail.outbox] == [["issue-pair@example.com"]]
+
+
+@override_settings(**{**DELIVERABLE, "ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN": 60})
+def test_issuing_a_link_locks_the_account_before_it_reads_the_cooldown(iam_admin):
+    target = User.objects.create_user("link-locked", "link-locked@example.com")
+    with actor_context(iam_admin), CaptureQueriesContext(connection) as captured:
+        target.with_actor(iam_admin).issue_sign_in_link()
+    statements = [query["sql"] for query in captured]
+    locks = [index for index, sql in enumerate(statements) if User._meta.db_table in sql and "FOR UPDATE" in sql]
+    reads = [
+        index for index, sql in enumerate(statements)
+        if SignInLink._meta.db_table in sql and statement_startswith(sql, "SELECT")
+    ]
+    assert len(locks) == 1 and reads
+    assert locks[0] < reads[0]

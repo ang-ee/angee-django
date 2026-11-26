@@ -143,7 +143,10 @@ def test_the_spent_mark_ends_with_the_attempt_even_when_it_raises(db):
     assert authenticate_once(quiet, **credentials) is None
     assert SPENT_MARK not in vars(quiet)
 
-    def fail(sender: Any, **kwargs: Any) -> None:
+    marked: list[str | None] = []
+
+    def fail(sender: Any, request: Any = None, **kwargs: Any) -> None:
+        marked.append(vars(request).get(SPENT_MARK))
         raise RuntimeError("receiver failed")
 
     raising = _at("203.0.113.82")
@@ -153,4 +156,6 @@ def test_the_spent_mark_ends_with_the_attempt_even_when_it_raises(db):
             authenticate_once(raising, **credentials)
     finally:
         user_login_failed.disconnect(fail)
+    # The backend marked the attempt while it ran, and the mark ended with it.
+    assert marked == [holder.public_id]
     assert SPENT_MARK not in vars(raising)
