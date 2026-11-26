@@ -17,8 +17,20 @@ import {
 
 import { IamIssueUserPassword, IamResetUserPassword } from "./documents";
 import { useIamT } from "./i18n";
+import { USER_MODEL } from "./users-list";
 
-const USER_MODEL = "iam.User";
+/**
+ * IAM's own account actions, each named by its Zed permission on `auth/user` (`UserAccountAction` in
+ * `angee.iam.models`). The wire spells them so whatever the composed enum's type is named, which differs by
+ * host; a misspelt property does not compile.
+ */
+const IAM_ACCOUNT_ACTIONS = {
+  setActive: "set_active",
+  rename: "rename",
+  resetPassword: "reset_password",
+  issuePassword: "issue_password",
+  setPassword: "set_password",
+} as const;
 
 /** Fields every account action reads from the open user record. */
 export const ACCOUNT_ACTION_FIELDS = ["account_actions", "revision", "username"] as const;
@@ -83,7 +95,7 @@ export function useSetPasswordAction(): ActionDescriptor {
   return {
     id: "set-password", label: t("users.setPassword"), danger: true,
     args: passwordForm.args,
-    visibleWhen: (record) => offersAccountAction(record, "set_password"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.setPassword),
     submit: async (values, context) => {
       const invalid = passwordForm.validate(values);
       if (invalid) return invalid;
@@ -132,7 +144,7 @@ export function useIssuePasswordAction(): ActionDescriptor {
   return {
     id: "give-access", label: t("users.giveAccess"), run,
     confirm: { title: t("users.giveAccess.confirmTitle"), body: t("users.giveAccess.confirmBody") },
-    visibleWhen: (record) => offersAccountAction(record, "issue_password"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.issuePassword),
   };
 }
 
@@ -148,7 +160,7 @@ export function useResetPasswordAction(): ActionDescriptor {
   return {
     id: "reset-access", label: t("users.resetAccess"), run, danger: true,
     confirm: { title: t("users.resetAccess.confirmTitle"), body: t("users.resetAccess.confirmBody"), danger: true },
-    visibleWhen: (record) => offersAccountAction(record, "reset_password"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.resetPassword),
   };
 }
 
@@ -164,12 +176,12 @@ export function useSetActiveActions(): readonly ActionDescriptor[] {
     {
       id: "deactivate", label: t("users.deactivate"), danger: true, run: deactivate,
       confirm: { title: t("users.deactivate.confirmTitle"), body: t("users.deactivate.confirmBody"), danger: true },
-      visibleWhen: (record: Row) => record.is_active === true && offersAccountAction(record, "set_active"),
+      visibleWhen: (record: Row) => record.is_active === true && offersAccountAction(record, IAM_ACCOUNT_ACTIONS.setActive),
     },
     {
       id: "reactivate", label: t("users.reactivate"), run: reactivate,
       confirm: { title: t("users.reactivate.confirmTitle"), body: t("users.reactivate.confirmBody") },
-      visibleWhen: (record: Row) => record.is_active === false && offersAccountAction(record, "set_active"),
+      visibleWhen: (record: Row) => record.is_active === false && offersAccountAction(record, IAM_ACCOUNT_ACTIONS.setActive),
     },
   ];
 }
@@ -196,7 +208,7 @@ export function useRenameAction(): ActionDescriptor {
   }, [rename, t]);
   return {
     id: "rename", label: t("users.rename"), args, submit,
-    visibleWhen: (record) => offersAccountAction(record, "rename"),
+    visibleWhen: (record) => offersAccountAction(record, IAM_ACCOUNT_ACTIONS.rename),
   };
 }
 

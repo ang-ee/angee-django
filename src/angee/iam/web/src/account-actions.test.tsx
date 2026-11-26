@@ -106,6 +106,8 @@ describe("account actions follow the row's server projection", () => {
     expect(offersAccountAction(record, "rename")).toBe(true);
     expect(offersAccountAction(record, "issue_password")).toBe(false);
     expect(offersAccountAction({ id: "user-2" }, "rename")).toBe(false);
+    // The wire spells each action as its Zed permission; the old enum's upper-case names offer nothing.
+    expect(offersAccountAction({ id: "user-3", account_actions: ["RENAME"] }, "rename")).toBe(false);
     const { result } = renderHook(useSetActiveActions);
     const [deactivate, reactivate] = result.current;
     expect(deactivate?.visibleWhen?.(record)).toBe(true);
