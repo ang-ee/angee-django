@@ -43,6 +43,13 @@ live in code docstrings.
     default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
     resource condition keeps its own depth bound of 12, measured by the same
     walk.
+  - A request body or WebSocket message nested too deeply for Python's JSON
+    decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
+    `decode_json` in `angee.base.serialization`: the GraphQL view answers
+    Strawberry's own 400, a refused view-as preview still answers its 403, the
+    GraphQL WebSocket closes with Strawberry's 4400, and anonymous ingress
+    refuses it as `invalid_request`. Each raised an uncaught `RecursionError`
+    before.
   - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
     through nested lists and expands shared references; bounding it belongs to
     that library's own release.

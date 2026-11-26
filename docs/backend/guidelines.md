@@ -1807,7 +1807,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   expanding walk counts them, a repeated reference counted each time. A value
   past either is refused as `BAD_USER_INPUT` while the request is coerced, so
   no resolver, permission check or query runs for it. `validation_issues`
-  applies the same bounds before a JSON Schema keyword walks a value. A domain
+  applies the same bounds before a JSON Schema keyword walks a value. A body or
+  WebSocket message too deep for Python's JSON decoder is malformed JSON
+  (`decode_json`), answered as Strawberry answers any other. A domain
   bound stays with its owner: `GraphQLSchemas.resource_filter` bounds a stored
   resource condition's depth with the same walk.
 - **Delete previews are generated with the resource's delete surface.**

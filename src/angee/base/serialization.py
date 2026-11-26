@@ -1,4 +1,4 @@
-"""Canonical JSON serialization, JSON value comparison and bounds, and JSON-safe coercion for runtime subsystems."""
+"""Canonical JSON serialization and decoding, JSON value comparison and bounds, and JSON-safe coercion."""
 
 from __future__ import annotations
 
@@ -133,6 +133,20 @@ def json_bound_violation(
                 frames[-1][2] = max(frames[-1][2], height + 1)
                 frames[-1][3] += frame[3]
     return None
+
+
+def decode_json(data: str | bytes, **options: Any) -> Any:
+    """``json.loads`` ``data``, refusing a document nested past the decoder's stack as malformed.
+
+    CPython's decoder raises ``RecursionError`` for such a document; this
+    raises ``json.JSONDecodeError`` instead, so a caller that answers a
+    malformed body as a client error answers this one the same way.
+    """
+
+    try:
+        return json.loads(data, **options)
+    except RecursionError:
+        raise json.JSONDecodeError("JSON nests too deeply to decode", "", 0) from None
 
 
 def json_equal(left: Any, right: Any) -> bool:

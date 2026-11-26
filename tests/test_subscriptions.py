@@ -468,6 +468,36 @@ def test_ws_consumer_uses_rebac_channels_mixin() -> None:
     assert issubclass(AngeeGraphQLWSConsumer, RebacChannelsConsumerMixin)
 
 
+def test_ws_message_nested_past_the_json_decoder_closes_as_invalid_json() -> None:
+    """A message too deep for the decoder's stack gets Strawberry's own close for a message that is not JSON."""
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> bool:
+            return True
+
+    async def scenario() -> object:
+        communicator = WebsocketCommunicator(
+            AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)),
+            "/graphql",
+            subprotocols=["graphql-transport-ws"],
+        )
+        communicator.scope["user"] = AnonymousUser()
+        connected, _subprotocol = await communicator.connect()
+        assert connected
+        await communicator.send_json_to({"type": "connection_init"})
+        assert await communicator.receive_json_from() == {"type": "connection_ack"}
+        await communicator.send_to(text_data="[" * 100_000 + "]" * 100_000)
+        closed = await communicator.receive_output()
+        await communicator.wait()
+        return closed
+
+    assert asyncio.run(scenario()) == {
+        "type": "websocket.close", "code": 4400, "reason": "WebSocket message must be valid JSON",
+    }
+
+
 @pytest.mark.django_db(transaction=True)
 def test_ws_query_runs_inside_actor_context() -> None:
     """GraphQL-over-WebSocket queries install the connection actor."""

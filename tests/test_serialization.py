@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import inspect
+import json
 import math
 import sys
 from decimal import Decimal
@@ -17,6 +18,7 @@ from angee.base.serialization import (
     MAX_JSON_MEMBERS,
     canonical_json,
     canonical_json_sha256,
+    decode_json,
     json_bound_violation,
     json_equal,
     json_safe,
@@ -174,3 +176,11 @@ def test_json_bounds_are_measured_without_recursion() -> None:
         sys.setrecursionlimit(limit)
 
     assert measured == [None, f"nests deeper than {MAX_JSON_DEPTH} levels", None]
+
+
+def test_decode_json_refuses_a_document_past_the_decoders_stack_as_malformed() -> None:
+    levels = 200_000
+
+    assert decode_json('{"a": [1]}') == {"a": [1]}
+    with pytest.raises(json.JSONDecodeError):
+        decode_json("[" * levels + "]" * levels)
