@@ -16,11 +16,15 @@ live in code docstrings.
     recipient with `effective("template", key, person=...)`) with the caller's
     values inside `system_context(reason=reason)`, and records it on messaging's
     system channel through `Message.objects.compose_as_system`, queued: one
-    message per call, returned unbound, with no idempotency key. It is for mail
-    the framework writes on no person's request and is called only from named
-    system work: the caller's own gate authorised the send, the verb checks no
-    permission and decides nothing about the values or who may be mailed, and a
-    test lists the modules that call it. The caller looks the row up inside its
+    message per call, returned unbound, with no idempotency key. It is named
+    system work, which a person's button may cause when the caller's own
+    permission decided the send, the causing actor recorded in the caller's
+    changeset. Call it only from system work whose own gate decided the send: a
+    person's request reaches it only through such a gate, never from a resolver,
+    an MCP tool or a view that hands it a person's choice of row, address or values
+    unchecked. It checks no permission and decides nothing about the values, the
+    links in them or who may be mailed; a test lists the modules that call it. The
+    caller looks the row up inside its
     own `system_context(reason=...)`, under the reason it sends with (the
     README's recipe). A blank `reason` is a `ValueError`; then
     `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;

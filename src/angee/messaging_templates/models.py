@@ -38,8 +38,9 @@ write and delete rows that are not baselines, read every row's sample and previe
 every row, and nobody but a resource load writes a baseline (``permissions.zed``).
 
 **Sending.** :meth:`MessageTemplateManager.send_as_system` renders an effective
-template as named system work and records it on messaging's system channel, for
-mail the framework sends on no person's request; messaging delivers it.
+template as named system work and records it on messaging's system channel, which
+delivers it: system mail, which a person's button may cause when the caller's own
+permission decided the send, the causing actor recorded in the caller's changeset.
 :meth:`MessageTemplateManager.send_test` is an administrator's test send of a
 row with its sample to their own address: decided by the row's ``preview``, then
 sent the same way, as named system work, with the administrator recorded as who
@@ -663,8 +664,10 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
     ) -> Message:
         """Render ``row`` with ``values`` as named system work and record it on the system channel, queued.
 
-        For mail the framework sends on no person's request, and the one path
-        every template mail takes (:meth:`send_test` shares it). **Call it only
+        System mail from a template: named system work, which a person's button
+        may cause when the caller's own permission decided the send, the causing
+        actor recorded in the caller's changeset; and the one path every template
+        mail takes (:meth:`send_test` shares it). **Call it only
         from system work whose own gate decided the send**: a person's request
         reaches it only through such a gate, never from a resolver, an MCP tool
         or a view that hands it a person's choice of row, address or values

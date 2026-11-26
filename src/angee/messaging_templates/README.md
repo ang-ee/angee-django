@@ -6,10 +6,11 @@ renderer that turns a row and its values into a subject, a preheader, an HTML bo
 and a plain-text body. The [models module](models.py), the
 [rendering module](rendering.py), the [engine](engine.py) and the
 [walker](walker.py) own the contracts below; their docstrings carry the exact API.
-A sender renders a row and hands the result on. For mail the framework writes on
-no person's request, `MessageTemplate.objects.send_as_system` renders a template
-as named system work and records it on messaging's system channel, which
-delivers it ([Sending as system work](#sending-as-system-work)). The addon
+A sender renders a row and hands the result on. `MessageTemplate.objects.send_as_system`
+renders a template as named system work and records it on messaging's system
+channel, which delivers it ([Sending as system work](#sending-as-system-work)):
+system mail, which a person's button may cause when the caller's own permission
+decided the send, the causing actor recorded in the caller's changeset. The addon
 requires messaging: enabling it enables messaging and what messaging requires,
 and mail settings are [messaging's](../messaging/README.md).
 
@@ -225,13 +226,15 @@ the default one.
 ## Sending as system work
 
 `MessageTemplate.objects.send_as_system(row, *, reason, to, values, kit=None)`
-sends mail the framework writes on no person's request: one effective template,
-one address, the values. It checks no permission and decides nothing about the
-values, the links in them or who may be mailed: the caller's own gate authorised
-the send, so it is called only from named system work, never from a path a
-person's request reaches with that person's choice of row, address or values (a
-resolver, an MCP tool, a view). A test lists the modules that call it, so a new
-caller is a reviewed change.
+sends one effective template to one address with the caller's values, as named
+system work: system mail, which a person's button may cause when the caller's
+own permission decided the send, the causing actor recorded in the caller's
+changeset. Call it only from system work whose own gate decided the send: a
+person's request reaches it only through such a gate, never from a resolver, an
+MCP tool or a view that hands it a person's choice of row, address or values
+unchecked. It checks no permission and decides nothing about the values, the
+links in them or who may be mailed. A test lists the modules that call it, so a
+new caller is a reviewed change.
 
 The caller picks the row for its recipient inside its own named work, so the
 lookup and the send are audited under one reason:
