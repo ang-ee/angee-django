@@ -51,6 +51,8 @@ export interface ActionFormContext {
   selectedIds: readonly string[];
   /** Refetch the invoking record without replacing this action's collected draft. */
   refresh?: () => Promise<Row | null>;
+  /** The draft's idempotency key, given to `submit` when the action declares `idempotencyScope`. */
+  idempotencyKey?: string;
 }
 
 /** A descriptor form, including record-specific JSON Schema argument forms. */
@@ -102,8 +104,11 @@ export interface ActionScalarArg extends ActionArgBase {
   fromContext?: (context: ActionFormContext) => unknown;
 }
 
-/** A single relation-picker arg naming the target resource its options list. */
-export interface ActionRelationArg extends ActionArgBase {
+/**
+ * A single relation-picker arg naming the target resource its options list. It may decline
+ * the picker's inline edit of the selected record with the descriptor's own `relationEdit: null`.
+ */
+export interface ActionRelationArg extends ActionArgBase, Pick<FieldDescriptor, "relationEdit"> {
   argKind: "relation";
   /** Seed the saved relation from the invoking record when the dialog opens. */
   fromContext?: (context: ActionFormContext) => unknown;
@@ -191,6 +196,15 @@ interface ActionBinding {
     context: ActionFormContext,
     options?: AuthoredMutateOptions,
   ) => ActionSubmitResult | Promise<ActionSubmitResult>;
+  /**
+   * The draft a keyed `submit` writes, named for the record it acts on (`useIdempotencyKeys`): the
+   * action dialog holds one idempotency key for it from its first attempt until an `ok` answer,
+   * gives it to `submit` as `context.idempotencyKey`, and gives the draft up when the person
+   * dismisses the dialog with nothing possibly written. While open, the dialog holds the scope
+   * (`useIdempotencyDraftOwner`). Null when the context names no draft (no record to act on): the
+   * dialog then gives `submit` no key, and a keyed `submit` refuses to send.
+   */
+  idempotencyScope?: (context: ActionFormContext) => string | null;
 }
 
 export interface ActionProps extends ActionBinding {

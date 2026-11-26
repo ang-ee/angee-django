@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
-import { MessageRow } from "./index";
+import { MessageActions, MessageRow } from "./index";
 
 describe("MessageRow", () => {
   test("renders the author, body, and every composed slot", () => {
@@ -45,5 +45,20 @@ describe("MessageRow", () => {
 
     expect(screen.getByText("Body only")).toBeTruthy();
     expect(screen.queryByText("undefined")).toBeNull();
+  });
+
+  test("its actions reveal on hover or focus, and always show where the primary pointer is coarse, which never hovers", () => {
+    render(
+      <ul>
+        <MessageRow author="Ada Lovelace" actions={<MessageActions><button type="button">Reply</button></MessageActions>}>
+          Shipping today.
+        </MessageRow>
+      </ul>,
+    );
+
+    const actions = screen.getByRole("button", { name: "Reply" }).parentElement!;
+    expect(actions.className.split(" ")).toEqual(expect.arrayContaining([
+      "opacity-0", "group-hover:opacity-100", "focus-within:opacity-100", "pointer-coarse:opacity-100",
+    ]));
   });
 });

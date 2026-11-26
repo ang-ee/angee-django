@@ -1,0 +1,75 @@
+# The base message template layout: one 600px column on the brand's canvas, the header
+# and footer blocks around the template's content, light colours inline and the dark
+# ones set from the role classes in <style>. It has no words of its own and no <h1>.
+# Classic Outlook reads its conditional comments: the DPI setting, a font it has in
+# place of a missing first family, and a ghost table 600 wide, since Word ignores
+# max-width. A client that drops <style> shows square corners.
+- xref: layout.base.en
+  kind: layout
+  key: base
+  language: en
+  name: Base
+  description: The wrapper every message template renders into. Header, content, footer, at most 600px wide.
+  format: html
+  source: |-
+    <!doctype html>
+    <html lang="{{ lang }}" dir="{{ dir }}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <meta name="format-detection" content="telephone=no,date=no,address=no,email=no,url=no">
+    <meta name="color-scheme" content="light dark">
+    <meta name="supported-color-schemes" content="light dark">
+    <title>{{ subject }}</title>
+    <!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->
+    <!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->
+    <style>
+    :root{color-scheme:light dark;supported-color-schemes:light dark}
+    body{margin:0;padding:0;-webkit-text-size-adjust:100%}
+    table{border-collapse:collapse}
+    .brand-radius{border-radius:8px}
+    @media (prefers-color-scheme:dark){
+    .brand-canvas{background:{{ brand.dark.canvas }} !important}
+    .brand-surface{background:{{ brand.dark.surface }} !important}
+    .brand-primary{background:{{ brand.dark.primary }} !important}
+    .brand-text{color:{{ brand.dark.text }} !important}
+    .brand-muted{color:{{ brand.dark.muted }} !important}
+    .brand-on-primary{color:{{ brand.dark.on_primary }} !important}
+    .brand-link{color:{{ brand.dark.link }} !important}
+    .brand-border{border-color:{{ brand.dark.border }} !important}
+    }
+    [data-ogsb] .brand-canvas{background:{{ brand.dark.canvas }} !important}
+    [data-ogsb] .brand-surface{background:{{ brand.dark.surface }} !important}
+    [data-ogsb] .brand-primary{background:{{ brand.dark.primary }} !important}
+    [data-ogsc] .brand-text{color:{{ brand.dark.text }} !important}
+    [data-ogsc] .brand-muted{color:{{ brand.dark.muted }} !important}
+    [data-ogsc] .brand-on-primary{color:{{ brand.dark.on_primary }} !important}
+    [data-ogsc] .brand-link{color:{{ brand.dark.link }} !important}
+    [data-ogsc] .brand-border{border-color:{{ brand.dark.border }} !important}
+    @media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}
+    </style>
+    </head>
+    <body xml:lang="{{ lang }}" class="brand-canvas" style="margin:0;padding:0;background:{{ brand.light.canvas }}">
+    <div lang="{{ lang }}" dir="{{ dir }}" style="display:none;max-height:0;overflow:hidden;mso-hide:all">{{ preheader }}&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>
+    <div lang="{{ lang }}" dir="{{ dir }}" role="article" aria-roledescription="email" aria-label="{{ subject }}" class="brand-canvas" style="padding:24px 12px;background:{{ brand.light.canvas }}">
+    <!--[if mso]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
+    <table role="presentation" dir="{{ dir }}" width="100%" cellpadding="0" cellspacing="0" class="brand-surface brand-border brand-radius" style="width:100%;max-width:600px;margin:0 auto;background:{{ brand.light.surface }};border:1px solid {{ brand.light.border }}">
+    <tr><td style="padding:28px 32px 4px;text-align:{% if dir == 'rtl' %}right{% else %}left{% endif %}">{% include "blocks/header" only %}</td></tr>
+    <tr><td class="brand-text" style="padding:16px 32px 8px;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }};text-align:{% if dir == 'rtl' %}right{% else %}left{% endif %}">{% block content %}{% endblock %}</td></tr>
+    <tr><td class="brand-muted brand-border" style="padding:16px 32px 28px;border-top:1px solid {{ brand.light.border }};font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }};text-align:{% if dir == 'rtl' %}right{% else %}left{% endif %}">{% include "blocks/footer" with unsubscribe=unsubscribe_url only %}</td></tr>
+    </table>
+    <!--[if mso]></td></tr></table><![endif]-->
+    </div>
+    </body>
+    </html>
+  text_source: |-
+    {% include "blocks/header" only %}
+
+    {% block content %}{% endblock %}
+
+    {% include "blocks/footer" with unsubscribe=unsubscribe_url only %}
+  variables:
+    unsubscribe_url: Where the recipient stops this kind of email; the footer leaves the line out when empty.
+  sample:
+    unsubscribe_url: https://app.example.test/forms/email-preferences

@@ -220,7 +220,7 @@ export function useDescriptorRowActions<TRow extends Row>(
           if (!result || !("status" in result)) return result;
           if (result.status === "ok") return result.data;
           return result.status === "conflict"
-            ? { ok: false, message: result.message }
+            ? { ok: false, message: result.message, ...(result.code ? { code: result.code } : {}) }
             : { ok: false, message: result.issues.formErrors.join(" ") || action.id,
                 validationErrors: result.issues.fieldErrors };
         });

@@ -22,7 +22,8 @@ async function mount(version: 1 | 2, ask = true, providerOptions: AcpProviderOpt
   const providers = createAcpTestProviders(agent, version, providerOptions);
   fixtures.push(() => agent.close(), providers.clearClients);
   transport.open.mockImplementation(agent.open);
-  render(<providers.Provider><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+  // Under a router, as an app page is: the reason dialog guards route moves while it holds work.
+  render(<providers.Provider router><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
     <AgentChat agentId="agt-1" view={view} />
   </AppRuntimeProvider></ToastProvider></providers.Provider>);
   const input = await screen.findByPlaceholderText("Message the agent…");
