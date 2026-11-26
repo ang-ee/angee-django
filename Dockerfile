@@ -14,7 +14,11 @@
 # the framework distributions + `[postgres]` into `ghcr.io/ang-ee/django-angee`, the fuller
 # image the self-contained `local` stack runs.
 
-ARG PYTHON_VERSION=3.14
+# The CPython release `.python-version` pins. `deps` runs `uv sync` on the source,
+# which reads that file, and the image never downloads an interpreter, so the
+# base tag carries exactly that release. A Dockerfile cannot read a context file
+# into FROM; tests/test_runtime_image.py holds this default to the pin.
+ARG PYTHON_VERSION=3.14.9
 
 # --- base: the lean OS+python layer, shared by `deps` and `final` --------------
 FROM python:${PYTHON_VERSION}-slim AS base
