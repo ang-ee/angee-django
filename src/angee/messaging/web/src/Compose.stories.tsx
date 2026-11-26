@@ -9,7 +9,7 @@ import {
 } from "./compose.fixtures.test-support";
 import { messageForm } from "./MessageForm";
 import { NewMessageAction } from "./NewMessageAction";
-import { ThreadTranscript, type ThreadTranscriptReply } from "./ThreadTranscript";
+import { ThreadTranscript, type ThreadTranscriptProps, type ThreadTranscriptReply } from "./ThreadTranscript";
 
 export default {
   title: "Messaging/Compose",
@@ -28,36 +28,39 @@ const REPLY: ThreadTranscriptReply = { leaves: pathnameChanges };
 
 /** Ana's New message, as the inbox header shows it: she sends on Support alone. Open it: Channel is fixed and focus starts in To; type "ana" and Send for a refusal under To, or an address and a message for the server's toast. */
 export const NewMessage = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="new-message" seat="ana" /> };
-/** The Support conversation for Ana: Reply on each email of it, and the delivery of what was written here. Reply on an email: the box docks under the conversation and sends with Ctrl/Cmd+Enter; "Who can see this?" is refused for its Reply-To. */
+/** The Support conversation for Ana, as Messaging › Threads shows it: Reply on each email of it, and the delivery of what was written here. Reply on an email: the box docks under the conversation and sends with Ctrl/Cmd+Enter; "Who can see this?" is refused for its Reply-To. */
 export const Reply = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" /> };
-/** The Sales conversation for Ana, who reads it and may not send on it: no Reply. */
+/** The Sales conversation in Messaging › Threads for Ana, who reads it and may not send on it: no Reply. */
 export const ReplyGateReader = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" conversation="sales" /> };
-/** The Sales conversation for Dana, who may send on it: Reply on its email. */
+/** The Sales conversation in Messaging › Threads for Dana, who may send on it: Reply on its email. */
 export const ReplyGateSender = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="dana" conversation="sales" /> };
-/** The Support conversation in a 420 px column: rows, their delivery and their actions wrap. */
+/** The Support conversation of Messaging › Threads in a 420 px column: rows, their delivery and their actions wrap. */
 export const ConversationNarrow = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ana" width={420} /> };
-/** Every local delivery state on Support's outgoing mail, with its time and attempts, Delivery details on Failed and Uncertain; synced own mail and the inbound requests show none. A host that offers no Reply (a record aside) shows the same. */
-export const DeliveryStates = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="cleo" noReply /> };
+/** Every local delivery state on Support's outgoing mail, as a record's Conversation aside shows it to Cleo (no Reply, oldest first): its time and attempts, Delivery details on Failed and Uncertain; synced own mail and the inbound requests show none. */
+export const DeliveryStates = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="cleo" noReply order="history" /> };
 /** The failed message's Envelope for Cleo, who manages Support: why delivery failed, the attempts, and Retry delivery. */
 export const FailedForManager = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="cleo" message={MESSAGE.failed} pane="envelope" /> };
 /** The failed message's Envelope for Ana, who wrote on Support: the attempts, no reason and no verb. */
 export const FailedForAuthor = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="ana" message={MESSAGE.failed} pane="envelope" /> };
 /** The uncertain message's Envelope for Cleo: the reason, Retry delivery and Mark as sent. */
 export const UncertainForManager = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="message-page" seat="cleo" message={MESSAGE.uncertain} pane="envelope" /> };
-/** Ben reads Support and may send nowhere: no New message and no Reply; everything reads as it did. */
+/** New message as the inbox header shows it, above the Support conversation as Messaging › Threads shows it: Ben reads Support and may send nowhere, so neither New message nor Reply shows; everything reads as it did. */
 export const ReaderCannotSend = { render: (_args: unknown, { globals }: StoryContext) => <ComposerStory appearance={storyAppearance(globals)} surface="transcript" seat="ben" withNewMessage /> };
 
 /** The real New message action, transcript and message page over the composer's wire fake, in the routed console shell. */
 export function ComposerStory({
-  appearance, surface, seat = "ana", conversation = "support", anchor = "", message, pane, width, noReply = false, withNewMessage = false,
+  appearance, surface, seat = "ana", conversation = "support", anchor = "", order, message, pane, width, noReply = false, withNewMessage = false,
   lose = false, revokeAfterSend = false, preview = false, onSent, onRequest, onCall, onFixture, queryClient,
 }: {
   appearance?: RuntimeFixtureProps["appearance"];
   surface: Surface;
   seat?: ComposerSeat;
   conversation?: "support" | "sales";
-  /** The transcript's window, as a host anchors it (`message:<id>`); it moves as the transcript asks. */
+  /** The transcript's window, as the inbox anchors it (`message:<id>`), with the inbox's control to move it (a date to
+   *  jump to, Latest); without it the transcript has neither, as Messaging › Threads and a record's aside have neither. */
   anchor?: string;
+  /** The transcript's scroll placement: `history` as a record's Conversation aside reads it. */
+  order?: ThreadTranscriptProps["order"];
   /** The message whose page opens (`message-page`). */
   message?: string;
   /** The message page's pane it opens on (`envelope`). */
@@ -106,7 +109,8 @@ export function ComposerStory({
       : <div className="flex h-[40rem] min-h-0 flex-col">
         {withNewMessage ? <div className="flex justify-end p-2"><NewMessageAction onSent={onSent} /></div> : null}
         <PaneToolbarHost>
-          <ThreadTranscript threadId={THREAD[conversation]} anchor={at} onAnchorChange={setAt} reply={noReply ? undefined : REPLY} />
+          <ThreadTranscript threadId={THREAD[conversation]} order={order} anchor={at}
+            onAnchorChange={anchor ? setAt : undefined} reply={noReply ? undefined : REPLY} />
         </PaneToolbarHost>
       </div>;
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={fixture.schemas}

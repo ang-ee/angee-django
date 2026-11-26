@@ -377,6 +377,8 @@ function submitReply(input: HTMLTextAreaElement): void {
 test("Reply answers an email from the box docked under the conversation, sends only what an answer takes, and shows it Queued", async () => {
   const { sends } = mount({ surface: "transcript", seat: "ana" });
   const box = await openReply("Please add me.");
+  // As Messaging › Threads hosts it: no control moves the window.
+  expect(screen.queryByText(word("transcript.jumpDate"))).toBeNull();
   // Reply opens the box it controls; pressed again it stays open, so it is no toggle.
   const reply = within(await row("Please add me.")).getByRole("button", { name: /^Reply to / });
   expect(reply.getAttribute("aria-expanded")).toBe("true");
@@ -410,6 +412,8 @@ test("Reply answers an email from the box docked under the conversation, sends o
 test("a reply sent from an anchored conversation returns to the latest and gives focus to the list", async () => {
   mount({ surface: "transcript", seat: "ana", anchor: `message:${MESSAGE.request}` });
   const box = await openReply("Please add me.");
+  // As the inbox hosts it: its control moves the window.
+  expect(screen.getAllByText(word("transcript.jumpDate")).length).toBeGreaterThan(0);
   submitReply(typeReply(box, "Thanks, adding you now."));
   await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
   await row("Thanks, adding you now.");
