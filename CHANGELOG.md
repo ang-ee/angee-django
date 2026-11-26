@@ -10,6 +10,14 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: **The deployment's public origin has one accessor.**
+  `angee.base.origins.configured_public_origin()` returns
+  `settings.ANGEE_PUBLIC_ORIGIN` as `public_origin` gives it under `DEBUG`, or
+  raises `PublicOriginUnavailable` (a `DomainError` coded
+  `PUBLIC_ORIGIN_UNAVAILABLE`, and an `ImproperlyConfigured`) when it is unset or
+  not one. Code that builds or judges a link without a request calls it instead
+  of reading the setting; the callers that read it today move onto it in their
+  own changes.
 - `angee.messaging_templates`: **A message template is sent as system work.**
   - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
     kit=None, must_print=())` renders one effective template (the caller picks it for its
