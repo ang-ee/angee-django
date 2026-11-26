@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useDebounce } from "use-debounce";
-import type { MessageTemplateTextDirection } from "@angee/gql/console/graphql";
+import type { MessageTemplateTextDirection, Message_Templates_Set_Input } from "@angee/gql/console/graphql";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   EmptyState,
@@ -111,11 +111,15 @@ export function MessageTemplatePreviewPane({
   const kits = useRelationOptions(BRAND_KIT_RELATION, { enabled: active, fields: KIT_FIELDS });
   const { patch, settling } = useSettledPatch(form);
   // Unset sends no kit, and the server renders in the default one; no edit sends no patch, the saved row's preview.
-  const variables = React.useMemo(() => ({
-    template,
-    ...(kit ? { brand_kit: kit } : {}),
-    ...(patch === null ? {} : { patch: JSON.parse(patch) }),
-  }), [kit, patch, template]);
+  const variables = React.useMemo(() => {
+    // The edits as their Save would send them, which `nextSave` reads untyped: stated here, not checked.
+    const patchInput: Message_Templates_Set_Input | undefined = patch === null ? undefined : JSON.parse(patch);
+    return {
+      template,
+      ...(kit ? { brand_kit: kit } : {}),
+      ...(patchInput === undefined ? {} : { patch: patchInput }),
+    };
+  }, [kit, patch, template]);
   const preview = useAuthoredQuery(MessageTemplatePreview, variables, {
     models: PREVIEW_MODELS,
     keepPreviousData: true,
