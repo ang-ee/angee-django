@@ -13,7 +13,7 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
+import { OperationDocumentsProvider, boundedGraphQLTransportError, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import gql from "graphql-tag";
 import { useList, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
@@ -458,7 +458,7 @@ test("a pane focuses a sheet field's native control in place", async () => {
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
-test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, as leaving does", async () => {
+test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, alone or with the tab, as leaving does", async () => {
   const f = await fixture();
   edit("title", "Local edit");
   // The form publishes its dirty state a render after the value, as the person's next move finds it.
@@ -469,8 +469,15 @@ test("a record's tab switch keeps a dirty form and asks nothing; any other searc
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 
   act(() => { void f.router.history.push("/?recordTab=activity&page=2"); });
+  const asked = await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" });
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+  fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+  act(() => { void f.router.history.push("/?recordTab=history&page=2"); });
   expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
   expect(f.router.history.location.search).toBe("?recordTab=activity");
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
 test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
@@ -1701,7 +1708,7 @@ test("a create whose key an earlier attempt spent is told in the form's own word
   f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   expect(await screen.findByText("Created earlier")).toBeTruthy();
-  expect(screen.getByText("An earlier attempt to save from this form already created a record; it is in the list. Saving again creates another.")).toBeTruthy();
+  expect(screen.getByText("An earlier attempt to save from this form already created a record; find it among the existing ones before saving again.")).toBeTruthy();
   expect(screen.queryByText("CREATION_KEY_CONFLICT")).toBeNull();
   expect(screen.queryByRole("button", { name: "Reload saved record" })).toBeNull();
   expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("My record");
@@ -1726,6 +1733,16 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
   expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
+});
+
+test("a custom create owner's lost answer says only that it may have been sent: the form cannot tell that its owner sends the key", async () => {
+  const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(boundedGraphQLTransportError(new TypeError("Failed to fetch")));
+  const f = await fixture({ id: null, submit, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "One");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostMaybeSent"]);
 });
 
 test("a new record is one draft: a refused create keeps its key for the corrected retry, and discarding it then starts a new draft", async () => {

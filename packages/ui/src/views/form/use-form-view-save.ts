@@ -616,8 +616,11 @@ export function useFormViewSave({
     leaves: leavesRecordForm,
   });
 
-  // A create carries its draft's key when its writer takes one (a custom owner always does).
-  const keyed = isCreate && Boolean(submitOwner || dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"));
+  // A create carries its draft's key when its writer takes one: a custom owner always receives it,
+  // but only the form's own create root, when it takes the key, is known to send it, so only there
+  // does a lost answer promise that sending again sends it once.
+  const sendsKey = isCreate && !submitOwner && Boolean(dataResource?.createArguments?.some(({ name }) => name === "idempotency_key"));
+  const keyed = sendsKey || (isCreate && Boolean(submitOwner));
   const runSubmit = React.useCallback(
     async (data: FormValues, lines: LineDiff | null = null, submitted: FormValues = data): Promise<FormSubmitResult<Row | FormSubmitAcknowledgement>> => {
       // One keyed write per attempt, lines included: the draft's key goes with it.
@@ -881,7 +884,8 @@ export function useFormViewSave({
       submittingRef.current = true;
       try {
         const result = readSubmitResult(await runSubmit(data, linesDiff, value)
-          .catch((cause) => formSubmitError(cause, t("form.genericSaveError"), keyed ? t("form.answerLostResend") : undefined)));
+          .catch((cause) => formSubmitError(cause, t("form.genericSaveError"),
+            sendsKey ? t("form.answerLostResend") : keyed ? t("form.answerLostMaybeSent") : undefined)));
         if (result) {
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
@@ -911,6 +915,7 @@ export function useFormViewSave({
       isCreate,
       keyed,
       previewBlockedRef,
+      sendsKey,
       commitSavedRecord,
       linesConfig,
       linesField,

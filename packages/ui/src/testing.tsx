@@ -11,7 +11,6 @@ import {
   type RefineTestDataProvider,
   type RefineTestProviderOptions,
 } from "@angee/refine/testing";
-import { failedWriteOutcome } from "@angee/refine";
 import {
   ModelMetadataProvider,
   refineResourcesFromDataResources,
@@ -22,7 +21,7 @@ import {
 
 import { ModalsHost } from "./feedback/ModalsHost";
 import { AppRuntimeProvider, type AppRuntime } from "./runtime/runtime";
-import { createClientKey } from "./lib/client-key";
+import { IdempotencyKeyStore } from "./lib/idempotency-key";
 import { InAppLinkProvider, type InAppNavigator } from "./lib/in-app-link";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -196,8 +195,8 @@ export interface MutationDialogTestDoubleOptions {
  * `@angee/ui` module in their mock, so codecs and every unrelated UI owner stay
  * production-accurate. Like the dialog, a submit runs the declared `validate`
  * first, with the same quiet call options, and submits nothing it refuses; and a keyed one sends
- * one key per draft, as the dialog's owner holds it: minted at the draft's first submit and kept
- * through every retry until an accepted answer or a spent key ends it.
+ * its draft's key through the dialog's own key owner, one per double: kept through every retry
+ * until an accepted answer or a spent key ends it. It has no dismissal, so it gives no draft up.
  */
 export function createMutationDialogTestDouble({
   capture,
@@ -206,7 +205,7 @@ export function createMutationDialogTestDouble({
 }: MutationDialogTestDoubleOptions = {}): (
   props: MutationDialogTestDoubleProps,
 ) => React.ReactElement | null {
-  const draftKeys = new Map<string, string>();
+  const keys = new IdempotencyKeyStore();
   return function MutationDialogTestDouble(
     props: MutationDialogTestDoubleProps,
   ): React.ReactElement | null {
@@ -242,16 +241,8 @@ export function createMutationDialogTestDouble({
               if (validation) return;
               // A keyed dialog's submission gets its draft's key.
               const scope: string | undefined = props.idempotencyScope;
-              const key = scope === undefined ? undefined : draftKeys.get(scope) ?? createClientKey(scope);
-              if (scope !== undefined && key !== undefined) draftKeys.set(scope, key);
-              let result;
-              try {
-                result = await submitMutationDialog(props, parsed, String(props.errorFallback ?? ""), key);
-              } catch (cause) {
-                if (scope !== undefined && failedWriteOutcome(cause) === "conflict") draftKeys.delete(scope);
-                throw cause;
-              }
-              if (scope !== undefined && formSubmitOutcome(result) !== "refused") draftKeys.delete(scope);
+              const submit = (key?: string) => submitMutationDialog(props, parsed, String(props.errorFallback ?? ""), key);
+              const result = scope === undefined ? await submit() : await keys.send(scope, submit, formSubmitOutcome);
               if (result.status === "ok") props.onSubmitted?.(result.data, parsed);
             });
         }}

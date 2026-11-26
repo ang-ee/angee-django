@@ -525,8 +525,25 @@ test.each<[string, FormSubmitResult<unknown>, ReturnType<typeof formSubmitOutcom
   ["a stale revision refuses it", { status: "conflict", code: "STALE_REVISION", message: "x" }, "refused"],
   ["a bare conflict is a stale one and refuses it", { status: "conflict", message: "x" }, "refused"],
   ["a validation refusal refuses it", { status: "invalid", issues: { fieldErrors: {}, formErrors: ["x"] } }, "refused"],
+  ["issues marked unconfirmed keep it as possibly written", { status: "invalid", issues: { fieldErrors: {}, formErrors: ["x"] }, outcome: "unconfirmed" }, "unconfirmed"],
 ])("what a submit's result tells its key: %s", (_name, result, outcome) => {
   expect(formSubmitOutcome(result)).toBe(outcome);
+});
+
+test.each([
+  ["with the surface's sentence", "It may have been sent.", ["It may have been sent."]],
+  ["without one, reading what the transport tells", undefined, ["Request failed."]],
+])("a lost answer converted to a result is marked unconfirmed, %s", (_name, answerLost, formErrors) => {
+  const result = formSubmitError(boundedGraphQLTransportError(new TypeError("Failed to fetch")), "Could not create.", answerLost);
+  expect(result).toMatchObject({ status: "invalid", outcome: "unconfirmed", issues: { fieldErrors: {} } });
+  expect(result.status === "invalid" && result.issues.formErrors.slice(0, 1)).toEqual(formErrors);
+  expect(formSubmitOutcome(result)).toBe("unconfirmed");
+});
+
+test("a caller's own refusal worded from its message is no lost answer", () => {
+  const result = formSubmitError("Could not create.", undefined, "It may have been sent.");
+  expect(result).toEqual(invalidFormSubmit({ fieldErrors: {}, formErrors: ["Could not create."] }));
+  expect(formSubmitOutcome(result)).toBe("refused");
 });
 
 test("a creation-key conflict does not lock a draft as a stale edit does: its form error is its own type", () => {
@@ -537,7 +554,8 @@ test("a creation-key conflict does not lock a draft as a stale edit does: its fo
   expect(result.current.getFieldState("root.server").error?.type).toBe("conflict");
 });
 
-test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
+test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} },
+  { status: "invalid", issues: { fieldErrors: {}, formErrors: [] }, outcome: "refused" }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
   const { result } = renderHook(() => useForm<Record<string, unknown>>());
   expect(() => {
     try {
