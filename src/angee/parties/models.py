@@ -1203,19 +1203,6 @@ class Handle(
             labels.append(label)
         return ".".join(labels)
 
-    @staticmethod
-    def email_value(address: str) -> str:
-        """Return an email address trimmed and lower-cased: the form compose, a channel's sender and inbound mail still
-        pass when they land an address.
-
-        Which handle an address lands on is the spelling key's
-        (:meth:`spelling_key_of`); this form still decides the spelling a handle
-        those writers create first stores as its ``value``, and the keys of
-        ``Message.reply_addresses``. It is removed with its callers.
-        """
-
-        return (address or "").strip().lower()
-
     # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
     """The longest an email address may be (RFC 3696 section 3): the bound Django's ``EmailValidator`` applies."""
