@@ -182,6 +182,16 @@ Use these owners instead of maintaining another contract in an addon:
   `check --database default`) verifies the co-location. Permission reads never
   run on a replica: a lagging replica serves grants already revoked on the
   primary.
+- **PostgreSQL JIT:** the Django connections Angee builds from `DATABASE_URL`
+  run with JIT off ([`disable_jit`](../../src/angee/base/conf/__init__.py)),
+  unless the URL's libpq `options` set `jit` themselves. An authored `DATABASES`
+  stays authoritative; `disable_jit` is public so a hand-written entry can opt
+  in. It recognises only the four PostgreSQL engines django-environ selects, and
+  a custom backend path gets no setting. Because Angee always passes `options`,
+  libpq ignores `PGOPTIONS` on these connections: put session settings in the
+  URL's `options`. A direct client (psql, `dbshell`, a measurement script) gets
+  the server's default, so a diagnostic runs `SET jit = off` first, or starts as
+  `PGOPTIONS='-c jit=off' manage.py dbshell`.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -1361,6 +1371,9 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
+  The guard runs only in an instance's `save()`: a queryset `update`,
+  `bulk_update` or a `bulk_create` that updates on conflict writes declared
+  fields unchecked.
 - **Archive and trash are different facts.** `ArchiveMixin` soft-hides a row
   from default pickers. `TrashMixin` removes it: who, when and an optional reason
   are stamped and restore re-grants nothing. The model's Zed withholds a trashed

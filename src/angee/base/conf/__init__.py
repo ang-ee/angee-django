@@ -80,13 +80,42 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         _start_error_reporting(namespace, env)
 
 
+# The PostgreSQL engines django-environ's URL schemes select. Its `POSTGRES_FAMILY` is
+# undocumented, so the set is explicit, and a test pins it to django-environ's mapping.
+_POSTGRESQL_ENGINES = frozenset({
+    "django.db.backends.postgresql",
+    "django.contrib.gis.db.backends.postgis",
+    "django_prometheus.db.backends.postgresql",
+    "django_prometheus.db.backends.postgis",
+})
+
+
+def disable_jit(database: MutableMapping[str, Any]) -> None:
+    """Run a PostgreSQL database's Django sessions with JIT off.
+
+    On permission-scoped reads JIT compiles thousands of functions per
+    statement for no plan change. ``configure`` applies this to the database
+    ``DATABASE_URL`` selects; a hand-written ``DATABASES`` entry opts in by
+    calling it. ``-c jit=off`` goes before the libpq ``options`` the entry
+    already carries, so a ``jit`` set in them wins: PostgreSQL applies the
+    last setting. Only the four PostgreSQL engines django-environ selects are
+    recognised; any other engine, a custom backend path included, is left
+    unchanged.
+    """
+    if database.get("ENGINE") not in _POSTGRESQL_ENGINES:
+        return
+    options = database.setdefault("OPTIONS", {})
+    carried = options.get("options")
+    options["options"] = f"-c jit=off {carried}" if carried else "-c jit=off"
+
+
 def _deployment_urls(namespace: MutableMapping[str, Any], env: environ.Env) -> None:
     """Project URL environment inputs through django-environ's native parsers."""
     if "DATABASE_URL" in os.environ:
         database = env.db()
-        if "postgresql" in database.get("ENGINE", ""):
+        disable_jit(database)
+        if database.get("ENGINE") in _POSTGRESQL_ENGINES:
             options = database.setdefault("OPTIONS", {})
-            options.setdefault("options", "-c jit=off")
             if env.bool("ANGEE_DB_POOL", default=environ.Env.parse_value(namespace.get("ANGEE_DB_POOL", False), bool)):
                 if database.get("CONN_MAX_AGE"):
                     raise ImproperlyConfigured("ANGEE_DB_POOL cannot be used with DATABASE_URL CONN_MAX_AGE")

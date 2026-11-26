@@ -17,6 +17,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rebac import actor_context, system_context
+from rebac.roles import grant as grant_role
 
 from angee.calendar.models import UNEXPANDABLE_MESSAGE
 from angee.calendar.testing.models import Calendar, CalendarEvent, EventAttendee
@@ -968,6 +969,8 @@ def test_merging_two_invited_handles_keeps_one_invitation_with_the_organizer_and
     event = _event(_calendar(), start=_utc(2026, 7, 6, 9), end=_utc(2026, 7, 6, 10))
     with system_context(reason="tests.calendar.merge"):
         owner = create_user("cal_merger")
+        # Two different addresses of one person: a contact administrator merges them.
+        grant_role(actor=owner, role="parties/role:contact_admin")
         kept = Handle.objects.create(platform="email", value="ada@example.test", created_by=owner)
         merged = Handle.objects.create(platform="email", value="ada.l@example.test", created_by=owner)
         EventAttendee.objects.create(event=event, handle=kept)
