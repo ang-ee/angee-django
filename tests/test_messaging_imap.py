@@ -173,15 +173,16 @@ def test_malformed_date_falls_back_to_internal_date() -> None:
 
 
 def test_direction_classifies_from_own_addresses() -> None:
-    """Own From is outbound; own From with only own recipients is internal."""
+    """Own From is outbound; own From with only own recipients is internal; an own address is any of its spellings."""
 
-    own = frozenset({"ada@example.com"})
+    own = frozenset({"ada@example.com", "desk@bücher.example"})
     outbound = _eml(sender="ada@example.com", to="bob@example.com")
-    internal = _eml(sender="ada@example.com", to="Ada <ADA@example.com>")
+    internal = _eml(sender="ada@example.com", to="Ada <ADA@example.com>, Desk <desk@xn--bcher-kva.example>")
     inbound = _eml(sender="bob@example.com", to="ada@example.com")
     assert _parse(outbound, own_addresses=own).direction == "outbound"
     assert _parse(internal, own_addresses=own).direction == "internal"
     assert _parse(inbound, own_addresses=own).direction == "inbound"
+    assert _parse(_eml(sender="desk@XN--BCHER-KVA.example"), own_addresses=own).direction == "outbound"
     assert _parse(outbound).direction == "inbound"  # no own-address knowledge
 
 
@@ -2349,6 +2350,36 @@ def test_channel_resync_is_incremental_and_idempotent(
     assert stream.cursor == {"uidvalidity": 999, "last_uid": 103}
     assert stream.generation == 2
     assert RecordLink._base_manager.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_mail_from_the_accounts_own_address_in_another_spelling_is_reclassified_once_when_fetched_again(
+    imap_server: ImapServer,
+) -> None:
+    """An own address counts in any spelling, its display name dropped. Direction is in the sync hash, so a message
+    stored inbound while its own address went unmatched is rewritten in place once, when the mailbox is fetched
+    again; it stays synced and nothing is sent."""
+
+    raw = _eml(message_id="<own@x>", sender="Desk <desk@xn--bcher-kva.example>", to="bob@example.com")
+    imap_server.folders.update({"INBOX": mailbox(raw)})
+    channel = _imap_channel()
+    with system_context(reason="test imap own address spelling"):
+        assert channel.run_sync(now=datetime(2026, 7, 2, 12, 0, tzinfo=UTC)) == 1
+        stored = Message._base_manager.get()
+        assert stored.direction == "inbound"
+
+        channel.config = {**channel.config, "own_addresses": ["Desk <Desk@Bücher.example>"]}
+        channel.save(update_fields=["config"])
+        # The server renumbers the mailbox: a new stream generation fetches it again in full.
+        imap_server.folders["INBOX"] = mailbox(raw, uidvalidity=200)
+        channel.refresh_from_db()
+        channel.run_sync(now=datetime(2026, 7, 2, 12, 5, tzinfo=UTC))
+        message = Message._base_manager.get()
+        assert (message.pk, message.direction, message.status) == (stored.pk, "outbound", "synced")
+
+        assert channel.run_sync(now=datetime(2026, 7, 2, 12, 10, tzinfo=UTC)) == 0
+    assert Message._base_manager.get().updated_at == message.updated_at
+    assert not Message._base_manager.exclude(status="synced").exists()
 
 
 def _attached(message_id: str) -> bytes:
