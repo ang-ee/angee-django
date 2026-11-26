@@ -692,11 +692,12 @@ def _channel_cascade_children(channel: Any) -> tuple[tuple[Any, models.Q], ...]:
     through the child's own delete root, so a plain ``.count()`` never materializes a row.
     The ``OR`` predicates join two independent to-one FKs (a notification FKs a message
     *or* a thread; an edge FKs a source *or* destination message), so each matching row
-    still appears once — no fan-out to dedupe. A recipient's thread is its message's (its
-    writers set it so and :meth:`MessageManager.correct_source_thread` moves both), and a
-    message in a channel's thread belongs to that channel (threads resolve inside the
-    ingesting channel; a reply takes its parent's thread and channel), so counting by the
-    message's channel reaches every recipient either cascade deletes. ``ThreadAttachment``
+    still appears once — no fan-out to dedupe. A recipient's thread is its message's (the
+    row takes it on insert, ``Recipient.save``, and
+    :meth:`MessageManager.correct_source_thread` moves both), and a message in a channel's
+    thread belongs to that channel (threads resolve inside the ingesting channel; a reply
+    takes its parent's thread and channel), so counting by the message's channel reaches
+    every recipient either cascade deletes. ``ThreadAttachment``
     counts a channel thread's source edges: a chatter thread is never channel-scoped.
     """
 
