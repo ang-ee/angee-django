@@ -7,7 +7,7 @@ import { LabeledDescriptorField } from "./DescriptorFieldList";
 import { fieldErrorMessages, isFieldVisible, resolveField, type FormValues } from "./form-view-model";
 import type { FormViewSaveSurface } from "./use-form-view-save";
 import { fieldsWithMetadataDefaults } from "../resource/model-metadata-defaults";
-import { isUnregisteredImplementation } from "../resource/implementation-fields";
+import { isUnregisteredImplementationField } from "../resource/implementation-fields";
 import { UnregisteredImplementationField } from "./record-field-marks";
 import type { WidgetFocusTarget } from "../../widgets";
 
@@ -94,19 +94,17 @@ export function BoundDescriptorField({
   const siblingValues = isFormValues(scopedValues) ? scopedValues : {};
   const resolved = resolveField(declared, siblingValues);
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
-  // One of this record's own columns whose stored key is not registered: the stored row, so a create
-  // form never shows it, and while the form still holds no other choice.
-  const storedUnregistered = !scope && surface.displayRecord != null
-    && isUnregisteredImplementation(modelMetadata, resolved.name, surface.displayRecord[resolved.name]);
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
+  const fieldReadOnly = readOnly || surface.fieldReadOnly({ ...resolved, name });
 
   return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
-    field={storedUnregistered && (bound.value == null || bound.value === "") ? resolved.name : null}
+    field={isUnregisteredImplementationField(modelMetadata, surface.displayRecord, name, bound.value) ? resolved.name : null}
+    readOnly={fieldReadOnly}
   ><LabeledDescriptorField
     field={resolved}
     value={bound.value}
     dialogValues={siblingValues}
-    readOnly={readOnly || surface.fieldReadOnly({ ...resolved, name })}
+    readOnly={fieldReadOnly}
     controlRef={bound.controlRef}
     messages={bound.messages}
     onCommit={bound.onCommit}

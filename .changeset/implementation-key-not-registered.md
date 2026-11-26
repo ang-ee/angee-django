@@ -7,12 +7,16 @@ null, and the console says so instead of showing an empty value: a list cell of
 an implementation-key column (one the resource's `implFields` names) reads "Not
 registered" (`implementation.notRegistered`) through the status badge, in the
 warning tone. On the record's own form the field carries "Not registered" as an
-attention mark while its control still offers every registered implementation:
-from the stored record (a create form never shows it) and while the form holds
-no other choice (picking a registered one clears the mark until the draft is
-discarded). A dialog's field of the same name carries none. A null in any other
-column, or in a column reached through a relation (`channel.backend_class`),
-renders as before.
+attention mark, from the stored record (a create form never shows it) and while
+the form holds no other choice (picking a registered one clears the mark until
+the draft is discarded). The mark explains itself, as its accessible
+description and on hover: where the field is editable, its control offers every
+registered implementation and the mark says "Choose a registered one to save
+this record."; where it is read-only on that form (`readOnly`, or `createOnly`
+on a stored record), "It cannot be changed on this record." A refused save
+still shows the server's reason under the field. A dialog's field of the same
+name carries none. A null in any other column, or in a column reached through a
+relation (`channel.backend_class`), renders as before.
 
 Not changed: a list grouped by such a column, a board laned by it and a facet
 counted on it read the column's groups, which fail for such a row, as before:

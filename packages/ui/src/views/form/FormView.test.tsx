@@ -1353,22 +1353,28 @@ describe("FormView", () => {
       values: [{ value: "LOCAL", description: "Local" }, { value: "STUB", description: "Stub" }] };
     const resource = testDataResource("notes.Note", { fields: [backend], implFields: ["backend"] });
     const record = { id: "note-1", title: "First", backend: null, permissions: ["read", "write"] };
-    const page = (readOnly: boolean) => renderWithProviders(<FormView resource="notes.Note" id="note-1"
-      fields={[{ name: "title", title: true }, { name: "backend", label: "Backend", readOnly }]}
+    const page = (locked: { readOnly?: boolean; createOnly?: boolean }) => renderWithProviders(<FormView resource="notes.Note"
+      id="note-1" fields={[{ name: "title", title: true }, { name: "backend", label: "Backend", ...locked }]}
       acknowledgedSource={{ record, values: record }} />,
     { types: { NoteType: { resource, fields: { backend } } } });
 
-    page(false);
+    // The mark's accessible description explains it by case; its name is the one fact.
+    const explanation = (mark: HTMLElement) => document.getElementById(mark.getAttribute("aria-describedby") ?? "")?.textContent;
+
+    page({});
     const control = await screen.findByRole("combobox", { name: "Backend" });
-    expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+    expect(explanation(screen.getByLabelText("Not registered: Backend"))).toBe("Choose a registered one to save this record.");
     fireEvent.click(control);
     expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
 
-    cleanup();
-    page(true);
-    expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+    // A selector read-only in this form, declared so or create-only on a stored record, cannot change here.
+    for (const locked of [{ readOnly: true }, { createOnly: true }]) {
+      cleanup();
+      page(locked);
+      expect(explanation(await screen.findByLabelText("Not registered: Backend"))).toBe("It cannot be changed on this record.");
+      expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+    }
   });
 
   test("a create form never marks an implementation key; a picked registered one clears the mark until discarded", async () => {

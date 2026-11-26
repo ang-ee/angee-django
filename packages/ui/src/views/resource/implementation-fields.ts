@@ -24,3 +24,19 @@ export function isUnregisteredImplementation(
 ): boolean {
   return value == null && Boolean(model?.resource?.implFields?.includes(field));
 }
+
+/**
+ * Whether the record form's field at `path` (its full form path) is marked not registered: the
+ * stored row reads null there for an implementation key the registry no longer names
+ * ({@link isUnregisteredImplementation}), and the form's `value` for it is still empty. A create
+ * form has no stored row, so it never marks one; picking a registered implementation clears the mark
+ * until the draft is discarded. A nested path is never one of `implFields`, so it is never marked.
+ */
+export function isUnregisteredImplementationField(
+  model: ModelMetadata | null | undefined,
+  stored: Row | null | undefined,
+  path: string,
+  value: unknown,
+): boolean {
+  return stored != null && (value == null || value === "") && isUnregisteredImplementation(model, path, stored[path]);
+}

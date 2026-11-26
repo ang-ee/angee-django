@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
@@ -118,20 +118,29 @@ function useRecordFieldMarksForField(field: string) {
   }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
-const UnregisteredImplementation = createContext<string | null>(null);
+const UnregisteredImplementation = createContext<{ field: string; readOnly: boolean } | null>(null);
 
 /** Name the one field of the record's own form whose stored implementation key the registry no
- * longer names and whose value in the form is still empty; only that field's marks read it.
+ * longer names and whose value in the form is still empty; only that field's marks read it, and
+ * `readOnly` (the field's own state in this form) decides what the mark explains. React context
+ * crosses portals, so a dialog rendered inside that field's row would see it too; none is.
  * @kind null
  * @reason Provider infrastructure: the record form's not-registered field.
  */
-export function UnregisteredImplementationField({ field, children }: { field: string | null; children: ReactNode }) {
-  return <UnregisteredImplementation.Provider value={field}>{children}</UnregisteredImplementation.Provider>;
+export function UnregisteredImplementationField({ field, readOnly = false, children }: {
+  field: string | null;
+  readOnly?: boolean;
+  children: ReactNode;
+}) {
+  const value = useMemo(() => field === null ? null : { field, readOnly }, [field, readOnly]);
+  return <UnregisteredImplementation.Provider value={value}>{children}</UnregisteredImplementation.Provider>;
 }
 
 /** Every native form field placement composes attention, provenance, and access marks once.
  * The field the record's own form names through `UnregisteredImplementationField` carries "Not
- * registered" as an attention mark, while its control still offers every registered one; a
+ * registered" as an attention mark, explained as its accessible description: an editable field
+ * offers every registered implementation and the record saves once one is chosen; a read-only one
+ * cannot be changed on this record. The save's refusal stays the server's, shown under the field. A
  * dialog's field of the same name is not that field, so it carries none.
  * @kind fragment
  */
@@ -142,10 +151,13 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
 }) {
   const t = useUiT();
   const published = useRecordFieldMarksForField(field);
-  const unregistered = useContext(UnregisteredImplementation) === field;
-  const marks: readonly RecordFieldMark[] = [
+  const unregistered = useContext(UnregisteredImplementation);
+  const marks: readonly ShownMark[] = [
     ...published,
-    ...(unregistered ? [{ field, label: t("implementation.notRegistered"), tone: "warning" as const }] : []),
+    ...(unregistered?.field === field ? [{
+      field, label: t("implementation.notRegistered"), tone: "warning" as const,
+      explanation: t(unregistered.readOnly ? "implementation.unchangeable" : "implementation.chooseRegistered"),
+    }] : []),
     ...(restricted ? [{ field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }] : []),
   ];
   if (!marks.length) return null;
@@ -156,12 +168,16 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
   </>;
 }
 
+/** A mark as a field shows it: a published one may reveal its source; the form's own may explain itself. */
+type ShownMark = RecordFieldMark & { reveal?: () => void; explanation?: string };
+
 function RecordFieldMarkItem({ mark, field, label }: {
-  mark: RecordFieldMark & { reveal?: () => void };
+  mark: ShownMark;
   field: string;
   label?: ReactNode;
 }) {
   const ariaLabel = `${mark.label}: ${typeof label === "string" ? label : field}`;
+  const explanationId = useId();
   const badge = <Chip tone={mark.tone}>
     {mark.icon ? <Glyph decorative name={mark.icon} /> : null}{mark.label}
   </Chip>;
@@ -172,9 +188,15 @@ function RecordFieldMarkItem({ mark, field, label }: {
     control = <Button type="button" variant="ghost" size="sm" className="h-auto px-1 py-0"
       onClick={mark.reveal} aria-label={ariaLabel}>{badge}</Button>;
   } else {
-    control = <span aria-label={ariaLabel}>{badge}</span>;
+    control = <span aria-label={ariaLabel} aria-describedby={mark.explanation ? explanationId : undefined}>{badge}</span>;
   }
-  return mark.origin
-    ? <Tooltip label={mark.origin}><span className="inline-flex" tabIndex={mark.target || mark.reveal ? undefined : 0}>{control}</span></Tooltip>
-    : control;
+  // The hover copy is the value's source, or the form's own explanation, which also stays in the
+  // page as the mark's accessible description.
+  const hover = mark.origin ?? mark.explanation;
+  return <>
+    {hover
+      ? <Tooltip label={hover}><span className="inline-flex" tabIndex={mark.target || mark.reveal ? undefined : 0}>{control}</span></Tooltip>
+      : control}
+    {mark.explanation ? <span id={explanationId} className="sr-only">{mark.explanation}</span> : null}
+  </>;
 }
