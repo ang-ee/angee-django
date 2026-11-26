@@ -138,7 +138,7 @@ taken at the load each run states. `test_preview_time` and `test_pass_time` (und
 a preview, 1 s a pass) and scale them by a fixed reference workload measured in
 the same process, so a busy machine slows the case and the bound alike; the
 costliest admitted preview written into a saved row as a patch keeps a
-preview's 2 s (`test_patched_preview_time`).
+preview's 2 s (`review patched` in `test_preview_time`).
 
 | Where it applies | Caps | Pinned by |
 |---|---|---|

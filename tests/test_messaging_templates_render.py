@@ -2735,11 +2735,13 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
     """The costliest previews and renders the caps admit take under two seconds of CPU, and so do their walk and
-    prepare() alone; the refused cases stop as soon."""
+    prepare() alone, and ``review`` written into another saved row as a patch, validated as its save would be; the
+    refused cases stop as soon."""
 
     del plain
+    cases, edited, patch = _patched_cases()
     spent: dict[str, float] = {}
-    for name, template in _preview_cases().items():
+    for name, template in cases.items():
         started = time.process_time()
         with system_context(reason="tests.messaging_templates.render.timed"):
             preview = template.preview(kit=kit)
@@ -2757,6 +2759,11 @@ def test_preview_time(plain: Any, kit: Any) -> None:
                 started = time.process_time()
                 template.render(template.sample, kit=kit)
                 spent[f"{name} render"] = round(time.process_time() - started, 3)
+    started = time.process_time()
+    with system_context(reason="tests.messaging_templates.render.timed"):
+        patched = edited.preview(kit=kit, patch=patch)
+    spent["review patched"] = round(time.process_time() - started, 3)
+    assert patched.rendered is not None, patched.warnings
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     bound = _scaled(2.0)
     print(f"preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
@@ -2789,26 +2796,6 @@ def test_a_patched_preview_walks_once(plain: Any, kit: Any, work: dict[str, list
             preview = row.preview(kit=kit, patch=patched)
         assert preview.rendered is not None, preview.warnings
         assert (sum(work["checked"]), work["trees"], _charges(work["passes"])) == PREVIEW_WORK["review"], row.key
-
-
-@TIMED
-def test_patched_preview_time(plain: Any, kit: Any) -> None:
-    """The costliest admitted preview written into a saved row as a patch, validated as its save would be and
-    rendered from that one walk, takes under two seconds of CPU."""
-
-    del plain
-    cases, edited, patch = _patched_cases()
-    spent: dict[str, float] = {}
-    for name, row, patched in (("saved", cases["review"], None), ("patched", edited, patch)):
-        started = time.process_time()
-        with system_context(reason="tests.messaging_templates.render.timed"):
-            preview = row.preview(kit=kit, patch=patched)
-        spent[name] = round(time.process_time() - started, 3)
-        assert preview.rendered is not None, preview.warnings
-    print(f"patched preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
-    bound = _scaled(2.0)
-    print(f"patched preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
-    assert spent["patched"] < bound, (spent, bound)
 
 
 # ---------- preview, its warnings and its read ----------
