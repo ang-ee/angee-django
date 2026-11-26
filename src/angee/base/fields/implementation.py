@@ -143,15 +143,19 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
             return value
 
     def get_prep_value(self, value: Any) -> Any:
-        """Prepare a lookup value: a key the choices name as its member, any other as its text.
+        """Prepare a value as its canonical key (:meth:`key_for`): the member where the choices name it, else its text.
 
-        A filter on a key the choices no longer name finds the rows that store
-        it; :meth:`get_db_prep_save` refuses to write one.
+        ``" base "`` and the member's name ``"BASE"`` both prepare as ``base``,
+        so a filter finds the rows that store a key whichever spelling it is
+        given, and one on a key the choices no longer name finds those rows too;
+        :meth:`get_db_prep_save` refuses to write such a key. Input keeps
+        :meth:`to_python`'s stricter conversion.
         """
 
-        if value in self.empty_values or self.has_key(value):
+        if value in self.empty_values:
             return super().get_prep_value(value)
-        return self.key_for(models.Field.get_prep_value(self, value))
+        key = self.key_for(models.Field.get_prep_value(self, value))
+        return self.choices_enum(key) if self.has_key(key) else key
 
     def get_db_prep_save(self, value: Any, connection: Any) -> Any:
         """Refuse writing a key outside this field's choices, in every value the field prepares.

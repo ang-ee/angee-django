@@ -1583,6 +1583,21 @@ def test_a_key_its_choices_no_longer_name_is_refused_wherever_the_field_prepares
 
 
 @pytest.mark.django_db
+def test_a_lookup_reads_spaces_and_a_member_name_as_the_key() -> None:
+    """A filter canonicalises once, alike for a key the choices name and for one they no longer name."""
+
+    retired = _retired_backend("canonical")
+    backend_model = type(retired)
+    with system_context(reason="test.impl.canonical.kept"):
+        kept = backend_model.objects.create(slug="canonical-kept", label="Kept", backend_class="local")
+    rows = backend_model._base_manager.filter(pk__in=(retired.pk, kept.pk))
+
+    for spelling in ("local", " local ", "LOCAL"):
+        assert list(rows.filter(backend_class=spelling)) == [kept]
+    assert list(rows.filter(backend_class=" retired ")) == [retired]
+
+
+@pytest.mark.django_db
 def test_a_value_typed_as_the_field_is_refused_and_an_expression_writes_unchecked() -> None:
     """The refusal covers what the field prepares; a bare ``Value`` is an expression it never sees, so it writes."""
 
