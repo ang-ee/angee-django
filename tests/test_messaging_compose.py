@@ -22,7 +22,7 @@ from django.utils import timezone
 from hypothesis import example, given
 from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
-from rebac import PermissionDenied, system_context
+from rebac import PermissionDenied, actor_context, system_context
 from rebac.models import PermissionAuditEvent
 
 from angee.jobs.enqueue import celery_app
@@ -345,6 +345,37 @@ def test_an_internationalised_domain_is_delivered_in_its_ascii_form(desk: Any, s
         (to,) = _delivered(message)["To"].addresses
         assert (to.display_name, to.addr_spec) == ("Ada", "ada@xn--exmple-cua.test")
         assert mail.mailers["smtp"].prep_address(str(to)) == "ada@xn--exmple-cua.test"
+
+
+def test_mail_a_stranger_sends_onto_a_records_chatter_is_removable_and_mail_sent_from_it_is_retained(
+    desk: Any,
+) -> None:
+    """Anyone who saw a chatter mail's Message-ID can answer onto the record; its moderator can take it off."""
+
+    owner = desk.owner
+    with system_context(reason="tests.messaging.compose.planted"):
+        doc = ChatterDoc.objects.create(title="Invoice 9")
+    grant(doc, "manager", owner)
+    sent = Message.objects.compose(channel=desk, record=doc, to=["client@example.test"], subject="Invoice 9",
+                                   text="Your invoice.", actor=owner)
+    raw = (
+        f"From: stranger@evil.test\r\nTo: desk@example.test\r\nMessage-ID: <planted@evil.test>\r\n"
+        f"In-Reply-To: <{sent.external_id}>\r\nSubject: Re: Invoice 9\r\n\r\nPay this other account.\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.planted"):
+        (planted,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)], channel=desk)
+        assert planted.thread_id == doc.message_thread(create=False).pk
+    with actor_context(owner):
+        record = ChatterDoc.objects.with_actor(owner).get(pk=doc.pk)
+        assert Message.objects.with_actor(owner).get(pk=planted.pk).can_trash(moderate_access=True)
+        record.message_trash(Message.objects.with_actor(owner).get(pk=planted.pk), reason="spam")
+        with pytest.raises(ValidationError) as retained:
+            record.message_trash(Message.objects.with_actor(owner).get(pk=sent.pk))
+    assert Message._base_manager.get(pk=planted.pk).is_trashed
+    assert not Message._base_manager.get(pk=sent.pk).is_trashed
+    assert (retained.value.code, retained.value.messages) == (
+        "retained", ["Only comments and received messages can be removed."],
+    )
 
 
 def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_so(desk: Any, settings: Any) -> None:

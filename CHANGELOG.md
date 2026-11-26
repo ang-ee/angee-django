@@ -65,7 +65,12 @@ live in code docstrings.
     record's chatter (the customer's answer to a mail sent from the record) is
     ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
     answers it by email; before, the answer was refused for want of a sender.
-    Like every email it is a retained record: a moderator no longer trashes it.
+    Anyone who has seen a chatter mail's Message-ID can answer onto the record,
+    so a message received on a record's chatter, email or comment, is one its
+    moderator may trash; mail sent from the record and system notes stay
+    retained, and that refusal is now a coded `ValidationError` (`retained`,
+    "Only comments and received messages can be removed.") where it was a bare
+    `ValueError`. Whether such mail should land on the record at all is open.
   - **Changed.** A record's chatter thread is never folded with a mailbox thread.
     The copy of a chatter mail (or of an answer to one) that reaches a
     colleague's own connected mailbox still folds as a message, but the

@@ -1471,19 +1471,23 @@ class Message(
     def delete_error(self) -> str | None:
         """Only comments may be deleted; notes and automatic messages are retained."""
 
-        return self._retained_error("deleted")
+        if self.message_type != self.MessageKind.COMMENT:
+            return "Only comment messages can be deleted."
+        return None
 
     def trash_error(self) -> str | None:
-        """Only comments may be trashed; notes and automatic messages stay on record."""
+        """Only comments and received messages may be trashed; sent mail and system notes stay on record.
 
-        return self._retained_error("removed")
+        Trash is a record moderator's verb, asked on the record's own thread
+        (``ThreadedModelMixin.message_trash``, the chatter's ``can_trash``). A
+        message received there came from outside, whoever sent it (an answer that
+        its threading headers placed on the chatter, or anything mailed with a
+        chatter mail's Message-ID), so its moderator may take it off as a comment.
+        """
 
-    def _retained_error(self, verb: str) -> str | None:
-        """Return why this message is a retained record that no removal verb may take."""
-
-        if self.message_type != self.MessageKind.COMMENT:
-            return f"Only comment messages can be {verb}."
-        return None
+        if self.message_type == self.MessageKind.COMMENT or self.direction == self.Direction.INBOUND:
+            return None
+        return "Only comments and received messages can be removed."
 
     def can_trash(self, *, moderate_access: bool) -> bool:
         """Return whether a record moderator may move this comment to the trash."""

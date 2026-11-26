@@ -4225,7 +4225,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if not thread.member_threads().filter(pk=message.thread_id).exists():
                 raise ValueError("Message does not belong to this record thread.")
             if trash and (error := message.trash_error()):
-                raise ValueError(error)
+                raise ValidationError(error, code="retained")
             record = message.threaded_record()
             if record is None or not record.can_moderate():
                 raise PermissionDenied("Removing or restoring comments requires moderator access to the record.")
