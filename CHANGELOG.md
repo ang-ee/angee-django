@@ -10,6 +10,48 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: **Changed API.** A keyboard user sees when a mail in
+  `MessageHtmlFrame` has focus. Focus inside the sandboxed frame matches
+  neither the frame's `:focus-visible` nor its wrapper's `:focus-within`, so
+  the page cannot draw a ring, and nothing on screen showed that a mail had
+  keyboard focus. The framed document draws it. Its body is a tab stop of its
+  own, whether or not the mail scrolls, so a mail with links gains one stop:
+  the mail itself, before its first link. While the body or anything in the
+  mail has keyboard focus, a ring fixed to the frame's edges stays as the
+  arrow, page, space and end keys scroll the mail, and stays beside a link's
+  own ring, also in a mail that removes its links' outline: 2px of the theme's
+  `--border-focus` outside, made opaque, and 2px of white or black inside,
+  whichever contrasts with it, so one edge holds 3:1 on a white mail and on a
+  near-black one (on a mid-grey mail neither edge may reach it). A click on
+  the mail's text or on a link shows no ring until the next key press; a
+  click into a field of the mail shows it, as the field shows its own. The
+  ring is the root's own
+  `::after`, in an unnamed cascade layer, starting from `all: initial`, every
+  declaration important: a mail's CSS on `body`, `body::after` or `*::after`,
+  a transform, filter or containment on the body, and an important rule on
+  `html::after` at any specificity leave it in place. A mail that makes the
+  root itself a containing block for fixed boxes (on `html`: a transform or
+  one of its single properties, `perspective`, `will-change: transform`,
+  layout or paint containment, `content-visibility`; from a style sheet or
+  the mail's own `<html style>`) still detaches it: the ring then follows
+  the document, and its bottom edge scrolls out of view; a `clip-path` on
+  the root clips it, and a mail's own popover or modal dialog covers it. A
+  mail's own `html::after` is not shown while the frame has focus. The theme's
+  color is used only if the browser parses it as a color and its functions
+  are closed; otherwise the framed document's own accent. The framed document
+  carries the frame's title, which the accessibility tree gives it as its
+  name. The ring's color is read from the page when the document is
+  assembled: a theme, brand or light/dark switch reloads an open mail, which
+  returns to its top and shows no ring until the next Tab; an ordinary render
+  keeps it. A browser without CSS relative color syntax draws the theme's
+  color as it is, then a black and a white line inside it; one without
+  `:has()` (before Chrome 105, Safari 15.4, Firefox 121) draws no ring, as
+  before this change.
+  `@angee/ui/lib/use-motion-tokens` is removed and
+  `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
+  beside `useRootTokens`, the one reader of the root's resolved tokens, which
+  keeps its record while no value changes. **Upgrade:** import
+  `useMotionTokens` from `@angee/ui/lib/use-root-tokens`.
 - `@angee/ui`: The toast region is named in the app's language. `ToastProvider`
   passed no label to the toast library's viewport, so the region was always
   the library's English default, "Notifications"; it now reads the `ui`
