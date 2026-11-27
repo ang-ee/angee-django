@@ -518,7 +518,10 @@ Use these owners instead of maintaining another contract in an addon:
   registered. The console's record form offers that choice exactly then and
   sends the config it shows: `impl_choices(model, field, record)` answers,
   for each choice, what choosing it sets on that record (the config
-  `carried_config` carries over), gated as the write is
+  `carried_config` carries over), gated exactly as the write is: write on the
+  record while its stored key is not registered, the administrator-or-policy
+  admission of a choices read without a record not asked, since a repair is
+  the writer's act
   ([`record_impl_choices`](../../src/angee/graphql/impl.py),
   `ImplDefaultsMixin.repair_impl_defaults`). A record without an update root (calendar sources, directories,
   mounts) or a selector a connect flow chose is not repaired in the console:

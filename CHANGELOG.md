@@ -93,9 +93,11 @@ live in code docstrings.
   implies no create path, which `creatable` alone states. `impl_choices` takes an
   optional `record`: each choice's `defaults` is then what choosing it sets on
   that record, the config it carries over (`ImplDefaultsMixin.repair_impl_defaults`),
-  answered only for a record the actor may write whose stored key is not
-  registered, and refused as the write is otherwise (not found, or
-  "Implementation selection is create-only."). `@angee/ui`: the record form
+  answered for exactly whoever may write that record while its stored key is
+  not registered (the administrator-or-policy admission of a choices read
+  without a record is not asked: a repair is the writer's act), and refused as
+  the write is otherwise (not found, or "Implementation selection is
+  create-only."). `@angee/ui`: the record form
   offers a create-only selector once more while its stored key is not
   registered, sets the config the chosen implementation carries over, and
   saves the selector with that config; afterwards the selector is locked

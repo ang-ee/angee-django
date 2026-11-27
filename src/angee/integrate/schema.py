@@ -132,8 +132,10 @@ class ConsoleImplChoicesQuery:
     """Administrator metadata with explicit model-owned author access."""
 
     @strawberry.field(description=(
-        "A selector's implementations and what choosing each sets: for an insert, its defaults; "
-        "for record, the config it carries over from that record (a repair)."
+        "A selector's implementations and what choosing each sets: for an insert, its defaults; for record, "
+        "the config it carries over from that record (a repair). Without record, an administrator or the "
+        "model's own policy may read them; with record, exactly whoever may write that record, since a "
+        "repair is that writer's act."
     ))
     def impl_choices(
         self,
@@ -142,15 +144,16 @@ class ConsoleImplChoicesQuery:
         field: str,
         record: Annotated[strawberry.ID | None, strawberry.argument(description=(
             "A record the actor may write whose stored key the field's choices no longer name: each choice's "
-            "defaults are then what choosing it sets on that record; refused otherwise, as the write is."
+            "defaults are then what choosing it sets on that record. Admitted as the write is (write on the "
+            "record, its stored key not registered); a record the actor cannot write reads as not found."
         ))] = None,
     ) -> list[ImplChoice]:
-        """Return registry choices under the administrator or owning model's policy, for an insert or a repair."""
+        """Return registry choices: for an insert under the administrator or model policy, for a repair as the write."""
+        if record is not None:
+            return record_impl_choices(info, model, field, record)
         actor = _session_user(info)
         if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
             raise PermissionDenied("Implementation choices are not readable by this actor.")
-        if record is not None:
-            return record_impl_choices(info, model, field, record)
         return resolve_impl_choices(model, field)
 
 

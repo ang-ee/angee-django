@@ -1834,6 +1834,63 @@ def test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is
     }
 
 
+_REPAIRABLE = (
+    ("agents", "InferenceProvider", "backend_class"),
+    ("calendar", "CalendarSource", "backend_class"),
+    ("integrate_vcs", "VcsBridge", "backend_class"),
+    ("knowledge_integrate_notion", "NotionConnection", "backend_class"),
+    ("messaging", "Channel", "backend_class"),
+    ("parties", "Directory", "backend_class"),
+    ("posts", "Feed", "feed_backend_class"),
+    ("storage_integrate", "Mount", "backend_class"),
+)
+
+
+@pytest.mark.parametrize(("app_label", "model_name", "selector"), _REPAIRABLE)
+def test_a_repair_read_admits_exactly_whoever_may_write_the_record(
+    db: None, app_label: str, model_name: str, selector: str,
+) -> None:
+    """With record, the write's gate alone: the owner is answered as an administrator is, and nobody else."""
+
+    from django.apps import apps
+
+    del db
+    model = apps.get_model(app_label, model_name)
+    field = model._meta.get_field(selector)
+    extra = {}
+    if model_name == "Mount":
+        with system_context(reason="test.repair.gate.drive"):
+            backend = apps.get_model("storage", "Backend").objects.create(
+                slug="gate-drive", label="Gate", backend_class="local",
+            )
+            extra["drive"] = apps.get_model("storage", "Drive")._base_manager.create(
+                backend=backend, slug="gate", name="Gate", prefix="gate",
+            )
+    row = make_integration(f"gate-{model_name.lower()}", model=model, **{selector: field.registered_keys()[0]}, **extra)
+    store_column(field.model, row.pk, field.column, "retired")
+    owner, stranger = row.owner, User.objects.create_user(username=f"gate-{model_name.lower()}-stranger")
+    admin = _platform_admin(f"gate-{model_name.lower()}-admin")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    query = """
+        query($model: String!, $field: String!, $record: ID) {
+          impl_choices(model: $model, field: $field, record: $record) { key defaults }
+        }
+    """
+    asked = {"model": model._meta.label, "field": selector, "record": _public_id(row)}
+
+    by_owner = execute_schema(schema, query, asked, user=owner)
+    by_admin = execute_schema(schema, query, asked, user=admin)
+    without_record = execute_schema(schema, query, {**asked, "record": None}, user=owner)
+    by_stranger = execute_schema(schema, query, asked, user=stranger)
+
+    assert by_owner.errors is None and by_admin.errors is None
+    assert by_owner.data == by_admin.data and by_owner.data["impl_choices"]
+    assert without_record.errors is not None and without_record.errors[0].message == (
+        "Implementation choices are not readable by this actor."
+    )
+    assert by_stranger.errors is not None and "not found" in by_stranger.errors[0].message
+
+
 def test_the_read_offers_a_bridge_s_repair_exactly_when_the_update_allows_it(db: None) -> None:
     """The contract a form reads: the key reads null exactly while its record read and its update are allowed."""
 
