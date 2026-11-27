@@ -346,8 +346,13 @@ live in code docstrings.
   workflow's mail.
   `Recipient.save` and `full_clean` refuse any other, or one with surrounding
   space, with a `ValidationError` on `address` (`not_its_handle`) before
-  writing, and one written past them (a queryset `update`) is ignored, with a
-  warning naming the row, the mail going to the handle's own. An address the
+  writing. The reader (`Recipient.envelope_address`) asks the message's channel
+  what a recorded address the handle's merges no longer name means (a merge
+  reverted after the row was written, a row written past those checks): the
+  system channel's message is refused whole, settled failed with "A recipient of
+  this message no longer names the address it was written for.", so system mail
+  is exact or not sent, and the release does not hand it off again; a person's
+  row is mailed at the handle's value with a warning naming the row. An address the
   transport cannot carry as given (`carries_address`) records nothing and is
   mailed at the handle's value, as before. `HandleManager.find_identity_owners`
   returns the row owning each identity before its merge redirect;

@@ -1436,6 +1436,24 @@ def test_a_persons_message_written_while_two_addresses_were_merged_still_goes_to
     assert [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"] == []
 
 
+def test_a_persons_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(
+    desk: Any, caplog: Any,
+) -> None:
+    """A person's row follows its handle: an unrelated address put on it by a queryset update is not mailed, the
+    handle's own address is, and the warning names the row, not either address."""
+
+    message = Message.objects.compose(channel=desk, to=["Client@Example.test"], text="Hi.", actor=desk.owner,
+                                      queued=True)
+    with system_context(reason="tests.messaging.compose.unnamed"):
+        (row,) = Recipient._base_manager.filter(message=message)
+        Recipient._base_manager.filter(pk=row.pk).update(address="intruder@elsewhere.test")
+    caplog.set_level(logging.WARNING, logger="angee.messaging.models")
+    assert _delivered(message)["To"] == "Client@Example.test"
+    assert [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"] == [
+        f"Recipient {row.pk} holds an address its handle does not name; it is mailed at the handle's own.",
+    ]
+
+
 def test_a_spelling_the_transport_cannot_carry_is_not_recorded_and_the_mail_goes_to_the_handles_address(
     desk: Any,
 ) -> None:

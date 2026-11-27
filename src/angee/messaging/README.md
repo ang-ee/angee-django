@@ -89,12 +89,19 @@ handle's row and goes exactly there, so a merge never redirects an account's
 or a workflow's mail. A person's compose in another spelling of the kept
 handle's own address is mailed as typed. An address the
 transport cannot carry as typed (`carries_address`) records nothing and is
-mailed at the handle's value. One written past that check is ignored with a
-warning, the mail going to the handle's own. The one place a recorded address
-can outlive its handle's value is `HandleManager.reidentify` (and `upsert`'s
-external-id path into it), which rewrites a live handle's value: the row keeps
-the spelling it was given, and the message is mailed at the handle's new value
-with that warning each time. A name inbound mail stored with a literal encoded word is
+mailed at the handle's value. The reader (`Recipient.envelope_address`) asks
+the message's channel what a recorded address the handle's merges no longer
+name means (the merge it was written under reverted, a row written past that
+check): on the system channel (`Channel.system_only`) the whole message is
+refused, settled failed with the reason "A recipient of this message no longer
+names the address it was written for.", so system mail is exact or not sent and
+never reaches the kept handle's mailbox, and a new mail lands on the address's
+own handle; a person's row, which records only spellings of its own handle and
+follows the handle, is mailed at the handle's value with a warning naming the
+row. The one place a recorded address can outlive its handle's value is
+`HandleManager.reidentify` (and `upsert`'s external-id path into it), which
+rewrites a live handle's value: the row keeps the spelling it was given, and
+the message is read as above each time. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;

@@ -67,6 +67,7 @@ from angee.base.prefetch import prefetched, prefetched_objects
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
+from angee.integrate.errors import IntegrationError
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.live import (
     PairingProjection,
@@ -2263,7 +2264,9 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     (``MessageManager.clean_recipient``) and as the transport carries it: a spelling of the handle's address
     or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``): the bound for every writer,
     of which system mail alone records a merged handle's address, so it goes there while the row is on the
-    survivor (``MessageManager._land_addressees``). Empty for a recipient no
+    survivor (``MessageManager._land_addressees``); the reader (:attr:`envelope_address`) refuses a system
+    mail whose recorded address its handle's merges no longer name, and mails a person's at the handle.
+    Empty for a recipient no
     caller handed as an address (one a reply inherits from its parent, one known only as a handle, an
     ingested one), which is mailed at the handle's own ``value``. It leaves with the row: with its handle,
     its message and a channel's purge."""
@@ -2296,14 +2299,20 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         """The address this row is mailed at: :attr:`address` while it spells the handle's address, else the handle's
         own ``value``.
 
-        A recorded address of a handle merged into this row's handle is read once to confirm it. A row whose
-        ``address`` names neither, or carries surrounding space, written past :meth:`save` (a queryset ``update``),
-        is mailed at its handle's ``value`` with a warning naming the row, so mail never goes where its handle's
-        merges do not name.
+        A recorded address of a handle merged into this row's handle is read once to confirm it. A recorded address
+        that neither names (the merge it was written under reverted, a row written past :meth:`save`), or that carries
+        surrounding space, is read as its message's channel says. On the system channel (``Channel.system_only``,
+        asked only here, one read of the channel) the whole message is refused, an ``IntegrationError`` settled as
+        its stored delivery reason, so system mail is exact or not sent and never reaches the kept handle's mailbox.
+        A person's row, which records only spellings of its own handle and follows the handle, is mailed at its
+        handle's ``value`` with a warning naming the row. Mail never goes where its handle's merges do not name.
         """
 
         handle = self.handle
         if self.address and not self._names_its_handle():
+            channel = self.message.channel
+            if channel is not None and channel.system_only:
+                raise IntegrationError("A recipient of this message no longer names the address it was written for.")
             logger.warning("Recipient %s holds an address its handle does not name; it is mailed at the handle's own.",
                            self.pk)
             return str(handle.value)

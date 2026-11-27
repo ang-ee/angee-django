@@ -535,23 +535,97 @@ def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_r
     assert _deliver(message).from_email == "Ops <Ops@Example.test>"
 
 
-def test_a_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(
-    system_mailer: Any, caplog: Any,
-) -> None:
-    """A queryset update puts another address on the row: the mail goes to the handle's own address, never that one,
-    and the warning names the row, not either address."""
+UNNAMED = "A recipient of this message no longer names the address it was written for."
 
-    assert send_mail("Report", "Body.", None, ["Reader@Example.test"]) == 1
+
+def _not_sent(message: Any) -> None:
+    """Delivering ``message`` hands nothing to the transport and settles it failed, with the reason stored."""
+
+    sent = len(mail.outbox)
+    outcome = deliver_message(message._meta.label_lower, message.pk, message.external_id)
+    assert not outcome["delivered"], outcome
+    assert len(mail.outbox) == sent
+    with system_context(reason="tests.messaging.system_mail.unnamed"):
+        stored = Message._base_manager.get(pk=message.pk)
+    assert (stored.status, stored.local_fact("delivery_error")) == ("failed", UNNAMED)
+
+
+@pytest.mark.parametrize("recipients", [1, 2], ids=["its-one-recipient", "one-of-two-recipients"])
+def test_a_system_mail_whose_recipient_was_written_past_its_validation_is_not_sent_to_anyone(
+    system_mailer: Any, recipients: int,
+) -> None:
+    """A queryset update puts an unrelated address on a system mail's row: the whole message is refused, settled
+    failed with its reason, and nothing reaches the handle's mailbox, that address, or the other recipient."""
+
+    addresses = ["Reader@Example.test", "other@example.test"][:recipients]
+    assert send_mail("Report", "Body.", None, addresses) == 1
     (message,) = _recorded(system_mailer)
-    with system_context(reason="tests.messaging.system_mail.invariant"):
-        row = Recipient._base_manager.get(message=message)
+    with system_context(reason="tests.messaging.system_mail.unnamed"):
+        row = Recipient._base_manager.get(message=message, handle__value="Reader@Example.test")
         Recipient._base_manager.filter(pk=row.pk).update(address="intruder@elsewhere.test")
-    caplog.set_level(logging.WARNING, logger="angee.messaging.models")
-    assert _deliver(message).to == ["Reader@Example.test"]
-    warned = [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"]
-    assert warned == [
-        f"Recipient {row.pk} holds an address its handle does not name; it is mailed at the handle's own.",
-    ]
+    _not_sent(message)
+
+
+def _revert_merge(merged: Any) -> None:
+    """Revert the changeset that merged ``merged`` away, as a platform administrator."""
+
+    reverter = create_platform_admin(f"system-mail-merge-reverter-{merged.pk}")
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        boundary = Handle.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+    with actor_context(reverter):
+        boundary.with_actor(reverter).revert()
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_sign_in_mail_written_while_its_address_was_merged_is_refused_after_the_revert_and_a_new_one_is_sent(
+    system_mailer: Any,
+) -> None:
+    """The account's address was merged into another when its link was written; the merge is reverted before
+    delivery. The link goes to neither mailbox: it is refused with its reason, and a new link lands on the account's
+    own handle, live again, and is delivered to it."""
+
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        merged = Handle.objects.upsert(platform="email", value="account@example.test")
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+    _merge_as_contact_administrator(kept, merged)
+    written = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(written) == [(kept.pk, "account@example.test")]
+    _revert_merge(merged)
+    _not_sent(written)
+    again = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(again) == [(merged.pk, "account@example.test")]
+    assert _deliver(again).to == ["account@example.test"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_release_meets_the_same_refusal_for_a_system_mail_whose_merge_was_reverted(
+    system_mailer: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hand-off failed while the address was merged; the merge is reverted; the release hands the mail off again
+    and its delivery is refused, and a refused mail is not handed off again."""
+
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        merged = Handle.objects.upsert(platform="email", value="account@example.test")
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+    _merge_as_contact_administrator(kept, merged)
+
+    def refused(name: str, **options: Any) -> None:
+        raise OperationalError("[Errno 61] Connection refused")
+
+    monkeypatch.setattr(celery_app, "send_task", refused)
+    message = _system_mail(system_mailer, "send-mail", "account@example.test")
+    _revert_merge(merged)
+    handed: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: handed.append(options["kwargs"]))
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        Message._base_manager.filter(pk=message.pk).update(delivery_lease_until=timezone.now() - timedelta(hours=1))
+    assert Message.objects.release_held_messages() == 1
+    assert [kwargs["pk"] for kwargs in handed] == [message.pk]
+    _not_sent(message)
+    assert Message.objects.release_held_messages() == 0
+    assert len(handed) == 1
 
 
 def test_a_django_email_is_recorded_on_the_system_channel_and_sent_once_through_the_transport(
