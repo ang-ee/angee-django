@@ -100,6 +100,7 @@ from angee.graphql.data.resource_fields import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.impl import ImplChoice, repair_impl_choices
 from angee.graphql.introspection import (
     FieldPathError,
     django_model,
@@ -1720,6 +1721,9 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     Strawberry permission classes the insert, update and save roots ask before their write backend
     (an administrator-only resource names IAM's ``ADMIN_PERMISSION_CLASSES``).
 
+    A resource with an update root over a model with a create-only implementation selector also
+    generates ``<res>_repair_choices(id, field)``, its repair read (:func:`_attach_repair_choices`).
+
     ``delete=True`` also generates ``<res>_delete(id, confirm=False)`` and its
     delete-preview metadata. The active write backend must implement
     ``delete_preview``; an override of ``delete`` must define it as well, keeping
@@ -2074,6 +2078,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if update and create_only_selectors(model):
+        resource = _attach_repair_choices(
+            resource, model=model, write_backend=active_write_backend,
+            write_permission_classes=tuple(write_permission_classes),
+        )
     if lifecycle_fields:
         resource.types.append(
             strawberry_django.type(model, name=node_definition.name, extend=True, fields=lifecycle_fields)(
@@ -2303,6 +2312,52 @@ def _nested_inserts(lines: HasuraLines) -> list[NestedInsert]:
             id_column=PUBLIC_ID_FIELD_NAME,
         )
     ]
+
+
+def _attach_repair_choices(
+    resource: HasuraResource,
+    *,
+    model: type[models.Model],
+    write_backend: WriteBackend,
+    write_permission_classes: tuple[type[BasePermission], ...],
+) -> HasuraResource:
+    """Generate ``<res>_repair_choices(id, field)``, the resource's repair read, beside its update.
+
+    What choosing each implementation of one of the model's create-only selectors sets on the record
+    ``id`` (the config each carries over), gated as :func:`angee.graphql.impl.repair_impl_choices` says:
+    the create flow's admission, this resource's ``write_permission_classes``, then its write backend's
+    ``authorize_update``. It rides the resource's query type, so a schema exposes it where it takes the
+    resource; composition refuses one that would expose it without the update root.
+    """
+
+    authorize_update = getattr(write_backend, "authorize_update", None)
+    if not callable(authorize_update):
+        raise ImproperlyConfigured(
+            f"{model._meta.label} has a create-only selector and an update root, so its resource generates "
+            f"a repair read: {type(write_backend).__name__} must implement authorize_update(info, pk)."
+        )
+    root = f"{resource.name}_repair_choices"
+
+    def resolve_repair_choices(self: Any, info: strawberry.Info, id: PublicID, field: str) -> list[ImplChoice]:
+        return repair_impl_choices(
+            info, model, field, str(id),
+            write_permission_classes=write_permission_classes, authorize_update=authorize_update,
+        )
+
+    holder = strawberry.type(
+        type(
+            f"{resource.name}__repair_choices_query",
+            (),
+            {root: strawberry.field(resolver=resolve_repair_choices, name=root, description=(
+                "What choosing each implementation of this resource's create-only selector `field` sets on the "
+                "record `id` (a repair): the config each carries over. Read by an actor the create flow's "
+                "choices read admits who may update that record."
+            ))},
+        )
+    )
+    name = get_object_definition(resource.query, strict=True).name
+    query = strawberry.type(type(f"{resource.name}__query", (resource.query, holder), {}), name=name)
+    return dataclasses.replace(resource, query=query)
 
 
 def _attach_delete_preview(

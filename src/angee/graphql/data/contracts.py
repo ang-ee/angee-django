@@ -272,6 +272,7 @@ class DataResourceRoots:
     delete_name: Annotated[str | None, Field(serialization_alias="delete")] = None
     delete_preview_name: Annotated[str | None, Field(serialization_alias="deletePreview")] = None
     changes_name: Annotated[str | None, Field(serialization_alias="changes")] = None
+    repair_choices_name: Annotated[str | None, Field(serialization_alias="repairChoices")] = None
 
 
 @dataclass(frozen=True, slots=True)

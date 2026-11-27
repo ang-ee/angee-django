@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from enum import StrEnum
 from functools import partial, wraps
-from typing import Annotated, Any, ParamSpec, Self, cast
+from typing import Any, ParamSpec, Self, cast
 
 import strawberry
 import strawberry_django
@@ -56,7 +56,7 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.impl import ImplChoice, can_read_impl_choices, record_impl_choices
+from angee.graphql.impl import ImplChoice, require_impl_choices_admitted
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.related_counts import RelatedCount
@@ -66,7 +66,6 @@ from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import is_platform_admin
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
@@ -131,29 +130,10 @@ _OPEN_FAILURE_LINKS = Prefetch(
 class ConsoleImplChoicesQuery:
     """Administrator metadata with explicit model-owned author access."""
 
-    @strawberry.field(description=(
-        "A selector's implementations and what choosing each sets: for an insert, its defaults; for record, "
-        "the config it carries over from that record (a repair). An administrator or the model's own policy "
-        "may read them; a repair asks, besides, the write on the record: it offers only what this person "
-        "could choose when creating such a record."
-    ))
-    def impl_choices(
-        self,
-        info: strawberry.Info,
-        model: str,
-        field: str,
-        record: Annotated[strawberry.ID | None, strawberry.argument(description=(
-            "A record the actor may write whose stored key the field's choices no longer name: each choice's "
-            "defaults are then what choosing it sets on that record. Admitted as the choices are, then as the "
-            "write is (write on the record, its stored key not registered)."
-        ))] = None,
-    ) -> list[ImplChoice]:
-        """Return registry choices under the administrator or owning model's policy, for an insert or a repair."""
-        actor = _session_user(info)
-        if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
-            raise PermissionDenied("Implementation choices are not readable by this actor.")
-        if record is not None:
-            return record_impl_choices(info, model, field, record)
+    @strawberry.field
+    def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
+        """Return registry choices to an actor the create flow's admission admits (``impl_choices_admitted``)."""
+        require_impl_choices_admitted(info, model, field)
         return resolve_impl_choices(model, field)
 
 

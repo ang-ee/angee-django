@@ -1809,16 +1809,14 @@ def test_every_update_input_carries_its_model_s_create_only_selectors_and_the_me
 
 
 _REPAIR_CHOICES = """
-    query($record: ID) {
-      impl_choices(model: "integrate_vcs.VcsBridge", field: "backend_class", record: $record) { key defaults }
-    }
+    query($record: ID!) { vcs_bridges_repair_choices(id: $record, field: "backend_class") { key defaults } }
 """
 
 
 def test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is_refused_as_the_write_is(
     db: None,
 ) -> None:
-    """With a record, each choice's defaults are the config it carries over; the gate is the write's."""
+    """The bridges' repair read: each choice's defaults are the config it carries over; a non-admin is refused."""
 
     del db
     admin = _platform_admin("repair-choices-admin")
@@ -1830,7 +1828,7 @@ def test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is
     record = {"record": _public_id(bridge)}
 
     choices = {choice["key"]: choice["defaults"] for choice in _data(
-        execute_schema(_schema(), _REPAIR_CHOICES, record, user=admin))["impl_choices"]}
+        execute_schema(_schema(), _REPAIR_CHOICES, record, user=admin))["vcs_bridges_repair_choices"]}
     assert choices["local"] == {"config": LocalVCSBackend.carried_config({"local_root": "/srv/team"})}
     assert choices["stub"] == {"config": {"local_root": "/srv/team", "retired_option": True}}
 
@@ -1878,89 +1876,190 @@ def test_an_administrator_only_resource_admits_its_insert_and_update_by_its_own_
     assert by_admin.errors is None, by_admin.errors
 
 
-_REPAIRABLE = (
-    ("agents", "InferenceProvider", "backend_class"),
-    ("calendar", "CalendarSource", "backend_class"),
-    ("integrate_vcs", "VcsBridge", "backend_class"),
-    ("knowledge_integrate_notion", "NotionConnection", "backend_class"),
-    ("messaging", "Channel", "backend_class"),
-    ("parties", "Directory", "backend_class"),
-    ("posts", "Feed", "feed_backend_class"),
-    ("storage_integrate", "Mount", "backend_class"),
+# Every selector resource of the framework's hosts: the six with an update root and a repair read, then the
+# three without (no update root, so no read in any schema).
+_REPAIR_READS = (
+    ("agents", "InferenceProvider", "backend_class", "inference_providers"),
+    ("integrate_vcs", "VcsBridge", "backend_class", "vcs_bridges"),
+    ("knowledge_integrate_notion", "NotionConnection", "backend_class", "notion_connections"),
+    ("messaging", "Channel", "backend_class", "channels"),
+    ("posts", "Feed", "backend_class", "feeds"),
+    ("posts", "Feed", "feed_backend_class", "feeds"),
 )
+_NO_UPDATE_ROOT = (
+    ("calendar", "CalendarSource", "calendar_sources"),
+    ("parties", "Directory", "directories"),
+    ("storage_integrate", "Mount", "mounts"),
+)
+_NOT_ADMITTED = ("PERMISSION_DENIED", "Implementation choices are not readable by this actor.")
 
 
-@pytest.mark.parametrize(("app_label", "model_name", "selector"), _REPAIRABLE)
-def test_a_repair_read_offers_only_what_its_reader_could_choose_on_create(
-    db: None, app_label: str, model_name: str, selector: str,
+def _admit_every_signed_in_user(user: Any) -> bool:
+    """A test host's choices admission that admits everyone signed in, so the update's own gate decides."""
+
+    return user is not None
+
+
+def _outcome(result: Any) -> tuple[str, str] | str:
+    """``"ok"``, or the first error's code and words."""
+
+    if not result.errors:
+        return "ok"
+    return (result.errors[0].extensions or {}).get("code", ""), result.errors[0].message
+
+
+@pytest.mark.parametrize(("app_label", "model_name", "selector", "root"), _REPAIR_READS)
+@pytest.mark.parametrize("admission", ["iam", "open"])
+def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admits(
+    db: None, settings: Any, app_label: str, model_name: str, selector: str, root: str, admission: str,
 ) -> None:
-    """With record, the choices' own admission first: write on the record grants no repair the create flow does not."""
+    """Four actors, each on its own retired row: the read run, then the repair update, side by side.
+
+    Where the create flow's admission admits the actor (IAM's administrators; every signed-in person under an
+    open admission), the read answers exactly as the update does, in the update's words. Where it does not, the
+    read refuses whatever the update would do: write on the record grants no repair the create flow does not.
+    """
 
     from django.apps import apps
+    from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
 
     del db
+    if admission == "open":
+        settings.ANGEE_IMPL_CHOICES_ADMISSION = f"{__name__}._admit_every_signed_in_user"
     model = apps.get_model(app_label, model_name)
     field = model._meta.get_field(selector)
-    extra = {}
-    if model_name == "Mount":
-        with system_context(reason="test.repair.gate.drive"):
-            backend = apps.get_model("storage", "Backend").objects.create(
-                slug="gate-drive", label="Gate", backend_class="local",
-            )
-            extra["drive"] = apps.get_model("storage", "Drive")._base_manager.create(
-                backend=backend, slug="gate", name="Gate", prefix="gate",
-            )
-    row = make_integration(f"gate-{model_name.lower()}", model=model, **{selector: field.registered_keys()[0]}, **extra)
-    store_column(field.model, row.pk, field.column, "retired")
-    owner, stranger = row.owner, User.objects.create_user(username=f"gate-{model_name.lower()}-stranger")
-    admin = _platform_admin(f"gate-{model_name.lower()}-admin")
+    registered = field.registered_keys()[0]
     schema = GraphQLSchemas.from_discovery().build("console")
-    query = """
-        query($model: String!, $field: String!, $record: ID) {
-          impl_choices(model: $model, field: $field, record: $record) { key defaults }
-        }
+    read = f"query($id: ID!, $field: String!) {{ {root}_repair_choices(id: $id, field: $field) {{ key }} }}"
+    update = f"""
+        mutation($id: String!, $set: {root}_set_input!) {{
+          update_{root}_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ id }}
+        }}
     """
-    asked = {"model": model._meta.label, "field": selector, "record": _public_id(row)}
 
-    by_owner = execute_schema(schema, query, asked, user=owner)
-    by_admin = execute_schema(schema, query, asked, user=admin)
-    without_record = execute_schema(schema, query, {**asked, "record": None}, user=owner)
-    by_stranger = execute_schema(schema, query, asked, user=stranger)
+    def side_by_side(actor_kind: str) -> tuple[tuple[str, str] | str, tuple[str, str] | str]:
+        slug = f"agree-{root}-{selector}-{admission}-{actor_kind}".replace("_", "-")
+        row = make_integration(slug, model=model)
+        store_column(field.model, row.pk, field.column, "retired")
+        actor = {
+            "admin": lambda: _platform_admin(f"{slug}-admin"),
+            "owner": lambda: row.owner,
+            "reader": lambda: User.objects.create_user(username=f"{slug}-reader", email=f"{slug}-r@example.com"),
+            "stranger": lambda: User.objects.create_user(username=f"{slug}-stranger", email=f"{slug}-s@example.com"),
+        }[actor_kind]()
+        if actor_kind == "reader":
+            # Read on these rows derives from the nearest row declaring a reader: the row, or its parent.
+            holders = [row, *(getattr(row, link.name) for link in model._meta.parents.values())]
+            with system_context(reason="test.repair.agree.reader"):
+                for holder in holders:
+                    try:
+                        write_relationships([RelationshipTuple(
+                            resource=to_object_ref(holder), relation="reader", subject=to_subject_ref(actor),
+                        )])
+                        break
+                    except ValueError:
+                        continue
+        target = _public_id(row)
+        by_read = _outcome(execute_schema(schema, read, {"id": target, "field": selector}, user=actor))
+        by_update = _outcome(execute_schema(
+            schema, update, {"id": target, "set": {selector: registered.upper()}}, user=actor,
+        ))
+        return by_read, by_update
 
-    assert by_admin.errors is None and by_admin.data["impl_choices"]
-    for refused in (by_owner, without_record, by_stranger):
-        assert refused.errors is not None and refused.errors[0].message == (
-            "Implementation choices are not readable by this actor."
-        )
+    for actor_kind in ("admin", "owner", "reader", "stranger"):
+        by_read, by_update = side_by_side(actor_kind)
+        if admission == "open" or actor_kind == "admin":
+            assert by_read == by_update, (actor_kind, by_read, by_update)
+        else:
+            assert by_read == _NOT_ADMITTED, (actor_kind, by_read)
 
 
-@pytest.mark.parametrize(("label", "selector", "words"), [
-    ("storage.Backend", "backend_class", "storage.Backend.backend_class has no repair."),
-    ("integrate.OAuthClient", "provider_type", "provider type is not create-only, so it has no repair."),
-])
-def test_a_repair_read_of_a_selector_with_no_repair_is_a_plain_refusal(
-    db: None, label: str, selector: str, words: str,
+@pytest.mark.parametrize(("app_label", "model_name", "root"), _NO_UPDATE_ROOT)
+def test_a_selector_resource_without_an_update_root_has_no_repair_read_in_any_schema(
+    app_label: str, model_name: str, root: str,
 ) -> None:
-    """A model without repairs, or a selector that is not create-only, refuses in the write's family, never INTERNAL."""
+    """No update root, so no read: in no schema of the host, the public one included."""
 
-    from django.apps import apps
+    schemas = GraphQLSchemas.from_discovery()
+    for name in sorted(schemas.names()):
+        sdl = schemas.build(name).as_str()
+        assert f"{root}_repair_choices" not in sdl, (name, root)
+        assert f"update_{root}_by_pk" not in sdl, (name, root)
+
+
+def test_the_six_repair_reads_are_the_console_s_and_its_metadata_names_each_beside_its_update() -> None:
+    """The generated read is ``<res>_repair_choices(id: ID!, field: String!): [ImplChoice!]!`` in the console only."""
+
+    schemas = GraphQLSchemas.from_discovery()
+    console = schemas.build("console").as_str()
+    for root in sorted({root for *_, root in _REPAIR_READS}):
+        assert f"  {root}_repair_choices(id: ID!, field: String!): [ImplChoice!]!\n" in console
+    assert "  impl_choices(model: String!, field: String!): [ImplChoice!]!\n" in console
+    named = {
+        resource.model_label: (resource.roots.repair_choices_name, resource.roots.update_name)
+        for resource in schemas.resources("console") if resource.roots.repair_choices_name
+    }
+    assert named == {
+        f"{app}.{model}": (f"{root}_repair_choices", f"update_{root}_by_pk") for app, model, _, root in _REPAIR_READS
+    }
+    for name in sorted(set(schemas.names()) - {"console"}):
+        assert "_repair_choices" not in schemas.build(name).as_str(), name
+
+
+def test_a_schema_that_would_expose_a_repair_read_without_its_update_root_fails_composition() -> None:
+    """The bridges' query type taken without their mutation: composition refuses, naming the resource."""
+
+    addon = SchemaAddon({"console": {
+        **{key: tuple(integrate_vcs_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS},
+        "mutation": (),
+    }})
+    base = [
+        SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
+        for module in (iam_schema, integrate_schema)
+    ]
+    with pytest.raises(ImproperlyConfigured) as refused:
+        GraphQLSchemas([*base, addon]).build("console")
+    assert "integrate_vcs.VcsBridge" in str(refused.value) and "vcs_bridges_repair_choices" in str(refused.value)
+
+
+def test_the_choices_admission_is_closed_without_its_hook_and_checked_as_an_optional_single_hook(
+    db: None, settings: Any,
+) -> None:
+    """No hook set: nobody is admitted beyond a model's own policy, and the check finds nothing to refuse."""
+
+    from angee.graphql.checks import check_impl_choices_admission
 
     del db
-    admin = _platform_admin(f"no-repair-{selector}")
-    model = apps.get_model(label)
-    with system_context(reason="test.repair.none"):
-        if label == "storage.Backend":
-            row = model.objects.create(slug="no-repair", label="No repair", backend_class="local")
-        else:
-            row = model.objects.create(slug="no-repair", display_name="No repair", client_id="no-repair")
+    admin = _platform_admin("admission-closed-admin")
+    bridge = make_integration("admission-closed", model=VcsBridge)
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    choices = 'query { impl_choices(model: "integrate_vcs.VcsBridge", field: "backend_class") { key } }'
+
+    assert _outcome(execute_schema(schema, choices, {}, user=admin)) == "ok"
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = ""
+    assert check_impl_choices_admission() == []
+    assert _outcome(execute_schema(schema, choices, {}, user=admin)) == _NOT_ADMITTED
+    repair = execute_schema(schema, _REPAIR_CHOICES, {"record": _public_id(bridge)}, user=admin)
+    assert _outcome(repair) == _NOT_ADMITTED
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = "angee.iam.permissions.no_such_check"
+    assert [message.id for message in check_impl_choices_admission()] == ["angee.E033"]
+
+
+@pytest.mark.parametrize("name", ["display_name", "lifecycle", "no_such_field"])
+def test_a_repair_read_of_a_name_that_is_not_a_create_only_selector_is_a_plain_refusal(db: None, name: str) -> None:
+    """A name the resource's update does not carry as a create-only selector refuses in the write's family."""
+
+    del db
+    admin = _platform_admin(f"no-repair-{name}".replace("_", "-"))
+    bridge = make_integration(f"no-repair-{name}".replace("_", "-"), model=VcsBridge)
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
     result = execute_schema(GraphQLSchemas.from_discovery().build("console"), """
-        query($model: String!, $field: String!, $record: ID) {
-          impl_choices(model: $model, field: $field, record: $record) { key }
-        }
-    """, {"model": label, "field": selector, "record": _public_id(row)}, user=admin)
+        query($id: ID!, $field: String!) { vcs_bridges_repair_choices(id: $id, field: $field) { key } }
+    """, {"id": _public_id(bridge), "field": name}, user=admin)
 
     assert result.errors is not None and result.errors[0].extensions["code"] != "INTERNAL"
-    assert result.errors[0].extensions["validationErrors"] == {selector: [words]}
+    assert result.errors[0].extensions["validationErrors"] == {name: [f"integrate_vcs.VcsBridge.{name} has no repair."]}
 
 
 def test_the_read_offers_a_bridge_s_repair_exactly_when_the_update_allows_it(db: None) -> None:

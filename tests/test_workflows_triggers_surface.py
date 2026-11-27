@@ -327,9 +327,13 @@ def test_message_source_defaults_and_record_model_use_the_same_canonical_identit
     assert str(trigger) == "Message ingested: message"
 
 
-def test_source_choices_follow_workflow_authority_without_widening_other_registries(trigger_surface):
-    """A non-admin author can configure a source; ordinary readers cannot inspect its defaults."""
+def test_source_choices_follow_workflow_authority_without_widening_other_registries(trigger_surface, settings):
+    """A non-admin author can configure a source; ordinary readers cannot inspect its defaults.
+
+    The model's own policy admits without the choices admission hook: a host with none set still answers.
+    """
     _schema, _workflow, editor, viewer, starter = trigger_surface
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = ""
     schema = addon_schema({"console": {"query": [ConsoleImplChoicesQuery]}}, "console")
     query = """query($model: String!, $field: String!) {
       impl_choices(model: $model, field: $field) { key defaults }

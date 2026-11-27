@@ -95,17 +95,25 @@ live in code docstrings.
   resource field's metadata gains `createOnly` (the model refuses a change once a
   registered value is stored), published only where the resource writes the
   field (`creatable` or `updatable`), so a read-only exposure says `false`; it
-  implies no create path, which `creatable` alone states. `impl_choices` takes an
-  optional `record`: each choice's `defaults` is then what choosing it sets on
-  that record, the config it carries over (`ImplDefaultsMixin.repair_impl_defaults`),
-  answered for an actor the choices' own admission admits (an administrator, or
-  the model's policy) who may also write that record while its stored key is not
-  registered: a repair offers only what that person could choose when creating
-  such a record, and grants no new power; refused otherwise ("Implementation
-  choices are not readable by this actor.", not found, or "Implementation
-  selection is create-only."); a selector with no repair (its model composes no
-  `ImplDefaultsMixin`, or the selector is not create-only) is refused in words
-  under the field. `@angee/ui`: the record form
+  implies no create path, which `creatable` alone states. A resource whose update
+  root meets a create-only selector generates its repair read,
+  `<res>_repair_choices(id: ID!, field: String!): [ImplChoice!]!` (the console's
+  `inference_providers`, `vcs_bridges`, `notion_connections`, `channels`, `feeds`;
+  the resource metadata names it `roots.repairChoices`), whose `defaults` per choice
+  are what choosing it sets on that record, the config it carries over
+  (`ImplDefaultsMixin.repair_impl_defaults`). Its gate, in order: the create flow's
+  admission for the choices (`impl_choices_admitted`: the
+  `ANGEE_IMPL_CHOICES_ADMISSION` hook, which IAM points at `is_platform_admin`, or
+  the model's `can_read_impl_choices`; closed when no hook is set), so a repair
+  offers only what its reader could choose when creating such a record and grants
+  no new power; the resource's own `write_permission_classes`; the update's own
+  decision on the record (`authorize_update`); then the model ("Implementation
+  selection is create-only.", or "<label>.<field> has no repair." for a name that
+  is not a create-only selector). A schema that would expose the read without the
+  update root fails composition. `impl_choices(model, field)` is the create flow's
+  read only, as before. `hasura_model_resource` takes `write_permission_classes`,
+  asked on its insert, update and save roots, and a write backend's
+  `authorize_update(info, pk)` is the update's own decision before it writes. `@angee/ui`: the record form
   offers a create-only selector (one the model's metadata makes create-only,
   never a page's own flag) once more while the record its draft was made
   against stores a key that is not registered, sets the config the chosen

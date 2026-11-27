@@ -16,6 +16,7 @@ _Settings = TypedDict(
         "AUTH_USER_MODEL": str,
         "REBAC_UNIVERSAL_ADMIN_ROLE": str,
         "ANGEE_PROFILING_PERMISSION": str,
+        "ANGEE_IMPL_CHOICES_ADMISSION": str,
         "MIDDLEWARE:append": list[str],
         "AUTHENTICATION_BACKENDS:append": list[str],
         "SILENCED_SYSTEM_CHECKS:append": list[str],
@@ -32,6 +33,9 @@ SETTINGS: _Settings = {
     "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",
     # Only platform admins open the server's request profiling UI.
     "ANGEE_PROFILING_PERMISSION": "angee.iam.permissions.is_platform_admin",
+    # Only platform admins read implementation choices beyond a model's own policy (and so repair a
+    # record's selector): another intent than profiling, kept in its own setting.
+    "ANGEE_IMPL_CHOICES_ADMISSION": "angee.iam.permissions.is_platform_admin",
     "MIDDLEWARE:append": [
         "django.contrib.sessions.middleware.SessionMiddleware",
         "django.middleware.csrf.CsrfViewMiddleware",

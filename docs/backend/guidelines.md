@@ -519,14 +519,20 @@ Use these owners instead of maintaining another contract in an addon:
   decides. Create-only therefore means: chosen on create, and once more, by
   a person who may write the record, only while its stored key is not
   registered. The console's record form offers that choice exactly then and
-  sends the config it shows: `impl_choices(model, field, record)` answers,
-  for each choice, what choosing it sets on that record (the config
-  `carried_config` carries over), for an actor the choices' own admission
-  admits (an administrator, or the model's policy) who may also write the
-  record while its stored key is not registered: a repair offers only what
-  that person could choose when creating such a record
-  ([`record_impl_choices`](../../src/angee/graphql/impl.py),
-  `ImplDefaultsMixin.repair_impl_defaults`). A record without an update root (calendar sources, directories,
+  sends the config it shows: the resource's generated repair read,
+  `<res>_repair_choices(id, field)` (`hasura_model_resource` generates it where
+  an update root meets a create-only selector; the metadata names it
+  `roots.repairChoices`), answers for each choice what choosing it sets on
+  that record (the config `carried_config` carries over). Its gate is the
+  resource's by construction, in order: the create flow's admission for the
+  choices (`impl_choices_admitted`, one owner: the `ANGEE_IMPL_CHOICES_ADMISSION`
+  hook or the model's `can_read_impl_choices`, closed without the hook), so a
+  repair offers only what its reader could choose when creating such a record;
+  the update root's `write_permission_classes`; the update's own decision
+  (`authorize_update`); then the model
+  ([`repair_impl_choices`](../../src/angee/graphql/impl.py),
+  `ImplDefaultsMixin.repair_impl_defaults`). Composition refuses a schema that
+  would expose the read without the update root. A record without an update root (calendar sources, directories,
   mounts) or a selector a connect flow chose is not repaired in the console:
   its mark says "It cannot be changed here.", and the remedy is installing
   again the addon that provides the implementation, or removing the record
