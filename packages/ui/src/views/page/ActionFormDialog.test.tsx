@@ -1208,7 +1208,7 @@ describe("ActionFormDialog", () => {
     // As the server answers: its message joins every reason, the non-field one under `__all__`.
     ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field",
       { message: "Too early.; The period is closed.", validationErrors: { date: ["Too early."], __all__: ["The period is closed."] } }, "banner"],
-    ["a refusal of a field only brings the person to that field, or to the banner naming it while the fields are held",
+    ["a refusal of a field only brings the person to that field",
       { message: "Too early.", validationErrors: { date: ["Too early."] } }, "field"],
   ] as const)("%s", async (_name, refusal, focused) => {
     const submit = vi.fn(async () => ({ ok: false, ...refusal }));
@@ -1220,8 +1220,8 @@ describe("ActionFormDialog", () => {
     expect(await screen.findAllByText("Too early.")).toHaveLength(1);
     const date = screen.getByRole("textbox", { name: "Date" });
     if (focused === "field") {
-      // The field takes focus; were it disabled at the answer, the banner naming it would.
-      await waitFor(() => expect([date, date.closest("[role='dialog']")?.querySelector("[tabindex='-1']")]).toContain(document.activeElement));
+      // Asked once the dialog has stopped submitting, when its fields take focus again.
+      await waitFor(() => expect(document.activeElement).toBe(date));
     } else {
       const banner = (await screen.findByText("The period is closed.")).closest("[tabindex='-1']");
       await waitFor(() => expect(document.activeElement).toBe(banner));
@@ -1304,20 +1304,19 @@ describe("an action's refusal, as the server answers it, says each reason once a
     return items.length ? items.map((item) => item.textContent) : node ? [node.textContent] : [];
   };
 
-  // Focus goes to a refused field where it can take focus. A typed-args dialog's text fields stay
-  // enabled while the submit runs. A schema or definition dialog holds its fields in a fieldset it
-  // disables while the submit runs, and a browser does not focus a form control inside a disabled
-  // fieldset (the test DOM does), so there the person lands on the field or on the banner naming it.
+  // Focus goes to the refused field on every kind: it is asked once the dialog has stopped
+  // submitting, so the fieldset a schema or definition dialog disables while the submit runs is
+  // enabled again. The test DOM would focus into a disabled fieldset all the same (a browser does
+  // not), so the proof that the call is made on a control that takes focus is
+  // `validation-errors.focus.test.tsx`, which records each call's target at that moment.
   describe.each([
-    ["typed arguments", typed, "the field"],
-    ["a schema's arguments", schema, "the field or the banner naming it"],
-    ["a definition's fields", definition, "the field or the banner naming it"],
-  ] as const)("on a dialog of %s", (_kind, dialog, lands) => {
-    const expectFocusOn = (field: HTMLElement) => lands === "the field"
-      ? expect(document.activeElement).toBe(field)
-      : expect([field, banner()]).toContain(document.activeElement);
+    ["typed arguments", typed],
+    ["a schema's arguments", schema],
+    ["a definition's fields", definition],
+  ] as const)("on a dialog of %s", (_kind, dialog) => {
+    const expectFocusOn = (field: HTMLElement) => expect(document.activeElement).toBe(field);
 
-    test(`one refused field: its reason once, under it; the banner names the field without repeating it, and focus is on ${lands}`, async () => {
+    test("one refused field: its reason once, under it; the banner names the field without repeating it, and focus is on the field", async () => {
       await refuse(dialog, { message: TO, validationErrors: { to: [TO] } });
       expect(await screen.findAllByText(TO)).toHaveLength(1);
       const to = screen.getByRole("textbox", { name: "To" });
@@ -1327,7 +1326,7 @@ describe("an action's refusal, as the server answers it, says each reason once a
       await waitFor(() => expectFocusOn(to));
     });
 
-    test(`two refused fields: focus on the first in the dialog's order, not the server's (${lands})`, async () => {
+    test("two refused fields: focus on the first in the dialog's order, not the server's", async () => {
       await refuse(dialog, { message: `${SUBJECT}; ${TO}`, validationErrors: { subject: [SUBJECT], to: [TO] } });
       expect(await screen.findAllByText(TO)).toHaveLength(1);
       expect(screen.getAllByText(SUBJECT)).toHaveLength(1);

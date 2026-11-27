@@ -14,6 +14,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import preview from "../../.storybook/preview";
 import * as FormViewStories from "./FormView.stories";
 import * as ListViewStories from "./ListView.stories";
+import * as RefusedSubmitStories from "./RefusedSubmit.stories";
 
 setProjectAnnotations([preview]);
 afterEach(() => { vi.restoreAllMocks(); });
@@ -60,8 +61,11 @@ test.each(paths)("%s imports", (path) => {
 
 /** The stories a browser pass reads, each checked by its own test below and so not rendered again here. */
 const RECORD_STORIES = ["EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit"] as const;
+const REFUSED_SUBMIT_STORIES = ["MutationDialog", "ActionTypedArguments", "ActionSchemaArguments"] as const;
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
+  "./ListView.stories.tsx PaneWithOrder",
+  ...REFUSED_SUBMIT_STORIES.map((name) => `./RefusedSubmit.stories.tsx ${name}`),
 ]);
 /** The stories not rendered here, each with why. */
 const NOT_RENDERED: ReadonlyMap<string, string> = new Map([
@@ -144,3 +148,78 @@ test("Views/ListView / Grouped With Tie-breakers shows on its headers the sort i
   ]));
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
 });
+
+test("Views/ListView / Pane With Order checks the key the rows follow, offers no key the groups share, and a choice keeps the groups where they are", async () => {
+  const said = consoleMessages();
+  // Each request the story's schema answers.
+  const reads = vi.spyOn(ListViewStories.default.parameters.angeeFixture.schemas.public!, "fetch");
+  render(<listView.PaneWithOrder />);
+  for (const name of ["closed", "open"]) fireEvent.click(await screen.findByRole("button", { name: new RegExp(`^${name}`) }));
+  const sort = (name: string) => screen.getByRole("columnheader", { name: new RegExp(name) }).getAttribute("aria-sort");
+  const shown = () => ({
+    headers: ["Status", "Rank", "Title"].map(sort),
+    groups: screen.getAllByRole("button", { name: /^(closed|open)/ }).map((button) => button.textContent?.replace(/\d+$/, "")),
+    rows: screen.queryAllByText(TASKS).map((cell) => cell.textContent),
+  });
+  const atLoad = { headers: ["none", "ascending", "none"], groups: ["closed", "open"],
+    rows: ["Archive notes", "Approve budget", "Send invites", "Book the room", "Draft the brief", "Collect quotes"] };
+  await waitFor(() => expect(shown()).toEqual(atLoad));
+  // The menu's Order group, opened with the pane toolbar's own More button when it is closed.
+  const order = async () => {
+    if (!screen.queryByRole("group", { name: "Order" })) fireEvent.click(screen.getByRole("button", { name: "More" }));
+    return within(await screen.findByRole("group", { name: "Order" }));
+  };
+  const items = async () => (await order()).getAllByRole("menuitemradio").map((item) => [item.textContent, item.getAttribute("aria-checked")]);
+  const choose = async (name: string) => { fireEvent.click((await order()).getByRole("menuitemradio", { name })); await settled(); };
+  expect(await items()).toEqual([
+    ["Rank, ascending", "true"], ["Rank, descending", "false"], ["Title, ascending", "false"], ["Title, descending", "false"],
+  ]);
+  // The item already checked changes nothing: Title still breaks the rank ties. The read count states the
+  // intent only: a list grouped in the browser reads nothing when its order changes, so the rows are the check.
+  await settled();
+  const loaded = reads.mock.calls.length;
+  await choose("Rank, ascending");
+  expect([shown(), reads.mock.calls.length]).toEqual([atLoad, loaded]);
+  await choose("Title, descending");
+  const byTitle = { headers: ["none", "none", "descending"], groups: ["closed", "open"],
+    rows: ["Send invites", "Archive notes", "Approve budget", "Draft the brief", "Collect quotes", "Book the room"] };
+  await waitFor(() => expect(shown()).toEqual(byTitle));
+  const chosen = reads.mock.calls.length;
+  expect((await items()).find(([, checked]) => checked === "true")?.[0]).toBe("Title, descending");
+  await choose("Title, descending");
+  expect([shown(), reads.mock.calls.length, (await items()).find(([, checked]) => checked === "true")?.[0]])
+    .toEqual([byTitle, chosen, "Title, descending"]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+const refusedSubmit = composeStories(RefusedSubmitStories);
+
+// Where focus lands is a browser's to show, so these do not read it: they read what the refusal says and where.
+test.each(REFUSED_SUBMIT_STORIES)(
+  "Views/RefusedSubmit / %s, refusing the date, says why once, under the date, and the banner names it, with the reason about the whole submit when asked",
+  async (name) => {
+    const said = consoleMessages();
+    const Story = refusedSubmit[name];
+    for (const formReason of [false, true]) {
+      const view = render(<Story refuse="date" formReason={formReason} />);
+      const dialog = await screen.findByRole("dialog", { name: "Send the form" });
+      const send = await within(dialog).findByRole<HTMLButtonElement>("button", { name: "Send" });
+      await waitFor(() => expect(send.disabled).toBe(false));
+      fireEvent.click(send);
+      const [reason, ...again] = await within(dialog).findAllByText("This value was refused.");
+      expect(again).toEqual([]);
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "Date" }).getAttribute("aria-describedby")?.split(" "))
+        .toContain(reason!.id));
+      // The banner's lines: one message is its body, several a list.
+      const banner = dialog.querySelector("[role='alert']");
+      const items = [...banner?.querySelectorAll("li") ?? []].map((item) => item.textContent);
+      expect(items.length ? items : [banner?.textContent]).toEqual([
+        ...(formReason ? ["This submit was refused as a whole."] : []), "Please fix the highlighted fields: Date.",
+      ]);
+      view.unmount();
+    }
+    expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+    expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+  },
+);

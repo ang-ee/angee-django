@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import * as React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GetListParams } from "@refinedev/core";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { getCoreRowModel, useReactTable, type SortingState } from "@tanstack/react-table";
@@ -11,11 +11,13 @@ import { OperationDocumentsProvider } from "@angee/refine";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../feedback";
+import { PaneToolbarHost } from "../../layouts/PaneToolbar";
 import { createUiTestProviders } from "../../testing";
 import { ListView } from "./ListView";
 import { RowsListView } from "./RowsListView";
 import { ResourceViewProvider, useResourceView, type ResourceViewContextValue } from "./resource-view-context";
-import { buildColumns, ListHeaderCell } from "./resource-view-list-body";
+import { buildColumns, ListHeaderCell, listOrderChoice, type ListOrderChoice } from "./resource-view-list-body";
+import { favoriteFromResourceView, resourceViewFavoriteIsActive, resourceViewFavoritesFromUnknown } from "./model/favorites";
 import type { ResourceViewGroup, ResourceViewInitialState } from "./resource-view-model";
 import { useResourceViewSurface } from "./resource-view-surface";
 
@@ -59,10 +61,12 @@ function taskResource(order: Order, rowModel: "server" | "client" = "server") {
 
 /**
  * A task list over a resource whose default order is `order`, its view state starting from
- * `initialState`, held by the list (`local`) or by the URL (`route`).
+ * `initialState`, held by the list (`local`) or by the URL (`route`, opened at `path`), drawn
+ * in a pane, its Order select in the pane's menu, with `pane`.
  */
-function renderList(order: Order, { columns = titleAndRank, initialState = {}, rowModel = "server", scope = "local" }: {
-  columns?: typeof withStatus; initialState?: ResourceViewInitialState; rowModel?: "server" | "client"; scope?: "local" | "route";
+function renderList(order: Order, { columns = titleAndRank, initialState = {}, rowModel = "server", scope = "local", path = "/tasks", pane = false }: {
+  columns?: typeof withStatus; initialState?: ResourceViewInitialState; rowModel?: "server" | "client"; scope?: "local" | "route"; path?: string;
+  pane?: boolean;
 } = {}) {
   const resource = taskResource(order, rowModel);
   // A held read answers once `release` runs.
@@ -79,27 +83,42 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
     }),
     totalCount: 2,
   } }));
+  const view: { current?: ResourceViewContextValue } = {};
+  function ViewState() { view.current = useResourceView(); return null; }
   const tree = (
     <Provider resources={[resource]} dataProvider={{ getList, custom }} queryClientConfig={{ defaultOptions: { queries: { retry: false } } }}>
       <OperationDocumentsProvider documents={{ console: { groups: { "notes.Task": "query Groups { tasks_groups { key } totalCount }" } } }}>
         <ToastProvider>
           <ResourceViewProvider resource={resource.modelLabel} scope={scope} initialState={initialState}>
-            <ListView resource={resource.modelLabel} scope="inherit" columns={columns} />
+            <ViewState />
+            {pane
+              ? <PaneToolbarHost><ListView resource={resource.modelLabel} scope="inherit" columns={columns} pane={{ selector: "Tasks" }} /></PaneToolbarHost>
+              : <ListView resource={resource.modelLabel} scope="inherit" columns={columns} />}
           </ResourceViewProvider>
         </ToastProvider>
       </OperationDocumentsProvider>
     </Provider>
   );
+  let router: ReturnType<typeof createRouter> | null = null;
   if (scope === "route") {
     const root = createRootRoute({ component: () => tree });
     const tasks = createRoute({ getParentRoute: () => root, path: "tasks" });
-    render(<RouterProvider router={createRouter({ routeTree: root.addChildren([tasks]), history: createMemoryHistory({ initialEntries: ["/tasks"] }) })} />);
+    router = createRouter({ routeTree: root.addChildren([tasks]), history: createMemoryHistory({ initialEntries: [path] }) });
+    render(<RouterProvider router={router} />);
   } else render(tree);
   const keys = (order: Record<string, string> | undefined) => Object.entries(order ?? {}).map(([field, direction]) => `${field} ${direction}`);
   const groupsRead = () => custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as {
     order_by?: { field: string; direction: string }[]; rows_order_by?: Record<string, string>;
   } | undefined;
   return {
+    /** The list's view state and commands, as its toolbar and saved views use them. */
+    view: () => view.current!,
+    /** The route list's address: its path and search, as a reload or a shared link opens it. */
+    href: () => router!.state.location.href,
+    /** The `sort` key the route list's address holds. */
+    urlSort: () => (router!.state.location.search as { sort?: unknown }).sort,
+    /** How many reads of the list's records were made. */
+    reads: () => getList.mock.calls.length,
     /** The order the last read of the list's records asked for, key by key. */
     readOrder: () => keys((getList.mock.calls.at(-1)?.[0].meta?.gqlVariables as { order_by?: Record<string, string> } | undefined)?.order_by),
     /** The order the last groups read asked for its groups. */
@@ -321,16 +340,142 @@ test("a press on the grouping column of rows grouped in the browser is the table
   expect(shown("Status", "Rank")).toEqual({ Status: "none", Rank: "none" });
 });
 
-test("a press on a tie-breaker of rows grouped in the browser sets that key alone: the grouping key goes with the rest, so the groups lose its order", () => {
+test("a press on a tie-breaker of rows grouped in the browser keeps the grouping key ahead of it, so the groups keep its order", () => {
   const list = renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }, { field: "title", direction: "ASC" }], { grouped: true });
   const groups = () => screen.getAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0]);
   expect(groups()).toEqual(["closed", "open"]);
   expect(shown("Status", "Title", "Rank")).toEqual({ Status: "none", Title: "none", Rank: "ascending" });
 
   press("Title");
-  // A fresh single-key order: the open group's first record, Alpha, now sorts first.
-  expect([list.sorting(), groups()]).toEqual([[{ id: "title", desc: false }], ["open", "closed"]]);
+  // The status key stays ahead of the pressed column; the rank tie-breaker goes.
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: false }, { id: "title", desc: false }], ["closed", "open"]]);
   expect(shown("Status", "Title", "Rank")).toEqual({ Status: "none", Title: "ascending", Rank: "none" });
+});
+
+test("a grouping column's key turns in place at each press and is never removed: the groups turn back", () => {
+  const list = renderRows([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { grouped: true });
+  const groups = () => screen.getAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0]);
+  press("Status");
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: true }], ["open", "closed"]]);
+  press("Status");
+  expect([list.sorting(), groups()]).toEqual([[{ id: "status", desc: false }], ["closed", "open"]]);
+});
+
+test("on rows grouped in the browser by two levels, a press keeps both levels' keys, each at its level", () => {
+  const query = ResourceQuery.forRows({ fields: { ...fields, kind: { scalar: "String" } } });
+  const rows = records.map((row, index) => ({ ...row, kind: index % 2 ? "task" : "bug" }));
+  const list = renderRows([], { query, rows, columns: [{ field: "status", header: "Status" }, { field: "kind", header: "Kind" }, { field: "title", header: "Title" }],
+    initialState: { groupStack: [{ field: "status" }, { field: "kind" }], sorting: [{ id: "status", desc: false }] } });
+  // Kind joins the status key at its own level, behind it.
+  press("Kind");
+  expect(list.sorting()).toEqual([{ id: "status", desc: false }, { id: "kind", desc: false }]);
+  // Status turns in place, and the kind key stays.
+  press("Status");
+  expect(list.sorting()).toEqual([{ id: "status", desc: true }, { id: "kind", desc: false }]);
+});
+
+const pressCases = [
+  // [the press, the declared order, the pressed column, the order it leaves, what the headers then show]
+  ["a tie-breaker", "status rank title", "Title", "status:asc,title:asc", { Title: "ascending", Rank: "none" }],
+  ["the shown key, not the order's last", "status rank title", "Rank", "status:asc,rank:desc", { Title: "none", Rank: "descending" }],
+  ["the shown key, the order's last", "status rank", "Rank", "status:asc,rank:desc", { Title: "none", Rank: "descending" }],
+  ["a column outside the order", "status rank", "Title", "status:asc,title:asc", { Title: "ascending", Rank: "none" }],
+] as const;
+test.each((["client", "server"] as const).flatMap((rowModel) => pressCases.map((press) => [rowModel, ...press] as const)))(
+  "on a route list grouped by status (%s row model), a press on %s keeps the grouping key ahead: the groups keep their order, the column shows its direction, the URL and a reload agree",
+  async (rowModel, _name, declared, column, sort, headers) => {
+    const order: Order = declared.split(" ").map((field) => ({ field, direction: "ASC" }));
+    const initialState = { groupStack: [{ field: "status" }], sorting: order.map(({ field }) => ({ id: field, desc: false })) };
+    // In the browser the groups' order is the table's; on the server, the order the groups read asks for.
+    const groups = (rendered: ReturnType<typeof renderList>) => rowModel === "client"
+      ? screen.queryAllByRole("button", { name: /^(closed|open)/ }).map((group) => group.textContent?.match(/^[a-z]+/)?.[0])
+      : rendered.groupOrder();
+    const groupsInStatusOrder = rowModel === "client" ? ["closed", "open"] : ["status asc"];
+    const recordsRead = sort.split(",").map((key) => key.replace(":", " "));
+    const list = renderList(order, { scope: "route", rowModel, columns: withStatus, initialState });
+    await waitFor(() => expect([shown("Rank"), groups(list)]).toEqual([{ Rank: "ascending" }, groupsInStatusOrder]));
+    press(column);
+    await waitFor(() => expect(list.urlSort()).toBe(sort));
+    await waitFor(() => expect([shown("Status", "Title", "Rank"), groups(list)]).toEqual([{ Status: "none", ...headers }, groupsInStatusOrder]));
+    if (rowModel === "server") await waitFor(() => expect(list.groupRowsOrder()).toEqual(recordsRead));
+
+    const href = list.href();
+    cleanup(); clearClients();
+    const reloaded = renderList(order, { scope: "route", rowModel, columns: withStatus, initialState, path: href });
+    await waitFor(() => expect([shown("Status", "Title", "Rank"), groups(reloaded)]).toEqual([{ Status: "none", ...headers }, groupsInStatusOrder]));
+    if (rowModel === "server") expect(reloaded.groupRowsOrder()).toEqual(recordsRead);
+  },
+);
+
+/** The Order select's checked choice in the pane's menu, opening the menu if it is closed. */
+async function checkedOrder(): Promise<string | undefined> {
+  if (!screen.queryByRole("group", { name: "Order" })) fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const order = within(await screen.findByRole("group", { name: "Order" }));
+  return order.queryAllByRole("menuitemradio").find((item) => item.getAttribute("aria-checked") === "true")?.textContent ?? undefined;
+}
+
+test.each([
+  ["an order of several keys", "rank desc, title asc", [], true, "Rank, descending"],
+  ["a grouping key ahead of the shown one", "status asc, rank asc", [{ field: "status" }], true, "Rank, ascending"],
+  ["a grouping key ahead of the shown one, the order inherited", "status asc, rank asc", [{ field: "status" }], false, "Rank, ascending"],
+] as const)("the pane's Order select checks what the headers show, with %s", async (_name, declared, groupStack, seeded, checked) => {
+  const order: Order = declared.split(", ").map((key) => {
+    const [field, dir] = key.split(" ");
+    return { field: field!, direction: dir === "desc" ? "DESC" : "ASC" };
+  });
+  const sorting = order.map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
+  renderList(order, { pane: true, columns: withStatus, initialState: { groupStack: [...groupStack], ...(seeded ? { sorting } : {}) } });
+  await screen.findByText("Charlie");
+  expect(await checkedOrder()).toBe(checked);
+});
+
+test.each(["server", "client"] as const)("choosing in the Order select of a list grouped by status (%s row model) keeps the grouping key ahead, as a press does", async (rowModel) => {
+  const list = renderList(statusThenRank, { pane: true, scope: "route", rowModel, columns: withStatus,
+    initialState: { groupStack: [{ field: "status" }], sorting: [{ id: "status", desc: false }, { id: "rank", desc: false }] } });
+  await waitFor(() => expect(shown("Rank")).toEqual({ Rank: "ascending" }));
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: "Title, descending" }));
+  await waitFor(() => expect(list.urlSort()).toBe("status:asc,title:desc"));
+  if (rowModel === "server") await waitFor(() => expect(list.groupRowsOrder()).toEqual(["status asc", "title desc"]));
+  await waitFor(() => expect(shown("Status", "Title", "Rank")).toEqual({ Status: "none", Title: "descending", Rank: "none" }));
+  expect(await checkedOrder()).toBe("Title, descending");
+});
+
+test("the Order select offers only what it can show as chosen, and choosing what it shows changes nothing", async () => {
+  const order: Order = ["status", "rank", "title"].map((field) => ({ field, direction: "ASC" }));
+  const list = renderList(order, { pane: true, rowModel: "client", columns: withStatus,
+    initialState: { groupStack: [{ field: "status" }], sorting: order.map(({ field }) => ({ id: field, desc: false })) } });
+  await waitFor(() => expect(shown("Rank")).toEqual({ Rank: "ascending" }));
+  fireEvent.click(screen.getByRole("button", { name: "More" }));
+  const select = within(await screen.findByRole("group", { name: "Order" }));
+  // The status key is one every group's records share: no header shows it chosen, so it is not offered.
+  expect(select.getAllByRole("menuitemradio").map((item) => item.textContent))
+    .toEqual(["Title, ascending", "Title, descending", "Rank, ascending", "Rank, descending"]);
+  fireEvent.click(select.getByRole("menuitemradio", { name: "Rank, ascending" }));
+  expect(list.view().state.sorting).toEqual(order.map(({ field }) => ({ id: field, desc: false })));
+});
+
+test("the Order select chooses on the column the header presses, and only one its header can sort", () => {
+  const query = ResourceQuery.fromContract(taskContract([]));
+  const choice: { current?: ListOrderChoice } = {};
+  let sorting: SortingState = [{ id: "status", desc: false }, { id: "rank", desc: false }];
+  function Choice() {
+    const [state, setState] = React.useState<SortingState>(sorting);
+    sorting = state;
+    // A rank column under its own id, and a note column the resource cannot sort by.
+    const columns = React.useMemo(() => buildColumns<Row>([{ id: "position", field: "rank", header: "Rank" }, { field: "note", header: "Note" }, ...withStatus.slice(0, 2)], { query }), []);
+    const table = useReactTable<Row>({ data: records as Row[], columns, state: { sorting: state }, onSortingChange: setState,
+      meta: { groupAxes: [query.group({ field: "status" })] }, enableMultiSort: false, manualSorting: true, getCoreRowModel: getCoreRowModel() });
+    choice.current = listOrderChoice(table);
+    return null;
+  }
+  render(<Choice />);
+  expect(["rank", "note", "status", "title"].map((field) => choice.current!.offers(field))).toEqual([true, false, false, true]);
+  act(() => choice.current!.choose("note", true));
+  act(() => choice.current!.choose("status", true));
+  expect(sorting).toEqual([{ id: "status", desc: false }, { id: "rank", desc: false }]);
+  act(() => choice.current!.choose("rank", true));
+  expect(sorting).toEqual([{ id: "status", desc: false }, { id: "position", desc: true }]);
 });
 
 test("rows grouped in the browser by a hidden column still show the sort of the next key", () => {
@@ -363,11 +508,86 @@ test("a client list seeded with a two-key order keeps it, and a press on its tie
   expect(shown("Title", "Rank")).toEqual({ Title: "none", Rank: "ascending" });
 });
 
-test.fails("on a list whose state lives in the URL, a press on the shown key behind a grouping key turns it descending and the read asks for it", async () => {
+test("on a list whose state lives in the URL, a press on the shown key behind a grouping key turns it descending and the read asks for it", async () => {
   const list = renderList([{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }], { scope: "route", columns: withStatus,
     initialState: { groupStack: [{ field: "status" }], sorting: [{ id: "status", desc: false }, { id: "rank", desc: false }] } });
   await screen.findByText("Charlie");
   expect(shown("Rank")).toEqual({ Rank: "ascending" });
   press("Rank");
   await waitFor(() => expect([list.groupRowsOrder(), shown("Rank")]).toEqual([["status asc", "rank desc"], { Rank: "descending" }]));
+  // The URL holds the whole order, grouping key first.
+  expect(list.urlSort()).toBe("status:asc,rank:desc");
+});
+
+const statusThenRank: Order = [{ field: "status", direction: "ASC" }, { field: "rank", direction: "ASC" }];
+test.each(["server", "client"] as const)("a reload of a %s-grouped route list restores the whole order the press left", async (rowModel) => {
+  const initialState = { groupStack: [{ field: "status" }], sorting: [{ id: "status", desc: false }, { id: "rank", desc: false }] };
+  const list = renderList(statusThenRank, { scope: "route", rowModel, columns: withStatus, initialState });
+  await waitFor(() => expect(shown("Rank")).toEqual({ Rank: "ascending" }));
+  press("Rank");
+  await waitFor(() => expect(list.urlSort()).toBe("status:asc,rank:desc"));
+  const href = list.href();
+  cleanup(); clearClients();
+
+  const reloaded = renderList(statusThenRank, { scope: "route", rowModel, columns: withStatus, initialState, path: href });
+  await waitFor(() => expect(shown("Status", "Rank")).toEqual({ Status: "none", Rank: "descending" }));
+  if (rowModel === "server") expect(reloaded.groupRowsOrder()).toEqual(["status asc", "rank desc"]);
+});
+
+test("a route list opened at a link holding several keys reads in that whole order", async () => {
+  const list = renderList(statusThenRank, { scope: "route", path: "/tasks?sort=rank%3Adesc%2Ctitle%3Aasc" });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  expect(shown("Rank", "Title")).toEqual({ Rank: "descending", Title: "none" });
+});
+
+test.each([
+  ["a trailing comma", "rank%3Aasc%2C"],
+  ["a key of three parts", "rank%3Aasc%3Atitle"],
+  ["a padded field", "status%3Aasc%2C%20rank%3Adesc"],
+  ["a duplicate field", "rank%3Aasc%2Crank%3Adesc"],
+])("a route list opened at a link whose order has %s reads nothing and offers its reset", async (_name, sort) => {
+  const list = renderList(statusThenRank, { scope: "route", path: `/tasks?sort=${sort}` });
+  expect(await screen.findByRole("button", { name: "Reset filters, sorting and grouping" })).toBeTruthy();
+  expect(list.reads()).toBe(0);
+});
+
+const rankThenTitle: Order = [{ field: "rank", direction: "DESC" }, { field: "title", direction: "ASC" }];
+test("a saved view of a list in its inherited order stores no order, and applying it restores the order the list declares", async () => {
+  // The list's state declares no order: it inherits the resource's, rank then title.
+  const list = renderList(rankThenTitle, { scope: "route" });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  const [saved] = resourceViewFavoritesFromUnknown([JSON.parse(JSON.stringify(favoriteFromResourceView(list.view().state, "Declared")))]);
+  expect(saved).not.toHaveProperty("sort");
+  press("Title");
+  await waitFor(() => expect(list.readOrder()).toEqual(["title asc"]));
+
+  act(() => list.view().applyFavorite(saved!));
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  expect([shown("Rank", "Title"), list.urlSort()]).toEqual([{ Rank: "descending", Title: "none" }, undefined]);
+});
+
+test("a saved view whose order is an explicit null clears the list's order", async () => {
+  const list = renderList(rankThenTitle, { scope: "route", initialState: { sorting: [{ id: "rank", desc: true }, { id: "title", desc: false }] } });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  act(() => list.view().applyFavorite({ id: "favorite:unordered", label: "Unordered", sort: null }));
+  await waitFor(() => expect(list.readOrder()).toEqual([]));
+  expect([shown("Rank", "Title"), list.urlSort()]).toEqual([{ Rank: "none", Title: "none" }, ""]);
+});
+
+test("on a list whose view inherits its order, a view of the inherited order and an unordered view are never active together", async () => {
+  const list = renderList(rankThenTitle, { scope: "route" });
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  const [inherited] = resourceViewFavoritesFromUnknown([JSON.parse(JSON.stringify(favoriteFromResourceView(list.view().state, "Declared")))]);
+  const unordered = { id: "favorite:unordered", label: "Unordered", sort: null };
+  // What the search model shows active (`activeItems`): the match given the list's inherited order.
+  const active = () => [inherited!, unordered].filter((view) => resourceViewFavoriteIsActive(view, list.view().state, list.view().inheritedSorting)).map(({ label }) => label);
+  expect(active()).toEqual(["Declared"]);
+
+  act(() => list.view().applyFavorite(unordered));
+  await waitFor(() => expect(list.readOrder()).toEqual([]));
+  expect(active()).toEqual(["Unordered"]);
+
+  act(() => list.view().applyFavorite(inherited!));
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  expect(active()).toEqual(["Declared"]);
 });

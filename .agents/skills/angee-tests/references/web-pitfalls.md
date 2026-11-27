@@ -45,3 +45,34 @@ Traps moved from the frontend guide's Pitfalls and Checks sections. Commands and
 Run the package vitest suite — not just `tsc` and a story render, which miss
 stale assertion drift. When verifying data-bound views, wait for the async query
 to load before asserting.
+
+- **A focus assertion is proven by the test DOM only where happy-dom refuses
+  focus as a browser does.** happy-dom refuses `focus()` only on an element that
+  is already focused, outside the document, carrying its own `disabled`, or under
+  `inert`. It computes styles from inline styles and the `<style>` elements it
+  holds, but never consults them when it decides focus, and these tests load no
+  app stylesheet. A control that can sit inside a disabled fieldset, a
+  non-editable editor or a hidden host takes focus in a test and not in a
+  browser: assert the target's state when focus was asked (`recordFocusCalls` in
+  `@angee/ui/testing`, which refuses what the test DOM can show: a disabled
+  fieldset outside its first legend, `[hidden]`, `[inert]`, a closed `details`,
+  a computed `display: none`, `visibility: hidden` or `collapse`, an element
+  that is not focusable at all), and give the case a browser check or say in the test that
+  it has none; a host hidden by an app stylesheet is a browser's to judge. The
+  same `focus()` calls, measured in both:
+
+  | Target of `focus()` | happy-dom 20 | Chromium |
+  |---|---|---|
+  | `<button disabled>` | refuses | refuses |
+  | `<input readonly>` | focuses | focuses |
+  | `<input>` inside `<fieldset disabled>` | **focuses** | refuses |
+  | `<span tabindex="-1" aria-disabled="true">` inside `<fieldset disabled>` | focuses | focuses |
+  | `contenteditable="false"` without `tabindex` | **focuses** | refuses |
+  | an element under a `display: none` ancestor | **focuses** | refuses |
+  | an element outside the document | refuses | refuses |
+  | `validity.stepMismatch` of `<input type="number" step="0.01" value="2">` | **true** | false |
+
+  The last row refuses a dialog's float field client-side under happy-dom (its
+  step check is `value % step`). A CodeMirror editor's `focus()` raises under
+  happy-dom, which dispatches `selectionchange` inside the editor's own
+  selection update, where a browser queues it.

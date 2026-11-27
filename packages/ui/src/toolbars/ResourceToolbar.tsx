@@ -5,7 +5,7 @@ import { SearchControls } from "../views/resource/search/SearchControls";
 import { useSearchShortcuts, type ListSearchDeclaration } from "../views/resource/search/shortcuts";
 import type * as React from "react";
 import type { ReactElement, ReactNode } from "react";
-import type { SortingState } from "@tanstack/react-table";
+import type { ListOrderChoice } from "../views/resource/list-body/cell-utils";
 import { ScopeChip } from "../communication/pane-list";
 import { PaneToolbar, PaneToolbarMenu, type PaneToolbarMenuItem, type PaneToolbarMenuRadioGroup, type PaneToolbarProps } from "../layouts/PaneToolbar";
 import { SearchActiveLabel } from "../views/resource/search/SearchBox";
@@ -48,8 +48,8 @@ export interface ResourceToolbarProps {
   /** Pane presentation: the pane's selector and scope chips, plus radio groups the pane adds to the overflow menu. */
   pane?: Pick<PaneToolbarProps, "selector" | "scope"> & { overflowGroups?: readonly PaneToolbarMenuRadioGroup[]; overflowItems?: readonly PaneToolbarMenuItem[] };
   sortOptions?: readonly { value: string; label: string }[];
-  sorting?: SortingState;
-  onSortingChange?: (sorting: SortingState) => void;
+  /** The pane's Order select: the key the list's headers show, and a choice set as a header press sets it (`listOrderChoice`). */
+  order?: ListOrderChoice;
   search: ResourceSearch;
   pager: PagerState;
   chrome?: ResourceToolbarChrome;
@@ -142,27 +142,29 @@ export function ResourceToolbar(props: ResourceToolbarProps): ReactElement {
 }
 
 /** The pane presentation owns no query state; all commands belong to the resource. */
-function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, sortOptions = [], sorting,
-  onSortingChange, chrome, view, onViewChange, availableViews, actions, utilityActions,
+function PaneResourceToolbar({ search, pane, searchDeclaration, modelMetadata, sortOptions = [], order,
+  chrome, view, onViewChange, availableViews, actions, utilityActions,
   onCreate, createLabel, viewControls }: ResourceToolbarProps): ReactElement {
   const t = useUiT();
   const shortcuts = useSearchShortcuts(searchDeclaration, modelMetadata);
   const expandedSearch = searchDeclaration?.box === true && chrome?.search !== false;
-  const order = sorting?.[0];
+  const shown = order?.shown;
+  // The select offers only what it can show as chosen (`ListOrderChoice.offers`).
+  const orderOptions = order ? sortOptions.filter(({ value }) => order.offers(value)) : [];
   const firstGroup = search.groupStack[0];
   const groups = [
     ...(pane?.overflowGroups ?? []),
-    ...(sortOptions.length && onSortingChange ? [{
+    ...(orderOptions.length && order ? [{
       label: t("resourceToolbar.order"),
-      value: order ? `${order.id}:${order.desc ? "desc" : "asc"}` : "",
+      value: shown ? `${shown.field}:${shown.desc ? "desc" : "asc"}` : "",
       onValueChange: (value: string) => {
-        const option = sortOptions.flatMap(({ value: field }) => [
-          { value: `${field}:asc`, sorting: [{ id: field, desc: false }] },
-          { value: `${field}:desc`, sorting: [{ id: field, desc: true }] },
+        const option = orderOptions.flatMap(({ value: field }) => [
+          { value: `${field}:asc`, field, desc: false },
+          { value: `${field}:desc`, field, desc: true },
         ]).find((option) => option.value === value);
-        if (option) onSortingChange(option.sorting);
+        if (option) order.choose(option.field, option.desc);
       },
-      items: sortOptions.flatMap(({ value, label }) => [
+      items: orderOptions.flatMap(({ value, label }) => [
         { value: `${value}:asc`, label: t("resourceToolbar.sortAscending", { label }) },
         { value: `${value}:desc`, label: t("resourceToolbar.sortDescending", { label }) },
       ]),
