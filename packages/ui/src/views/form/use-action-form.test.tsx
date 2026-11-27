@@ -33,7 +33,7 @@ describe("useActionForm", () => {
       { x: "1" },
       { id: "one" },
     );
-    expect(result.current.formError).toBeNull();
+    expect(result.current.formErrors).toEqual([]);
     expect(result.current.submitting).toBe(false);
     // The success message renders through the shared toast owner.
     expect(await screen.findByText("Done.")).toBeTruthy();
@@ -55,13 +55,32 @@ describe("useActionForm", () => {
     });
 
     expect(ok).toBe(false);
-    // Every in-band error is available for a field to bind; the form-level message
-    // carries the outcome message plus the key no field claimed.
+    // Every in-band error is available for a field to bind; the form-level messages are
+    // the refusal's form-level reason, then the key no field claimed.
     expect(result.current.fieldErrors).toEqual({
       count: ["Too big."],
       _root: ["Server down."],
     });
-    expect(result.current.formError).toBe("Fix it. _root: Server down.");
+    expect(result.current.formErrors).toEqual(["Fix it.", "_root: Server down."]);
+  });
+
+  test("fields that follow the values are read with the form's values when the answer lands: a reason of a field not shown then folds into the form error", async () => {
+    const submit = vi.fn().mockResolvedValue({
+      status: "invalid", issues: { fieldErrors: { token: ["Expired."] }, formErrors: [] },
+    });
+    const fieldNames = (values: { mode: string }) => values.mode === "note" ? ["mode", "token"] : ["mode"];
+    const { result } = renderHook(
+      () => useActionForm<{ mode: string }>({ submit, defaultValues: { mode: "email" }, fieldNames }),
+      { wrapper },
+    );
+
+    await act(async () => { await result.current.run(); });
+    expect(result.current.formErrors).toEqual(["token: Expired."]);
+
+    act(() => result.current.form.setValue("mode", "note"));
+    await act(async () => { await result.current.run(); });
+    expect(result.current.formErrors).toEqual([]);
+    expect(result.current.fieldErrors).toEqual({ token: ["Expired."] });
   });
 
   test("clearFieldError removes one field's bound messages", async () => {
@@ -95,7 +114,7 @@ describe("useActionForm", () => {
     });
 
     expect(ok).toBe(false);
-    expect(result.current.formError).toBe("boom");
+    expect(result.current.formErrors).toEqual(["boom"]);
     expect(result.current.fieldErrors).toEqual({});
     // The form renders the failure, so the submission was told to keep refine's toast off.
     expect(submit).toHaveBeenCalledExactlyOnceWith({}, { errorNotification: false });
@@ -114,7 +133,7 @@ describe("useActionForm", () => {
     });
 
     expect(ok).toBe(false);
-    expect(result.current.formError).toBe("Nope.");
+    expect(result.current.formErrors).toEqual(["Nope."]);
     expect(result.current.fieldErrors).toEqual({});
   });
 
@@ -234,7 +253,7 @@ test.each(["invalid", "conflict"] as const)("retains the draft after %s and clea
   expect(result.current.saveConflict).toBe(status === "conflict");
   await act(async () => { expect(await result.current.run()).toBe(true); });
   expect(result.current.fieldErrors).toEqual({});
-  expect(result.current.formError).toBeNull();
+  expect(result.current.formErrors).toEqual([]);
   expect(onSuccess).toHaveBeenCalledTimes(1);
 });
 
@@ -242,7 +261,7 @@ test("uses the configured fallback for a failure without a message", async () =>
   const submit = vi.fn().mockRejectedValue({});
   const { result } = renderHook(() => useActionForm({ submit, genericErrorMessage: "Schedule failed." }), { wrapper });
   await act(async () => { expect(await result.current.run()).toBe(false); });
-  expect(result.current.formError).toBe("Schedule failed.");
+  expect(result.current.formErrors).toEqual(["Schedule failed."]);
 });
 
 test("a success continuation failure stays a developer error after an accepted submission", async () => {
@@ -251,7 +270,7 @@ test("a success continuation failure stays a developer error after an accepted s
   const { result } = renderHook(() => useActionForm({ submit, onSuccess }), { wrapper });
   await act(async () => { await expect(result.current.run()).rejects.toThrow("Continuation failed"); });
   expect(await screen.findByText("Accepted")).toBeTruthy();
-  expect(result.current.formError).toBeNull();
+  expect(result.current.formErrors).toEqual([]);
   expect(result.current.submitting).toBe(false);
   expect(submit).toHaveBeenCalledTimes(1);
 });
@@ -325,6 +344,6 @@ test("an outdated submit callback is a developer failure, not a retry banner", a
   const submit = vi.fn().mockResolvedValue({ id: "old-result" });
   const { result } = renderHook(() => useActionForm({ submit }), { wrapper });
   await act(async () => { await expect(result.current.run()).rejects.toThrow(/FormSubmitResult contract/); });
-  expect(result.current.formError).toBeNull();
+  expect(result.current.formErrors).toEqual([]);
   expect(result.current.submitting).toBe(false);
 });

@@ -1,7 +1,8 @@
 import * as React from "react";
 import type { ErrorObject } from "ajv";
 import {
-  extractActionOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome, type AuthoredMutateOptions,
+  actionOutcomeReasons, extractActionOutcome, failedWriteOutcome, publicGraphQLErrorsFromUnknown, type ActionOutcome,
+  type AuthoredMutateOptions, type FailedWriteOutcome,
 } from "@angee/refine";
 import { get, set, type FieldErrors, type FieldValues, type Path, type UseFormReturn } from "react-hook-form";
 import { errorFromUnknown, graphQLErrorsFromUnknown } from "../../data/errors";
@@ -169,11 +170,35 @@ export function markMemberErrors<TErrors extends object>(
   return errors;
 }
 
-/** A save either acknowledges data, reports validation issues, or rejects a stale edit. */
+/** The server's code for a conflict: a stale revision, or an idempotency key spent on other content. */
+export type FormSubmitConflictCode = "STALE_REVISION" | "CREATION_KEY_CONFLICT";
+
+/**
+ * A save either acknowledges data, reports validation issues, or rejects it for a conflict: a
+ * stale edit (`code` `STALE_REVISION`, or none: a custom submit's bare conflict is a stale one),
+ * or a create whose idempotency key an earlier version spent (`CREATION_KEY_CONFLICT`). Issues
+ * marked `outcome: "unconfirmed"` report a lost answer: the save may have been written.
+ */
 export type FormSubmitResult<TData> =
   | { status: "ok"; data: TData; message?: string }
-  | { status: "invalid"; issues: ValidationErrors }
-  | { status: "conflict"; message: string; field?: string };
+  | { status: "invalid"; issues: ValidationErrors; outcome?: "unconfirmed" }
+  | { status: "conflict"; message: string; field?: string; code?: FormSubmitConflictCode };
+
+const CONFLICT_CODES: ReadonlySet<unknown> = new Set<FormSubmitConflictCode>(["STALE_REVISION", "CREATION_KEY_CONFLICT"]);
+
+/**
+ * What a submit's result tells its draft's idempotency key (`useIdempotencyKeys().send`'s
+ * `outcome`): an accepted result confirms it (null), a conflict with the creation-key code says
+ * the key is spent, issues marked unconfirmed keep it as possibly written, and every other
+ * refusal refuses it. The record form and both dialogs pass it.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function formSubmitOutcome(result: FormSubmitResult<unknown>): FailedWriteOutcome | null {
+  if (result.status === "ok") return null;
+  if (result.status === "invalid") return result.outcome ?? "refused";
+  return result.code === "CREATION_KEY_CONFLICT" ? "conflict" : "refused";
+}
 
 /** Decode a wire action response through the transport owner.
  * @kind null
@@ -183,17 +208,25 @@ export function actionFormSubmitResult(data: unknown, root: string): FormSubmitR
   return actionOutcomeSubmitResult(extractActionOutcome(data, root));
 }
 
-/** Adapt an already normalized action outcome without decoding it again.
+/** Adapt an already normalized action outcome without decoding it again. A refusal with a
+ * conflict code is that conflict. Any other keeps its field reasons under their keys, for the form
+ * to bind, and its non-field reasons (Django's `__all__` key) are its form-level reasons, as they
+ * are. Its `message` stands in only when it carries no reason at all (`actionOutcomeReasons`, as
+ * `runActionResult` reads it): the server joins every reason into it, and a refused target's is
+ * only the verb's summary.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function actionOutcomeSubmitResult(outcome: ActionOutcome | null | undefined): FormSubmitResult<ActionOutcome> {
-  return outcome?.ok
-    ? { status: "ok", data: outcome, message: outcome.message }
-    : invalidFormSubmit({
-        fieldErrors: outcome?.validationErrors ?? {},
-        formErrors: outcome?.message ? [outcome.message] : [],
-      });
+  if (outcome && !outcome.ok && CONFLICT_CODES.has(outcome.code)) {
+    return { status: "conflict", code: outcome.code as FormSubmitConflictCode, message: outcome.message };
+  }
+  if (outcome?.ok) return { status: "ok", data: outcome, message: outcome.message };
+  const { __all__: nonField = [], ...fieldErrors } = outcome?.validationErrors ?? {};
+  return invalidFormSubmit({
+    fieldErrors,
+    formErrors: outcome && actionOutcomeReasons(outcome) ? nonField : outcome?.message ? [outcome.message] : [],
+  });
 }
 
 /**
@@ -212,22 +245,31 @@ export function savedFormSubmitResult<TData>(data: TData | null | undefined, mis
   return data == null ? formSubmitError(missingMessage) : { status: "ok", data };
 }
 
-/** Decode a transport failure; contract violations remain developer errors.
+/** Decode a transport failure, or word a caller's own refusal from its message; contract
+ * violations remain developer errors. A lost answer (`failedWriteOutcome` says `unconfirmed`: no
+ * answer says whether it was written) is marked so on its result, returned or thrown alike, and
+ * reads `answerLost` when the surface gives the sentence it reads there.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function formSubmitError(cause: unknown, fallback?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
+export function formSubmitError(cause: unknown, fallback?: string, answerLost?: string): Exclude<FormSubmitResult<never>, { status: "ok" }> {
   if (cause instanceof FormSubmitContractError) throw cause;
-  if (publicGraphQLErrorsFromUnknown(cause).some((item) =>
-    item.extensions.code === "STALE_REVISION" || item.extensions.code === "CREATION_KEY_CONFLICT")) {
-    return { status: "conflict", message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
+  if (typeof cause !== "string" && failedWriteOutcome(cause) === "unconfirmed") {
+    const issues = answerLost === undefined ? validationErrorsFromError(cause, fallback) : { fieldErrors: {}, formErrors: [answerLost] };
+    return { status: "invalid", issues, outcome: "unconfirmed" };
+  }
+  const codes = publicGraphQLErrorsFromUnknown(cause).map((item) => item.extensions.code);
+  // A spent key outranks a stale revision: it is what the next attempt must change.
+  const code = codes.includes("CREATION_KEY_CONFLICT") ? "CREATION_KEY_CONFLICT" : codes.includes("STALE_REVISION") ? "STALE_REVISION" : null;
+  if (code) {
+    return { status: "conflict", code, message: validationErrorMessage(cause, fallback ?? "Could not save record.") };
   }
   return invalidFormSubmit(validationErrorsFromError(cause, fallback));
 }
 
 class FormSubmitContractError extends TypeError {
   constructor() {
-    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues }, or { status: "conflict", message }.');
+    super('FormSubmitResult contract requires { status: "ok", data }, { status: "invalid", issues, outcome? }, or { status: "conflict", message, code? }.');
     this.name = "FormSubmitContractError";
   }
 }
@@ -239,6 +281,8 @@ function assertNeverResult(_result: never): never {
 /** Narrow one submit result and bind its issues to RHF; malformed results fail loudly.
  * A failure is shown once: a message bound to a rendered field stays under that field,
  * and `fallback` stands in only for a failure no field and no form-level message names.
+ * The form-level messages stay several: `root.server` holds them as a list (its `types`),
+ * read with `formErrorsFromForm`; its `message` is their text, one per line.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
@@ -249,10 +293,22 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     fieldNames?: Iterable<string>;
     fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
     fallback?: string;
+    /**
+     * Bring the person to the refusal; the surface's own way of focusing its banner
+     * (`useRefusalBannerFocus`). A refusal with a reason no field shows (a form-level one, or one
+     * of a field the form does not display) calls it: the banner, which then also carries the line
+     * naming the refused fields, is the one place that says everything. A refusal with field
+     * reasons only moves focus to the first rendered field it names, in the order of `fieldNames`
+     * (the server's order without them), through the form library's own `shouldFocus`. A submit's
+     * answer asks for this; an owner that projects issues while the person edits elsewhere does not.
+     */
+    focus?: () => void;
   } = {},
 ): result is Exclude<FormSubmitResult<TData>, { status: "ok" }> {
   let issues: ValidationErrors;
-  let type: "server" | "conflict";
+  // A stale edit is a `conflict` (its surface locks the draft); a spent key is not (its next
+  // attempt is a new draft): its own type, which the record form's banner words.
+  let type: "server" | "conflict" | "creationKeyConflict";
   if (result == null || typeof result !== "object") throw new FormSubmitContractError();
   switch (result.status) {
     case "ok":
@@ -260,7 +316,8 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       return false;
     case "invalid":
       if (!result.issues || !isStringListMap(result.issues.fieldErrors)
-        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")) {
+        || !Array.isArray(result.issues.formErrors) || !result.issues.formErrors.every((message) => typeof message === "string")
+        || (result.outcome !== undefined && result.outcome !== "unconfirmed")) {
         throw new FormSubmitContractError();
       }
       issues = result.issues;
@@ -268,32 +325,78 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
       break;
     case "conflict":
       if (typeof result.message !== "string" || (result.field !== undefined && typeof result.field !== "string")) throw new FormSubmitContractError();
+      if (result.code !== undefined && !CONFLICT_CODES.has(result.code)) throw new FormSubmitContractError();
       issues = { fieldErrors: result.field ? { [result.field]: [result.message] } : {}, formErrors: [result.message] };
-      type = "conflict";
+      type = result.code === "CREATION_KEY_CONFLICT" ? "creationKeyConflict" : "conflict";
       break;
     default:
       return assertNeverResult(result);
   }
   const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
+  const named = Object.keys(issues.fieldErrors).filter((name) => issues.fieldErrors[name]!.length > 0);
+  const claimed = (name: string) => !fieldNames || fieldNames.some((field) => dottedPathBelongsToField(name, field));
+  // A reason no field shows: the banner is then the one place that says everything, and takes the focus.
+  const bannerOnly = issues.formErrors.length > 0 || named.some((name) => !claimed(name));
+  const focused = !options.focus || bannerOnly ? undefined
+    : fieldNames ? fieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
   const bound: Record<string, readonly string[]> = {};
   const unclaimed: Record<string, readonly string[]> = {};
   for (const [name, messages] of Object.entries(issues.fieldErrors)) {
     if (messages.length === 0) continue;
     form.setError(name as Path<TValues>, {
       type, message: messages.join(" "), types: { [type]: [...messages] },
-    });
-    const target = fieldNames && !fieldNames.some((field) => dottedPathBelongsToField(name, field)) ? unclaimed : bound;
-    target[name] = messages;
+    }, name === focused ? { shouldFocus: true } : undefined);
+    (claimed(name) ? bound : unclaimed)[name] = messages;
   }
-  const summary = [...issues.formErrors];
-  if (summary.length === 0 && Object.keys(bound).length && options.fieldSummary) {
-    summary.push(options.fieldSummary(bound));
+  const messages = [...issues.formErrors];
+  if (Object.keys(bound).length && options.fieldSummary) messages.push(options.fieldSummary(bound));
+  messages.push(...dottedPathErrorMessages(unclaimed));
+  if (messages.length === 0 && Object.keys(bound).length === 0 && options.fallback) messages.push(options.fallback);
+  if (messages.length > 0) {
+    form.setError("root.server" as Path<TValues>, { type, message: messages.join("\n"), types: { [type]: messages } });
   }
-  const unclaimedSummary = dottedPathErrorSummary(unclaimed);
-  if (unclaimedSummary) summary.push(unclaimedSummary);
-  const message = summary.join(" ") || (Object.keys(bound).length > 0 ? "" : options.fallback);
-  if (message) form.setError("root.server", { type, message });
+  if (focused === undefined) options.focus?.();
   return true;
+}
+
+/**
+ * A refusal's banner takes focus when its owner asks (`applyFormErrors`'s `focus`), or when a new
+ * list lands and focus is not in a refused field (the form library found no control to focus).
+ * Spread `banner` on the surface's `ErrorBanner` and pass `focusBanner` as that `focus`; `messages`
+ * is the list the banner renders (`formErrorsFromForm`), whose identity changes with each answer.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useRefusalBannerFocus(messages: readonly string[]): {
+  banner: { ref: React.RefObject<HTMLDivElement | null>; tabIndex: -1 };
+  focusBanner: () => void;
+} {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const asked = React.useRef(false);
+  const focusBanner = React.useCallback(() => { asked.current = true; }, []);
+  React.useEffect(() => {
+    const wanted = asked.current;
+    asked.current = false;
+    if (messages.length === 0) return;
+    if (wanted || document.activeElement?.getAttribute("aria-invalid") !== "true") ref.current?.focus();
+  }, [messages]);
+  return React.useMemo(() => ({ banner: { ref, tabIndex: -1 as const }, focusBanner }), [focusBanner]);
+}
+
+/**
+ * The form-level messages a submit left on the form (`root.server`), each its own entry: the list
+ * `applyFormErrors` stored, or the one message another owner set there. Empty when there is none.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function formErrorsFromForm(errors: object): readonly string[] {
+  const server = "root" in errors && errors.root && typeof errors.root === "object" && "server" in errors.root ? errors.root.server : undefined;
+  if (!server || typeof server !== "object") return EMPTY_FIELD_NAMES;
+  const type = "type" in server && typeof server.type === "string" ? server.type : undefined;
+  const listed = type && "types" in server && server.types && typeof server.types === "object" ? (server.types as Record<string, unknown>)[type] : undefined;
+  // The stored list itself, so its identity changes exactly when a new answer lands.
+  if (Array.isArray(listed) && listed.every((message) => typeof message === "string")) return listed;
+  return "message" in server && typeof server.message === "string" && server.message ? [server.message] : EMPTY_FIELD_NAMES;
 }
 
 /**
@@ -487,12 +590,15 @@ function dottedPathBelongsToField(path: string, field: string): boolean {
   return path === field || path.startsWith(`${field}.`);
 }
 
+/** One `field: message` entry per message of a path no rendered field claims. */
+function dottedPathErrorMessages(errors: DottedPathFieldErrorMap): string[] {
+  return Object.entries(errors).flatMap(([field, entries]) => entries.map((message) => `${field}: ${message}`));
+}
+
 function dottedPathErrorSummary(
   errors: DottedPathFieldErrorMap,
 ): string | null {
-  const messages = Object.entries(errors).flatMap(([field, entries]) =>
-    entries.map((message) => `${field}: ${message}`),
-  );
+  const messages = dottedPathErrorMessages(errors);
   return messages.length > 0 ? messages.join(" ") : null;
 }
 

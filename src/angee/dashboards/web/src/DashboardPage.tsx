@@ -23,6 +23,7 @@ import {
   useRuntimeUserPreferences,
   useTrashRecord,
   useBusyRun,
+  useIdempotencyKeys,
   type DescriptorField,
   type MutationDialogValues,
 } from "@angee/ui";
@@ -69,6 +70,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
   const busy = useBusyRun();
+  const keys = useIdempotencyKeys();
   const pending = busy.busy;
   const href = target.scope === "personal" ? routeHref("dashboards.detail", { id: target.id }) : null;
   const shortcutId = state.status === "ready" ? `dashboard:${state.persistedId}` : "";
@@ -84,11 +86,12 @@ function StoredDashboardPage({ target, registry, store }: {
   const duplicate = () => {
     if (state.status !== "ready") return;
     void run(async () => {
-      const result = await binding.duplicate(target, {
+      // Duplicating one dashboard is one draft: every attempt until the copy is made carries its key.
+      const result = await keys.send(`dashboards.duplicate:${target.scope}:${"id" in target ? target.id : target.key}`, (idempotencyKey) => binding.duplicate(target, {
         name: t("common.copyName", { name: state.name }),
-        idempotencyKey: globalThis.crypto?.randomUUID?.() ?? `dashboard-copy-${Date.now()}`,
+        idempotencyKey,
         snapshot: visibleDashboardSnapshot(registry, target, state),
-      });
+      }));
       await navigate({ to: routeHref("dashboards.detail", { id: result.persistedId }) });
     }, t("common.duplicated"));
   };

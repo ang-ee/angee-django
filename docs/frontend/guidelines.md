@@ -312,7 +312,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   variables are authored. The shared hook owns deriving the Hasura custom
   mutation and running it through refine `useCustomMutation`; the rendered record
   adapter owns binding it to `ActionContext` (record id, refresh,
-  missing-record handling, success hooks). Set `idArgument` to the schema
+  missing-record handling, success hooks), and the action bar toasts its
+  outcome: a success with its message, a refusal under the verb's label with
+  its reasons (`runActionResult` throws them, or the message when it carries
+  none); `linkTo` follows the record the verb created. Set `idArgument` to the schema
   argument that receives the record id when it is named differently (for example,
   `"round"`); `null` on an outcome mutation sends only its explicit arguments.
   Don't hand-author these as `graphql()` documents or page-local
@@ -326,12 +329,20 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field errors). A channel vendor contributes such a verb through its
   `defineChannel*BridgeAddon` `recordActions`, scoped to its own rows.
 - **`ActionResult` verbs settle through `useActionResultRun`** (`@angee/ui`) —
-  it fires the verb, toasts the outcome (danger with the in-band non-field
-  reasons; success with the message), and deep-links to a created record via
+  it fires the verb, toasts the outcome (danger with the in-band reasons,
+  under any key; success with the message), and deep-links to a created record via
   `linkTo` + the routed resource page when the outcome carries an `id`. It
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A hook that toasts a verb's failure itself (`useActionResultMutation`,
+  `useRecordChromeActionMutation`, `useRecordActionMutation`) turns the data
+  layer's own error notice off for it, so a failed request is told once.
+  A record action bound with `useRecordActionMutation` is not settled there:
+  its bar toasts it, and both follow a created record through one hook. A
+  record action whose own `run` calls `useActionResultRun`, directly or
+  through `useActionResultMutation` or `useRecordChromeActionMutation`, is
+  toasted there, under the server's message.
 - React does not own business logic, permissions, models, or persistence.
 - Dashboard widget visibility is declared separately from its data filter.
   [`WidgetSpec.visibility`](../../packages/ui/src/dashboard/headless.ts) names
@@ -450,10 +461,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   guarded: only a menu `remove` makes a page unavailable. Rail, login, public
   mark and document title read the selected brand through `useRuntimeBrand`;
   shell components hard-code no identity. The selected theme is the appearance
-  default, and the person's own choice still wins, unless the declaration that
-  supplies the theme sets `themeLocked`: then that theme and its options win
-  within the app, the person's color scheme still applies, their saved theme
-  is kept for other apps, and Appearance says why. A lock travels with the theme
+  default, its options ranked as [host and user precedence](appearance.md#host-and-user-precedence)
+  says. The person's own choice still wins, unless the declaration that
+  supplies the theme sets `themeLocked` (what a lock does is
+  [host and user precedence](appearance.md#host-and-user-precedence)). A lock travels with the theme
   it is declared beside; `ANGEE_UI.shell.theme` never locks. The rail likewise takes its
   selected app's `railExpanded` default only when no expansion preference is saved;
   undeclared, it starts expanded at desktop widths. Visiting a route without
@@ -525,14 +536,19 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and keep any callbacks they close over stable; when a callback wraps
   Refine/query mutation objects that may refresh identity, expose a stable
   callback that reads the latest execution context from a ref (`useLatestRef`).
-  Explorer pages compose `ScopedExplorerPane`, which owns the primary-pane
-  navigator publication plus the root loading/empty gate; addons provide row
-  projection, route transitions, DnD policy, and domain actions. Context another
+  Explorer pages over a scoped tree (storage, knowledge) compose
+  `ScopedExplorerPane`, which owns the primary-pane navigator publication plus the
+  root loading/empty gate; addons provide row projection, route transitions, DnD
+  policy, and domain actions. An explorer page whose navigator is another surface
+  (the iam schema explorer, the agents session rail) renders it with
+  `PrimaryPanePublisher`. Context another
   addon owns beside a page's list is that addon's pane component, published with
   `usePrimaryPane` rather than stacked as a second list. The left pane never
   describes the record (see the shell's regions below). Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
+  `ShellPageTestProviders` renders under a memory router, as a shell page
+  renders under the app's router, unless the test brings its own around it.
 - **The shell has four regions, each with a test.** The left pane is the
   explorer: trees, collection lists in split placement, session rails, smart
   views and the record pager; it changes which record is in the middle and
@@ -666,8 +682,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   every `⋮`: the record band, row menus, `PaneToolbarMenu` (descriptor items and
   radio groups over the same owner), the visible-fields menu, the dashboard widget
   menu, the collapsed statusbar. Field choices inside such a menu stay native items;
-  verbs are `ActionTrigger`s. Every fire → toast flow settles through
-  `useActionResultRun`; row verbs included. Owner story:
+  verbs are `ActionTrigger`s. Each verb's outcome has one toast owner: the
+  record action bar for a record action whose run resolves a message or
+  rejects (one bound with `useRecordActionMutation` or projected through
+  `runActionResult`); `useActionResultRun` for a verb fired from a chrome, a
+  row or a pane, and for a record action whose run settles through it, whose
+  bar then stays silent; the action form for a verb with arguments; the bulk
+  owner for a selection. Owner story:
   [action menu](../../packages/storybook/src/stories/ActionMenu.stories.tsx) (story id `toolbars-actionmenu--default`).
 - **Time is absolute; relative time is a live header's.** Every list, row, facts
   line and period title formats through `date-format.ts`: `formatDate`,
@@ -736,7 +757,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **A class composed through a variant is a registered utility.** `styles/index.css`
   declares it with `@utility` (`selected`, `focus-ring`, `focus-ring-danger`):
   Tailwind gives a variant to a registered utility only, and a plain class in
-  `@layer utilities` compiles to nothing under one, silently
+  `@layer utilities` compiles to nothing under one, silently. The focus ring
+  (`focus-ring`, `focus-ring-danger` on an invalid control) sits under the state
+  variant that shows it, beside a bare `outline-none`, and is Tailwind's ring
+  layer: an elevation is a `shadow-*` utility, never a raw `box-shadow`, so focus
+  keeps both. `ring-0` with `outline-none`, under a selector that outranks the
+  ring's state variant, removes a ring; `shadow-none` does not; an elevation token
+  is a shadow list, never `none` ("no elevation" is `0 0 #0000`; the theme contract
+  holds elevations and the rings to its shadow forms, and a theme stylesheet may not
+  set one, since a layer outside them voids the ring). In forced colours the ring paints a
+  transparent outline the browser colours
   ([the compiled-stylesheet test](../../packages/storybook/scripts/styles.test.mjs)).
 - **One in-flow list message: `ListStatusMessage`** (`fragments/ListStatusMessage.tsx`)
   for a group's error or empty note inside a table, board or pane list; `ErrorBanner`,
@@ -1325,11 +1355,43 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `formSubmitError` (VALIDATION and STALE_REVISION). Do not add another in-band
   form transport. Adapt ActionResult wire responses with
   `actionFormSubmitResult(data, root)` and normalized outcomes with
-  `actionOutcomeSubmitResult(outcome)`. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
+  `actionOutcomeSubmitResult(outcome)`: field reasons stay under their keys, the
+  non-field ones (`__all__`) are the form-level reasons, and the outcome's
+  message, which joins every reason (a refused target's is the verb's summary),
+  stands in only when the outcome carries no reason, the rule `runActionResult`
+  applies. A dialog thus says each reason once: under the field it names when it
+  shows that field ([shownFields](../../packages/ui/src/views/form/form-view-model.ts)),
+  on its banner otherwise; a reason under a name only a `content` editor holds
+  shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  A refusal's form-level messages stay several: the form-level error holds a
+  list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
+  and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
+  several as a list; never join them into one text. A surface that asks
+  (`applyFormErrors` with `focus` and a `fieldSummary`; the record form and
+  both form dialogs do)
+  has a refused submit bring the person to its reasons, and `applyFormErrors`
+  decides where: with a reason no field shows (a form-level one, or one of a
+  field the form does not display) the banner takes focus and also carries
+  the line naming the refused fields, so one focused place says everything;
+  with field reasons only, the first shown field takes focus where it can: the
+  form library focuses it as the answer lands, so a field disabled or replaced
+  while the submit runs (a native input of a schema-driven or definition
+  `ActionFormDialog`, held in a fieldset it disables; a checkbox or switch
+  still takes it) cannot take it, and the banner, which names the field but
+  does not repeat its reason, takes focus instead. A surface gives its
+  banner's focus through `useRefusalBannerFocus`,
+  never an effect of its own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
+- What a record form's Save would write is readable before a save:
+  [nextSave](../../packages/ui/src/views/form/use-form-view-save.ts), on the
+  save surface a pane and a toolbar receive, returns the record's input and the
+  lines diff, built by Save's own function from the values, the baseline and
+  the changed fields the form holds when it is called. It validates, writes and
+  requests nothing, and each call returns a new object: a pane that previews
+  unsaved edits compares what it reads by value, and never rebuilds the mapping.
 - Schema-driven forms import [createJsonSchemaResolver](../../packages/ui/src/views/form/json-schema.ts)
   from `@angee/ui/views/json-schema`. Ajv owns schema validation, formats and
   discriminator selection; RHF owns original and transformed values. Dialog
@@ -1344,8 +1406,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the record form's draft, every dialog's seeds and the presence control read: a
   descriptor with a declared `format` (a date, a date and time or a time carried
   as text) holds `null`, then an explicit `string` kind holds `""` whatever its
-  widget, the `integer` and `float` widgets and the date and time widgets
-  `null`; a lines editor's new cell has its own rule. A form spec's parser
+  widget, the number widgets (`NUMBER_WIDGETS`: `integer`, `float`, `percent`,
+  `progressBar`) and the date and time widgets `null`, read before the kinds,
+  so a `boolean` kind under one of them holds `null`; a lines editor's new
+  cell has its own rule. A form spec's parser
   carries the `format` from the schema
   ([deserializeFormSpec](../../packages/ui/src/views/form/form-spec.ts)), and
   the backend's form spec keeps it beside the date control it selects; a
@@ -1360,7 +1424,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Record forms and dialogs find a field's failed rules through one owner,
   [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
   structured field `required` means presence and the field's own bounds judge a
-  blank. A record form asks the fields its save can write and the record does
+  blank. The check composes the seed rule at every depth: the `null` a form
+  seeds an optional field or member with when it holds nothing is not held
+  against it for holding the key, so a form does not refuse its own seed; a
+  list item that holds nothing is always missing. A
+  record form asks the fields its save can write and the record does
   not redact, whose descriptor is neither hidden, nor read-only, nor excluded by
   its condition, whatever their widget. Its fields are its own, the fields of
   the groups it displays for the record
@@ -1492,6 +1560,42 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   error reporting. Clear settled failures through
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
+  [`DialogForm`](../../packages/ui/src/fragments/DialogForm.tsx) owns that rule
+  for every form dialog: it refuses dismissal while `pending` (Close and Cancel
+  stay focusable and say why), asks before discarding while `dirty`, and asks
+  before a route move while it holds either, through the unsaved-changes guard;
+  its owner's `holdsWork` says no once an accepted submit moves on. A dialog
+  never guards its own `onOpenChange`, and an answer that lands after it went
+  away is still reported (`useLateAnswerReport`).
+- A keyed write (one the server replays by its idempotency key) takes its key
+  from [`useIdempotencyKeys`](../../packages/ui/src/lib/idempotency-key.ts):
+  one key per draft, named by its scope (the surface and what it writes to),
+  minted at the draft's first attempt and kept until a confirmed answer ends it,
+  or the person gives the draft up with nothing possibly written. What an error
+  says never releases the key: a resend, edited or not, carries it. The server
+  replays the write for the same content and answers `CREATION_KEY_CONFLICT` for
+  other content under a spent key; the owner then starts a new draft at the
+  next send, and the caller only says what happened. The owner reads a thrown
+  answer itself and a resolved one through `send`'s `outcome`
+  (`formSubmitOutcome` for a submit's result, whose conflict carries its
+  `code`), so a conflict ends the draft whether thrown or returned.
+  `formSubmitError` marks a lost answer's result `outcome: "unconfirmed"`, so
+  the draft keeps it as possibly written either way; a result a caller builds
+  by hand for a lost answer carries that mark, or the draft forgets the
+  attempt may have been written. A dialog takes its draft as
+  `idempotencyScope`. Never hold a key in component
+  state, and promise "it will not go out twice" only from this page.
+- One draft scope belongs to one surface at a time: two holding it at once
+  would send one key for two writes. A surface that holds a draft says so with
+  `useIdempotencyDraftOwner` (the keyed dialogs, every create form and the
+  composers do), and development fails at once, naming the scope and both
+  holders, when two hold it; a production build logs it once. A create form
+  names its draft under the surface hosting it (`useDraftScope`): the record
+  form provides its own scope, and a relation field's dialog its
+  `relation:<field>` slot (a lines cell's field names its row), so a create
+  opened from another form, or from another relation field or row to the same
+  resource, never shares a draft with it.
+  Name a scope after its target, never after a component.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:
@@ -1757,10 +1861,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ancestor, refreshes on local writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
+  `Explorer` is removed.** The console body and a list's split placement compose
+  `Workbench` over `page/SplitPanes` (v4) — `primary` is the navigator pane,
+  `children` the content, `secondary` the aside, with size/collapse persistence via
+  `autoSave`. Explorer pages do not compose it: they publish their navigator into the
+  console's primary pane (the shell-published surfaces rule above).
+  A pane scrolls its content: the library sets `overflow: auto` on it
+  ([`SplitPane`](../../packages/ui/src/page/SplitPanes.tsx)). Do not
   hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
   the library owns sizing/collapse/persistence and Workbench owns the composition.
 - **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
@@ -2170,7 +2277,8 @@ metadata the backend derives from each edge's schema target relations. Timeline
 sources use the same fact to decline unsupported records; workflow run evidence
 accepts any canonical REBAC record. Never let a pane report the edge
 "unavailable" or offer writes on a type whose schema declares no arm. A section
-with neither rows nor a verb is absent, not empty.
+with neither rows nor a verb is absent, not empty; when every eligible group
+is absent the pane shows its empty state.
 
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
@@ -2359,20 +2467,44 @@ resources, runtime and operation documents; the preview mounts the shared
 [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
 Transport fixtures use the GraphQL wire fake
 [`graphqlWireFetch`](../../packages/refine/src/testing-wire.ts)
-(`@angee/refine/testing/wire`, free of Vitest so stories bundle it): it answers
+(`@angee/refine/testing/wire`, free of Vitest so stories bundle it; the app
+shell's providers, `AppShellTestProviders` from `@angee/ui/testing/shell`, and
+`@angee/app/testing` are free of it too, while `@angee/ui/testing` and
+`@angee/refine/testing` hold spied fakes and stay with tests): it answers
 each root field of a request from the handler named for it, fails loudly on a
 field without a handler or a missing required variable, and reports each parsed
 request; a handler throws `GraphQLError` to answer an error. Stories and addon
-tests wrap it as `storySchema(operations, onRequest)`; framework package tests
+tests wrap it as `storySchema(operations, { schema, resources, onRequest })`:
+the schema it names (`public` unless `schema` says), whose metadata names the
+data resources a story declares once, without which a resource surface finds
+no model, warns and loads no record. `testDataResource` declares `console`
+unless told otherwise, so a `public` story schema names `schemaName: "public"`
+resources; naming a resource of another schema throws. Framework package tests
 pass it as the `fetch` of a real Angee data provider. Tests match requests by
 `fields` or `operationName`, never by query text. A routed fixture
 reused by tests sets `angeeOwnRuntime: true` and passes
 `appearance={storyAppearance(context.globals)}` into the same owner. Each story
-has one provider stack — appearance, data, toasts and modals.
+has one provider stack — appearance, data, toasts and modals. The data layer
+tells its notices only to a `notificationProvider` a test passes to record them,
+so such a test records which notices the data layer opens for a surface's calls
+(none for a call passing `SURFACE_RENDERS_FAILURE`), not what the app's
+`useConnectionNotifications` holds back or tells once; a surface's own toast is
+not recorded. The workshop package's
+[story check](../../packages/storybook/src/stories/stories.test.tsx) imports
+each story module of that package and renders each of its stories (but one
+that fetches a missing file on purpose) through the preview's own annotations,
+failing on a model its schema does not name, a crash or an unanswered read; the
+fragments' and products' stories the workshop also loads need generated
+documents, so it does not import them. No story's runtime imports reach a test
+runner, which the [architecture guardrails](../../packages/app/src/architecture-guardrails.test.ts)
+check.
 
 Full-product workshops use `ComposedRuntimeFixture` from `@angee/storybook/testing`.
 It mounts the real `createApp` composition with native memory history and requires
-fixture transports with live queries disabled. The `@angee/storybook/host` entry
+fixture transports with live queries disabled. The workshop's toolbar is the host's
+appearance, so the fixture leaves the composed addons' run-time `hostAppearance`
+source out and a workshop answers none of its reads; a story about that source
+passes `hostAppearanceSource`. The `@angee/storybook/host` entry
 exposes the stack's emitted addons and schema loader; it adds no product registry.
 `resourceSnapshotOperations` supplies small read-only sample collections through
 metadata-owned filters, relations and grouping. Product packages own their sample
@@ -2413,7 +2545,12 @@ Native form saves refresh their resource queries and authored reads of that
 model; custom commands retain their mutation owner's invalidation. Declare
 other affected models through `invalidateModels`; the
 [shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
+resolves their resource and authored-query invalidation. The save confirms as
+soon as the write answers: it starts those refreshes and does not wait for
+them, so a list of a dependent model or a read in the record's chrome may show
+the saved state a moment after the confirmation, and a read that fails or
+never answers cannot hold a save. Only a save that writes lines waits, for its
+own model's lists. A dependency between
 read models is not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no

@@ -46,6 +46,73 @@ describe("RecordIssues", () => {
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Title" }));
   });
 
+  test("titles an issue by its field's label, so the same words under two fields read apart", () => {
+    const labels: Record<string, string> = { variables: "Variables", sample: "Sample values" };
+    const focus = vi.fn();
+    render(<RecordIssues
+      items={[
+        { id: "variables", tone: "danger", message: "Give an object.", field: "variables" },
+        { id: "sample", tone: "danger", message: "Give an object.", field: "sample" },
+        { id: "hidden", tone: "danger", message: "Give a key.", field: "key" },
+        { id: "record-wide", tone: "danger", message: "Nothing reads support_url." },
+      ]}
+      onFocusField={focus}
+      fieldLabel={(field) => labels[field]}
+    />);
+
+    const issues = screen.getAllByRole("alert");
+    expect(issues.map((issue) => issue.textContent)).toEqual([
+      "VariablesGive an object.", "Sample valuesGive an object.", "Give a key.", "Nothing reads support_url.",
+    ]);
+    // The label is the issue's title, not part of the control's name; the control is described by it, so
+    // two controls with the same words tell a screen reader which field each one goes to.
+    const controls = screen.getAllByRole("button", { name: "Give an object." });
+    expect(controls).toHaveLength(2);
+    expect(controls.map((control) => document.getElementById(control.getAttribute("aria-describedby") ?? "")?.textContent))
+      .toEqual(["Variables", "Sample values"]);
+    // A field the form gives no label for: the control has nothing to be described by.
+    expect(screen.getByRole("button", { name: "Give a key." }).hasAttribute("aria-describedby")).toBe(false);
+    fireEvent.click(controls[1]!);
+    expect(focus).toHaveBeenCalledWith("sample", undefined);
+  });
+
+  test("polite issues arrive in one region that is in the page before them, and interrupt nothing", () => {
+    const view = render(<RecordIssues polite items={[]} />);
+    // The region exists with no issues, so a screen reader knows it before anything arrives in it.
+    const region = view.container.querySelector("[aria-live]")!;
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.textContent).toBe("");
+
+    view.rerender(<RecordIssues polite items={[
+      { id: "refusal", tone: "danger", message: "Give an object.", field: "variables" },
+      { id: "note", tone: "info", message: "Two variables are unused." },
+    ]} />);
+    // The same region, now holding the issues; none of them is an alert or a live region of its own.
+    expect(view.container.querySelector("[aria-live]")).toBe(region);
+    expect(region.textContent).toBe("Give an object.Two variables are unused.");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(region.querySelectorAll("[aria-live], [role=alert], [role=status]")).toHaveLength(0);
+    // The tone and its colour stay.
+    expect(region.querySelector(".bg-danger-soft")?.textContent).toBe("Give an object.");
+    // Each issue is read whole when it changes: a changed message comes with its field's label.
+    expect([...region.querySelectorAll("li")].map((issue) => issue.getAttribute("aria-atomic"))).toEqual(["true", "true"]);
+  });
+
+  test("without `polite` the fragment renders nothing while there is no issue, and a danger issue is an alert", () => {
+    const view = render(<RecordIssues items={[]} />);
+    expect(view.container.childElementCount).toBe(0);
+    view.rerender(<RecordIssues items={[{ id: "refusal", tone: "danger", message: "Give an object." }]} />);
+    expect(screen.getByRole("alert").textContent).toBe("Give an object.");
+    expect(view.container.querySelector("[aria-live]")).toBeNull();
+    expect(view.container.querySelector("li")?.hasAttribute("aria-atomic")).toBe(false);
+  });
+
+  test("without a label source an issue that names a field shows its message alone", () => {
+    render(<RecordIssues items={[{ id: "variables", tone: "danger", message: "Give an object.", field: "variables" }]} />);
+    expect(screen.getByRole("alert").textContent).toBe("Give an object.");
+  });
+
   test("links a record through its registered route and the shared navigator", () => {
     const navigate = vi.fn();
     render(<Provider navigate={navigate}><AppRuntimeProvider runtime={{

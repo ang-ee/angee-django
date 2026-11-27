@@ -632,6 +632,29 @@ test.each([
   await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build")).rejects.toThrow(message);
 });
 
+test("a theme stylesheet reads elevations and sets custom properties of its own", async () => {
+  write(join(addon, "src", "theme.css"), '/* elevation comes from the definition */ [data-theme-id="demo.theme"] { --surface-rail: #101010; box-shadow: var(--elevation-xs); }');
+  await expect(resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build")).resolves.toBeTruthy();
+});
+
+test.each([
+  ["a declaration", '[data-theme-id="demo.theme"] { --elevation-xs: none; }', "declares --elevation-xs (refused wherever it appears, a comment included)"],
+  ["a commented-out declaration", '/* [data-theme-id="demo.theme"] { --elevation-sm: none; } */', "declares --elevation-sm (refused wherever it appears, a comment included)"],
+  ["a declaration behind a /* in a string", '[data-theme-id="demo.theme"] { content: "/*"; --elevation-md: none; } /* */', "declares --elevation-md"],
+  ["@property", "@property --elevation-lg { syntax: '<length>'; inherits: true; initial-value: 0px; }", "declares --elevation-lg"],
+  ["a comment before the colon", '[data-theme-id="demo.theme"] { --elevation-xs/**/: none; }', "declares --elevation-xs"],
+  ["an escaped hyphen", '[data-theme-id="demo.theme"] { --elevation\\-xs: none; }', "holds a backslash"],
+  ["a hex escape", '[data-theme-id="demo.theme"] { --\\65 levation-xs: none; }', "holds a backslash"],
+  ["an escaped second dash", '[data-theme-id="demo.theme"] { -\\-elevation-xs: none; }', "holds a backslash"],
+  ["both dashes escaped", '[data-theme-id="demo.theme"] { \\2d\\2d elevation-xs: none; }', "holds a backslash"],
+  ["an escaped @property", "@property -\\-elevation-lg { syntax: '<length>'; inherits: true; initial-value: 0px; }", "holds a backslash"],
+])("a theme stylesheet with %s of an elevation is refused, naming the theme", async (_form, css, message) => {
+  write(join(addon, "src", "theme.css"), css);
+  const refusal = await resolveConfig({ ...await config(), configFile: false, logLevel: "silent" }, "build").then(() => "", (error: Error) => error.message);
+  expect(refusal).toMatch(/Theme demo\.theme stylesheet \S+theme\.css /);
+  expect(refusal).toContain(message);
+});
+
 test("preview serves the built site and assets after sources and runtime disappear", async () => {
   siteFiles();
   const built = await builtSite({ build: { write: true } });

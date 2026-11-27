@@ -55,7 +55,17 @@ from angee.messaging_templates import walker as walker_module
 from angee.messaging_templates.engine import (
     ALLOWED_FILTERS,
     ALLOWED_TAGS,
+    INVALID_VALUES,
+    MESSAGE_TEMPLATE_REFUSED,
+    NO_BRAND_KIT,
     RENDER_BUDGET,
+    RENDER_BUDGET_EXCEEDED,
+    RENDER_FAILED,
+    RENDER_FILTER_INPUT_LIMIT,
+    RENDER_ITERATION_LIMIT,
+    RENDER_OUTPUT_LIMIT,
+    SUBJECT_TOO_LONG,
+    VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
     RenderBudget,
     RenderBudgetExceeded,
@@ -73,6 +83,7 @@ from angee.messaging_templates.html_checks import (
 )
 from angee.messaging_templates.models import MessageTemplateQuerySet
 from angee.messaging_templates.rendering import MarkdownFormatHandler
+from angee.messaging_templates.testing.faults import failing_filter
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
@@ -1242,7 +1253,7 @@ def _unless_unlinkable(render: Callable[[], str], value: str) -> str | None:
     try:
         return render()
     except ValidationError as refusal:
-        assert [item.code for item in refusal.error_list] == ["value_not_linkable"], refusal
+        assert [item.code for item in refusal.error_list] == [VALUE_NOT_LINKABLE], refusal
         assert UNPRINTED.sub("", value).strip() and url(UNPRINTED.sub("", value)) == "", value
         return None
 
@@ -1651,7 +1662,7 @@ def test_a_url_value_gives_a_link_or_the_render_is_refused(plain: Any, kit: Any)
         assert url(link) == "", link
         with pytest.raises(ValidationError) as refusal:
             _render(template, {"link": link}, kit)
-        assert [item.code for item in refusal.value.error_list] == ["value_not_linkable"], link
+        assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE], link
     assert 'href=""' in _render(template, {"link": " "}, kit).html
     for link, sent in ADMITTED_LINKS.items():
         assert f'href="{sent}"' in _render(template, {"link": link}, kit).html, link
@@ -1867,7 +1878,8 @@ def test_the_markdown_pass_reads_internals_markdown_it_still_has() -> None:
 
 def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any) -> None:
     """Django review 2 (a3, a2, q7, q10): values the walk admits that Django's filters would raise on are refused,
-    naming the path; a bare date printed with a time takes an aware datetime; preview reports the refusal."""
+    naming the path; a bare date printed with a time takes an aware datetime; preview reports each refusal as its
+    own warning."""
 
     del plain
     numbers = _mail("[{{ n|pluralize }}][{{ n|floatformat:2 }}][{{ n|yesno }}][{{ n }}]", {"n": "x"}, key="tests.n")
@@ -1896,51 +1908,48 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
                 except ValidationError:
                     pass
     with system_context(reason="tests.messaging_templates.render.preview"):
-        timed.sample = {**moments, "d": "2026-11-24"}
+        timed.sample = {**moments, "d": "2026-11-24", "e": "2026-11-24"}
         preview = timed.preview(kit=kit)
-    assert preview.rendered is None and [warning.code for warning in preview.warnings] == [
-        TemplateWarningCode.RENDER_ERROR]
-    assert "d is printed with a time" in preview.warnings[0].detail
-
-
-def _failing(raised: type[BaseException]) -> Any:
-    def upper(value: Any) -> str:
-        raise raised("a filter nobody thought of")
-
-    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
-    return upper
+    assert preview.rendered is None and [(warning.code, warning.field) for warning in preview.warnings] == [
+        (TemplateWarningCode.RENDER_ERROR, None)] * 2
+    assert [warning.detail.split(" (")[0] for warning in preview.warnings] == [
+        "d is printed with a time", "e is printed with a time"]
 
 
 @pytest.mark.parametrize("raised", [RuntimeError, ZeroDivisionError, ValueError])
 def test_any_other_failure_is_logged_then_refused_as_render_failed(
-    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: type[Exception],
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture, raised: type[Exception],
 ) -> None:
-    """Section 4: what nobody thought of is logged with its traceback, then leaves as render_failed; preview says so."""
+    """Section 4: what nobody thought of is logged as the row and the exception's type, never the exception's text
+    or traceback, which may quote a value, then leaves as render_failed; preview says so."""
 
     del plain
-    monkeypatch.setitem(register.filters, "upper", _failing(raised))
-    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
-    with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
-        with pytest.raises(ValidationError) as caught:
-            _render(template, {"name": "Ana"}, kit)
-        with system_context(reason="tests.messaging_templates.render.preview"):
-            preview = template.preview(kit=kit)
-    assert [item.code for item in caught.value.error_list] == ["render_failed"]
-    assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
-    assert preview.rendered is None
-    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
-    assert len(caplog.records) == 2 and all(record.exc_info for record in caplog.records)
+    with failing_filter("upper", raised("a filter nobody thought of")):
+        template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
+        with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
+            with pytest.raises(ValidationError) as caught:
+                _render(template, {"name": "Ana"}, kit)
+            with system_context(reason="tests.messaging_templates.render.preview"):
+                preview = template.preview(kit=kit)
+        assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
+        assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+        assert preview.rendered is None
+        assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
+        assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(
+            logging.ERROR,
+            f"A message template failed to render: the template {template.key} in en raised {raised.__name__}.",
+            None,
+    )] * 2
 
 
 @pytest.mark.parametrize("raised", [MemoryError, RecursionError])
 def test_running_out_of_room_is_not_a_refusal(
-    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, raised: type[Exception],
+    plain: Any, kit: Any, raised: type[Exception],
 ) -> None:
     """MemoryError and RecursionError say the process ran out of room, not that the row cannot render."""
 
     del plain
-    monkeypatch.setitem(register.filters, "upper", _failing(raised))
-    with pytest.raises(raised):
+    with failing_filter("upper", raised("a filter nobody thought of")), pytest.raises(raised):
         _render(_mail("{{ name|upper }}", {"name": "x"}), {"name": "Ana"}, kit)
 
 
@@ -1955,7 +1964,7 @@ def test_the_walk_and_the_warnings_are_inside_the_contract(
         patched.setattr(_TreeWalker, "close", lambda walker, tree: 1 / 0)
         with pytest.raises(ValidationError) as caught:
             _render(template, {"name": "Ana"}, kit)
-        assert [item.code for item in caught.value.error_list] == ["render_failed"]
+        assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
         with system_context(reason="tests.messaging_templates.render.preview"):
             assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
     monkeypatch.setattr(TemplateWalk, "unused", property(lambda walk: 1 / 0))
@@ -1977,22 +1986,22 @@ def test_a_caller_tells_each_refusal_apart_by_its_code(
         return {item.code for item in caught.value.error_list}
 
     template = _mail("{{ order.total }} {{ name }}", {"order.total": "x", "name": "x"}, key="tests.codes")
-    assert codes(template, {"order": "x"}) == {"invalid_values"}
-    assert codes(template, {"order": {"total": None}, "name": None}) == {"invalid_values"}
-    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {"message_template_refused"}
+    assert codes(template, {"order": "x"}) == {INVALID_VALUES}
+    assert codes(template, {"order": {"total": None}, "name": None}) == {INVALID_VALUES}
+    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {MESSAGE_TEMPLATE_REFUSED}
     looping = _mail("{% for i in items %}" + "{{ i|upper }}{{ i|lower }}{{ i|title }}" * 2 + "{% endfor %}",
                     {"items.*": "x"}, key="tests.looping")
-    assert codes(looping, {"items": ["a"] * 501}) == {"invalid_values"}
-    assert codes(looping, {"items": ["a" * 90] * 500}) == {"render_budget"}
+    assert codes(looping, {"items": ["a"] * 501}) == {INVALID_VALUES}
+    assert codes(looping, {"items": ["a" * 90] * 500}) == {RENDER_BUDGET_EXCEEDED}
     long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
-    assert codes(long_subject, {"name": "n" * 600}) == {"subject_too_long"}
-    monkeypatch.setitem(register.filters, "upper", _failing(RuntimeError))
-    assert codes(looping, {"items": ["a"]}) == {"render_failed"}
+    assert codes(long_subject, {"name": "n" * 600}) == {SUBJECT_TOO_LONG}
+    with failing_filter("upper", RuntimeError("a filter nobody thought of")):
+        assert codes(looping, {"items": ["a"]}) == {RENDER_FAILED}
     with system_context(reason="tests.messaging_templates.render.kit"):
         BrandKit.objects.filter(pk=kit.pk).update(is_default=False)
     with pytest.raises(ValidationError) as caught, system_context(reason="tests.messaging_templates.render"):
         template.render({"order": {"total": 1}, "name": "Ana"})
-    assert {item.code for item in caught.value.error_list} == {"no_brand_kit"}
+    assert {item.code for item in caught.value.error_list} == {NO_BRAND_KIT}
 
 
 def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> None:
@@ -2003,7 +2012,7 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
     template.sample = {"name": "a\ud800b"}  # unsaved: PostgreSQL's jsonb refuses a lone surrogate
     with pytest.raises(ValidationError, match="lone surrogate") as caught:
         _render(template, {"name": "a\ud800b"}, kit)
-    assert {item.code for item in caught.value.error_list} == {"invalid_values"}
+    assert {item.code for item in caught.value.error_list} == {INVALID_VALUES}
     with system_context(reason="tests.messaging_templates.render.preview"):
         assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
 
@@ -3038,6 +3047,9 @@ def test_the_costliest_pass_does_bounded_work(plain: Any, kit: Any, work: dict[s
     assert work["trees"] == trees and _charges(work["passes"]) == charges
     # The charges are counted against the budget's own limits: the costliest cases reach them.
     assert RenderBudget().limits == {"iterations": 500, "output": 200_000, "filter_input": 500_000}
+    assert RenderBudget().limits == {  # the defaults a sender reads are the exported limits
+        "iterations": RENDER_ITERATION_LIMIT, "output": RENDER_OUTPUT_LIMIT, "filter_input": RENDER_FILTER_INPUT_LIMIT,
+    }
     assert RenderBudget.for_lines().limits == {"iterations": 50, "output": 20_000, "filter_input": 50_000}
 
 
@@ -3134,13 +3146,15 @@ def test_pass_time(plain: Any, kit: Any, name: str) -> None:
 
 @TIMED
 def test_preview_time(plain: Any, kit: Any) -> None:
-    """A smoke measurement: the costliest previews and renders the caps admit, their walks and prepare() stay under two
-    seconds of CPU at the reference, and the refused cases stop as soon. It catches a gross regression; the counted
-    work of ``test_the_costliest_preview_does_bounded_work`` is the guarantee."""
+    """A smoke measurement: the costliest previews and renders the caps admit, their walks and prepare(), and
+    ``review`` written into another saved row as a patch, validated as its save would be, stay under two seconds of
+    CPU at the reference, and the refused cases stop as soon. It catches a gross regression; the counted work of
+    ``test_the_costliest_preview_does_bounded_work`` is the guarantee."""
 
     del plain
+    cases, edited, patch = _patched_cases()
     spent: dict[str, float] = {}
-    for name, template in _preview_cases().items():
+    for name, template in cases.items():
         started = time.process_time()
         with system_context(reason="tests.messaging_templates.render.timed"):
             preview = template.preview(kit=kit)
@@ -3158,12 +3172,45 @@ def test_preview_time(plain: Any, kit: Any) -> None:
                 started = time.process_time()
                 template.render(template.sample, kit=kit)
                 spent[f"{name} render"] = round(time.process_time() - started, 3)
+    started = time.process_time()
+    with system_context(reason="tests.messaging_templates.render.timed"):
+        patched = edited.preview(kit=kit, patch=patch)
+    spent["review patched"] = round(time.process_time() - started, 3)
+    assert patched.rendered is not None, patched.warnings
     print(f"preview CPU {spent} load {os.getloadavg()[0]:.0f}")  # noqa: T201 -- the report quotes it
     bound = _scaled(2.0)
     print(f"preview bound {bound:.3f}s (2.0 s at the reference)")  # noqa: T201 -- the report quotes it
     assert max(spent.values()) < bound, (spent, bound)
     # The costliest admitted Markdown, measured back to back with the review case it extends.
     assert spent["onebracket"] < 1.3 * spent["review"], spent
+
+
+PATCHED_COLUMNS = ("source", "text_source", "subject", "variables", "sample")
+"""The columns that make ``review`` the costliest admitted preview, written into another saved row as a patch."""
+
+
+def _patched_cases() -> tuple[dict[str, Any], Any, dict[str, Any]]:
+    """The preview cases, a saved template of one line, and the patch writing ``review``'s columns into it."""
+
+    cases = _preview_cases()
+    edited = _mail("Hello.", key="tests.edited", format="html", text_source="Hello.")
+    return cases, edited, {name: getattr(cases["review"], name) for name in PATCHED_COLUMNS}
+
+
+def test_a_patched_preview_walks_once(plain: Any, kit: Any, work: dict[str, list[Any]]) -> None:
+    """A patch that changes what renders is walked once, by ``clean()``, and rendered from that walk; one that
+    changes only the sample is walked once, as the saved row is. Either checks each row it reaches once and does
+    the work of the saved row's preview."""
+
+    del plain
+    cases, edited, patch = _patched_cases()
+    for row, patched in ((edited, patch), (cases["review"], {"sample": cases["review"].sample})):
+        for seen in work.values():
+            seen.clear()
+        with system_context(reason="tests.messaging_templates.render.work"):
+            preview = row.preview(kit=kit, patch=patched)
+        assert preview.rendered is not None, preview.warnings
+        assert (sum(work["checked"]), work["trees"], _charges(work["passes"])) == PREVIEW_WORK["review"], row.key
 
 
 # ---------- preview, its warnings and its read ----------
@@ -3205,6 +3252,22 @@ def test_a_layout_previews_around_a_fixed_body_and_a_block_alone(plain: Any, kit
     assert "A template writes its message here." in layout.rendered.plain_text
     assert block.rendered is not None and block.rendered.html == "<b>Tuner</b>"
     assert block.warnings == []
+
+
+def test_a_patch_renders_on_a_copy_and_writes_only_the_columns_an_administrator_edits(plain: Any, kit: Any) -> None:
+    """A patch renders on a copy of the row, which keeps its own values, and holds edited columns alone: the row's
+    identity, its flag and its hashes are refused before anything is copied or walked."""
+
+    del plain
+    row = _mail("Hello.")
+    with system_context(reason="tests.messaging_templates.render.preview"):
+        preview = row.preview(kit=kit, patch={"source": "Edited."})
+    assert preview.rendered is not None and "Edited." in preview.rendered.plain_text
+    assert (row.source, row.content_hash) == ("Hello.", MessageTemplate._base_manager.get(pk=row.pk).content_hash)
+    for column in ("kind", "key", "is_baseline", "content_hash"):
+        with system_context(reason="tests.messaging_templates.render.preview"), pytest.raises(
+                ValueError, match=f"never {column}"):
+            row.preview(kit=kit, patch={"source": "Edited.", column: "x"})
 
 
 def test_deleting_an_included_block_or_part_is_refused_while_its_key_would_stop_resolving(plain: Any) -> None:

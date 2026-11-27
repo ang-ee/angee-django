@@ -1,15 +1,25 @@
-import { useCallback, useRef, type ReactElement } from "react";
+import { useCallback, type ReactElement } from "react";
 
-import { extractActionOutcome } from "@angee/refine";
+import { extractActionOutcome, failedWriteOutcome } from "@angee/refine";
 
 import {
-  Action, Column, createClientKey, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
-  useAuthoredResourceMutation, type ActionDescriptor } from "@angee/ui";
+  Action, Column, DrawerResourceList, Field, Form, List, SettingsSection, SettingsShell,
+  useAuthoredResourceMutation, type ActionDescriptor, type ActionFormContext } from "@angee/ui";
 import { KnowledgeCreateVaultFrom, PAGE_READ_MODELS } from "../data/documents";
 import { useKnowledgeT } from "../i18n";
 
 const VAULT_MODEL = "knowledge.Vault";
 const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
+/** The template a clone copies: the record the action is invoked on. */
+const templateOf = (context: ActionFormContext): string | null => {
+  const template = context.record?.id;
+  return typeof template === "string" && template ? template : null;
+};
+/** The clone dialog of one template is one draft: its key lasts from the first attempt until a vault is created. Without a template there is no draft. */
+const cloneScope = (context: ActionFormContext) => {
+  const template = templateOf(context);
+  return template === null ? null : `knowledge.vault-from-template:${template}`;
+};
 
 /**
  * The knowledge admin console: a managed list of vaults whose record form opens
@@ -18,27 +28,28 @@ const CLONE_MODELS = [VAULT_MODEL, ...PAGE_READ_MODELS];
  */
 export function KnowledgeSettingsPage(): ReactElement {
   const t = useKnowledgeT();
-  const pendingClone = useRef<{ template: string; name: string; key: string } | null>(null);
   const [createFrom] = useAuthoredResourceMutation(KnowledgeCreateVaultFrom, {
     invalidateModels: CLONE_MODELS,
     shouldInvalidate: (data) => data?.create_vault_from.ok === true,
   });
   const cloneSubmit = useCallback<NonNullable<ActionDescriptor["submit"]>>(
     async (values, context, options) => {
-      const template = context.record?.id;
-      if (typeof template !== "string" || !template || typeof values.name !== "string") {
+      // The action dialog holds the draft's key (`idempotencyScope`): every attempt until a vault is
+      // created carries it, and without a template there is neither a draft nor a clone to send.
+      const template = templateOf(context);
+      const key = context.idempotencyKey;
+      if (template === null || !key || typeof values.name !== "string") {
         return { ok: false, message: t("vault.cloneFailed") };
       }
       const name = values.name.trim();
-      if (pendingClone.current?.template !== template || pendingClone.current.name !== name) {
-        pendingClone.current = { template, name, key: createClientKey() };
+      try {
+        const data = await createFrom({ template, name, owned: true, idempotency_key: key }, options);
+        return extractActionOutcome(data, "create_vault_from");
+      } catch (cause) {
+        if (failedWriteOutcome(cause) !== "conflict") throw cause;
+        // An earlier attempt created a vault under this draft's key, in this action's words.
+        return { ok: false, code: "CREATION_KEY_CONFLICT", message: t("vault.clonedEarlier") };
       }
-      const data = await createFrom({
-        template, name, owned: true, idempotency_key: pendingClone.current.key,
-      }, options);
-      const outcome = extractActionOutcome(data, "create_vault_from");
-      if (outcome?.ok) pendingClone.current = null;
-      return outcome;
     },
     [createFrom, t],
   );
@@ -66,6 +77,7 @@ export function KnowledgeSettingsPage(): ReactElement {
             icon="copy"
             args={[{ name: "name", label: t("vault.cloneName"), widget: "text" }]}
             submit={cloneSubmit}
+            idempotencyScope={cloneScope}
             // Keep the action off the create drawer until a record is loaded.
             visibleWhen={() => true}
           />

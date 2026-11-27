@@ -53,12 +53,12 @@ import json
 import logging
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
@@ -70,18 +70,20 @@ from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.permissions import require_save_allowed
 from angee.base.prefetch import InstancePrefetch
 from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.brandkit.models import BrandKit
 from angee.graphql.capabilities import held_permissions
-from angee.messaging_templates.engine import clean_link
+from angee.messaging_templates.engine import NO_BRAND_KIT, NOT_A_TEMPLATE, NOT_EFFECTIVE, clean_link
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
     PreviewFrame,
     RenderedMessage,
     TemplatePreview,
+    TemplateWalk,
     TemplateWalker,
     TemplateWarning,
     TemplateWarningCode,
@@ -751,6 +753,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             raise refusal
         return self._render_and_record(row, reason=reason, to=to, values=values, kit=kit, must_print=must_print)
 
+    @sensitive_variables()
     def send_test(
         self, row: TemplateT, *, actor: User, kit: BrandKit | None = None, idempotency_key: str | None = None,
     ) -> Message:
@@ -836,7 +839,6 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 require_changeset().record_created(message)
                 return message
 
-    @sensitive_variables()
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
         subject_prefix: str = "", must_print: Iterable[str] = (),
@@ -1047,6 +1049,17 @@ def _lacking(row: MessageTemplate, permission: str) -> PermissionDenied | None:
     return PermissionDenied(f"Denied: the current actor lacks {permission!r} on {to_object_ref(row)}.")
 
 
+def _refusals(error: ValidationError, code: TemplateWarningCode) -> list[TemplateWarning]:
+    """``error`` as a preview's ``code`` warnings: one for each distinct refusal and the column it names, ``None`` for
+    a refusal of the row as a whole (Django's ``NON_FIELD_ERRORS``)."""
+
+    refusals: Iterable[tuple[str, list[str]]] = (
+        error.message_dict.items() if hasattr(error, "error_dict") else [(NON_FIELD_ERRORS, error.messages)]
+    )
+    distinct = dict.fromkeys((name, message) for name, messages in refusals for message in messages)
+    return [TemplateWarning(code, message, None if name == NON_FIELD_ERRORS else name) for name, message in distinct]
+
+
 class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One message template: a layout, template, block or part, for one key and one language."""
 
@@ -1057,6 +1070,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         "sample",
     )
     """The columns an administrator edits: what an override copies and the console updates."""
+    _clean_walk: TemplateWalk | None = None
+    """The walk the last :meth:`clean` ran (:meth:`validate_source`), or ``None`` when it walked nothing; what
+    :meth:`preview` renders a patch from, read straight after ``full_clean()``."""
     sqid_prefix = "mtl_"
 
     kind = StateField(choices_enum=MessageTemplateKind)
@@ -1266,9 +1282,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         """
 
         if not self.handler.carries_message_fields:
-            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code="not_a_template")
+            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code=NOT_A_TEMPLATE)
         if not self.is_effective:
-            return ValidationError(NOT_EFFECTIVE_MESSAGE, code="not_effective")
+            return ValidationError(NOT_EFFECTIVE_MESSAGE, code=NOT_EFFECTIVE)
         return None
 
     def _row_fact(self, name: str) -> bool:
@@ -1340,17 +1356,19 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         admit (:meth:`_walkable`, judged before the row is hashed) and what the row
         renders is new or changed (its content hash differs from the stored
         row's), :meth:`validate_source`, through the
-        same scope: an edit of only the name, the description or the sample walks
-        nothing.
+        same scope, kept as :attr:`_clean_walk`: an edit of only the name, the
+        description or the sample walks nothing. The stored layout and hash are a
+        structural read of the row's own columns (``_base_manager``).
         """
 
+        self._clean_walk = None
         if not self._readable():
             return
         super().clean()
         self._write_newlines()
         errors: dict[str, str] = {}
         stored_layout, stored_hash = (None, None) if self._state.adding else (
-            type(self).system_queryset().filter(pk=self.pk).values_list("layout", "content_hash").first()
+            type(self)._base_manager.filter(pk=self.pk).values_list("layout", "content_hash").first()
             or (None, None)
         )
         if self.kind in MessageTemplateKind.values and self.handler.carries_message_fields:
@@ -1369,7 +1387,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if errors:
             raise ValidationError(errors)
         if self._walkable() and stored_hash != self.compute_content_hash():
-            self.validate_source()
+            self._clean_walk = self.validate_source()
 
     def _readable(self) -> bool:
         """Whether every column holds what :meth:`clean_fields` admits: text in a text column, what JSON writes in
@@ -1403,8 +1421,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
             return False
         return True
 
-    def validate_source(self) -> None:
-        """Walk this row as it would be saved, among its language's effective rows; raise ``ValidationError``.
+    def validate_source(self) -> TemplateWalk:
+        """Walk this row as it would be saved, among its language's effective rows; return the walk, or raise
+        ``ValidationError``.
 
         The walk (:meth:`~angee.messaging_templates.walker.TemplateWalker.walk`)
         refuses what may not render: this row's own source, subject, preheader
@@ -1416,7 +1435,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         """
 
         rows = type(self).objects
-        TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
+        return TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
 
     @sensitive_variables("values")
     def render(
@@ -1454,28 +1473,83 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         walk = TemplateWalker().walk(self, type(self).objects)
         return walk.render(values, kit=self._brand_kit(kit), must_print=must_print)
 
-    def preview(self, *, kit: BrandKit | None = None) -> TemplatePreview:
-        """Render this row with its ``sample`` and say what a sender should know about it.
+    @sensitive_variables()
+    def preview(self, *, kit: BrandKit | None = None, patch: Mapping[str, Any] | None = None) -> TemplatePreview:
+        """Render this row with its ``sample``, or as ``patch`` would save it, and say what a sender should know.
 
-        Requires ``preview`` on the row before anything else (named system work
-        always may); ``PermissionDenied`` otherwise. A template renders whole, a
-        layout around its handler's fixed body, subject and preheader, and a block
-        or part alone, its sample as its arguments. ``rendered`` is ``None`` when
-        the walk, the render or its warnings refused, and the one warning is then
-        ``render_error``; only a ``ValidationError`` leaves any of them
-        (:func:`~angee.messaging_templates.walker.refusals_only`).
+        Requires ``preview`` on the row, and with a ``patch`` also ``write`` and
+        what the save's gates ask of the columns it edits, before anything is
+        copied or walked (named system work always may); ``PermissionDenied``
+        otherwise. So a patch on a shipped default, which only a resource load
+        writes, is refused, and an empty patch is a patch. ``patch`` holds native
+        values of :attr:`edited_fields`, decoded as the console's update decodes
+        its input; the row it makes (:meth:`_patched`) is validated with
+        ``full_clean()``, refused for what the update's validation refuses, and
+        never saved. One walk serves the preview: the one that ``clean()`` ran when the
+        patch changed what renders (:attr:`_clean_walk`, never a shipped default's,
+        which reaches shipped rows alone), else the walk of the row as it would
+        render. A template renders whole, a layout around its handler's fixed
+        body, subject and preheader, and a block or part alone, its sample as its
+        arguments. ``rendered`` is ``None`` when the validation, the walk, the
+        render or its warnings refused, and each distinct refusal is then one
+        warning naming its column (``field``; ``None`` for one of the row as a
+        whole): ``save_refused`` when saving the patch would be refused (the
+        copy's validation), ``render_error`` when the row, as saved or as the
+        patch would save it, does not render with its sample. Only a
+        ``ValidationError`` leaves any of them
+        (:func:`~angee.messaging_templates.walker.refusals_only`). Every local of
+        this frame and of each it calls (:meth:`_patched` among them) is Django's
+        ``sensitive_variables``: a report of a failure that propagates shows no
+        sample or patch.
         """
 
         self.require_access("preview")
+        if patch is not None:
+            self.require_access("write")
+        row = self if patch is None else self._patched(patch)
+        walk = None
+        if patch is not None:
+            try:
+                row.full_clean()
+            except ValidationError as error:
+                return TemplatePreview(rendered=None, warnings=_refusals(error, TemplateWarningCode.SAVE_REFUSED))
+            walk = None if row.is_baseline else row._clean_walk
         try:
-            walk = TemplateWalker().walk(self, type(self).objects)
-            rendered = walk.render(self.sample, kit=self._brand_kit(kit), frame=self.handler.preview_frame)
-            warnings = walk.preview_warnings(rendered, self.sample)
+            if walk is None:
+                walk = TemplateWalker().walk(row, type(row).objects)
+            rendered = walk.render(row.sample, kit=self._brand_kit(kit), frame=row.handler.preview_frame)
+            warnings = walk.preview_warnings(rendered, row.sample)
         except ValidationError as error:
-            return TemplatePreview(
-                rendered=None, warnings=[TemplateWarning(TemplateWarningCode.RENDER_ERROR, " ".join(error.messages))],
-            )
+            return TemplatePreview(rendered=None, warnings=_refusals(error, TemplateWarningCode.RENDER_ERROR))
         return TemplatePreview(rendered=rendered, warnings=warnings)
+
+    def _patched(self, patch: Mapping[str, Any]) -> Self:
+        """This row with ``patch``'s native values over its :attr:`edited_fields`, for :meth:`preview`; never saved.
+
+        Refused before anything is copied: a key outside :attr:`edited_fields`
+        (``ValueError``), and a column the patch changes that the save's own
+        gates refuse the reader, a deployment's ``write__<field>`` among them
+        (``PermissionDenied``, :func:`~angee.base.permissions.require_save_allowed`
+        on this row). As the update's save, it asks only the columns whose value
+        differs from the loaded row's, by Python equality on native values, so
+        a column resent as it is stored, a JSON value as a new equal object or
+        the format as the value its console member name decodes to, asks
+        nothing. ``copy`` keeps the primary key and the saved
+        state, so Django's unique checks leave this row out. It does not keep
+        REBAC's state of this row (its pinned actor, its loaded values, its
+        field-deny mode), which is why the gates are asked of this row: the copy
+        validates in the reader's own scope, the one every message template is
+        read in.
+        """
+
+        if unknown := sorted(set(patch) - set(self.edited_fields)):
+            raise ValueError(f"A patch edits {', '.join(self.edited_fields)}, never {', '.join(unknown)}.")
+        if changed := [name for name, value in patch.items() if value != getattr(self, name)]:
+            require_save_allowed(self, update_fields=changed)
+        row = copy(self)
+        for name, value in patch.items():
+            setattr(row, name, value)
+        return row
 
     @staticmethod
     def _brand_kit(kit: BrandKit | None) -> BrandKit:
@@ -1484,7 +1558,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if kit is None:
             kit = apps.get_model("brandkit", "BrandKit").objects.default()
         if kit is None:
-            raise ValidationError(NO_BRAND_KIT_MESSAGE, code="no_brand_kit")
+            raise ValidationError(NO_BRAND_KIT_MESSAGE, code=NO_BRAND_KIT)
         return cast(BrandKit, kit)
 
     @classmethod

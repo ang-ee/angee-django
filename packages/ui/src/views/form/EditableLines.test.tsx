@@ -155,6 +155,33 @@ async function toggleField(label: string) {
 }
 
 describe("EditableLines", () => {
+  test("a line cell drawn by a registered widget receives the authored `relationEdit`", () => {
+    const seen: unknown[] = [];
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("demo.Product")]);
+    const lines: DataResourceLinesMetadata = { ...LINES, fields: [
+      { ...LINES.fields[0]!, name: "product", kind: "relation", scalar: null, relationModelLabel: "demo.Product", widget: "demo.product" },
+      ...LINES.fields,
+    ] };
+    const productWidget = {
+      read: () => null,
+      edit: ({ field }: WidgetRenderProps) => { seen.push(field?.relationEdit); return <span>custom product</span>; },
+    };
+    function Host({ declining }: { declining?: boolean }) {
+      const form = useForm<Record<string, unknown>>({ defaultValues: { lines: [{ id: "one", label: "Widget", quantity: 2, position: 0 }] } });
+      return <ModelMetadataProvider metadata={metadata}>
+        <AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, "demo.product": productWidget } }}>
+          <ModalsHost><EditableLines control={form.control} setValue={form.setValue} name="lines" lines={lines}
+            fields={declining ? [{ name: "product", relationEdit: null }] : undefined} /></ModalsHost>
+        </AppRuntimeProvider>
+      </ModelMetadataProvider>;
+    }
+    const view = render(<Host />);
+    expect(screen.getByText("custom product")).toBeTruthy();
+    expect(seen.at(-1)).toBeUndefined();
+    view.rerender(<Host declining />);
+    expect(seen.at(-1)).toBeNull();
+  });
+
   test("list-owned drag reorder keeps pending patches bound to the same child", () => {
     const f = rowPatchFixture();
     fireEvent.click(screen.getByRole("button", { name: "Preview Widget" }));

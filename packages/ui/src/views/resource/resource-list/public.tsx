@@ -122,7 +122,7 @@ export interface ResourceListProps<TRow extends Row = Row> {
    * create, and close navigation. Do not mix with controlled record props.
    */
   routed?: boolean;
-  /** Where the form shows: beside/below the list (`"inline"`) or in a modal. */
+  /** Where the open record shows: in place of the list (`"inline"`, the default), beside it (`"split"`) or in a drawer. */
   placement?: ResourceRecordPlacement;
   /** Render a saved record with domain-owned content instead of the resource form. */
   renderRecord?: (context: ResourceRecordRenderContext) => React.ReactNode;
