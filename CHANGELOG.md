@@ -235,8 +235,10 @@ live in code docstrings.
   it; an empty string or list is not missing. No refusal holds the exception it replaces
   (`render_failed`, values that are not JSON, a lone surrogate) as its `__cause__` or its
   `__context__`, so a caller that logs one with its traceback prints neither; `refusals_only`
-  swallows the failure and its entry raises `guard.refused()` after the block. A value of the
-  wrong shape covers the required paths under it, in that list item alone. No refusal's
+  swallows the failure and its entry raises `guard.refused()` after the block. A
+  `ValidationError` that a filter, a tag or a loader raises inside a render with no source
+  is refused as `render_failed` (`unknown`), so every one a render raises carries a source.
+  A value of the wrong shape covers the required paths under it, in that list item alone. No refusal's
   words or `params` quote a value, nor a key of the values the row does not declare
   (`A value is over 10000 characters.`). **Changed words, which
   no caller should match:** `render_failed` names the exception's type only

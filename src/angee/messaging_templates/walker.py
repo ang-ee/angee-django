@@ -88,6 +88,7 @@ from angee.messaging_templates.engine import (
     clean_link,
     filter_names,
     refusal_item,
+    refusal_sources,
     url,
 )
 from angee.messaging_templates.html_checks import (
@@ -184,10 +185,15 @@ class refusals_only:  # a context manager named as a phrase at each entry, as co
 
     Every public entry of a walk runs inside it, so ``MessageTemplate.render``,
     ``MessageTemplate.preview`` and a sender rendering a walk itself are covered
-    whole. A ``ValidationError`` passes as it is. ``MemoryError`` and
-    ``RecursionError`` pass unconverted: they say the process ran out of room, not
-    that the row cannot render, and no admitted row and values reach either. Any
-    other exception is logged and swallowed: one error record naming ``root`` (its
+    whole. This addon's own refusals pass as they are: a ``ValidationError`` whose
+    items carry their source (:func:`~angee.messaging_templates.engine.refusal_sources`),
+    as every one :func:`~angee.messaging_templates.engine.refusal_item` builds does.
+    ``MemoryError`` and ``RecursionError`` pass unconverted: they say the process ran
+    out of room, not that the row cannot render, and no admitted row and values reach
+    either. Any other exception, a ``ValidationError`` a filter, a tag or a loader
+    raises with no source among them (its words are its raiser's, and may quote a
+    value), is logged and swallowed, so every ``ValidationError`` that leaves an entry
+    carries a source: one error record naming ``root`` (its
     kind, key and language) and the exception's type, never its message or its
     traceback, which may quote a value the render was given (a sign-in link). The
     entry then raises :meth:`refused` after the block, ``ValidationError(code=RENDER_FAILED)``,
@@ -211,7 +217,9 @@ class refusals_only:  # a context manager named as a phrase at each entry, as co
     def __exit__(
         self, kind: type[BaseException] | None, error: BaseException | None, traceback: TracebackType | None,
     ) -> bool:
-        if not isinstance(error, Exception) or isinstance(error, (ValidationError, MemoryError, RecursionError)):
+        if not isinstance(error, Exception) or isinstance(error, (MemoryError, RecursionError)):
+            return False
+        if isinstance(error, ValidationError) and refusal_sources(error):
             return False
         self.failure = type(error).__name__
         logger.error(

@@ -130,7 +130,8 @@ REFUSAL_SOURCE = "source"
 
 def refusal_sources(error: ValidationError) -> frozenset[RefusalSource]:
     """The sources of a send's refusal items: empty for a refusal that is not this addon's, such as messaging's keyed
-    ones (a recipient's, the system channel's), whose items carry none. Safe on a keyed or a listed error alike."""
+    ones (a recipient's, the system channel's), whose items carry none. Safe on a keyed or a listed error alike. Every
+    ``ValidationError`` a render raises carries one (:class:`~angee.messaging_templates.walker.refusals_only`)."""
 
     keyed = getattr(error, "error_dict", None)
     items = error.error_list if keyed is None else [item for listed in keyed.values() for item in listed]

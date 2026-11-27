@@ -885,6 +885,50 @@ def test_an_engine_failure_quoting_a_value_logs_the_templates_identity_and_type_
     )]
 
 
+@pytest.mark.parametrize("raised", ["listed", "keyed"])
+def test_a_validation_error_a_filter_raises_is_refused_as_render_failed_and_leaves_no_trace_of_its_words(
+    system_channel: Any, caplog: pytest.LogCaptureFixture, raised: str,
+) -> None:
+    """A ``ValidationError`` raised inside the render with no source, its words and ``params`` holding a value (as
+    Django's validators do), listed or keyed: through ``send_as_system``, the test send and both previews it is
+    ``render_failed``, source ``unknown``, with no chain to it, its words in no refusal, warning or log record."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-validating")
+    row = _mail("Hi {{ name|upper }}.", {"name": "A name."}, key="tests.validating")
+    row.sample = {"name": MARK}
+    inner = ValidationError("upper refused %(value)s.", code="invalid", params={"value": MARK})
+    error = inner if raised == "listed" else ValidationError({"name": [inner]})
+    said = "The message template did not render: it raised ValidationError."
+    with failing_filter("upper", error), caplog.at_level(logging.DEBUG):
+        for caller in ("send_as_system", "test send", "preview", "preview of unsaved edits"):
+            if caller.startswith("preview"):
+                with actor_context(tester):
+                    preview = row.preview(patch=None if caller == "preview" else {"sample": {"name": MARK}})
+                assert preview.rendered is None, caller
+                assert [(warning.code, warning.detail) for warning in preview.warnings] == [
+                    (TemplateWarningCode.RENDER_ERROR, said)], caller
+                continue
+            with pytest.raises(ValidationError) as refusal:
+                if caller == "test send":
+                    MessageTemplate.objects.send_test(row, actor=tester)
+                else:
+                    _send(row, {"name": MARK})
+            assert [(item.code, item.params[REFUSAL_SOURCE], item.messages[0])
+                    for item in refusal.value.error_list] == [(RENDER_FAILED, RefusalSource.UNKNOWN, said)], caller
+            assert refusal_sources(refusal.value) == {RefusalSource.UNKNOWN}, caller
+            assert _chained(refusal.value) == [], caller
+            held = [str(refusal.value), repr(refusal.value), repr(refusal.value.args),
+                    "".join(traceback.format_exception(refusal.value))]
+            assert all(MARK not in text for text in held), caller
+    for record in caplog.records:
+        held = (record.getMessage(), repr(record.args), repr(record.exc_info), str(record.exc_text))
+        assert all(MARK not in text for text in held), record
+    named = [record.getMessage() for record in caplog.records if record.name == "angee.messaging_templates.walker"]
+    assert named == ["A message template failed to render: the template tests.validating in en raised "
+                     "ValidationError."] * 4
+
+
 SEND_SITES = sorted([
     # (module, function, code, source): the per-site table; a site whose fault changes fails here.
     ("engine.py", "check", "RENDER_BUDGET_EXCEEDED", "VALUES"),  # loops and includes over these values

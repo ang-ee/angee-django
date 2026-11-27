@@ -373,7 +373,9 @@ raised. A `RefusalSource` is a string enum: it compares equal to its string
 (`"values"`) and serializes as it. A sender reads a refusal's sources with
 `refusal_sources(error)`, exported beside `SEND_CODES`: the set of its items'
 sources, keyed or not, and empty for a refusal that is not this addon's, whose
-items carry none. The sources are named for what a sender does:
+items carry none. Every `ValidationError` a render raises carries a source: one
+that a filter, a tag or a loader raises without one is refused as `render_failed`
+(`unknown`), logged by its type alone. The sources are named for what a sender does:
 
 | source | what a sender does |
 |---|---|
