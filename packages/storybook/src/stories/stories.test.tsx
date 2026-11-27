@@ -215,8 +215,8 @@ test("Views/FormView / Implementation Key Not Registered, Create-only offers Bac
     query?: string; variables?: Record<string, unknown>;
   });
   // The form asked what choosing each implementation sets on this record, the backend it shows.
-  expect(requests.find((request) => request.query?.includes("BaseImplRepairChoices"))?.variables)
-    .toEqual({ model: "storage.Backend", field: "backend_class", record: "backend-2" });
+  expect(requests.find((request) => request.query?.includes("backends_repair_choices"))?.variables)
+    .toEqual({ id: "backend-2", field: "backend_class" });
   // The wire request's body: the update's input is exactly the selector and the config the form showed.
   const update = requests.find((request) => request.query?.includes("update_backends_by_pk"));
   const input = Object.values(update?.variables ?? {}).find((value) => typeof value === "object" && value !== null

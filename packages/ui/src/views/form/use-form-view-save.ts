@@ -35,7 +35,7 @@ import { useToast } from "../../feedback";
 import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { asWidgetDefinition, canonicalOptionValue, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
-import { BaseImplRepairChoices, type ImplChoice } from "../resource/documents";
+import { repairChoicesDocument, type ImplChoice } from "../resource/documents";
 import { repairChoosable } from "../resource/implementation-fields";
 import { errorMessage } from "../../feedback/error-message";
 import {
@@ -651,23 +651,25 @@ export function useFormViewSave({
   // record and nothing but this state is written.
   if (!formIsDirty && editBasis !== displayRecord) setEditBasis(displayRecord);
   // A repair: a create-only selector the record lets be chosen once more (`repairChoosable`, on the
-  // edit's basis). What choosing each implementation sets on the record is the server's rule
-  // (`impl_choices` with the record), asked only of a form that takes edits; until it answers, and while
-  // a save is pending, the selector shows `loading`; a refusal keeps it read-only, with the server's words.
+  // edit's basis). What choosing each implementation sets on the record is the server's rule, asked of
+  // the resource's own repair read (`roots.repairChoices`) and only by a form that takes edits; until it
+  // answers, and while a save is pending, the selector shows `loading`; a refusal (the create flow does not
+  // admit this person, or the update would refuse them) keeps it read-only, with the server's words.
+  const repairRoot = modelMetadata?.resource?.roots.repairChoices ?? null;
   const repairFields = React.useMemo(
     () => isCreate || !formTakesEdits ? [] : recordFields.filter((field) => !field.readOnly
       && repairChoosable(modelMetadata, editBasis, field.name)),
     [editBasis, formTakesEdits, isCreate, modelMetadata, recordFields],
   );
-  const repairChoicesBatch = useAuthoredQueryBatch(repairFields.map((field) => ({
+  const repairChoicesBatch = useAuthoredQueryBatch(repairRoot ? repairFields.map((field) => ({
     key: field.name,
-    document: BaseImplRepairChoices,
-    variables: { model: dataResource?.modelLabel ?? resource, field: field.name, record: id ?? "" },
-  })), { enabled: repairFields.length > 0 && id != null, errorNotification: false });
-  const repairChoices = React.useMemo(() => new Map(repairFields.flatMap((field) => {
-    const choices = repairChoicesBatch.get(field.name)?.data?.impl_choices;
+    document: repairChoicesDocument(repairRoot),
+    variables: { id: id ?? "", field: field.name },
+  })) : [], { enabled: repairFields.length > 0 && id != null, errorNotification: false });
+  const repairChoices = React.useMemo(() => new Map(repairRoot ? repairFields.flatMap((field) => {
+    const choices = repairChoicesBatch.get(field.name)?.data?.[repairRoot];
     return choices ? [[field.name, choices] as const] : [];
-  })), [repairChoicesBatch, repairFields]);
+  }) : []), [repairChoicesBatch, repairFields, repairRoot]);
   const recordField = React.useCallback(
     (path: string) => recordFields.find((field) => field.name === path),
     [recordFields],

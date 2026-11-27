@@ -30,6 +30,8 @@ const selectors = [
 ];
 const resource = testDataResource("posts.Feed", {
   implFields: ["backend_class", "feed_backend_class"],
+  // The feeds' repair read, generated beside their update.
+  roots: { repairChoices: "feeds_repair_choices" },
   fields: [...selectors, ...[...new Set(names)].filter((name) => !name.endsWith("backend_class")).map((name) => ({
     name, kind: "scalar" as const, scalar: name === "reply_hold" ? "Float"
       : name === "config" || name === "sync_progress" ? "JSON" : "String",
@@ -59,7 +61,7 @@ function fixture({ replyHold = null, connectable = false, create = false, retire
   const custom = vi.fn(async (request: { meta?: Record<string, unknown> }) => {
     const variables = (request.meta?.gqlVariables ?? {}) as Record<string, unknown>;
     // The repair read: what choosing each feed implementation sets on this feed, the config it carries over.
-    if (variables.record != null) return { data: { impl_choices: [
+    if (variables.field != null) return { data: { feeds_repair_choices: [
       { key: "manual", category: "", defaults: { config: { quota_limit: 10000 } }, config_schema: null },
     ] } };
     return { data: { connect_integration: {
@@ -114,7 +116,7 @@ test("the feed's backend is offered on create and locked on a stored feed whose 
   expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
   // Registered keys offer no repair, so neither selector's record read is ever made.
   const asked = stored.custom.mock.calls.map(([request]) => (request?.meta?.gqlVariables ?? {}) as Record<string, unknown>);
-  expect(asked.filter((variables) => variables.record != null)).toEqual([]);
+  expect(asked.filter((variables) => variables.field != null)).toEqual([]);
 });
 
 test("a feed whose own implementation is retired is repaired by its selector alone: the feeds update writes no config", async () => {

@@ -50,24 +50,35 @@ export const BaseImplChoices: TypedDocumentNode<
   }
 `;
 
+/** What a resource's repair read answers under its root name. */
+export type RepairChoicesResult = Readonly<Record<string, ImplChoice[] | undefined>>;
+
+const repairChoicesDocuments = new Map<string, TypedDocumentNode<RepairChoicesResult, { id: string; field: string }>>();
+
 /**
- * What choosing each implementation sets on `record`, a repair: the record's stored key is not registered,
- * so each choice's `defaults` is the config it carries over. Admitted as the record's write is. A separate
- * document, so the insert's read (`BaseImplChoices`) asks a server nothing new.
+ * The document of a resource's repair read, `<res>_repair_choices(id, field)`, named by its metadata's
+ * `roots.repairChoices`: what choosing each implementation of the create-only selector `field` sets on the
+ * record `id` (each choice's `defaults`, the config it carries over), answered under the root's name. One
+ * document per root.
  */
-export const BaseImplRepairChoices: TypedDocumentNode<
-  BaseImplChoicesResult,
-  BaseImplChoicesVariables & { record: string }
-> = gql`
-  query BaseImplRepairChoices($model: String!, $field: String!, $record: ID!) {
-    impl_choices(model: $model, field: $field, record: $record) {
-      key
-      category
-      defaults
-      config_schema
-    }
+export function repairChoicesDocument(root: string): TypedDocumentNode<RepairChoicesResult, { id: string; field: string }> {
+  if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(root)) throw new Error(`Invalid repair read root ${JSON.stringify(root)}.`);
+  let document = repairChoicesDocuments.get(root);
+  if (!document) {
+    document = gql(`
+      query BaseImplRepairChoices($id: ID!, $field: String!) {
+        ${root}(id: $id, field: $field) {
+          key
+          category
+          defaults
+          config_schema
+        }
+      }
+    `) as TypedDocumentNode<RepairChoicesResult, { id: string; field: string }>;
+    repairChoicesDocuments.set(root, document);
   }
-`;
+  return document;
+}
 
 /** The in-band outcome the shared trash verbs project (`angee.graphql.actions.ActionResult`). */
 export interface TrashOutcomeResult {

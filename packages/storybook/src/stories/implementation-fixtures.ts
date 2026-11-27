@@ -48,7 +48,9 @@ export const repairDefaults = {
 function backendResourceFor({ createOnly = false }: { createOnly?: boolean } = {}) {
   return testDataResource("storage.Backend", {
     schemaName: "public", recordRepresentation: "label", implFields: ["backend_class"],
-    roots: { aggregate: "backends_aggregate" }, typeNames: { filter: "BackendFilter", order: "BackendOrder" },
+    // A create-only selector beside the update root: the resource generates its repair read.
+    roots: { aggregate: "backends_aggregate", ...(createOnly ? { repairChoices: "backends_repair_choices" } : {}) },
+    typeNames: { filter: "BackendFilter", order: "BackendOrder" },
     fields: [
       storyField("id", { scalar: "ID", creatable: false, updatable: false }), storyField("label"),
       storyField("backend_class", { kind: "enum", scalar: null, values: registered, ...(createOnly ? { createOnly } : {}) }),
@@ -69,8 +71,9 @@ export const createOnlyBackendResource = backendResourceFor({ createOnly: true }
 /**
  * A fresh set of the backends' roots, with its own store of what its saves write, so a saved choice reads
  * back as the server would read it within one story and never leaks into another. A save keeps the key a
- * backend holds unless it chooses another. `impl_choices` with a record answers, as the server does, only
- * for a backend whose stored key is not registered: what choosing each implementation sets on it.
+ * backend holds unless it chooses another. `impl_choices` answers a create's choices; the resource's repair
+ * read, `backends_repair_choices(id, field)`, answers, as the server does, only for a backend whose stored
+ * key is not registered: what choosing each implementation sets on it.
  */
 export function backendOperationsFor(): Readonly<Record<string, GraphQLWireOperation>> {
   const stored = new Map<string, Record<string, unknown>>(backends.map((backend) => [backend.id, { ...backend }]));
@@ -80,17 +83,18 @@ export function backendOperationsFor(): Readonly<Record<string, GraphQLWireOpera
     return typeof id === "string" ? stored.get(id) ?? null : null;
   };
   return {
-    impl_choices: (args) => {
-      const record = typeof args.record === "string" ? stored.get(args.record) : undefined;
-      if (args.record != null && (record?.id !== "backend-2" || record.backend_class != null)) {
+    impl_choices: () => registered.map(({ value }) => {
+      const key = value.toLowerCase() as keyof typeof configSchemas;
+      return { key, category: "", config_schema: configSchemas[key], defaults: insertDefaults[key] };
+    }),
+    backends_repair_choices: (args) => {
+      const record = typeof args.id === "string" ? stored.get(args.id) : undefined;
+      if (args.field !== "backend_class" || record?.id !== "backend-2" || record.backend_class != null) {
         throw new Error("Implementation selection is create-only.");
       }
       return registered.map(({ value }) => {
         const key = value.toLowerCase() as keyof typeof configSchemas;
-        return {
-          key, category: "", config_schema: configSchemas[key],
-          defaults: args.record != null ? repairDefaults[key] : insertDefaults[key],
-        };
+        return { key, category: "", config_schema: configSchemas[key], defaults: repairDefaults[key] };
       });
     },
     backends: () => [...stored.values()],

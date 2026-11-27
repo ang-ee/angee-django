@@ -77,6 +77,8 @@ const RootsSchema = v.objectWithRest({
   delete: OptionalString,
   deletePreview: OptionalString,
   changes: OptionalString,
+  /** `<res>_repair_choices(id, field)`: what choosing each implementation sets on one record (a repair). */
+  repairChoices: OptionalString,
 }, OptionalString);
 const TypeNamesSchema = v.objectWithRest({
   query: OptionalString,

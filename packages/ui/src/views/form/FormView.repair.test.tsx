@@ -36,7 +36,9 @@ const UNCHANGEABLE = "Its implementation cannot run. It cannot be changed here."
 
 type Surface = Parameters<typeof BoundDescriptorField>[0]["form"];
 type Choices = (variables: Record<string, unknown> | undefined) => Promise<{ data?: unknown }>;
-const answer: Choices = async () => ({ data: { impl_choices: [
+// The resource's repair read, `notes_repair_choices(id, field)`, as its metadata names it.
+const REPAIR_ROOT = "notes_repair_choices";
+const answer: Choices = async () => ({ data: { [REPAIR_ROOT]: [
   { key: "local", category: "", defaults: { config: CARRIED }, config_schema: null },
   { key: "stub", category: "", defaults: { config: STORED_CONFIG }, config_schema: null },
 ] } });
@@ -58,6 +60,7 @@ function fixture(stored: Row, options: {
   });
   const resource = testDataResource("notes.Note", {
     fields: [title, { ...backend, ...options.meta }, config, note], implFields: ["backend"],
+    roots: { repairChoices: REPAIR_ROOT },
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const { Provider, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://repair", router: true });
@@ -71,7 +74,7 @@ function fixture(stored: Row, options: {
         }} />
     </AppRuntimeProvider>
   </ToastProvider></ModalsHost></Provider>);
-  const recordReads = () => custom.mock.calls.filter(([request]) => request?.meta?.gqlVariables?.record != null);
+  const recordReads = () => custom.mock.calls.filter(([request]) => request?.meta?.gqlVariables?.id != null);
   return { server, getOne, custom, update, queryClient, clearClients, recordReads, surface };
 }
 
@@ -92,7 +95,7 @@ test("a retired create-only selector is chosen once more, twice before saving, a
   const f = fixture(RETIRED);
 
   await waitFor(() => expect(f.recordReads().length).toBe(1));
-  expect(f.recordReads()[0]?.[0]?.meta?.gqlVariables).toEqual({ model: "notes.Note", field: "backend", record: "note-1" });
+  expect(f.recordReads()[0]?.[0]?.meta?.gqlVariables).toEqual({ id: "note-1", field: "backend" });
   expect(await screen.findByText(ONCE)).toBeTruthy();
   // Where the field takes edits its control is the one stop: the mark is no second Tab stop.
   expect(screen.getByLabelText("Not registered: Backend").getAttribute("tabindex")).toBeNull();
@@ -120,7 +123,7 @@ test("a registered key's selector stays locked and its record is never asked wha
 test("while the record's answer is pending the selector is loading and takes no pick, then takes one when it comes", async () => {
   let release: () => void = () => undefined;
   const late = new Promise<void>((done) => { release = done; });
-  const f = fixture(RETIRED, { choices: async (variables) => { if (variables?.record != null) await late; return answer(variables); } });
+  const f = fixture(RETIRED, { choices: async (variables) => { if (variables?.id != null) await late; return answer(variables); } });
 
   const control = await screen.findByRole("combobox", { name: "Backend" });
   await waitFor(() => expect(f.recordReads().length).toBe(1));
@@ -138,7 +141,7 @@ test("while the record's answer is pending the selector is loading and takes no 
 
 test("a refused answer keeps the selector read-only with the server's words under it, never 'cannot be changed here'", async () => {
   const refusal = "Note 'note-1' was not found.";
-  const f = fixture(RETIRED, { choices: async (variables) => { if (variables?.record != null) throw new Error(refusal); return answer(variables); },
+  const f = fixture(RETIRED, { choices: async (variables) => { if (variables?.id != null) throw new Error(refusal); return answer(variables); },
     fields: [{ name: "title", title: true }, { name: "backend", label: "Backend", description: "Where the notes are kept." },
       { name: "config", label: "Config" }] });
 
@@ -159,7 +162,7 @@ test("the bound placement takes the repair's states from the record form: loadin
   const late = new Promise<void>((done) => { release = done; });
   let respond: () => void = () => undefined;
   const f = fixture(RETIRED, { bound: true, fields: [{ name: "title", title: true }, { name: "backend", hidden: true }, { name: "config", label: "Config" }],
-    choices: async (variables) => { if (variables?.record != null) await late; return answer(variables); },
+    choices: async (variables) => { if (variables?.id != null) await late; return answer(variables); },
     update: (variables) => new Promise((done) => { respond = () => {
       f.server.row = { ...f.server.row, ...variables, backend: String(variables.backend).toUpperCase() };
       done({ data: f.server.row });
@@ -306,7 +309,7 @@ test("a discarded pick leaves no seed behind: the selector hidden afterwards doe
 test("a pick whose read is refused on a re-read still leaves with its selector, and the server decides", async () => {
   let refused = false;
   const f = fixture(RETIRED, { choices: async (variables) => {
-    if (variables?.record != null && refused) throw new Error("Implementation selection is create-only.");
+    if (variables?.id != null && refused) throw new Error("Implementation selection is create-only.");
     return answer(variables);
   } });
 
@@ -324,7 +327,7 @@ test("a pick whose read is refused on a re-read still leaves with its selector, 
 test("a repair read refused where the record shown is now registered still gives the server's words under the field", async () => {
   let registered = false;
   const f = fixture(RETIRED, { choices: async (variables) => {
-    if (variables?.record != null && registered) throw new Error(CREATE_ONLY);
+    if (variables?.id != null && registered) throw new Error(CREATE_ONLY);
     return answer(variables);
   } });
 
@@ -393,7 +396,7 @@ test("a create-only selector bound through BoundDescriptorField on a registered 
 test("the form offers the choice on the same three rows the server allows it on", () => {
   // The read contract joins the halves (the server's in test_integrate_graphql): a retired key reads null.
   const metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note", {
-    fields: [title, backend, config], implFields: ["backend"],
+    fields: [title, backend, config], implFields: ["backend"], roots: { repairChoices: REPAIR_ROOT },
   })]);
   const model = Object.values(metadata.types)[0] ?? null;
   const offered = (stored: Row) => !withModeLockedFields([{ name: "backend", createOnly: true }], false,

@@ -2555,7 +2555,10 @@ from another:
 
 A record form locks a `createOnly` field on an edit except while the record its
 draft was made against stores a key that is not registered, when the field can
-be chosen once more (a repair, `repairChoosable`); it offers the field on a
+be chosen once more (a repair, `repairChoosable`, asked of the resource's
+repair read that `roots.repairChoices` names, so a resource without one offers
+none; a person the server does not admit sees the field read-only with its
+words); it offers the field on a
 create only where it is `creatable`. While the repair's answer or a save is
 pending the selector is `loading`; a refused answer keeps it read-only with the
 server's words; a save that would send the repair's config without its selector
