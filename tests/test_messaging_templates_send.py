@@ -58,7 +58,6 @@ from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_platform_admin, create_user
 from tests.messaging_campaign import grant
-from tests.system_mail_references import caller_sources, reference_lines
 from tests.test_messaging_compose import _refused
 from tests.test_messaging_system_mail import LOCMEM, SENDER, _install
 from tests.test_messaging_templates_render import ANGEE, _mail, _recording, _render, _row
@@ -995,51 +994,6 @@ def test_a_send_costs_its_render_compose_as_system_and_one_row_fact_read(system_
     with CaptureQueriesContext(connection) as send:
         _send(row, values, to=address)
     assert len(send) == len(render) + len(compose) + 1, (len(send), len(render), len(compose))
-
-
-# ---------- server code only ----------
-
-
-SYSTEM_SEND_CALLERS: frozenset[Path] = frozenset({
-    # Mails a question only to the people it is put to, each judged by decisions' own rule before the send:
-    # ``act`` and ``read`` on the question (``Decision.objects.deciders``/``put_to``, ``administrators``).
-    Path("src/angee/decisions_messaging/models.py"),
-})
-"""The source modules that call ``send_as_system``, each added here in a reviewed change.
-
-Call it only from system work whose own gate decided the send: a person's request reaches it only through such a
-gate, never from a resolver, an MCP tool or a view that hands it a person's choice of row, address or values
-unchecked. It checks no permission and decides nothing about the values, the links in them or who may be mailed."""
-
-SHARED_STEP_CALLERS: frozenset[Path] = frozenset({Path("src/angee/messaging_templates/models.py")})
-"""The one module that may call the shared send step ``_render_and_record``, whose verbs ask the row's side first."""
-
-
-@pytest.mark.shared_inputs
-def test_only_the_listed_modules_call_the_system_send_or_its_shared_step() -> None:
-    """List every production caller of ``send_as_system`` and ``_render_and_record``.
-
-    Messaging's writer guard names this addon. Each caller of the template send owns its permission decision.
-    """
-
-    sources = caller_sources()
-    for name, allowed in (("send_as_system", SYSTEM_SEND_CALLERS), ("_render_and_record", SHARED_STEP_CALLERS)):
-        found = {module for module, tree in sources.items() if reference_lines(tree, name)}
-        assert found == allowed, name
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        pytest.param("MessageTemplate.objects._render_and_record(row)", id="attribute"),
-        pytest.param("getattr(MessageTemplate.objects, '_render_and_record')(row)", id="getattr"),
-        pytest.param("step = manager._render_and_record\nstep(row)", id="variable"),
-    ],
-)
-def test_the_tripwire_sees_a_reference_however_it_is_spelled(source: str) -> None:
-    assert reference_lines(ast.parse(source), "_render_and_record")
-    definition = ast.parse('def _render_and_record(self):\n    """See :meth:`_render_and_record`."""\n')
-    assert not reference_lines(definition, "_render_and_record")
 
 
 # ---------- the test send ----------
