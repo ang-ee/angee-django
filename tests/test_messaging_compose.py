@@ -1454,18 +1454,36 @@ def test_a_persons_recipient_written_past_its_validation_is_mailed_at_its_handle
     ]
 
 
-def test_a_spelling_the_transport_cannot_carry_is_not_recorded_and_the_mail_goes_to_the_handles_address(
-    desk: Any,
+@pytest.mark.parametrize(
+    ("given", "existing"),
+    [("\u212aate@example.test", "kate@example.test"), ("M\u00dcLLER@example.test", "m\u00fcller@example.test")],
+    ids=["the-kelvin-sign-its-own-handle", "a-spelling-of-a-handle-it-cannot-carry"],
+)
+def test_an_address_the_transport_cannot_carry_as_given_is_not_recorded_and_its_delivery_is_refused(
+    desk: Any, given: str, existing: str,
 ) -> None:
-    """The Kelvin sign lower-cases to ``k``, so it spells the handle's address, but no transport here carries a
-    non-ASCII name part: the row records nothing and the mail goes to the handle's own spelling."""
+    """A spelling of an ASCII mailbox is ASCII (``Handle.normalize_local_part`` keeps a character whose lower case
+    would be ASCII), so only a name part outside ASCII is one no transport here carries. The row records nothing for
+    it: the Kelvin sign is a handle of its own, ``MÜLLER@`` lands on ``müller@``'s; neither is sent, the delivery
+    refused with the carry rule's reason."""
 
     with system_context(reason="tests.messaging.compose.carry"):
-        handle = Handle.objects.upsert(platform="email", value="kate@example.test")
-    message = Message.objects.compose(channel=desk, to=["\u212aate@example.test"], text="Hi.", actor=desk.owner,
-                                      queued=True)
-    assert _rows_and_addresses(message) == [(handle.pk, "")]
-    assert _delivered(message)["To"] == "kate@example.test"
+        handle = Handle.objects.upsert(platform="email", value=existing)
+    message = Message.objects.compose(channel=desk, to=[given], text="Hi.", actor=desk.owner, queued=True)
+    ((landed, address),) = _rows_and_addresses(message)
+    assert address == ""
+    assert (landed == handle.pk) is (Handle.spelling_key_of("email", given) == handle.spelling_key)
+    sent = len(mail.outbox)
+    assert not deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+    assert len(mail.outbox) == sent
+    with system_context(reason="tests.messaging.compose.carry"):
+        stored = Message._base_manager.get(pk=message.pk)
+        shown = Handle._base_manager.get(pk=landed).value
+    assert stored.status == "failed"
+    assert stored.local_fact("delivery_error") == (
+        f"This mail transport cannot carry {shown}: its part before the @ is outside ASCII. "
+        "Send to another address of this contact."
+    )
 
 
 @pytest.mark.parametrize("erasure", ["the-handle-deleted", "the-channel-purged"])
