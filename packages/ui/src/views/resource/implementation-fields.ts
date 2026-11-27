@@ -44,17 +44,18 @@ export function storedImplementationUnregistered(
 
 /**
  * Whether the record form may offer the selector at `path` once more, a repair: the model makes it
- * create-only (its metadata's `createOnly`, never a page's own flag), its resource has a repair read
- * (`roots.repairChoices`), and the record the draft was made against stores a key the registry no longer
- * names. The one owner of that question: the mode lock, the repair read and the mark all ask it.
+ * create-only (its metadata's `createOnly`, never a page's own flag), its resource's repair read is
+ * `available` (`useRepairChoicesOperation`: the root its metadata names and the document the host
+ * generated for it), and the record the draft was made against stores a key the registry no longer names.
+ * The one owner of that question: the mode lock, the repair read and the mark all ask it.
  */
 export function repairChoosable(
   model: ModelMetadata | null | undefined,
   record: Row | null | undefined,
   path: string,
+  available: boolean,
 ): boolean {
-  return model?.fields[path]?.createOnly === true && Boolean(model.resource?.roots.repairChoices)
-    && storedImplementationUnregistered(model, record, path);
+  return available && model?.fields[path]?.createOnly === true && storedImplementationUnregistered(model, record, path);
 }
 
 /**

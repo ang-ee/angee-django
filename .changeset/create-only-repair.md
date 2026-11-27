@@ -9,13 +9,18 @@ reads that record, held while the form holds edits and moved by an accepted
 save, so neither a pick nor a re-read or another save meanwhile re-locks it. Choosing an implementation there
 sets what the server says it sets on that record (the resource's repair read,
 named by its metadata's `roots.repairChoices`: the config it carries over), so the save sends the selector with the config the
-person sees; a save that would send that config without its selector is refused
+person sees. The read is `<res>_repair_choices(id, field)` on the resource's own
+schema, answering under that root; each choice in it has the insert's choice
+shape (`key`, `category`, `defaults`, `config_schema`), its `defaults` the
+config carried over; a save that would send that config without its selector is refused
 on the client. Its mark reads "Its implementation cannot run until another is
 chosen. Once saved, the choice cannot be changed." Another key may be chosen
 before saving, never while a save is pending. After the save the selector is
-locked again. The repair asks the resource's own repair read
-(`repairChoicesDocument(roots.repairChoices)`), so a resource without one offers
-no repair; the insert's `BaseImplChoices` is unchanged. A person the create flow
+locked again. The repair asks that read through `@angee/refine`'s operation
+documents (the `repairChoices` kind the host's codegen generates per
+resource), so a resource without the root, or a host that
+generated no document for it, offers no repair; the insert's `BaseImplChoices`
+read is unchanged. A person the create flow
 does not admit, or the update refuses, sees the selector read-only with the
 server's words under the field. While the answer is pending the selector is
 `loading`; a refused answer keeps it read-only with the server's words under it,

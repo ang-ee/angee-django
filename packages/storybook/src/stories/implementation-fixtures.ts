@@ -110,5 +110,14 @@ export function backendOperationsFor(): Readonly<Record<string, GraphQLWireOpera
   };
 }
 
+/**
+ * The create-only backends' repair read as the host's codegen generates it, under the resource's own schema (the
+ * operation-documents seam's `repairChoices` kind); a fixture without it offers no repair.
+ */
+export const repairOperationDocuments = { public: { repairChoices: { "storage.Backend":
+  "query AngeeBackends_repair_choices($id: ID!, $field: String!) { "
+    + "backends_repair_choices(id: $id, field: $field) { key category defaults config_schema } }",
+} } } as const;
+
 /** The backends' roots shared by stories that never save a backend; a story that saves one takes its own (`backendOperationsFor`). */
 export const backendOperations = backendOperationsFor();

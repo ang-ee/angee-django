@@ -1,5 +1,7 @@
 ---
 "@angee/metadata": minor
+"@angee/refine": minor
+"@angee/app": minor
 "@angee/ui": patch
 ---
 
@@ -11,3 +13,8 @@ restates it, and a page's own `createOnly: false` cannot unlock it. `fieldChange
 says whether a person may change a field on a stored record (updatable and not
 create-only); the board's lane drag asks it. A resource's roots may name
 `repairChoices`, its generated repair read `<res>_repair_choices(id, field)`.
+`@angee/refine`'s operation documents gain the `repairChoices` kind
+(`RepairChoicesDocumentMap`), which `angee-web-codegen` derives per resource
+whose roots name the read, as `repairChoicesDocuments` in each schema's
+`actions.ts`, validated against that schema; a root the schema lacks fails
+codegen by its name.

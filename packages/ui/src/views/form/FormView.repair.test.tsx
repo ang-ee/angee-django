@@ -3,7 +3,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
+import { OperationDocumentsProvider, type OperationDocumentsBySchema } from "@angee/refine";
 import { QueryClient } from "@tanstack/react-query";
+import { gql } from "graphql-tag";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { ModalsHost, ToastProvider } from "../../feedback";
@@ -36,8 +38,15 @@ const UNCHANGEABLE = "Its implementation cannot run. It cannot be changed here."
 
 type Surface = Parameters<typeof BoundDescriptorField>[0]["form"];
 type Choices = (variables: Record<string, unknown> | undefined) => Promise<{ data?: unknown }>;
-// The resource's repair read, `notes_repair_choices(id, field)`, as its metadata names it.
+// The resource's repair read, `notes_repair_choices(id, field)`, as its metadata names it, and the document
+// the host's codegen generates for it (the operation-documents seam's `repairChoices` kind).
 const REPAIR_ROOT = "notes_repair_choices";
+const REPAIR_DOCUMENT = gql`
+  query AngeeNotes_repair_choices($id: ID!, $field: String!) {
+    notes_repair_choices(id: $id, field: $field) { key category defaults config_schema }
+  }
+`;
+const documentsFor = (schema: string): OperationDocumentsBySchema => ({ [schema]: { repairChoices: { "notes.Note": REPAIR_DOCUMENT } } });
 const answer: Choices = async () => ({ data: { [REPAIR_ROOT]: [
   { key: "local", category: "", defaults: { config: CARRIED }, config_schema: null },
   { key: "stub", category: "", defaults: { config: STORED_CONFIG }, config_schema: null },
@@ -46,11 +55,15 @@ const answer: Choices = async () => ({ data: { [REPAIR_ROOT]: [
 function fixture(stored: Row, options: {
   fields?: FieldDescriptor[]; meta?: Record<string, unknown>; choices?: Choices;
   update?: (variables: Row) => Promise<{ data: Row }>; bound?: boolean;
+  /** The resource's schema; the layout's active one stays the test providers' default. */
+  schemaName?: string;
+  roots?: Record<string, string>;
+  documents?: OperationDocumentsBySchema;
 } = {}) {
   const surface: { current: Surface | null } = { current: null };
   const server = { row: { ...stored } as Row };
   const getOne = vi.fn(async () => ({ data: server.row }));
-  const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: Record<string, unknown> } }) =>
+  const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: Record<string, unknown>; gqlQuery?: unknown } }) =>
     (options.choices ?? answer)(meta?.gqlVariables));
   const update = vi.fn(async ({ variables }: { variables: Row }) => {
     if (options.update) return options.update(variables);
@@ -60,11 +73,13 @@ function fixture(stored: Row, options: {
   });
   const resource = testDataResource("notes.Note", {
     fields: [title, { ...backend, ...options.meta }, config, note], implFields: ["backend"],
-    roots: { repairChoices: REPAIR_ROOT },
+    roots: options.roots ?? { repairChoices: REPAIR_ROOT },
+    ...(options.schemaName ? { schemaName: options.schemaName } : {}),
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const { Provider, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://repair", router: true });
   render(<Provider dataProvider={{ getOne, custom, update }} queryClient={queryClient}><ModalsHost><ToastProvider>
+    <OperationDocumentsProvider documents={options.documents ?? documentsFor(options.schemaName ?? "console")}>
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets, containers: containersFromChildren(FORM_CONTAINERS, {}) }}>
       <FormView resource="notes.Note" id="note-1" fields={options.fields ?? PAGE}
         formExtras={({ form }: { form: Surface }) => {
@@ -73,6 +88,7 @@ function fixture(stored: Row, options: {
             widget: "select", options: [{ value: "LOCAL", label: "Local" }, { value: "STUB", label: "Stub" }] }} /> : null;
         }} />
     </AppRuntimeProvider>
+    </OperationDocumentsProvider>
   </ToastProvider></ModalsHost></Provider>);
   const recordReads = () => custom.mock.calls.filter(([request]) => request?.meta?.gqlVariables?.id != null);
   return { server, getOne, custom, update, queryClient, clearClients, recordReads, surface };
@@ -345,6 +361,50 @@ test("a repair read refused where the record shown is now registered still gives
   f.clearClients();
 });
 
+test("the repair read sends the resource's generated document, with the record and the field", async () => {
+  const f = fixture(RETIRED);
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  const meta = f.recordReads()[0]?.[0]?.meta;
+  expect(meta?.gqlQuery).toBe(REPAIR_DOCUMENT);
+  expect(meta?.gqlVariables).toEqual({ id: "note-1", field: "backend" });
+  f.clearClients();
+});
+
+test("the repair read asks the resource's own schema, not the layout's", async () => {
+  const f = fixture(RETIRED, { schemaName: "public" });
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  // Each authored read's cache key names the provider it asked.
+  const asked = f.queryClient.getQueryCache().getAll().map((query) => JSON.stringify(query.queryKey))
+    .filter((key) => key.includes('"field":"backend"'));
+  expect(asked.length).toBeGreaterThan(0);
+  expect(asked.every((key) => key.includes('"public"'))).toBe(true);
+  f.clearClients();
+});
+
+test("a resource whose metadata names no repair read offers no repair: locked, said so, no read", async () => {
+  const f = fixture(RETIRED, { roots: {} });
+
+  expect(await screen.findByText(UNCHANGEABLE)).toBeTruthy();
+  await settle();
+  expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  expect(document.querySelectorAll("[aria-busy=true]")).toHaveLength(0);
+  expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+  expect(f.custom).not.toHaveBeenCalled();
+  f.clearClients();
+});
+
+test("a resource whose host generated no repair document offers no repair either", async () => {
+  const f = fixture(RETIRED, { documents: {} });
+
+  expect(await screen.findByText(UNCHANGEABLE)).toBeTruthy();
+  await settle();
+  expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  expect(f.custom).not.toHaveBeenCalled();
+  f.clearClients();
+});
+
 test("a page's own createOnly on a selector the model does not make create-only stays locked, with no repair read", async () => {
   const f = fixture(RETIRED, { meta: { createOnly: undefined },
     fields: [{ name: "title", title: true }, { name: "backend", label: "Backend", createOnly: true }, { name: "config", label: "Config" }] });
@@ -400,7 +460,7 @@ test("the form offers the choice on the same three rows the server allows it on"
   })]);
   const model = Object.values(metadata.types)[0] ?? null;
   const offered = (stored: Row) => !withModeLockedFields([{ name: "backend", createOnly: true }], false,
-    (field) => repairChoosable(model, stored, field.name))[0]?.readOnly;
+    (field) => repairChoosable(model, stored, field.name, true))[0]?.readOnly;
   expect([
     offered({ id: "note-1", backend: null }),
     offered({ id: "note-1", backend: "LOCAL" }),

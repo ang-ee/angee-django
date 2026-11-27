@@ -2,7 +2,9 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, useImplConfigFields, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { backendOperations, backendOperationsFor, backendResource, backends, createOnlyBackendResource } from "./implementation-fixtures";
+import {
+  backendOperations, backendOperationsFor, backendResource, backends, createOnlyBackendResource, repairOperationDocuments,
+} from "./implementation-fixtures";
 import { storyField, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const statusOptions = [
@@ -330,7 +332,7 @@ export const ImplementationKeyNotRegisteredCreateOnly: Story = {
   // Its save repairs the backend: its own store, so no other story reads the repaired key.
   parameters: { angeeFixture: { schemas: storySchema({ ...storyOperations, ...backendOperationsFor() }, {
     resources: [noteResource, personResource, createOnlyBackendResource],
-  }) } },
+  }), operationDocuments: repairOperationDocuments } },
   render: () => <RepairForm />,
 };
 

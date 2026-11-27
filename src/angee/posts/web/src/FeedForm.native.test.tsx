@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvider } from "@tanstack/react-router";
 import { testDataResource } from "@angee/metadata/testing";
-import { refineFieldsFromPaths } from "@angee/refine";
+import { OperationDocumentsProvider, refineFieldsFromPaths } from "@angee/refine";
 import { CONNECT_RECORD_FIELDS } from "@angee/integrate";
 import { containerChildren } from "@angee/app/testing";
 import { AppRuntimeProvider, FORM_CONTAINERS, ModalsHost, ToastProvider, containersFromChildren, defaultWidgets } from "@angee/ui";
@@ -38,6 +38,10 @@ const resource = testDataResource("posts.Feed", {
     readable: true, creatable: name === "display_name",
     updatable: name === "reply_hold", nullable: name === "reply_hold", aggregatable: false, requiredOnCreate: false }))],
 });
+// The feeds' repair read as the host's codegen generates it (the operation-documents seam's `repairChoices`).
+const REPAIR_DOCUMENTS = { console: { repairChoices: { "posts.Feed":
+  "query AngeeFeeds_repair_choices($id: ID!, $field: String!) { feeds_repair_choices(id: $id, field: $field) { key category defaults config_schema } }",
+} } };
 const { Provider, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://feeds",
   queryClientConfig: { defaultOptions: { queries: { retry: false } } } });
 afterEach(() => { cleanup(); clearClients(); });
@@ -71,12 +75,14 @@ function fixture({ replyHold = null, connectable = false, create = false, retire
   const update = vi.fn(async ({ variables }: { variables: Record<string, unknown> }) => ({ data: { ...row, ...variables } }));
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/feeds/feed"] }) });
   render(<Provider dataProvider={{ getOne, custom, update }}><RouterContextProvider router={router}>
+    <OperationDocumentsProvider documents={REPAIR_DOCUMENTS}>
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets,
       containers: containersFromChildren(FORM_CONTAINERS, Object.fromEntries(Object.keys(posts.containers ?? {})
         .map((address) => [address, Object.fromEntries(containerChildren(posts, address))]))),
     }}><ModalsHost><ToastProvider>
       <feedForm.Component resource="posts.Feed" {...(create ? {} : { id: "feed" })} />
     </ToastProvider></ModalsHost></AppRuntimeProvider>
+    </OperationDocumentsProvider>
   </RouterContextProvider></Provider>);
   return { getOne, custom, update };
 }

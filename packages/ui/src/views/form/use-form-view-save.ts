@@ -11,7 +11,7 @@ import {
   type Row,
 } from "@angee/metadata";
 import {
-  invalidateAuthoredQueries, useAngeeResourceSave, useAuthoredQueryBatch, type MutationRootArguments,
+  invalidateAuthoredQueries, useAngeeResourceSave, useAuthoredQueryBatch, type MutationRootArguments, type TypedDocumentNode,
 } from "@angee/refine";
 import {
   useInvalidate,
@@ -36,7 +36,6 @@ import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../
 import { asWidgetDefinition, canonicalOptionValue, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { ImplChoice } from "../resource/documents";
-import { repairChoicesDocument } from "../resource/repair-choices";
 import { repairChoosable } from "../resource/implementation-fields";
 import { errorMessage } from "../../feedback/error-message";
 import {
@@ -75,7 +74,7 @@ import {
   formFieldLabel,
   repairSelectorLost,
 } from "./form-view-model";
-import { useSaveOperation } from "../resource/resource-operations";
+import { useSaveOperation, type ResourceOperation } from "../resource/resource-operations";
 import {
   applyFormErrors, fieldErrorPaths, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalFocus, type FormSubmitResult,
 } from "./validation-errors";
@@ -173,6 +172,11 @@ export interface UseFormViewSaveProps {
   isCreate: boolean;
   readOnly?: boolean;
   dataResource: DataResourceMetadata | null;
+  /**
+   * The resource's repair read (`useRepairChoicesOperation`): its generated document and its target on the
+   * resource's schema. Absent, no repair is offered.
+   */
+  repairOperation?: ResourceOperation;
   modelMetadata: ModelMetadata | null;
   formFields: readonly FieldDescriptor[];
   /**
@@ -328,6 +332,7 @@ export function useFormViewSave({
   isCreate,
   readOnly = false,
   dataResource,
+  repairOperation,
   modelMetadata,
   formFields,
   formFieldsFor,
@@ -653,24 +658,29 @@ export function useFormViewSave({
   if (!formIsDirty && editBasis !== displayRecord) setEditBasis(displayRecord);
   // A repair: a create-only selector the record lets be chosen once more (`repairChoosable`, on the
   // edit's basis). What choosing each implementation sets on the record is the server's rule, asked of
-  // the resource's own repair read (`roots.repairChoices`) and only by a form that takes edits; until it
-  // answers, and while a save is pending, the selector shows `loading`; a refusal (the create flow does not
-  // admit this person, or the update would refuse them) keeps it read-only, with the server's words.
-  const repairRoot = modelMetadata?.resource?.roots.repairChoices ?? null;
+  // the resource's own repair read (`repairOperation`: its generated document, on the resource's schema)
+  // and only by a form that takes edits; until it answers, and while a save is pending, the selector shows
+  // `loading`; a refusal (the create flow does not admit this person, or the update would refuse them)
+  // keeps it read-only, with the server's words.
+  const repairTarget = repairOperation?.target ?? null;
   const repairFields = React.useMemo(
     () => isCreate || !formTakesEdits ? [] : recordFields.filter((field) => !field.readOnly
-      && repairChoosable(modelMetadata, editBasis, field.name)),
-    [editBasis, formTakesEdits, isCreate, modelMetadata, recordFields],
+      && repairChoosable(modelMetadata, editBasis, field.name, repairTarget !== null)),
+    [editBasis, formTakesEdits, isCreate, modelMetadata, recordFields, repairTarget],
   );
-  const repairChoicesBatch = useAuthoredQueryBatch(repairRoot ? repairFields.map((field) => ({
+  const repairChoicesBatch = useAuthoredQueryBatch(repairTarget ? repairFields.map((field) => ({
     key: field.name,
-    document: repairChoicesDocument(repairRoot),
+    document: repairOperation?.document as RepairChoicesDocument,
     variables: { id: id ?? "", field: field.name },
-  })) : [], { enabled: repairFields.length > 0 && id != null, errorNotification: false });
-  const repairChoices = React.useMemo(() => new Map(repairRoot ? repairFields.flatMap((field) => {
-    const choices = repairChoicesBatch.get(field.name)?.data?.[repairRoot];
+  })) : [], {
+    dataProviderName: repairTarget?.dataProviderName,
+    enabled: repairFields.length > 0 && id != null,
+    errorNotification: false,
+  });
+  const repairChoices = React.useMemo(() => new Map(repairTarget ? repairFields.flatMap((field) => {
+    const choices = repairChoicesBatch.get(field.name)?.data?.[repairTarget.root];
     return choices ? [[field.name, choices] as const] : [];
-  }) : []), [repairChoicesBatch, repairFields, repairRoot]);
+  }) : []), [repairChoicesBatch, repairFields, repairTarget]);
   const recordField = React.useCallback(
     (path: string) => recordFields.find((field) => field.name === path),
     [recordFields],
@@ -1198,6 +1208,9 @@ export function useFormViewSave({
     requestLeave,
   };
 }
+
+/** The repair read's document as the codegen generates it: the answer under the root's name. */
+type RepairChoicesDocument = TypedDocumentNode<Readonly<Record<string, ImplChoice[] | undefined>>, { id: string; field: string }>;
 
 /** A field's repair state (`FormViewSave.repairState`). */
 export interface RepairState {
