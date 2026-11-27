@@ -353,6 +353,10 @@ def final_resource_fields(
         )
         scalar = _graphql_scalar(named, kind=kind, field_name=name, node_name=node_name)
         values = _field_enum_values(model_field, named) if kind == "enum" else ()
+        is_creatable = (name in creatable or python_name in creatable
+                        or (model_field is not None and model_field_name in creatable))
+        is_updatable = (name in updatable or python_name in updatable
+                        or (model_field is not None and model_field_name in updatable))
         projected.append(
             data_contract.DataResourceFieldMetadata(
                 name=name,
@@ -364,11 +368,11 @@ def final_resource_fields(
                     name in aggregatable or python_name in aggregatable
                     or (model_field is not None and model_field_name in aggregatable)
                 ),
-                creatable=(name in creatable or python_name in creatable
-                           or (model_field is not None and model_field_name in creatable)),
-                updatable=(name in updatable or python_name in updatable
-                           or (model_field is not None and model_field_name in updatable)),
-                create_only=model_field is not None and model_field_name in create_only,
+                creatable=is_creatable,
+                updatable=is_updatable,
+                # Create-only where this resource writes the column at all: a read-only exposure says nothing.
+                create_only=(model_field is not None and model_field_name in create_only
+                             and (is_creatable or is_updatable)),
                 required_on_create=(
                     name in required_on_create or python_name in required_on_create
                     or (model_field is not None and model_field_name in required_on_create)

@@ -86,7 +86,10 @@ live in code docstrings.
   `notion_connections_set_input`, `feeds_set_input` (both selectors) and any
   consumer resource over such a model gain the column, and
   `inference_providers_set_input` and `vcs_bridges_set_input` list it last; a
-  resource field's metadata gains `createOnly`. `impl_choices` takes an
+  resource field's metadata gains `createOnly` (the model refuses a change once a
+  registered value is stored), published only where the resource writes the
+  field (`creatable` or `updatable`), so a read-only exposure says `false`; it
+  implies no create path, which `creatable` alone states. `impl_choices` takes an
   optional `record`: each choice's `defaults` is then what choosing it sets on
   that record, the config it carries over (`ImplDefaultsMixin.repair_impl_defaults`),
   answered only for a record the actor may write whose stored key is not

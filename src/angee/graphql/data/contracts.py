@@ -38,10 +38,14 @@ class DataResourceFieldMetadata:
     readable: bool = True
     aggregatable: bool = False
     creatable: bool = False
+    """Whether a create through this resource offers the field."""
     updatable: bool = False
+    """Whether this resource's update input accepts the field."""
     create_only: bool = False
-    """Whether the field is a create-only implementation selector: the update input carries it, and its
-    model's save allows a change only while the stored key is not registered (a repair)."""
+    """Whether the model refuses a change once a registered value is stored (an implementation selector
+    declared ``create_only``), published only where this resource writes the field (``creatable`` or
+    ``updatable``); a read-only exposure says ``False``. It implies no create path: that is ``creatable``.
+    The one change the model allows is a repair, while the stored key is not registered."""
     required_on_create: bool = False
     archivable: bool = False
     trashable: bool = False

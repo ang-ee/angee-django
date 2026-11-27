@@ -1757,41 +1757,45 @@ def test_a_writer_repairs_a_bridge_s_retired_key_once_and_a_person_who_may_not_w
 
 
 def test_every_update_input_carries_its_model_s_create_only_selectors_and_the_metadata_names_them() -> None:
-    """The resource layer derives it once: an update carries each create-only selector, published create-only."""
+    """The resource layer derives it once: an update carries each create-only selector, published create-only
+    only where the resource writes it, with the creatable and updatable the server enforces; a read-only
+    exposure, as the public schema's directories, publishes ``False``."""
 
     from django.apps import apps
 
-    schema = GraphQLSchemas.from_discovery().build("console")
-    carried: set[tuple[str, str]] = set()
-    published: set[tuple[str, str]] = set()
-    for resource in schema._schema.extensions["angee"]["resources"]:
-        if resource["modelLabel"] not in {model._meta.label for model in apps.get_models()}:
-            continue  # a resource over a projection (``iam.Role``) names no model
-        model = apps.get_model(resource["modelLabel"])
-        fields = {field["name"]: field for field in resource["fields"]}
-        for name in create_only_selectors(model):
-            if name not in fields:
-                continue
-            assert fields[name]["createOnly"] is True
-            published.add((resource["modelLabel"], name))
-            if resource["roots"]["update"]:
-                assert name in resource["updateFields"] and fields[name]["updatable"] is True
-                set_input = schema._schema.get_type(f"{resource['roots']['list']}_set_input")
-                assert name in set_input.fields
-                carried.add((resource["modelLabel"], name))
-        selectors = create_only_selectors(model)
-        assert not [name for name, field in fields.items() if field["createOnly"] and name not in selectors]
+    labels = {model._meta.label for model in apps.get_models()}
+    published: dict[str, dict[tuple[str, str], tuple[bool, bool]]] = {}
+    schemas = GraphQLSchemas.from_discovery()
+    for schema_name in ("console", "public"):
+        schema = schemas.build(schema_name)
+        published[schema_name] = {}
+        for resource in schema._schema.extensions["angee"]["resources"]:
+            if resource["modelLabel"] not in labels:
+                continue  # a resource over a projection (``iam.Role``) names no model
+            model = apps.get_model(resource["modelLabel"])
+            selectors = create_only_selectors(model)
+            for field in resource["fields"]:
+                writes = field["creatable"] or field["updatable"]
+                assert field["createOnly"] is (field["name"] in selectors and writes), (resource["modelLabel"], field)
+                if field["createOnly"]:
+                    published[schema_name][(resource["modelLabel"], field["name"])] = (
+                        field["creatable"], field["updatable"],
+                    )
+                    if resource["roots"]["update"]:
+                        set_input = schema._schema.get_type(f"{resource['roots']['list']}_set_input")
+                        assert field["name"] in resource["updateFields"] and field["name"] in set_input.fields
 
-    assert carried == {
-        ("agents.InferenceProvider", "backend_class"), ("integrate_vcs.VcsBridge", "backend_class"),
-        ("knowledge_integrate_notion.NotionConnection", "backend_class"), ("messaging.Channel", "backend_class"),
-        ("posts.Feed", "backend_class"), ("posts.Feed", "feed_backend_class"),
+    # (creatable, updatable) where the console writes a create-only selector.
+    assert published["console"] == {
+        ("agents.InferenceProvider", "backend_class"): (True, True),
+        ("integrate_vcs.VcsBridge", "backend_class"): (True, True),
+        ("knowledge_integrate_notion.NotionConnection", "backend_class"): (False, True),
+        ("messaging.Channel", "backend_class"): (False, True),
+        ("posts.Feed", "backend_class"): (False, True),
+        ("posts.Feed", "feed_backend_class"): (True, True),
     }
-    # No update root: the three connect-created resources publish the fact and carry nothing.
-    assert published - carried == {
-        ("calendar.CalendarSource", "backend_class"), ("parties.Directory", "backend_class"),
-        ("storage_integrate.Mount", "backend_class"),
-    }
+    # The public schema only reads selectors (the directories' `backend_class`): none is create-only there.
+    assert published["public"] == {}
 
 
 _REPAIR_CHOICES = """

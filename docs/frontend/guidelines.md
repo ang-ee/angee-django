@@ -2535,6 +2535,18 @@ submit and upload paths. The app resets actor-bound queries on enter and exit;
 change subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
 
+A resource field's metadata states three independent facts; read none of them
+from another:
+- `creatable`: a create through this resource offers the field;
+- `updatable`: this resource's update input accepts the field;
+- `createOnly`: the model refuses a change once a registered value is stored (a
+  create-only implementation selector), published only where this resource
+  writes the field. It implies no create path, which is `creatable` alone.
+
+A record form locks a `createOnly` field on an edit except while the stored key
+is not registered, when the field can be chosen once more (a repair); it offers
+the field on a create only where it is `creatable`.
+
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
 still open a creation form. Fixtures must declare the write operations they intend
