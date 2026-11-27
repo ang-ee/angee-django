@@ -2470,17 +2470,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         Three branches, none confirming its link and none duplicating an existing
         pair: indexed normalized twins contribute distinct candidate parties (the
-        first at ``1.0``, which decides the handle's party, competing parties at ``0.3`` for
-        review); otherwise an email whose non-generic domain matches a tracked
-        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``:
-        the handle's domain is its spelling key's (``Handle.spelling_key_of``,
-        from its own value), and an organization is found by its domain key
-        (``Organization.domain_filter``), so any spelling of the domain the one
-        rule (``Handle.normalize_email_domain``) joins finds it, however it was
-        typed; otherwise no-op. Both branches stay inside the partition of the handle's
-        creator: handles that user created and parties that user owns. Public
-        mailbox-provider domains never imply organization membership. Returns the
-        strongest created/existing link, or ``None``.
+        first at ``1.0``, which decides the handle's party, competing parties at ``0.3``,
+        below ``Party.REVIEW_CONFIDENCE``, for review); otherwise an email whose
+        non-generic domain matches tracked organizations suggests them, by the rule
+        ``email_domain``. One matching organization is the organization, suggested at
+        ``0.4``, below review confidence too, so a person confirms it. Several sharing the
+        domain are each a suggestion at the twins' ``0.3``, so none is chosen over another
+        and every one goes to review; they are asserted in primary-key order, which is
+        deterministic because the key is unique and fixed at creation, where the model's
+        default ``-updated_at`` moves with every save. The
+        handle's domain is its spelling key's (``Handle.domain_of``, from its own value),
+        and organizations are found by their domain key (``Organization.domain_filter``),
+        so any spelling of the domain the one rule (``Handle.normalize_email_domain``)
+        joins finds them, however it was typed; otherwise no-op. Both branches stay
+        inside the partition of the handle's creator: handles that user created and
+        parties that user owns. Public mailbox-provider domains never imply organization
+        membership. Returns the strongest created/existing link (of several
+        organizations, the first in that order), or ``None``.
         """
 
         if handle.party_id is not None:
@@ -2520,17 +2526,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         domain = handle_model.domain_of(handle.platform, handle.value)
         if domain and domain not in GENERIC_EMAIL_DOMAINS:
             organization_model = apps.get_model("parties", "Organization")
-            org = organization_model.objects.filter(
-                organization_model.domain_filter(domain), owner_id=handle.created_by_id
-            ).first()
-            if org is not None:
-                return self.assert_handle(
-                    org,
+            organizations = list(
+                organization_model.objects.filter(
+                    organization_model.domain_filter(domain), owner_id=handle.created_by_id
+                ).order_by("pk")
+            )
+            links = [
+                self.assert_handle(
+                    organization,
                     handle,
-                    confidence=0.4,
+                    confidence=0.4 if len(organizations) == 1 else 0.3,
                     asserted_by=self.rule_source("email_domain"),
                     evidence=[handle],
                 )
+                for organization in organizations
+            ]
+            if links:
+                return links[0]
         return None
 
     def reconcile_same_as(self, *, limit: int = 1000, shared: Collection[Any] | None = None) -> int:

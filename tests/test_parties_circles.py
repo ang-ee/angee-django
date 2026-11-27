@@ -1079,6 +1079,62 @@ def test_suggest_for_org_domain_finds_an_organization_by_its_domain_key(db: None
     assert Organization._base_manager.get(pk=publisher.pk).domain == "straße.example"
 
 
+@pytest.mark.parametrize("touched", [pytest.param(0, id="touch-the-first"), pytest.param(1, id="touch-the-second")])
+def test_suggest_for_organizations_sharing_a_domain_suggests_each_for_review(db: None, touched: int) -> None:
+    """Several organizations sharing a domain key are each a suggestion below review: none decides, whoever was touched.
+
+    Each is asserted at the twins' competing weight, below ``Party.REVIEW_CONFIDENCE``, in primary-key order; saving
+    either one (which moves the model's default ``-updated_at`` order) changes nothing.
+    """
+
+    del db
+    with system_context(reason="test suggest shared domain"):
+        owner = _user(f"kai-{touched}")
+        organizations = [
+            Organization._base_manager.create(display_name=name, domain=domain, created_by=owner)
+            for name, domain in (("Straße", "straße.example"), ("Strasse", "strasse.example"))
+        ]
+        before = Handle._base_manager.create(platform="email", value="ann@strasse.example", created_by=owner)
+        first = Party.objects.suggest_for(before)
+        organizations[touched].legal_name = "Touched"
+        organizations[touched].save()
+        after = Handle._base_manager.create(platform="email", value="ben@straße.example", created_by=owner)
+        second = Party.objects.suggest_for(after)
+
+        outcomes = []
+        for handle, link in ((before, first), (after, second)):
+            handle.refresh_from_db()
+            links = Party.statements.filter(handle=handle).order_by("subject_id")
+            outcomes.append((
+                link.subject_id,
+                [(row.subject_id, row.confidence, row.source_kind, row.is_confirmed) for row in links],
+                handle.party_id,
+            ))
+
+    ordered = sorted(organization.pk for organization in organizations)
+    expected = (ordered[0], [(pk, 0.3, "rule", False) for pk in ordered], None)
+    assert outcomes == [expected, expected]
+    assert all(confidence < Party.REVIEW_CONFIDENCE for _, rows, _ in outcomes for _, confidence, _, _ in rows)
+
+
+def test_suggest_for_one_organization_at_a_domain_is_suggested_as_before(db: None) -> None:
+    """One organization at the domain key is the organization: one rule suggestion at ``0.4``, and nothing else."""
+
+    del db
+    with system_context(reason="test suggest one organization"):
+        owner = _user("lea")
+        publisher = Organization._base_manager.create(display_name="Straße", domain="straße.example", created_by=owner)
+        Organization._base_manager.create(display_name="Elsewhere", domain="elsewhere.example", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="ann@strasse.example", created_by=owner)
+        link = Party.objects.suggest_for(handle)
+        rows = [(row.subject_id, row.confidence) for row in Party.statements.filter(handle=handle)]
+        handle.refresh_from_db()
+
+    assert (link.subject_id, link.confidence, link.source_kind) == (publisher.pk, 0.4, "rule")
+    assert rows == [(publisher.pk, 0.4)]
+    assert handle.party_id is None
+
+
 def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(db: None) -> None:
     """The partition follows party ownership, not who first recorded the party."""
 
