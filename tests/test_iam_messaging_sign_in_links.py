@@ -63,7 +63,7 @@ from angee.iam_messaging.models import (
 from angee.iam_messaging.testing.models import SignInLink
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Fragment, Handle, Message, Person
-from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_PRINTED
+from angee.messaging_templates.engine import INVALID_VALUES, NO_BRAND_KIT, VALUE_NOT_PRINTED
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
 from tests.conftest import addon_schema, create_platform_admin
@@ -1134,7 +1134,7 @@ def test_a_template_that_does_not_show_the_link_is_refused_as_the_deployments_fa
 
 
 DATED = '{{ link|date:"c" }}'
-"""The link read as a date: the console admits it, and the render refuses the link's value (``invalid_values``) in
+"""The link read as a date: the console admits it, and the render refuses the link's value (``INVALID_VALUES``) in
 words that quote its first characters."""
 
 
@@ -1244,7 +1244,7 @@ def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_li
     if state == "no default brand kit":
         assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_NOT_RENDERED_MESSAGE])
         assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
-        assert "could not be rendered for it (no_brand_kit)." in caplog.text
+        assert f"could not be rendered for it ({NO_BRAND_KIT})." in caplog.text
     if state == "cooldown":
         assert refusal.value.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
     assert result_data(result)["issue_user_sign_in_link"]["ok"] is False
