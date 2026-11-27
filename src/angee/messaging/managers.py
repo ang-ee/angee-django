@@ -5132,33 +5132,41 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         self, message: Any, rows: Iterable[tuple[Any, str, str, Any]], *, created_by_id: Any,
     ) -> None:
         """Create ``message``'s recipient rows from ``(handle or handle id, role, address, addressed handle)``, once per
-        handle and role.
+        mailbox of a handle in a role.
 
         The write path owns envelope dedup (the unique constraint is the
-        backstop): any producer may repeat an address within one role, and two
-        spellings of one address in one role are one row. That row records the
+        backstop on the exact text): any producer may repeat an address within
+        one role, and two spellings of one address in one role are one row, by
+        the handle owner's key (``Handle.spelling_key_of``). That row records the
         first spelling a caller handed for it, wherever it came in the order: a
         handed address wins over the same handle inherited without one (a reply's
-        parent's recipient), since the caller gave it. Each row takes its thread
-        from ``message`` (``Recipient.save``); ``address`` is empty for a row whose
-        recipient no caller handed as an address. The addressed handle, the handle
-        owning the address before a merge redirect, goes to the row's check
-        (``Recipient.addressed_handle``) and is not stored.
+        parent's recipient), since the caller gave it. Two different addresses
+        on one handle in one role, which only system mail records (each the
+        address of a handle merged into it), are two rows, each mailed at its
+        own. Each row takes its thread from ``message`` (``Recipient.save``);
+        ``address`` is empty for a row whose recipient no caller handed as an
+        address. The addressed handle, the handle owning the address before a
+        merge redirect, goes to the row's check (``Recipient.addressed_handle``)
+        and is not stored.
         """
 
         recipient_model = apps.get_model("messaging", "Recipient")
-        written: dict[tuple[Any, str], tuple[Any, str, Any]] = {}
+        handle_model = apps.get_model("parties", "Handle")
+        written: dict[tuple[Any, str], dict[str, tuple[Any, str, Any]]] = {}
         for handle, role, address, owner in rows:
-            key = (getattr(handle, "pk", handle), str(role))
-            if key not in written or (address and not written[key][1]):
-                written[key] = (handle, address, owner)
-        for (_handle_id, role), (handle, address, owner) in written.items():
-            row = recipient_model(
-                message=message, role=role, address=address, created_by_id=created_by_id,
-                **({"handle": handle} if isinstance(handle, models.Model) else {"handle_id": handle}),
-            )
-            row.addressed_handle = owner
-            row.save(force_insert=True)
+            mailboxes = written.setdefault((getattr(handle, "pk", handle), str(role)), {})
+            spelling = handle_model.spelling_key_of(handle_model.Platform.EMAIL, address) if address else ""
+            mailboxes.setdefault(spelling, (handle, address, owner))
+        for (_handle_id, role), mailboxes in written.items():
+            if len(mailboxes) > 1:
+                mailboxes.pop("", None)
+            for handle, address, owner in mailboxes.values():
+                row = recipient_model(
+                    message=message, role=role, address=address, created_by_id=created_by_id,
+                    **({"handle": handle} if isinstance(handle, models.Model) else {"handle_id": handle}),
+                )
+                row.addressed_handle = owner
+                row.save(force_insert=True)
 
 
 class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
