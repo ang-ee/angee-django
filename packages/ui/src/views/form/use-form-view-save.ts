@@ -76,7 +76,7 @@ import {
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalFocus, type FormSubmitResult,
+  applyFormErrors, fieldErrorPaths, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalFocus, type FormSubmitResult,
 } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
@@ -431,13 +431,8 @@ export function useFormViewSave({
   const displayRecord = record;
   // The edit's basis, the one holder of the record the draft was made against: a save sends its
   // revision, and the mode lock reads it, so a pick stays the save's until the save answers, whatever a
-  // re-read or another save stores meanwhile. Its ref is the same value for callbacks, written with it.
-  const [editBasis, setEditBasisState] = React.useState<Row | null>(displayRecord);
-  const editBasisRef = React.useRef<Row | null>(editBasis);
-  const setEditBasis = React.useCallback((basis: Row | null) => {
-    editBasisRef.current = basis;
-    setEditBasisState(basis);
-  }, []);
+  // re-read or another save stores meanwhile. It is state only: callbacks read it as rendered.
+  const [editBasis, setEditBasis] = React.useState<Row | null>(displayRecord);
   const recordFields = React.useMemo(
     () => formFieldsFor?.(displayRecord, editBasis) ?? formFields,
     [displayRecord, editBasis, formFields, formFieldsFor],
@@ -602,16 +597,21 @@ export function useFormViewSave({
     } else {
       const arrays = dirtyArrayValues(form.getValues(), (path) => form.getFieldState(path).isDirty);
       // A draft keeps what was said about it across a re-read (a refusal stays until the person changes
-      // that field, or discards); a clean field whose value the re-read changed loses what was said about
-      // its old value. A form holding no draft is reset whole, as before.
+      // that field, or discards). An error whose path the person has not changed and whose value the
+      // re-read replaced is about a value no longer shown: it goes, member paths included. A form holding
+      // no draft is reset whole, as before.
       const draft = form.formState.isDirty;
-      const stale = draft ? Object.keys(next).filter((name) => !form.getFieldState(name).isDirty
-        && !deepEqual(get(form.formState.defaultValues, name), next[name])) : [];
+      const stale = draft ? fieldErrorPaths(form.formState.errors).filter((path) => !form.getFieldState(path).isDirty
+        && !deepEqual(get(form.formState.defaultValues, path), get(next, path))) : [];
       reset(next, { keepDirtyValues: true, keepDirty: true, keepErrors: draft });
       if (stale.length) clearErrors(stale);
       for (const [path, value] of arrays) setValue(path, value, { shouldDirty: true });
     }
     resetDefaultValues(baseline, { keepIsValid: true });
+    // A re-read that leaves no draft (another writer stored the person's own values) takes the draft's
+    // errors with it: the defaults just reset decide what is still dirty.
+    if (!keepLines && form.formState.isDirty
+      && !Object.keys(form.getValues()).some((name) => form.getFieldState(name).isDirty)) clearErrors();
     // Whole-value undo frames cannot restore fields from an older accepted baseline.
     resetHistory();
     activeFieldInteractions.current.clear();
@@ -634,7 +634,7 @@ export function useFormViewSave({
       if (!submitOwner) throw new Error("No custom form submission is configured.");
       return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
-        baselineRecord: editBasisRef.current, lines,
+        baselineRecord: editBasis, lines,
         idempotencyKey,
         values: submitted, baselineValues: baseline,
       });
@@ -646,7 +646,9 @@ export function useFormViewSave({
   React.useEffect(() => {
     formIsDirtyRef.current = formIsDirty;
   }, [formIsDirty]);
-  // A form that holds no edits follows the record shown, in the render that shows it.
+  // A form that holds no edits follows the record shown, in the render that shows it: React's adjustment
+  // of state while rendering, set from a compared value, so no committed render locks against another
+  // record and nothing but this state is written.
   if (!formIsDirty && editBasis !== displayRecord) setEditBasis(displayRecord);
   // A repair: a create-only selector the record lets be chosen once more (`repairChoosable`, on the
   // edit's basis). What choosing each implementation sets on the record is the server's rule
@@ -707,7 +709,7 @@ export function useFormViewSave({
           const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
           const rootArguments: MutationRootArguments = {};
           if (!isCreate && (useSave ? saveRevision : updateRevision)) {
-            const revision = editBasisRef.current?.revision;
+            const revision = editBasis?.revision;
             if (typeof revision !== "number" || !Number.isInteger(revision)) {
               throw new Error(t("form.revisionUnavailable"));
             }
@@ -753,6 +755,7 @@ export function useFormViewSave({
     [
       customSubmit.mutateAsync,
       authoredInvalidateModels,
+      editBasis,
       dependentInvalidations,
       invalidate,
       queryClient,

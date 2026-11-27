@@ -2535,6 +2535,16 @@ submit and upload paths. The app resets actor-bound queries on enter and exit;
 change subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
 
+A record form's draft is made against one record, its edit basis: the save
+sends its revision and the mode lock reads it. While the form holds no edits it
+is the record shown, in the same render; an accepted save moves it to the
+record written. A re-read keeps the draft and what was said about it: a server
+refusal stays under its field until the person changes that field or discards,
+an error about a value the re-read replaced goes, and a re-read that leaves no
+draft (another writer stored the person's own values) takes the draft's errors
+with it. A form holding no draft is reset whole. See
+[the save owner](../../packages/ui/src/views/form/use-form-view-save.ts).
+
 A resource field's metadata states three independent facts; read none of them
 from another:
 - `creatable`: a create through this resource offers the field;

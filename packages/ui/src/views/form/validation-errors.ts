@@ -682,6 +682,29 @@ function validationErrorMessage(error: unknown, fallback: string): string {
 
 const EMPTY_FIELD_NAMES: readonly string[] = [];
 
+/**
+ * The dotted path of every field error the form holds (any type: a server refusal, a rule, a
+ * conflict), never the form-level `root` ones, sorted. A re-read reads it to clear exactly the
+ * errors whose value it replaced.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function fieldErrorPaths(errors: object): readonly string[] {
+  const paths: string[] = [];
+  const visit = (value: unknown, path: string): void => {
+    if (!value || typeof value !== "object") return;
+    if ("type" in value && typeof value.type === "string" && "message" in value) {
+      paths.push(path);
+      return;
+    }
+    for (const [name, child] of Object.entries(value)) {
+      if (name !== "ref" && name !== "types" && !(path === "" && name === "root")) visit(child, path ? `${path}.${name}` : name);
+    }
+  };
+  visit(errors, "");
+  return paths.sort();
+}
+
 /** Project RHF server errors into the backend dotted-path display contract. */
 export function serverErrorsFromForm(errors: object): Record<string, readonly string[]> {
   const result: Record<string, readonly string[]> = {};
