@@ -168,6 +168,8 @@ export interface UseFormViewSurfaceProps {
   defaultValues?: Record<string, unknown>;
   acknowledgedSource?: FormViewAcknowledgedSource;
   onSaved?: (row: Row) => void;
+  /** Called after the native trash action succeeds, for example to close a routed record. */
+  onTrashed?: () => void;
   submit?: FormSubmit;
   createSubmit?: FormSubmit;
   /** Additional model caches refreshed after an accepted save. */
@@ -265,6 +267,7 @@ export function useFormViewSurface({
   defaultValues,
   acknowledgedSource,
   onSaved,
+  onTrashed,
   submit,
   createSubmit,
   invalidateModels,
@@ -770,7 +773,7 @@ export function useFormViewSurface({
     t("form.record"),
   ), [modelMetadata, t, titleField]);
   const archiveActions = useArchiveActions(modelMetadata);
-  const trashActions = useTrashActions(dataResource, { name: recordName });
+  const trashActions = useTrashActions(dataResource, { name: recordName, onTrashed });
   const genericActions = React.useMemo(
     () => isCreate || readOnly ? [] : [...(submit ? [] : archiveActions), ...trashActions],
     [archiveActions, isCreate, readOnly, submit, trashActions],

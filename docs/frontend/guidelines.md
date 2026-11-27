@@ -553,7 +553,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   explorer: trees, collection lists in split placement, session rails, smart
   views and the record pager; it changes which record is in the middle and
   never says anything about the record. The middle is the subject: the form,
-  its body sections, the statusbar and the primary toolbar. The right pane is
+  its body sections, the statusbar and the primary toolbar. `ConsoleLayout` hosts
+  `ControlBand` above that middle pane; shell notices remain above all panes.
+  The right pane is
   the context aside: what is around the record (its Timeline, Discussion,
   Tasks, Related), a page's selection inspector, and drill-ins; it may act on
   the record's process (answer, stop, revert, comment) or lead to a related

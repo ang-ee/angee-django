@@ -38,7 +38,7 @@ export interface CommandBandProps {
 
 /**
  * The record page's command band: record verbs · `⋮` menu · (space) · header
- * controls · pager, in the shell's control row. Pages with record commands
+ * controls · pager, above the shell's middle pane. Pages with record commands
  * contribute to this one band, never a second bar. Read-only inspectors can
  * compose secondary actions and RecordChrome in RecordHeader.actions instead.
  *
