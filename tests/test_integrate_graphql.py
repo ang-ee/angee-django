@@ -1674,8 +1674,14 @@ def test_an_implementation_key_the_registry_no_longer_names_reads_null_in_a_list
     assert "  backend_class: VcsBackendImpl\n" in schema.as_str()
 
 
-def test_grouping_by_a_column_whose_key_is_retired_is_refused_publicly_in_words_naming_the_column(db: None) -> None:
-    """The grouping library refuses such a group key; the answer names the column, is public and is not retried."""
+def test_grouping_by_a_column_whose_key_is_retired_is_refused_publicly_in_words_naming_the_column(
+    db: None, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The grouping library refuses such a group key; the answer names the column, is public and is not retried.
+
+    The refusal is not logged: no logger records it, so neither the stored value nor the request's
+    variables reach a log.
+    """
 
     del db
     admin = _platform_admin("retired-key-grouper")
@@ -1688,7 +1694,11 @@ def test_grouping_by_a_column_whose_key_is_retired_is_refused_publicly_in_words_
     """
 
     for document, variables in ((literal, {}), (variable, {"groupBy": [{"field": "BACKEND_CLASS"}]})):
-        result = execute_schema(_schema(), document, variables, user=admin)
+        with caplog.at_level(logging.DEBUG):
+            caplog.clear()
+            result = execute_schema(_schema(), document, variables, user=admin)
+        assert caplog.records == []
+        assert "retired" not in caplog.text and "BACKEND_CLASS" not in caplog.text
         assert result.data is None
         assert [(error.message, error.extensions) for error in result.errors or []] == [(
             "A record holds an implementation that is not registered, "
