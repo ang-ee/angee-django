@@ -2330,7 +2330,9 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
 
         Its own spelling and the writer's :attr:`addressed_handle` are checked in memory: that handle spells the address
         and redirects to this row's handle, as a fold leaves every handle it merged. Otherwise the handle owner reads
-        the handles merged into this one, once.
+        the handles merged into the survivor of this row's handle, once: the handle itself while it is live, else its
+        survivor (``canonical``, read only then), since merging the row's handle away re-points every handle merged
+        into it at that survivor.
         """
 
         address, handle, owner = self.address, self.handle, self.addressed_handle
@@ -2340,7 +2342,8 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
             return True
         if owner is not None and owner.merged_into_id == handle.pk and owner.is_spelling_of(address):
             return True
-        return bool(handle.is_spelling_of(address, merged=True))
+        survivor = handle if handle.merged_into_id is None else handle.canonical()
+        return bool(survivor.is_spelling_of(address, merged=True))
 
     def _require_its_address(self) -> None:
         if self.address and not self._names_its_handle():

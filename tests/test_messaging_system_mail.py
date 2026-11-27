@@ -599,6 +599,47 @@ def test_a_sign_in_mail_written_while_its_address_was_merged_is_refused_after_th
     assert _deliver(again).to == ["account@example.test"]
 
 
+def test_a_system_mail_whose_kept_handle_is_merged_again_before_delivery_is_delivered_to_its_address(
+    system_mailer: Any,
+) -> None:
+    """The account's address was merged into another when the mail was written; that handle is then merged into a
+    third. The fold re-points the account's redirect at the third, the survivor of the row's handle, whose merges
+    still hold the address: the mail goes there."""
+
+    with system_context(reason="tests.messaging.system_mail.merged_again"):
+        account, kept, outer = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("account@example.test", "kept@example.net", "outer@example.org")
+        )
+    _merge_as_contact_administrator(kept, account)
+    message = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(message) == [(kept.pk, "account@example.test")]
+    _merge_as_contact_administrator(outer, kept)
+    with system_context(reason="tests.messaging.system_mail.merged_again"):
+        assert Handle._base_manager.get(pk=account.pk).merged_into_id == outer.pk
+    assert _deliver(message).to == ["account@example.test"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_system_mail_written_on_a_twice_merged_handle_is_refused_after_the_outer_merge_is_reverted(
+    system_mailer: Any,
+) -> None:
+    """The account's address, merged into one handle and that one into a third, is written on the third's row; the
+    outer merge is reverted, so the third's merges no longer hold it: the mail is refused, never sent to the third."""
+
+    with system_context(reason="tests.messaging.system_mail.merged_again"):
+        account, kept, outer = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("account@example.test", "kept@example.net", "outer@example.org")
+        )
+    _merge_as_contact_administrator(kept, account)
+    _merge_as_contact_administrator(outer, kept)
+    message = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(message) == [(outer.pk, "account@example.test")]
+    _revert_merge(kept)
+    _not_sent(message)
+
+
 @pytest.mark.django_db(transaction=True)
 def test_the_release_meets_the_same_refusal_for_a_system_mail_whose_merge_was_reverted(
     system_mailer: Any, monkeypatch: pytest.MonkeyPatch,
