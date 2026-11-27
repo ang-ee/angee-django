@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
-import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
+import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, useImplConfigFields, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { backendOperations, backendResource, backends } from "./implementation-fixtures";
 import { storyField, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
@@ -315,18 +315,29 @@ export const ImplementationKeyNotRegistered: Story = {
 };
 
 /**
- * The same record with Backend create-only: it can be chosen once more, since its stored key is not
- * registered. Its mark is described "Its implementation cannot run until another is chosen. Once saved,
- * the choice cannot be changed." Choosing Local folder and saving keeps it, and Backend is then
- * read-only.
+ * The same record with Backend create-only, repaired. Its stored key is not registered, so Backend can be chosen
+ * once more; its mark is described "Its implementation cannot run until another is chosen. Once saved, the choice
+ * cannot be changed." The form composes the implementation's config fields as the shipped pages do
+ * (`useImplConfigFields`). Choosing Local folder shows Root, kept at /srv/archive, and Create folders at its
+ * default; choosing S3 bucket instead keeps Root and shows Bucket at "archive", and Create folders is gone. Saving
+ * sends Backend with exactly the config shown, and Backend is then read-only.
  */
 export const ImplementationKeyNotRegisteredCreateOnly: Story = {
   name: "Implementation Key Not Registered, Create-only",
-  render: () => (
-    <FormView resource="storage.Backend" id={unregistered.id}
-      fields={[{ name: "label", label: "Name", title: true }, { ...backendField, createOnly: true }]} />
-  ),
+  render: () => <RepairForm />,
 };
+
+/** The create-only story's form: Backend, then the chosen implementation's config fields, as a bridge form composes them. */
+function RepairForm() {
+  const implConfig = useImplConfigFields("storage.Backend", "backend_class");
+  return (
+    <FormView resource="storage.Backend" id={unregistered.id} fields={[
+      { name: "label", label: "Name", title: true }, { ...backendField, createOnly: true },
+      { name: "config", label: "Config", widget: "json", showWhen: (values) => !implConfig.hasSchema(values.backend_class) },
+      ...implConfig.fields,
+    ]} />
+  );
+}
 
 export const RecordSectionHeading: Story = {
   render: () => <div className="max-w-3xl">

@@ -8,9 +8,38 @@ const registered = [{ value: "LOCAL", description: "Local folder" }, { value: "S
  * the registry no longer names, so the column reads null for it, as the server reads it.
  */
 export const backends = [
-  { id: "backend-1", label: "Team files", backend_class: "LOCAL" },
-  { id: "backend-2", label: "Old archive", backend_class: null },
+  { id: "backend-1", label: "Team files", backend_class: "LOCAL", config: { root: "/srv/team", create_dirs: true } },
+  { id: "backend-2", label: "Old archive", backend_class: null, config: { root: "/srv/archive", retired_flag: true } },
 ] as const;
+
+/**
+ * Each implementation's config fields, as `impl_choices` describes them (a FormSpec). They share `root`, declared
+ * alike, so carrying it over shows; each has one field of its own with a default, so a default shows too.
+ */
+const configSchemas = {
+  local: { type: "object", properties: {
+    root: { type: "string", label: "Root" },
+    create_dirs: { type: "boolean", label: "Create folders", defaultValue: true },
+  } },
+  s3: { type: "object", properties: {
+    root: { type: "string", label: "Root" },
+    bucket: { type: "string", label: "Bucket", defaultValue: "archive" },
+  } },
+} as const;
+
+/** What choosing each implementation sets on an insert: its defaults (the server's `effective_defaults`). */
+const insertDefaults = { local: { config: { root: "", create_dirs: true } }, s3: { config: { root: "", bucket: "archive" } } };
+
+/**
+ * What choosing each implementation sets on Old archive, a repair, written out as the server's rule answers it
+ * (`ImplBase.carried_config`): `root` kept, the chosen class's own field at its default, `retired_flag` dropped.
+ * The shape is the read's contract, `defaults: {<config field>: <carried config>}`, the one the server's
+ * `test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is_refused_as_the_write_is` pins.
+ */
+export const repairDefaults = {
+  local: { config: { root: "/srv/archive", create_dirs: true } },
+  s3: { config: { root: "/srv/archive", bucket: "archive" } },
+} as const;
 
 /** `storage.Backend`, whose `implFields` names `backend_class`: a null there is a key not registered. */
 export const backendResource = testDataResource("storage.Backend", {
@@ -19,6 +48,7 @@ export const backendResource = testDataResource("storage.Backend", {
   fields: [
     storyField("id", { scalar: "ID", creatable: false, updatable: false }), storyField("label"),
     storyField("backend_class", { kind: "enum", scalar: null, values: registered }),
+    storyField("config", { scalar: "JSON" }),
   ],
   query: testResourceQuery({ fields: {
     id: testQueryField("id", { scalar: "ID" }),
@@ -44,8 +74,16 @@ const backendById = (args: Record<string, unknown>) => {
 export const backendOperations: Readonly<Record<string, GraphQLWireOperation>> = {
   impl_choices: (args) => {
     const record = typeof args.record === "string" ? stored.get(args.record) : undefined;
-    if (args.record != null && record?.backend_class != null) throw new Error("Implementation selection is create-only.");
-    return registered.map(({ value }) => ({ key: value.toLowerCase(), category: "", defaults: {}, config_schema: null }));
+    if (args.record != null && (record?.id !== "backend-2" || record.backend_class != null)) {
+      throw new Error("Implementation selection is create-only.");
+    }
+    return registered.map(({ value }) => {
+      const key = value.toLowerCase() as keyof typeof configSchemas;
+      return {
+        key, category: "", config_schema: configSchemas[key],
+        defaults: args.record != null ? repairDefaults[key] : insertDefaults[key],
+      };
+    });
   },
   backends: () => [...stored.values()],
   backends_aggregate: () => ({ aggregate: { count: stored.size } }),

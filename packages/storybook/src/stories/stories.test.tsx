@@ -13,6 +13,7 @@ import type { ComponentType } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import preview from "../../.storybook/preview";
 import * as FormViewStories from "./FormView.stories";
+import { backendOperations, repairDefaults } from "./implementation-fixtures";
 import * as ListViewStories from "./ListView.stories";
 
 setProjectAnnotations([preview]);
@@ -174,17 +175,52 @@ test("Views/FormView / Implementation Key Not Registered marks Backend, says it 
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
 
-test("Views/FormView / Implementation Key Not Registered, Create-only offers Backend once more, and only once", async () => {
+test("Views/FormView / Implementation Key Not Registered, Create-only offers Backend once more, switches its config fields as the read answers, and saves what is shown", async () => {
   const said = consoleMessages();
+  // The fixture answers the read in the contract's shape the server's read pins: per choice, defaults holding the
+  // config field alone; a registered backend is refused as the write is.
+  const asked = await Promise.resolve(backendOperations.impl_choices!({
+    model: "storage.Backend", field: "backend_class", record: "backend-2" }, {} as never));
+  expect((asked as { key: string; defaults: unknown }[]).map(({ key, defaults }) => [key, defaults]))
+    .toEqual([["local", repairDefaults.local], ["s3", repairDefaults.s3]]);
+  expect(() => backendOperations.impl_choices!({ model: "storage.Backend", field: "backend_class", record: "backend-1" },
+    {} as never)).toThrow("Implementation selection is create-only.");
+  const writes = vi.spyOn(FormViewStories.default.parameters.angeeFixture.schemas.public!, "fetch");
+
   render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
   expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
   const control = await screen.findByRole("combobox", { name: "Backend" });
   expect(description(control)).toBe(
     "Its implementation cannot run until another is chosen. Once saved, the choice cannot be changed.");
-  fireEvent.click(control);
-  fireEvent.click(await screen.findByRole("option", { name: "Local folder" }));
+  const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
+  const choose = async (name: string) => {
+    fireEvent.click(screen.getByRole("combobox", { name: "Backend" }));
+    const option = await screen.findByRole("option", { name });
+    fireEvent.pointerDown(option, { pointerType: "mouse" });
+    fireEvent.click(option);
+  };
+  // A switch is labelled twice (its control and its hidden input); either holds the state.
+  const checked = (label: string) => screen.getAllByLabelText(label).map((element) =>
+    element.getAttribute("aria-checked") ?? String((element as HTMLInputElement).checked));
+  await choose("Local folder");
+  // The shared field keeps its stored value; the class's own field shows its default; the other class's is absent.
+  await waitFor(() => expect(value("Root")).toBe("/srv/archive"));
+  expect(new Set(checked("Create folders"))).toEqual(new Set(["true"]));
+  expect(screen.queryByLabelText("Bucket")).toBeNull();
+  await choose("S3 bucket");
+  await waitFor(() => expect(value("Bucket")).toBe("archive"));
+  expect(value("Root")).toBe("/srv/archive");
+  expect(screen.queryAllByLabelText("Create folders")).toEqual([]);
+
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
+  // The wire request's body: the update's input is exactly the selector and the config the form showed.
+  const update = writes.mock.calls.map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as {
+    query?: string; variables?: Record<string, unknown>;
+  }).find((request) => request.query?.includes("update_backends_by_pk"));
+  const input = Object.values(update?.variables ?? {}).find((value) => typeof value === "object" && value !== null
+    && "backend_class" in value);
+  expect(input).toEqual({ backend_class: "S3", config: repairDefaults.s3.config });
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
