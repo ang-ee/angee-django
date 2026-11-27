@@ -74,12 +74,14 @@ def test_trash_default_manager_check(guarded: bool) -> None:
             assert trash_errors[0].obj is Removable
 
 
+@pytest.mark.shared_inputs
 def test_installed_trash_models_compose_the_trash_scopes() -> None:
     models_ = [model for model in apps.get_models() if issubclass(model, TrashMixin)]
     assert models_
     assert all(not [error for error in model.check() if error.id == "angee.E036"] for model in models_)
 
 
+@pytest.mark.shared_inputs
 def test_installed_append_only_default_managers_compose_guard() -> None:
     models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
     assert models

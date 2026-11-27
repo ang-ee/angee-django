@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from django.apps import apps
 from django_compose.model_composition import ModelComposition
 
@@ -22,6 +23,7 @@ def test_record_picker_model_names() -> None:
     )
 
 
+@pytest.mark.shared_inputs
 def test_framework_runtime_models_do_not_use_naive_irregular_plurals() -> None:
     """Every composed framework model with an irregular ending declares a real plural."""
 

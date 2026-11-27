@@ -202,7 +202,7 @@ def test_one_reference_per_category_is_rejected(
         make_uom(
             category=weight,
             name="Second reference",
-            ratio=Decimal(1000),
+            ratio=Decimal(1),
             rounding=Decimal("0.001"),
             is_reference=True,
         )

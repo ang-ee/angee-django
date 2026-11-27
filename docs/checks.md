@@ -253,13 +253,20 @@ Run `uv run --locked python -m angee.base.testing.host angee.<addon>` from the
 framework slot. The compiler resolves the addon's native requirements, emits
 concrete models, and hands the host to pytest. An explicit repeatable `--app`
 includes a companion test app for a local run. The default CI invocation uses
-the declared addon's native closure. Declare optional fixture plugins with
-native pytest `-p` configuration or arguments, such as
-`-p angee.provenance.testing.fixtures` when the suite needs attribution.
-The host loads pytest-django and the base fixture plugin in that order.
+the declared addon's native closure. The host loads pytest-django and the base
+fixture plugin in that order. Register optional fixture plugins with
+`pytest_plugins` in the addon's root `conftest.py`, such as
+`angee.provenance.testing.fixtures` when the suite needs attribution. The
+conftest loads after the runner's plugins so fixture overrides compose in order.
 It passes `django_find_project=false` so pytest-django uses this host's import
 path even when the addon checkout sits below an unrelated stack's `manage.py`.
-The addon's pytest configuration and conftests own collection.
+The addon's pytest configuration and conftests own collection. The runner
+keeps pytest's generated cache with the host artifacts.
+Selective test-only reach assumes the standard packaged `tests/` layout.
+Custom native test roots still run, with a full fallback across isolated
+hosts when their shared imports cannot be accounted for.
+Disposable PostgreSQL test database names include the resolved host directory
+and source database, with space for pytest-django's worker suffixes.
 
 Installing a new framework addon still changes the workspace manifests and
 typically the lockfile. The first PR therefore selects the full shared suite.
@@ -635,8 +642,10 @@ The current tiers are:
   declarations, and lockfiles select the full applicable suite. Changes to
   shared inputs such as settings, test plugins, permission declarations,
   GraphQL documents and fixture data can broaden the legacy shared host.
-  Ordinary frontend and prose changes reach no framework SQLite test; the
-  PostgreSQL planner gate still runs.
+  Addon frontend inputs reach their owning Python contracts, reverse consumers
+  and declared shared readers.
+  Changes limited to prose or schema-independent frontend packages can leave
+  SQLite empty. The PostgreSQL planner gate still runs.
 - **PostgreSQL:** on `main`, in six groups of its own beside the
   SQLite shards, assigned by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
