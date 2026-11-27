@@ -3352,6 +3352,26 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             reason=reason,
         )
 
+    @staticmethod
+    def replay_claimed(original: MessageT) -> MessageT:
+        """Return the message a keyed write's claim names, to replay it, or refuse one trashed since.
+
+        The replay rule of a keyed message write: a key whose message has been
+        trashed (``is_trashed``) is refused under ``idempotency_key`` with code
+        ``discarded``, never answered with the trashed row as success. It reads
+        and writes nothing. Today :meth:`compose` (through ``_write_outgoing``)
+        and a message template's test send ask it on a replay;
+        :meth:`post_to_thread` (a chatter post) is the one keyed writer left with
+        its own copy, which refuses a trashed original as a non-field error with
+        other words and no code.
+        """
+
+        if original.is_trashed:
+            raise ValidationError({"idempotency_key": ValidationError(
+                "This key belongs to a discarded message.", code="discarded",
+            )})
+        return original
+
     def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
         """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
 
@@ -3555,11 +3575,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     )}),
                 )
                 if original is not None:
-                    if original.is_trashed:
-                        raise ValidationError({"idempotency_key": ValidationError(
-                            "This key belongs to a discarded message.", code="discarded",
-                        )})
-                    return original.with_actor(actor)
+                    return self.replay_claimed(original).with_actor(actor)
             recipients, subject, sender_address = outgoing.recipients, outgoing.subject, None
             if outgoing.parent is not None:
                 envelope = outgoing.parent.reply_envelope(actor=actor, channel=outgoing.channel)

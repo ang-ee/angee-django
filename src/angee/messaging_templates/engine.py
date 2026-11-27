@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from operator import attrgetter
 from typing import Any, ClassVar, cast
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
 from django.template import (
@@ -47,8 +48,10 @@ from django.template.base import FilterExpression, Node, NodeList, Parser, Token
 from django.template.loader_tags import IncludeNode
 from django.template.loaders.base import Loader
 from django.utils.safestring import SafeData, SafeString
+from django.views.decorators.debug import sensitive_variables
 from markdown_it import MarkdownIt
 
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 from angee.brandkit.models import BrandKit, MailRole, MailScheme
 
 ALLOWED_TAGS = ("if", "for", "with", "comment", "block", "include", "extends", "templatetag")
@@ -75,7 +78,13 @@ with a host (:data:`LINK_HOST`), or a ``mailto:`` or ``tel:`` link."""
 
 LINK_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?", re.I)
 """The authority of an ``https`` or ``http`` link: a domain name of two labels or more, the last a name, and a port.
-No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty."""
+No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty. The
+deployment's own public origin is linkable besides, whatever its host (:func:`_own_origin_authority`)."""
+
+_NAMED_AUTHORITY = re.compile(r"\[[0-9a-f:.]*\](?::\d{1,5})?|[a-z0-9.-]+(?::\d{1,5})?", re.I)
+"""An authority a refusal may name: a host, an IPv6 address in brackets, with an optional port. Anything else may hold
+the rest of the link (a percent-encoded separator, a ``;`` or a space after the host), so a refusal does not repeat
+it."""
 
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
@@ -105,6 +114,26 @@ class RenderBudgetExceeded(ValidationError):
     """A pass spent its :class:`RenderBudget`; the render it belongs to fails."""
 
 
+RENDER_ITERATION_LIMIT = 500
+"""The loop and include renders one render pass may do (:class:`RenderBudget`): a sender bounds the items a mail lists
+by it."""
+
+RENDER_OUTPUT_LIMIT = 200_000
+"""The characters one render pass's loops may write (:class:`RenderBudget`)."""
+
+RENDER_FILTER_INPUT_LIMIT = 500_000
+"""What one render pass's filters may read (:class:`RenderBudget`)."""
+
+VALUES_JSON_LIMIT = 50_000
+"""The longest the values a render reads may be as JSON, in characters (``values_too_large`` past it)."""
+
+VALUE_STRING_LIMIT = 10_000
+"""The longest one string value may be (``invalid_values`` past it)."""
+
+VALUE_ITEMS_LIMIT = 500
+"""The most list items the values may hold in all (``invalid_values`` past it)."""
+
+
 class RenderBudget:
     """The work one render pass may do: loop and include renders, loop output, filter input.
 
@@ -113,7 +142,10 @@ class RenderBudget:
     ``if`` operators swallow an exception a filter raises.
     """
 
-    def __init__(self, *, iterations: int = 500, output: int = 200_000, filter_input: int = 500_000) -> None:
+    def __init__(
+        self, *, iterations: int = RENDER_ITERATION_LIMIT, output: int = RENDER_OUTPUT_LIMIT,
+        filter_input: int = RENDER_FILTER_INPUT_LIMIT,
+    ) -> None:
         """Start a pass with these limits."""
 
         self.limits = {"iterations": iterations, "output": output, "filter_input": filter_input}
@@ -150,7 +182,7 @@ class RenderBudget:
         """Raise :class:`RenderBudgetExceeded` if the budget was ever passed."""
 
         if self.exceeded:
-            raise RenderBudgetExceeded(BUDGET_EXCEEDED_MESSAGE, code="render_budget", params=self.limits)
+            raise RenderBudgetExceeded(BUDGET_EXCEEDED_MESSAGE, code=RENDER_BUDGET_EXCEEDED, params=self.limits)
 
     @contextmanager
     def spend(self) -> Iterator[RenderBudget]:
@@ -307,27 +339,130 @@ _LINKS = MarkdownIt("commonmark")
 in punycode."""
 
 
+VALUE_NOT_LINKABLE = "value_not_linkable"
+"""The code of a value a render prints as a link and :func:`url` would empty (:func:`clean_link`)."""
+
+VALUE_NOT_PRINTED = "value_not_printed"
+"""The code of a value a sender requires (``must_print``) that a body does not print, or this mail does not show."""
+
+INVALID_VALUES = "invalid_values"
+"""The code of the values a render refuses to read: not JSON, a shape or a value its declarations do not admit, a
+required value missing, a number a float does not hold, a moment the date rules refuse."""
+
+NOT_A_TEMPLATE = "not_a_template"
+"""The code of a send of a layout, block or part, which only a template can be (``send_refusal``)."""
+
+NOT_EFFECTIVE = "not_effective"
+"""The code of a send of a row that is not what renders for its kind, key and language (``send_refusal``)."""
+
+VALUES_TOO_LARGE = "values_too_large"
+"""The code of values over the JSON size a render reads."""
+
+MESSAGE_TEMPLATE_REFUSED = "message_template_refused"
+"""The code of a row the walk refuses to render."""
+
+RENDER_BUDGET_EXCEEDED = "render_budget"
+"""The code of a render pass that spent its ``RenderBudget`` (:class:`RenderBudgetExceeded`)."""
+
+SUBJECT_TOO_LONG = "subject_too_long"
+"""The code of a rendered subject longer than a mail carries."""
+
+NO_BRAND_KIT = "no_brand_kit"
+"""The code of a render with no kit named and no default kit the reader reads."""
+
+RENDER_FAILED = "render_failed"
+"""The code of any other failure of a render, logged with its traceback first."""
+
+SEND_CODES = frozenset({
+    NOT_A_TEMPLATE, NOT_EFFECTIVE, INVALID_VALUES, VALUES_TOO_LARGE, MESSAGE_TEMPLATE_REFUSED, VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED, RENDER_BUDGET_EXCEEDED, SUBJECT_TOO_LONG, NO_BRAND_KIT, RENDER_FAILED,
+})
+"""Every code ``send_as_system`` can return from this addon, for a sender to compare its handling against: a code
+added later fails that comparison rather than falling silently into a default. What compose refuses is messaging's."""
+
+
+def _link(value: Any) -> tuple[str, str | None]:
+    """The link :func:`url` gives for ``value`` and, when it gives none for a value that is not blank, why."""
+
+    text = str(value)
+    if not text.strip():
+        return "", None
+    if len(text) > URL_INPUT_LIMIT:
+        return "", f"it is over {URL_INPUT_LIMIT:,} characters"
+    link = _LINKS.normalizeLink(text.strip())
+    scheme, colon, rest = link.partition(":")
+    scheme = scheme.lower()
+    if not colon or scheme not in LINK_SCHEMES:
+        schemes = f"{', '.join(LINK_SCHEMES[:-1])} or {LINK_SCHEMES[-1]}"
+        return "", f"a mail has no base, so a link is an absolute {schemes} link"
+    if scheme in ("https", "http"):
+        authority = re.split(r"[/?#]", rest[2:], maxsplit=1)[0] if rest.startswith("//") else ""
+        if not authority:
+            return "", "it names no host"
+        if "@" in authority:
+            return "", "it carries user info before its host"
+        if not LINK_HOST.fullmatch(authority):
+            own = _own_origin_authority(scheme, authority)
+            if own is None:
+                if _NAMED_AUTHORITY.fullmatch(authority):
+                    return "", f"the mail cannot link to {authority}"
+                return "", "its host is not one a mail can link to"
+            link = f"{link.partition(':')[0]}://{own}{rest[2 + len(authority):]}"
+    return link, None
+
+
+def _own_origin_authority(scheme: str, authority: str) -> str | None:
+    """The authority of this deployment's public origin, as its owner gives it
+    (:func:`~angee.base.origins.configured_public_origin`), when ``scheme://authority`` (as markdown-it writes a
+    link) is that origin; else ``None``. So a deployment whose origin is ``http://localhost:8000`` in ``DEBUG``, an
+    address or another single-label host links its own pages, an IPv6 address in its brackets, which markdown-it
+    would percent-encode, and no other host of that kind."""
+
+    try:
+        origin = configured_public_origin()
+    except PublicOriginUnavailable:
+        return None
+    if f"{scheme}://{authority}".lower() != _LINKS.normalizeLink(origin).lower():
+        return None
+    return urlsplit(origin).netloc
+
+
 def url(value: Any) -> str:
     """Return ``value`` as a link a message may carry, or ``""``.
 
     markdown-it's own normalisation of the value without its surrounding white
     space, kept only when it is an absolute link of :data:`LINK_SCHEMES`; any
-    other scheme, a protocol- or path-relative link, a fragment, and input over
-    :data:`URL_INPUT_LIMIT` characters give ``""``.
+    other scheme, a protocol- or path-relative link, a fragment, a host
+    :data:`LINK_HOST` refuses unless it is the deployment's own public origin,
+    and input over :data:`URL_INPUT_LIMIT` characters give ``""``. A render never lets a value
+    it was given be emptied here unseen: it asks :func:`clean_link` of each value
+    it prints through this filter first.
     """
 
-    text = str(value)
-    if len(text) > URL_INPUT_LIMIT:
-        return ""
-    link = _LINKS.normalizeLink(text.strip())
-    scheme, colon, rest = link.partition(":")
-    scheme = scheme.lower()
-    if not colon or scheme not in LINK_SCHEMES:
-        return ""
-    if scheme in ("https", "http") and not (
-        rest.startswith("//") and LINK_HOST.fullmatch(re.split(r"[/?#]", rest[2:], maxsplit=1)[0])
-    ):
-        return ""
+    return _link(value)[0]
+
+
+@sensitive_variables()
+def clean_link(value: Any, *, path: str = "link") -> str:
+    """Return the link a mail prints for ``value`` through :func:`url`, or refuse it as a render refuses it.
+
+    A blank value (nothing but white space) gives ``""`` and no refusal, as a
+    render leaves an optional link empty. Any other value :func:`url` would empty
+    is refused with a ``ValidationError`` of one item, code
+    :data:`VALUE_NOT_LINKABLE`, naming ``path`` and why: for a value as a render
+    prepares it (:meth:`~angee.messaging_templates.walker.TemplateWalk.prepare`
+    drops its control characters first), the link and the words a render gives
+    that value at that path. Every local of this frame and of the rule's
+    below it is Django's ``sensitive_variables``, so a report of a refusal that
+    propagates does not show the link. It reads no row, so a caller that mails
+    many recipients asks it once before the first send.
+    """
+
+    link, problem = _link(value)
+    if problem is not None:
+        raise ValidationError([ValidationError(
+            f"{path} is not a link this mail can carry: {problem}.", code=VALUE_NOT_LINKABLE,
+        )])
     return link
 
 

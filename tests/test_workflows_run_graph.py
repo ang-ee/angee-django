@@ -16,7 +16,6 @@ from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRun, Workflow, WorkflowRun
 from tests.conftest import addon_schema, create_user, vault_for
-from tests.test_workflows_children import child_graph as child_graph
 from tests.test_workflows_review import review as review
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import Echo, Route

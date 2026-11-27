@@ -30,6 +30,12 @@ WRITER = "compose_as_system"
 CALLERS = {
     # The system mailer, Django's default mailer: each email Django sends is recorded.
     Path("src/angee/messaging/email.py"): "the calling code's own gate (see SystemMailer)",
+    # Message templates' one send path (``MessageTemplateManager._render_and_record``), behind two verbs.
+    Path("src/angee/messaging_templates/models.py"): (
+        "send_test: the template's preview (an administrator's test send, decided before the system renders); "
+        "send_as_system: its caller's own permission, each caller listed in SYSTEM_SEND_CALLERS "
+        "(tests/test_messaging_templates_send.py)"
+    ),
 }
 PRIVATE_WRITER = "_write_outgoing"
 OWN_FILE = {

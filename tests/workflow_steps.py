@@ -6,7 +6,9 @@ import pytest
 from django.apps import apps
 from pydantic import BaseModel
 
+from angee.workflows.awaits import AwaitRunInput
 from angee.workflows.steps import Retryable, RetryPolicy, Step
+from angee.workflows.testing.drivers import load_workflow
 
 
 class Value(BaseModel):
@@ -103,3 +105,63 @@ def document(*keys, step="echo"):
         },
         "results": [{"from": keys[-1]}],
     }
+
+
+@pytest.fixture
+def child_graph(execution, register_step):
+    """Build parents whose child admission is performed by a real claimed step."""
+    actor, sent = execution
+    admitted = []
+
+    def build(*, relation="owned", await_child=True, repeat=False, next_page=False, request_key=None, subject=None,
+              subject_model="", run_actor=None, grant_child=True, child_step="echo"):
+        child_workflow = load_workflow(
+            document("entry", step=child_step), key=f"child-{len(admitted)}", actor=actor,
+            subject_model=subject_model,
+        )
+
+        class StartChild(Step[Value, AwaitRunInput, None]):
+            """Start again after a time wait when exercising derived-key replay."""
+
+            key = "start_child"
+
+            def run(self, ctx):
+                child = ctx.start_run(
+                    child_workflow, input=ctx.input.model_dump(), relation=relation,
+                    request_key=request_key, subject=subject,
+                )
+                admitted.append(child)
+                if repeat and not ctx.state:
+                    if next_page:
+                        return ctx.next_page({"again": True})
+                    return ctx.wait(until=ctx.now - timedelta(seconds=1), state={"again": True})
+                return ctx.done({"run_id": str(child.sqid)})
+
+        class Finish(Step[None, None, None]):
+            """Close every observed child outcome without requiring a value on cancellation."""
+
+            key = "finish_child"
+
+            def run(self, ctx):
+                return ctx.done(ctx.input)
+
+        register_step(StartChild)
+        register_step(Finish)
+        nodes = {"start": {"step": StartChild.key}}
+        if await_child:
+            nodes["start"]["next"] = {"done": "await"}
+            nodes["await"] = {
+                "step": "await_run", "config": {"expects": child_workflow.key},
+                "next": {outcome: "finish" for outcome in ("done", "error", "canceled", "interrupted")},
+            }
+            nodes["finish"] = {"step": Finish.key}
+        parent_workflow = load_workflow({"nodes": nodes}, key=f"parent-{len(admitted)}", actor=actor)
+        if run_actor is not None:
+            parent_workflow.with_actor(actor).grant_record_access("starter", run_actor)
+            if grant_child:
+                child_workflow.with_actor(actor).grant_record_access("starter", run_actor)
+        runs = apps.get_model("workflows", "WorkflowRun").objects
+        parent = runs.start(parent_workflow, actor=run_actor or actor, input={"value": 7})
+        return parent, child_workflow
+
+    return actor, sent, admitted, build

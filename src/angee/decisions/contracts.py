@@ -1,5 +1,6 @@
 """The proposal and the evidence accompanying one question."""
 
+import re
 from collections.abc import Mapping, Sequence
 from inspect import signature
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models
+from django.template.defaultfilters import yesno
 from pydantic import (
     MISSING,
     AwareDatetime,
@@ -46,10 +48,44 @@ class DecisionRecordReference(EvidenceReference):
     search: dict[str, str | None] = {}
 
 
+def title_case(name: str) -> str:
+    """A fact value's key as the card writes it: camelCase and ``-_./:`` split into words, each capitalised.
+
+    The web card's ``titleCase`` (``@angee/ui``), so ``due_date`` and ``dueDate`` both
+    read "Due Date".
+    """
+    spaced = re.sub(r"[-_./:\s]+", " ", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name))
+    return re.sub(r"\b\w", lambda letter: letter.group(0).upper(), spaced, flags=re.ASCII)
+
+
+def _value_text(value: JsonValue) -> str:
+    if isinstance(value, list):
+        return "; ".join(_value_text(item) for item in value)
+    if isinstance(value, dict):
+        return " · ".join(
+            f"{title_case(name)} {_value_text(item)}" for name, item in value.items() if item not in (None, "")
+        )
+    if isinstance(value, bool):
+        return str(yesno(value))
+    return "-" if value is None else str(value)
+
+
 class DecisionFact(EvidenceFact):
     evidence: tuple[DecisionRecordReference, ...] = ()
     widget: str | None = None
     row: dict[str, JsonValue] = Field(default_factory=dict)
+
+    def as_text(self) -> str:
+        """The value as text, as the card's ``FactValue`` writes it without a widget.
+
+        A list joined by ``;``, an object as ``Key value`` pairs joined by `` · `` (its
+        keys by :func:`title_case`, its empty members left out), a boolean as Django's
+        ``yesno`` in the active language, a ``None`` inside a list as the card's ``-``.
+        A fact a widget reads gives its bare value:
+        its ``row`` is the widget's context, which only the widget reads, and no widget
+        declares a text form yet.
+        """
+        return _value_text(self.value)
 
 
 class DecisionContext(BaseModel):

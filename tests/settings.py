@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     "angee.intake",
     "angee.webforms",
     "angee.webforms_messaging",
+    "angee.decisions_messaging",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
