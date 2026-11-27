@@ -1729,6 +1729,48 @@ def test_required_values_and_shapes(plain: Any, kit: Any) -> None:
     assert "&lt;b&gt;3&lt;/b&gt;" in rendered.html
 
 
+REQUIRED = {"question.asked_by.name": "x", "items.*.name": "x"}
+ASKED = {"question": {"asked_by": {"name": "Ana"}}}
+
+
+@pytest.mark.parametrize(("values", "lacking"), [
+    pytest.param({"question": {"asked_by": {"name": None}}}, [("question.asked_by.name", "values")],
+                 id="the-leaf-null"),
+    pytest.param({"question": {"asked_by": None}}, [("question.asked_by.name", "values")], id="a-parent-null"),
+    pytest.param({"question": None}, [("question.asked_by.name", "values")], id="the-root-null"),
+    pytest.param({"question": {"asked_by": {}}}, [("question.asked_by.name", "template")],
+                 id="an-object-without-the-member"),
+    pytest.param({"question": {}}, [("question.asked_by.name", "template")], id="a-parent-absent"),
+    pytest.param({}, [("question.asked_by.name", "template")], id="nothing-set"),
+    pytest.param({**ASKED, "items": [None]}, [("items.*.name", "values")], id="a-list-item-null"),
+    pytest.param({**ASKED, "items": [{"name": None}]}, [("items.*.name", "values")], id="an-items-member-null"),
+    pytest.param({**ASKED, "items": [{}]}, [("items.*.name", "template")], id="an-item-without-the-member"),
+    pytest.param({**ASKED, "items": [{"name": None}, {}]}, [("items.*.name", "template")],
+                 id="one-item-null-and-one-without-the-member"),
+    pytest.param({"question": {"asked_by": {"name": None}}, "items": [{}]},
+                 [("question.asked_by.name", "values"), ("items.*.name", "template")], id="one-of-each"),
+    pytest.param({"question": {"asked_by": {"name": ""}}, "items": []}, [], id="an-empty-string-and-an-empty-list"),
+    pytest.param({**ASKED, "items": None}, [], id="a-null-list"),
+    pytest.param(ASKED, [], id="an-absent-list"),
+])
+def test_a_required_path_null_for_this_item_is_the_values_and_one_never_set_the_templates(
+    plain: Any, kit: Any, values: dict[str, Any], lacking: list[tuple[str, str]],
+) -> None:
+    """Where the path stops decides: at a key present and null, here or above it, the item has no value (skip it);
+    at a key the values do not set, the template asks for something the sender never gives. An empty string prints
+    nothing and an empty, absent or null list loops no item: neither is missing."""
+
+    del plain
+    template = _mail("{{ question.asked_by.name }}{% for item in items %} {{ item.name }}{% endfor %}.", REQUIRED)
+    if not lacking:
+        assert "None" not in _render(template, values, kit).plain_text
+        return
+    with pytest.raises(ValidationError) as refusal:
+        _render(template, values, kit)
+    assert [(item.messages[0], item.code, item.params[REFUSAL_SOURCE]) for item in refusal.value.error_list] == [
+        (f"{path} is required and missing or null.", INVALID_VALUES, whose) for path, whose in lacking]
+
+
 def test_variables_caps(plain: Any) -> None:
     """q1, q2, q6: a row declares at most 50 paths of 8 segments; ``D`` is one set; prepare() bounds the values."""
 

@@ -385,7 +385,7 @@ items carry none. The sources are named for what a sender does:
 | `NO_BRAND_KIT` | `deployment` |
 | `MESSAGE_TEMPLATE_REFUSED` | `template` |
 | `VALUES_TOO_LARGE`, `VALUE_NOT_LINKABLE`, `SUBJECT_TOO_LONG`, `RENDER_BUDGET_EXCEEDED` | `values` |
-| `INVALID_VALUES` | `values`; `template` for a path the row's text requires and the values leave out, and for a date format that cannot print the value given. A value of the wrong shape and a required path not under it are refused together |
+| `INVALID_VALUES` | `values`, a path the row's text requires that this item's values hold null, or hold null above it, among them; `template` for a path the row's text requires that the values do not set, and for a date format that cannot print the value given. A value of the wrong shape and a required path not under it are refused together |
 | `VALUE_NOT_PRINTED` | `template` when the text, or a condition for these values, leaves the output out; `values` when the value is blank or not text |
 | `RENDER_FAILED` | `unknown` |
 
@@ -393,7 +393,12 @@ A sender checks once before a run: the default kit (`BrandKit.objects.default()`
 the row being a template and effective (`row.send_refusal()`), a link's origin
 and the link (`configured_public_origin()`, `MessageTemplate.objects.clean_link`),
 the row's own validity (a preview: `row.preview()`), and the values' sizes against
-the exported limits. Only `NOT_EFFECTIVE` can succeed on a retry with nothing
+the exported limits. A sender sets every key a template reads, null for an item
+that has no value there: a required path the values hold null is that item's to
+skip, and one they do not set is read as asked of a sender that never gives it,
+which drops the template in that language for every recipient. Over a list's
+items, one item that does not set the key makes it the template's. An empty
+string or list is not missing: it prints nothing. Only `NOT_EFFECTIVE` can succeed on a retry with nothing
 changed, after the sender picks the effective row again; the rest are permanent
 until someone changes the row, the values or the deployment. No refusal's words
 or `params` quote a value the mail was given, nor a key of the values the row

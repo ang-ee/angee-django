@@ -549,7 +549,9 @@ class TemplateWalk:
            at a :attr:`float_paths` path, a number one a float holds.
         3. Each :attr:`required` path present and not null, in every present item,
            but for one under a value of the wrong shape, which that value's
-           refusal covers; both are refused together. Each value at a
+           refusal covers; both are refused together. A path that stops at a
+           null is the values' to refuse, one the values do not set the
+           template's (:func:`_lacks`). Each value at a
            :attr:`link_paths` path that :func:`~angee.messaging_templates.engine.url`
            would empty and is not blank is refused, code ``value_not_linkable``,
            as :func:`~angee.messaging_templates.engine.clean_link` words it: a
@@ -598,12 +600,15 @@ class TemplateWalk:
             misshaped: list[Path] = []
             shaped = {key: _shaped(data[key], subtree, (key,), errors, misshaped)
                       for key, subtree in tree.items() if key in data}
-            required = [  # the row's text reads these unguarded: the template decides what a mail must be given
-                f"{_dotted(path)} is required and missing or null." for path in sorted(self.required)
-                if _lacks(shaped, path) and not any(path[:len(bad)] == bad for bad in misshaped)
-            ]  # a path under a value of the wrong shape is that value's consequence, not missing on its own
-            if errors or required:
-                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES), (required, RefusalSource.TEMPLATE))
+            lacking = [  # the row's text reads these unguarded; a path under a value of the wrong shape is that
+                (path, source) for path in sorted(self.required)  # value's consequence, not missing on its own
+                if (source := _lacks(shaped, path)) and not any(path[:len(bad)] == bad for bad in misshaped)
+            ]
+            null, unset = ([f"{_dotted(path)} is required and missing or null." for path, source in lacking
+                            if source == whose] for whose in (RefusalSource.VALUES, RefusalSource.TEMPLATE))
+            if errors or lacking:
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES), (null, RefusalSource.VALUES),
+                               (unset, RefusalSource.TEMPLATE))
             filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
             for path in sorted(self.float_paths):
                 errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
@@ -918,18 +923,24 @@ def _at(value: Any, path: Path) -> Iterator[Any]:
         yield from _at(value[head], rest)
 
 
-def _lacks(value: Any, path: Path) -> bool:
-    """Whether ``path`` is missing or null in ``value``; a ``*`` binds only the items present."""
+def _lacks(value: Any, path: Path) -> RefusalSource | None:
+    """Whose fault ``path`` missing or null in ``value`` is, else ``None``, read where the path stops: the values'
+    at a key present and null, this item having no value there; the template's at a key the values do not set, as
+    a sender sets every key it gives, null for an item without the value. A ``*`` binds only the items present (an
+    absent or null list, none); over them, one item that does not set the key makes it the template's."""
 
     head, rest = path[0], path[1:]
     if head == "*":
         if not isinstance(value, list):
-            return False
-        return any(item is None or (bool(rest) and _lacks(item, rest)) for item in value)
+            return None
+        found = {RefusalSource.VALUES if item is None else _lacks(item, rest) if rest else None for item in value}
+        return next((whose for whose in (RefusalSource.TEMPLATE, RefusalSource.VALUES) if whose in found), None)
     child = value.get(head) if isinstance(value, dict) else None
-    if child is None:
-        return not (rest and rest[0] == "*")
-    return bool(rest) and _lacks(child, rest)
+    if child is not None:
+        return _lacks(child, rest) if rest else None
+    if rest[:1] == ("*",):  # an absent or null list binds no item
+        return None
+    return RefusalSource.VALUES if isinstance(value, dict) and head in value else RefusalSource.TEMPLATE
 
 
 def _filled(value: Any, tree: dict[str, Any]) -> Any:

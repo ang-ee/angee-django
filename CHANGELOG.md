@@ -542,7 +542,9 @@ live in code docstrings.
   `SEND_CODES`, with `refusal_sources(error)`, which reads a refusal's sources, keyed
   or not, and gives none for messaging's own refusals. `subject_too_long` and
   `render_budget` are `values`: a subject or budget exceeded on every item of a run is
-  a template that is too long. No refusal's words or `params` quote a value, nor a key
+  a template that is too long. A path the row requires is `values` when this item's
+  values hold null for it or above it, and `template` only when the values do not set
+  it; an empty string or list is not missing. No refusal's words or `params` quote a value, nor a key
   of the values the row does not declare (`A value is over 10000 characters.`). **Changed words, which
   no caller should match:** `render_failed` names the exception's type only
   (`The message template did not render: it raised RuntimeError.`), no longer its

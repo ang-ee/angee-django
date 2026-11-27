@@ -876,7 +876,8 @@ SEND_SITES = sorted([
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a lone surrogate
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # sizes, a reserved name
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a value of the wrong shape, and with it
-    ("walker.py", "prepare", "INVALID_VALUES", "TEMPLATE"),  # a path the row's text requires, not under one
+    ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a path the row's text requires, null for this item
+    ("walker.py", "prepare", "INVALID_VALUES", "TEMPLATE"),  # a path the row's text requires, the values never set
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a number a float does not hold
     ("walker.py", "prepare", "VALUE_NOT_LINKABLE", "VALUES"),
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # not a date; a moment the zone cannot hold
@@ -996,6 +997,8 @@ VALUE_CASES = [
      {(INVALID_VALUES, "values")}),
     ("a-required-path", "Hi {{ name }}.{% if other %} {{ other }}{% endif %}", {"name": "A name.", "other": "More."},
      {"other": MARK}, [], {(INVALID_VALUES, "template")}),
+    ("a-required-path-null", "Hi {{ name }}.{% if other %} {{ other }}{% endif %}",
+     {"name": "A name.", "other": "More."}, {"name": None, "other": MARK}, [], {(INVALID_VALUES, "values")}),
     ("not-a-link", "[Go]({{ link }})", {"link": "A link."}, {"link": f"http://{MARK}/x"}, [],
      {(VALUE_NOT_LINKABLE, "values")}),
     ("not-a-date", "On {{ when|date }}.", {"when": "A date."}, {"when": MARK}, [], {(INVALID_VALUES, "values")}),
