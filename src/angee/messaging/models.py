@@ -2259,10 +2259,11 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     )
     role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
     address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
-    """The address a compose was handed for this recipient, as its recipient rule cleaned it
-    (``MessageManager.clean_recipient``): a spelling of the handle's address (``Handle.is_spelling_of``),
-    or empty for a row written from a handle (a picked handle, a reply, ingest), which is mailed at the
-    handle's own ``value``. It leaves with the row: with its handle, its message and a channel's purge."""
+    """The address the caller handed for this recipient, as its recipient rule cleaned it
+    (``MessageManager.clean_recipient``): a spelling of the handle's address (``Handle.is_spelling_of``).
+    Empty for a recipient no caller handed as an address (one a reply inherits from its parent, one known
+    only as a handle, an ingested one), which is mailed at the handle's own ``value``. It leaves with the
+    row: with its handle, its message and a channel's purge."""
 
     class Meta:
         """Django model options for the recipient source model."""

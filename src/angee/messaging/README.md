@@ -73,9 +73,11 @@ and is what the message shows and search finds. The recipient row records the
 address as typed (`Recipient.address`), and the message is mailed at it
 (`Recipient.envelope_address`), From as the channel configures it
 (`outbound_sender`), so an address with no handle yet is stored, shown and
-addressed as typed; a provider's alias is a handle of its own. A row written
-from a handle (a reply, which is answered as its handle stores it, and ingest)
-records no address; a recorded address is always a spelling of its handle's
+addressed as typed; a provider's alias is a handle of its own. Only an address
+the caller handed is recorded: a recipient a reply inherits from its parent is
+answered as its handle stores it (a reply is handed no address of its own:
+To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one
+records none; a recorded address is always a spelling of its handle's
 (`Handle.is_spelling_of`, checked when the row is saved), and one written past
 that check is ignored with a warning, the mail going to the handle's own. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender

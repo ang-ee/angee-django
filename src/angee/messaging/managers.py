@@ -3108,12 +3108,17 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
 
 class _Addressee(NamedTuple):
-    """One recipient of an outgoing message: an address landed by value, or a handle already known."""
+    """One recipient of an outgoing message: an address landed by value, or a handle already known.
+
+    ``given`` says the caller handed this address (a compose's own To/Cc/Bcc), so its row records it; a
+    recipient a reply inherits from its parent, or one known only as a handle, is not given.
+    """
 
     role: str
     address: str = ""
     name: str = ""
     handle_id: Any = None
+    given: bool = False
 
 
 @dataclass(frozen=True)
@@ -3454,7 +3459,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         else:
             kind, platform = email_kind, handle_model.Platform.EMAIL
             recipients = tuple(
-                _Addressee(role, address, name)
+                _Addressee(role, address, name, given=True)
                 for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
                 for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
@@ -3601,7 +3606,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     )
                 # A person's recipients keep that person as their creator; system work's have none.
                 with actor_context(_OUTGOING_ACTOR) if actor is None else nullcontext():
-                    rows = self._land_addressees(recipients, given=outgoing.parent is None, created_by_id=created_by_id)
+                    rows = self._land_addressees(recipients, created_by_id=created_by_id)
                 self._write_recipients(message, rows, created_by_id=created_by_id)
                 self.advance_thread(message)
                 if outgoing.queued:
@@ -3611,16 +3616,15 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         return message if actor is None else message.with_actor(actor)
 
     @staticmethod
-    def _land_addressees(
-        recipients: Sequence[_Addressee], *, given: bool, created_by_id: Any,
-    ) -> list[tuple[Any, str, str]]:
+    def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str, str]]:
         """Return each recipient's ``(handle, role, address)`` in the order given, its addresses resolved in one read.
 
-        ``address`` is the address the caller handed (``given``: a compose's own
-        To/Cc/Bcc, as its recipient rule cleaned it), which the row records and the
-        message is mailed at (``Recipient.envelope_address``); it is empty for a
-        recipient given as a handle id, and for every recipient of a reply, which
-        is derived from its parent and answered as the handle stores it. A landed
+        ``address`` is the address the caller handed for that recipient
+        (``_Addressee.given``: a compose's own To/Cc/Bcc, as its recipient rule
+        cleaned it), which the row records and the message is mailed at
+        (``Recipient.envelope_address``). It is empty for a recipient the caller did
+        not hand as an address: one a reply inherits from its parent, which is
+        answered as its handle stores it, and one known only as a handle. A landed
         recipient's handle is the instance, so the row's write reads nothing more.
 
         Known handles resolve through the handle owner's batch lookup
@@ -3648,7 +3652,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 )
         return [
             (addressee.handle_id, addressee.role, "") if addressee.handle_id is not None
-            else (found[(email, addressee.address)], addressee.role, addressee.address if given else "")
+            else (found[(email, addressee.address)], addressee.role, addressee.address if addressee.given else "")
             for addressee in recipients
         ]
 
@@ -5073,15 +5077,20 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         The write path owns envelope dedup (the unique constraint is the
         backstop): any producer may repeat an address within one role, and two
-        spellings of one address in one role are one row, with the first spelling
-        given. Each row takes its thread from ``message`` (``Recipient.save``);
-        ``address`` is empty for a row written from a handle.
+        spellings of one address in one role are one row. That row records the
+        first spelling a caller handed for it, wherever it came in the order: a
+        handed address wins over the same handle inherited without one (a reply's
+        parent's recipient), since the caller gave it. Each row takes its thread
+        from ``message`` (``Recipient.save``); ``address`` is empty for a row whose
+        recipient no caller handed as an address.
         """
 
         recipient_model = apps.get_model("messaging", "Recipient")
         written: dict[tuple[Any, str], tuple[Any, str]] = {}
         for handle, role, address in rows:
-            written.setdefault((getattr(handle, "pk", handle), str(role)), (handle, address))
+            key = (getattr(handle, "pk", handle), str(role))
+            if key not in written or (address and not written[key][1]):
+                written[key] = (handle, address)
         for (_handle_id, role), (handle, address) in written.items():
             recipient_model.objects.create(
                 message=message, role=role, address=address, created_by_id=created_by_id,

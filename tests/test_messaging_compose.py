@@ -37,7 +37,7 @@ from angee.messaging.backends import (
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.email import header_text
-from angee.messaging.managers import _preview
+from angee.messaging.managers import _Addressee, _preview
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.messaging_integrate_imap.parser import parse_message
@@ -1279,6 +1279,61 @@ def test_rows_written_from_a_handle_record_no_address(desk: Any) -> None:
         actor=desk.owner,
     )
     assert [_recorded_addresses(message) for message in (ingested, answered, redirected)] == [[""], [""], [""]]
+
+
+@pytest.mark.parametrize("role", ["to", "cc", "bcc"])
+def test_a_reply_is_handed_no_address_of_its_own(desk: Any, role: str) -> None:
+    """An answer goes to the message it answers: To, Cc and Bcc on a reply are refused before anything is written, so
+    every recipient of a reply is inherited from its parent and records no address."""
+
+    request = _receive(desk, f"reply-handed-{role}")
+    with _refused(key=role, code="reply_addressed"):
+        Message.objects.compose(parent=request, text="Answer.", actor=desk.owner, **{role: ["Other@Example.test"]})
+
+
+def _rows_of(message: Any) -> dict[str, str]:
+    with system_context(reason="tests.messaging.compose.given"):
+        return dict(Recipient._base_manager.filter(message=message).values_list("handle__value", "address"))
+
+
+def test_a_writers_call_records_only_the_addresses_its_caller_handed(desk: Any) -> None:
+    """Given is a fact of each addressee: in one call, an inherited address records nothing and a handed one is
+    recorded as handed."""
+
+    message = Message.objects.compose(channel=desk, to=["first@example.test"], text="Hi.", actor=desk.owner)
+    with system_context(reason="tests.messaging.compose.given"):
+        Handle.objects.upsert(platform="email", value="Inherited@Example.test")
+        Handle.objects.upsert(platform="email", value="Handed@Example.test")
+        rows = Message.objects._land_addressees(
+            [_Addressee("cc", "inherited@example.test"), _Addressee("cc", "handed@example.test", given=True)],
+            created_by_id=None,
+        )
+        Message.objects._write_recipients(message, rows, created_by_id=None)
+    assert _rows_of(message) == {
+        "first@example.test": "first@example.test", "Inherited@Example.test": "", "Handed@Example.test":
+        "handed@example.test",
+    }
+    assert _wire(desk, message)["Cc"] == "Inherited@Example.test, handed@example.test"
+
+
+@pytest.mark.parametrize("order", ["inherited-first", "handed-first"])
+def test_an_address_handed_and_inherited_in_one_role_is_one_row_recording_the_handed_spelling(
+    desk: Any, order: str,
+) -> None:
+    """The unique row of a handle in a role records the spelling the caller handed, whichever came first."""
+
+    message = Message.objects.compose(channel=desk, to=["first@example.test"], text="Hi.", actor=desk.owner)
+    inherited, handed = _Addressee("cc", "Client@Example.test"), _Addressee("cc", "client@example.test", given=True)
+    with system_context(reason="tests.messaging.compose.given"):
+        Handle.objects.upsert(platform="email", value="Client@Example.test")
+        rows = Message.objects._land_addressees(
+            [inherited, handed] if order == "inherited-first" else [handed, inherited], created_by_id=None,
+        )
+        Message.objects._write_recipients(message, rows, created_by_id=None)
+    assert _rows_of(message) == {
+        "first@example.test": "first@example.test", "Client@Example.test": "client@example.test",
+    }
+    assert _wire(desk, message)["Cc"] == "client@example.test"
 
 
 @pytest.mark.parametrize("erasure", ["the-handle-deleted", "the-channel-purged"])

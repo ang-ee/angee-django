@@ -329,10 +329,12 @@ live in code docstrings.
   their address, and each recipient row now records the address it was given,
   as its recipient rule cleaned it (`Recipient.address`): mail goes to that
   spelling (`Recipient.envelope_address`), where it went to the spelling the
-  handle was first stored in. A row written from a handle records nothing and is
-  mailed at the handle's `value`, as before: a reply, which is still answered as
-  its handle stores it, and ingest, whose raw envelope stays in the message's
-  metadata. A recorded address is always a spelling of its handle's
+  handle was first stored in. Only an address the caller handed is recorded; a
+  recipient no caller handed as an address records nothing and is mailed at the
+  handle's `value`, as before: one a reply inherits from its parent, still
+  answered as its handle stores it (a reply is handed no address of its own:
+  To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one,
+  whose raw envelope stays in the message's metadata. A recorded address is always a spelling of its handle's
   (`Handle.is_spelling_of`): `Recipient.save` and `full_clean` refuse another
   with a `ValidationError` on `address` (`not_its_handle`) before writing, and
   one written past them (a queryset `update`) is ignored, with a warning naming
