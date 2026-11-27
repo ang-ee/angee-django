@@ -35,7 +35,8 @@ import { useToast } from "../../feedback";
 import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 import { asWidgetDefinition, canonicalOptionValue, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
-import { repairChoicesDocument, type ImplChoice } from "../resource/documents";
+import type { ImplChoice } from "../resource/documents";
+import { repairChoicesDocument } from "../resource/repair-choices";
 import { repairChoosable } from "../resource/implementation-fields";
 import { errorMessage } from "../../feedback/error-message";
 import {
