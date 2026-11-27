@@ -1932,7 +1932,7 @@ def test_any_other_failure_is_logged_then_refused_as_render_failed(
             with system_context(reason="tests.messaging_templates.render.preview"):
                 preview = template.preview(kit=kit)
         assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
-        assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+        assert caught.value.messages == [f"The message template did not render: it raised {raised.__name__}."]
         assert preview.rendered is None
         assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
         assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(

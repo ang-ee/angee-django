@@ -360,6 +360,42 @@ frame they call; messaging marks its system write below them
 Django's filter hides them only with `DEBUG` off, and it never filters an
 exception's own message: a `value_not_linkable` refusal names the link's host.
 
+### A send's refusals
+
+Every refusal item a send returns from this addon carries its source in
+`params["source"]` (`REFUSAL_SOURCE`), one of `RefusalSource`, set where it is
+raised; a sender reads a refusal's sources as
+`{item.params[REFUSAL_SOURCE] for item in error.error_list}`. The sources are named
+for what a sender does:
+
+| source | what a sender does |
+|---|---|
+| `deployment` | fix the deployment's configuration; stop the run |
+| `template` | fix this template: it is out in this language, the others still go |
+| `values` | this mail's values: skip the item. Whether they are one item's for every reader or one reader's own is the caller's to know; the renderer cannot tell |
+| `unknown` | an unexpected failure: nothing the renderer can name is at fault |
+
+| code | source |
+|---|---|
+| `NOT_A_TEMPLATE`, `NOT_EFFECTIVE` | `template` |
+| `NO_BRAND_KIT` | `deployment` |
+| `MESSAGE_TEMPLATE_REFUSED`, `SUBJECT_TOO_LONG`, `RENDER_BUDGET_EXCEEDED` | `template` |
+| `VALUES_TOO_LARGE`, `VALUE_NOT_LINKABLE` | `values` |
+| `INVALID_VALUES` | `values`; `template` for a path the row's text requires and the sender left out, and for a date format that cannot print the value given |
+| `VALUE_NOT_PRINTED` | `template` when the text, or a condition for these values, leaves the output out; `values` when the value is blank or not text |
+| `RENDER_FAILED` | `unknown` |
+
+A sender checks once before a run: the default kit (`BrandKit.objects.default()`),
+the row being a template and effective (`row.send_refusal()`), a link's origin
+and the link (`configured_public_origin()`, `MessageTemplate.objects.clean_link`),
+the row's own validity (a preview: `row.preview()`), and the values' sizes against
+the exported limits. Only `NOT_EFFECTIVE` can succeed on a retry with nothing
+changed, after the sender picks the effective row again; the rest are permanent
+until someone changes the row, the values or the deployment. No refusal's words
+or `params` quote a value the mail was given: a path's name, a limit, a count, a
+length or a type, never the value. A recipient's refusal and the system
+channel's are messaging's, from compose, and carry none of this.
+
 ### A test send
 
 `MessageTemplate.objects.send_test(row, *, actor, kit=None, idempotency_key=None)`

@@ -28,6 +28,7 @@ import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from enum import StrEnum
 from operator import attrgetter
 from typing import Any, ClassVar, cast
 from urllib.parse import urlsplit
@@ -81,11 +82,6 @@ LINK_HOST = re.compile(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9
 No userinfo (``user:pw@good.example@evil.example`` goes to the last host), no address, nothing empty. The
 deployment's own public origin is linkable besides, whatever its host (:func:`_own_origin_authority`)."""
 
-_NAMED_AUTHORITY = re.compile(r"\[[0-9a-f:.]*\](?::\d{1,5})?|[a-z0-9.-]+(?::\d{1,5})?", re.I)
-"""An authority a refusal may name: a host, an IPv6 address in brackets, with an optional port. Anything else may hold
-the rest of the link (a percent-encoded separator, a ``;`` or a space after the host), so a refusal does not repeat
-it."""
-
 FILTER_CHARGE = 100
 """What a filter call charges a pass's ``filter_input``, besides the length of a string a reading filter reads."""
 
@@ -108,6 +104,42 @@ BUDGET_EXCEEDED_MESSAGE = (
     "The message template does more work than one render may: over %(iterations)s loop or include "
     "renders, %(output)s characters of loop output or %(filter_input)s characters of filter input."
 )
+
+
+class RefusalSource(StrEnum):
+    """Whose fault a send's refusal item is, named for what a sender does with it (``params[REFUSAL_SOURCE]``).
+
+    Set at each raise site by what that site knows. A sender reads a refusal's
+    sources as ``{item.params[REFUSAL_SOURCE] for item in error.error_list}``.
+    """
+
+    DEPLOYMENT = "deployment"
+    """The deployment's configuration: fix it; stop the run."""
+    TEMPLATE = "template"
+    """This template: fix it; it is out in this language, the others still go."""
+    VALUES = "values"
+    """This mail's values as the renderer saw them: skip the item. Whether they are one item's for every reader or one
+    reader's own is the caller's to know; the renderer cannot tell."""
+    UNKNOWN = "unknown"
+    """An unexpected failure: nothing the renderer can name is at fault."""
+
+
+REFUSAL_SOURCE = "source"
+"""The ``params`` key of a send's refusal item that holds its :class:`RefusalSource`."""
+
+
+def refusal_item(
+    message: str, code: str, source: RefusalSource, *, params: Mapping[str, Any] | None = None,
+    error: type[ValidationError] = ValidationError,
+) -> ValidationError:
+    """One refusal item of a send: ``message`` coded ``code``, its ``source`` in ``params``; the one way a send's
+    refusals are made. Neither the message nor ``params`` holds a value the mail was given: a path's name, a limit, a
+    count, a length or a type, never the value itself."""
+
+    # A message given no params of its own is literal text, which may hold a ``%`` (a row's ``{% include %}``);
+    # Django formats every message that has params, so such a message is escaped for it.
+    literal = message if params else message.replace("%", "%%")
+    return error(literal, code=code, params={**(params or {}), REFUSAL_SOURCE: source})
 
 
 class RenderBudgetExceeded(ValidationError):
@@ -182,7 +214,10 @@ class RenderBudget:
         """Raise :class:`RenderBudgetExceeded` if the budget was ever passed."""
 
         if self.exceeded:
-            raise RenderBudgetExceeded(BUDGET_EXCEEDED_MESSAGE, code=RENDER_BUDGET_EXCEEDED, params=self.limits)
+            raise refusal_item(
+                BUDGET_EXCEEDED_MESSAGE, RENDER_BUDGET_EXCEEDED, RefusalSource.TEMPLATE, params=self.limits,
+                error=RenderBudgetExceeded,
+            )
 
     @contextmanager
     def spend(self) -> Iterator[RenderBudget]:
@@ -404,8 +439,6 @@ def _link(value: Any) -> tuple[str, str | None]:
         if not LINK_HOST.fullmatch(authority):
             own = _own_origin_authority(scheme, authority)
             if own is None:
-                if _NAMED_AUTHORITY.fullmatch(authority):
-                    return "", f"the mail cannot link to {authority}"
                 return "", "its host is not one a mail can link to"
             link = f"{link.partition(':')[0]}://{own}{rest[2 + len(authority):]}"
     return link, None
@@ -460,8 +493,8 @@ def clean_link(value: Any, *, path: str = "link") -> str:
 
     link, problem = _link(value)
     if problem is not None:
-        raise ValidationError([ValidationError(
-            f"{path} is not a link this mail can carry: {problem}.", code=VALUE_NOT_LINKABLE,
+        raise ValidationError([refusal_item(
+            f"{path} is not a link this mail can carry: {problem}.", VALUE_NOT_LINKABLE, RefusalSource.VALUES,
         )])
     return link
 

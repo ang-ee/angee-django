@@ -535,6 +535,18 @@ live in code docstrings.
   not one. Code that builds or judges a link without a request calls it instead
   of reading the setting; the callers that read it today move onto it in their
   own changes.
+- `angee.messaging_templates`: **A send's refusal says whose fault it is, and quotes no value.**
+  Every refusal item a send returns from this addon carries `params["source"]`
+  (`REFUSAL_SOURCE`), one of `RefusalSource` (`deployment`, `template`, `values`,
+  `unknown`), set where it is raised; both are exported from the engine beside
+  `SEND_CODES`. No refusal's words or `params` quote a value. **Changed words, which
+  no caller should match:** `render_failed` names the exception's type only
+  (`The message template did not render: it raised RuntimeError.`), no longer its
+  text; a date that is not one says what was given by kind and length (`it is
+  text of 12 characters`), no longer the value; `value_not_linkable` no longer
+  names a link's host (`its host is not one a mail can link to`); values that are
+  not JSON name the error's type. Values of the wrong shape are refused alone; a
+  path the row requires is refused only when the shapes are right.
 - `angee.messaging_templates`: **A sender reads the send codes and the limits from the engine.**
   `SEND_CODES` holds the eleven codes `send_as_system` can return from this addon, built
   from their constants, and a test fails when a raise site names a code outside it or

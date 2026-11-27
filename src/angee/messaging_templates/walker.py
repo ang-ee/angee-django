@@ -82,10 +82,12 @@ from angee.messaging_templates.engine import (
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
+    RefusalSource,
     RenderBudget,
     brand_values,
     clean_link,
     filter_names,
+    refusal_item,
     url,
 )
 from angee.messaging_templates.html_checks import (
@@ -201,16 +203,18 @@ def refusals_only(root: WalkedRow) -> Iterator[None]:
             "A message template failed to render: the %s %s in %s raised %s.",
             root.kind, root.key, root.language, type(error).__name__,
         )
-        raise ValidationError(
-            "The message template did not render: %(error)s", code=RENDER_FAILED,
-            params={"error": f"{type(error).__name__}: {error}"},
+        raise refusal_item(
+            "The message template did not render: it raised %(error)s.", RENDER_FAILED, RefusalSource.UNKNOWN,
+            params={"error": type(error).__name__},
         ) from error
 
 
-def _refused(messages: Iterable[str], code: str) -> ValidationError:
-    """One ``ValidationError`` whose every item carries ``code``: Django keeps no code on an error built from a list."""
+def _refused(code: str, *groups: tuple[Iterable[str], RefusalSource]) -> ValidationError:
+    """One ``ValidationError`` whose every item carries ``code`` and its group's source (:func:`refusal_item`): Django
+    keeps no code on an error built from a list."""
 
-    return ValidationError([ValidationError(message, code=code) for message in dict.fromkeys(messages)])
+    return ValidationError([refusal_item(message, code, source) for messages, source in groups
+                            for message in dict.fromkeys(messages)])
 
 
 class RowPiece(StrEnum):
@@ -562,40 +566,48 @@ class TemplateWalk:
 
         with refusals_only(self.root):
             if not isinstance(values, Mapping):
-                raise ValidationError("Pass the values as an object of names to values.", code=INVALID_VALUES)
+                raise refusal_item(
+                    "Pass the values as an object of names to values.", INVALID_VALUES, RefusalSource.VALUES,
+                )
             try:
                 text = json.dumps(values, cls=DjangoJSONEncoder, ensure_ascii=False)
                 data = json.loads(text)
             except (TypeError, ValueError, RecursionError) as error:
-                raise ValidationError(f"The values are not JSON: {error}", code=INVALID_VALUES) from error
+                raise refusal_item(
+                    f"The values are not JSON ({type(error).__name__}).", INVALID_VALUES, RefusalSource.VALUES,
+                ) from error
             if len(text) > VALUES_JSON_LIMIT:
-                raise ValidationError(
-                    f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code=VALUES_TOO_LARGE,
+                raise refusal_item(
+                    f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", VALUES_TOO_LARGE,
+                    RefusalSource.VALUES,
                 )
             try:
                 text.encode()
             except UnicodeEncodeError as error:
-                raise ValidationError(
-                    "The values hold a character no mail can encode, a lone surrogate.", code=INVALID_VALUES,
+                raise refusal_item(
+                    "The values hold a character no mail can encode, a lone surrogate.", INVALID_VALUES,
+                    RefusalSource.VALUES,
                 ) from error
             errors = _value_errors(data)
             if errors:
-                raise _refused(errors, INVALID_VALUES)
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
             tree = _tree(self.declared)
             shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
-            errors.extend(
+            if errors:  # a value of the wrong shape, alone: a path it leaves missing is its consequence
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
+            required = [  # the row's text reads these unguarded: the template decides what a mail must be given
                 f"{_dotted(path)} is required and missing or null." for path in sorted(self.required)
                 if _lacks(shaped, path)
-            )
-            if errors:
-                raise _refused(errors, INVALID_VALUES)
+            ]
+            if required:
+                raise _refused(INVALID_VALUES, (required, RefusalSource.TEMPLATE))
             filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
             for path in sorted(self.float_paths):
                 errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
                               if isinstance(number, (int, float)) and not isinstance(number, bool)
                               and not _finite(number))
             if errors:
-                raise _refused(errors, INVALID_VALUES)
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
             for path in sorted(self.link_paths):
                 for link in _at(filled, path):
                     try:
@@ -603,12 +615,13 @@ class TemplateWalk:
                     except ValidationError as refusal:
                         errors.extend(refusal.messages)
             if errors:
-                raise _refused(errors, VALUE_NOT_LINKABLE)
+                raise _refused(VALUE_NOT_LINKABLE, (errors, RefusalSource.VALUES))
             printer = _DatePrinter(self.date_paths)
+            formats: list[str] = []
             for path in sorted(self.date_paths):
-                _parse_dates(filled, path, path, printer, errors)
-            if errors:
-                raise _refused(errors, INVALID_VALUES)
+                _parse_dates(filled, path, path, printer, errors, formats)
+            if errors or formats:
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES), (formats, RefusalSource.TEMPLATE))
             return filled
 
     @sensitive_variables()
@@ -654,7 +667,7 @@ class TemplateWalk:
         with refusals_only(self.root):
             unprinted = self._unprinted(must_print)
             if unprinted:
-                raise _refused(unprinted, VALUE_NOT_PRINTED)
+                raise _refused(VALUE_NOT_PRINTED, (unprinted, RefusalSource.TEMPLATE))
             language = self.language
             with translation.override(language):
                 prepared = self.prepare(values)
@@ -689,9 +702,9 @@ class TemplateWalk:
                 subject=subject, preheader=preheader, html=html, plain_text=_plain(text), language=language,
                 direction=direction,
             )
-            unshown = self._unshown(must_print, prepared, rendered)
-            if unshown:
-                raise _refused(unshown, VALUE_NOT_PRINTED)
+            blank, hidden = self._unshown(must_print, prepared, rendered)
+            if blank or hidden:
+                raise _refused(VALUE_NOT_PRINTED, (blank, RefusalSource.VALUES), (hidden, RefusalSource.TEMPLATE))
             return rendered
 
     def _unprinted(self, must_print: tuple[str, ...]) -> list[str]:
@@ -711,10 +724,12 @@ class TemplateWalk:
 
     def _unshown(
         self, must_print: tuple[str, ...], prepared: Mapping[str, Any], rendered: RenderedMessage,
-    ) -> list[str]:
-        """Why this render's bodies do not show each of ``must_print`` that names no list item."""
+    ) -> tuple[list[str], list[str]]:
+        """Why this render's bodies do not show each of ``must_print`` that names no list item: the values' (blank, not
+        text), then the template's (a body that does not show the value, as a condition left it out)."""
 
         unshown: list[str] = []
+        hidden: list[str] = []
         for path in must_print:
             segments = tuple(path.split("."))
             if "*" in segments:
@@ -726,9 +741,9 @@ class TemplateWalk:
                 unshown.append(f"{path} is empty, and this mail is sent for it.")
             else:
                 missing = rendered.bodies_without(value)
-                unshown.extend(f"The {body} body of this mail does not show {path}, which it is sent for."
-                               for form, body in _BODIES if form in missing)
-        return unshown
+                hidden.extend(f"The {body} body of this mail does not show {path}, which it is sent for."
+                              for form, body in _BODIES if form in missing)
+        return unshown, hidden
 
     def _engine(self, form: RowPiece, mail_globals: Mapping[str, Any]) -> MessageTemplateEngine:
         """An engine serving ``form`` of every walked row, through a per-render ``cached.Loader``."""
@@ -799,9 +814,9 @@ def _one_line(text: str, name: str) -> str:
     line = " ".join(word for word in (UNPRINTED.sub("", word) for word in text.split()) if word)
     line = ENCODED_WORD_OPENER.sub("= ?", line)
     if len(line) > SUBJECT_LIMIT:
-        raise ValidationError(
-            "The rendered %(name)s is over %(limit)s characters.",
-            code=SUBJECT_TOO_LONG, params={"name": name, "limit": SUBJECT_LIMIT},
+        raise refusal_item(
+            "The rendered %(name)s is over %(limit)s characters.", SUBJECT_TOO_LONG, RefusalSource.TEMPLATE,
+            params={"name": name, "limit": SUBJECT_LIMIT},
         )
     return line
 
@@ -917,7 +932,9 @@ def _filled(value: Any, tree: dict[str, Any]) -> Any:
     return {key: _filled(present.get(key), subtree) for key, subtree in tree.items()}
 
 
-def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, errors: list[str]) -> None:
+def _parse_dates(
+    value: Any, path: Path, full: Path, printer: _DatePrinter, errors: list[str], formats: list[str],
+) -> None:
     """Turn each non-empty string at ``path`` into a ``date``, else an aware ``datetime``, in place.
 
     Refuse, naming the path, a string that is neither, and a moment the render
@@ -930,7 +947,7 @@ def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, erro
     )
     for key, child in children:
         if rest:
-            _parse_dates(child, rest, full, printer, errors)
+            _parse_dates(child, rest, full, printer, errors, formats)
             continue
         if child == "":
             continue
@@ -944,10 +961,11 @@ def _parse_dates(value: Any, path: Path, full: Path, printer: _DatePrinter, erro
             except ValueError:
                 parsed = None
         if parsed is None:
-            errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: {str(child)[:40]!r}.")
+            given = f"text of {len(child)} characters" if isinstance(child, str) else f"a {type(child).__name__}"
+            errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: it is {given}.")
             continue
         if (refusal := printer.refusal(full, parsed)) is not None:
-            errors.append(f"{_dotted(full)} {refusal}")
+            (errors if refusal[1] == RefusalSource.VALUES else formats).append(f"{_dotted(full)} {refusal[0]}")
             continue
         value[key] = parsed
 
@@ -970,14 +988,15 @@ class _DatePrinter:
         self.verdicts: dict[tuple[Path, str, int], str | None] = {}
         self.probed: dict[tuple[str, str, int], str | None] = {}
 
-    def refusal(self, path: Path, moment: date | datetime) -> str | None:
-        """Why ``moment`` cannot be printed at ``path``, or ``None``."""
+    def refusal(self, path: Path, moment: date | datetime) -> tuple[str, RefusalSource] | None:
+        """Why ``moment`` cannot be printed at ``path``, and whose that is (a moment the zone cannot hold is the
+        value's; a format that cannot print it, the template's), or ``None``."""
 
         if isinstance(moment, datetime):
             try:
                 moment = template_localtime(moment)
             except (OverflowError, ValueError):
-                return "is a moment the local time zone cannot hold."
+                return "is a moment the local time zone cannot hold.", RefusalSource.VALUES
         kind = "datetime" if isinstance(moment, datetime) else "date"
         end = moment.year if moment.year in (1, 9999) else 0
         key = (path, kind, end)
@@ -985,7 +1004,8 @@ class _DatePrinter:
             self.verdicts[key] = next(
                 (refusal for name in self.formats[path] if (refusal := self.probe(name, kind, end)) is not None), None,
             )
-        return self.verdicts[key]
+        verdict = self.verdicts[key]
+        return None if verdict is None else (verdict, RefusalSource.TEMPLATE)
 
     def probe(self, name: str, kind: str, end: int) -> str | None:
         """Ask Django's ``date`` filter to print a probe of ``kind`` at ``end`` in the format ``name``."""
@@ -1424,7 +1444,7 @@ class TemplateWalker:
         with refusals_only(root):
             walk = self.judge(root, rows)
             if walk.refusals:
-                raise _refused(walk.refusals, MESSAGE_TEMPLATE_REFUSED)
+                raise _refused(MESSAGE_TEMPLATE_REFUSED, (walk.refusals, RefusalSource.TEMPLATE))
             return walk
 
     def judge(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
