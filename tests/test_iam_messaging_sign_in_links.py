@@ -30,7 +30,6 @@ from django.core.mail.backends.base import BaseEmailBackend
 from django.db import DatabaseError, IntegrityError, connection, transaction
 from django.db.models.signals import post_init, pre_save
 from django.http import HttpResponse
-from django.template.base import Template
 from django.test import RequestFactory
 from django.test.utils import override_settings
 from django.utils import timezone
@@ -67,6 +66,7 @@ from angee.iam_messaging.testing.models import SignInLink
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Fragment, Handle, Message, Person, Recipient
 from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_PRINTED
+from angee.messaging_templates.testing.faults import failing_render
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
 from tests.conftest import addon_schema, create_platform_admin
@@ -1313,12 +1313,8 @@ def test_an_engine_failure_quoting_the_link_leaves_no_log_record_holding_it(
 
     target = _person("guest-engine")
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
-
-    def failing(self: Any, context: Any) -> str:
-        raise RuntimeError(f"The engine failed near {context.get('link')}.")
-
-    monkeypatch.setattr(Template, "render", failing)
-    with caplog.at_level(logging.DEBUG):
+    link = SignInLink.url_for(f"{target.public_id}.{SECRET}")
+    with failing_render(RuntimeError(f"The engine failed near {link}.")), caplog.at_level(logging.DEBUG):
         answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
     assert result_data(answered)["issue_user_sign_in_link"] == {
         "ok": False, "message": SIGN_IN_LINK_NOT_RENDERED_MESSAGE,
