@@ -28,6 +28,7 @@ from rebac.models import PermissionAuditEvent
 from rebac.roles import grant as grant_role
 
 from angee.base.models.identity import public_id_of
+from angee.integrate.errors import IntegrationError
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import (
     OutboundEmailChannelMissing,
@@ -1434,6 +1435,31 @@ def test_a_persons_message_written_while_two_addresses_were_merged_still_goes_to
     caplog.set_level(logging.WARNING, logger="angee.messaging.models")
     assert _delivered(message)["To"] == "mine@example.net"
     assert [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"] == []
+
+
+def test_a_message_whose_channel_is_gone_is_refused_by_the_reader_for_an_address_its_handle_does_not_name(
+    desk: Any,
+) -> None:
+    """The reader cannot tell a message whose channel was deleted from system mail, so it fails closed for a row its
+    handle does not name; a row it names is read as before, without asking. Such a message was never deliverable:
+    the worker's claim settles it failed for want of a channel before the reader is reached, as it did."""
+
+    message = Message.objects.compose(channel=desk, to=["Client@Example.test"], text="Hi.", actor=desk.owner,
+                                      queued=True)
+    with system_context(reason="tests.messaging.compose.channel_gone"):
+        Message._base_manager.filter(pk=message.pk).update(channel=None)
+        (row,) = Recipient._base_manager.select_related("handle", "message").filter(message=message)
+        assert row.envelope_address == "Client@Example.test"
+        Recipient._base_manager.filter(pk=row.pk).update(address="intruder@elsewhere.test")
+        (row,) = Recipient._base_manager.select_related("handle", "message").filter(message=message)
+        with pytest.raises(IntegrationError, match="no longer names the address it was written for"):
+            row.envelope_address
+    sent = len(mail.outbox)
+    outcome = deliver_message(message._meta.label_lower, message.pk, message.external_id)
+    assert not outcome.get("delivered") and len(mail.outbox) == sent
+    with system_context(reason="tests.messaging.compose.channel_gone"):
+        stored = Message._base_manager.get(pk=message.pk)
+    assert (stored.status, stored.local_fact("delivery_error")) == ("failed", "Integration configuration is invalid.")
 
 
 def test_a_persons_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(
