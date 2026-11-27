@@ -320,14 +320,46 @@ jobs:
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.
+  # A framework addon whose tests moved into its own tests package runs them on a host
+  # the composer generates from that addon's dependency closure (angee.base.testing.host),
+  # not on the shared host. Every event runs every such suite, which
+  # scripts/changed_path_selection.py --host-suites names.
+  addon-hosts:
+    name: addon hosts
+    if: ${{ inputs.uv-enabled }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+      # The newest hosts composed against this lockfile; compose --if-stale recomposes a
+      # host whose composition inputs, the composer's own snapshot of its apps' sources
+      # and settings, changed since, so a stale host never runs.
+      - uses: actions/cache@v4
+        with:
+          path: .test-hosts/*/composed_test_runtime
+          key: test-hosts-${{ hashFiles('uv.lock') }}-${{ hashFiles('src/**/*.py', 'src/**/*.zed', 'src/**/pyproject.toml', '!src/**/tests/**') }}
+          restore-keys: test-hosts-${{ hashFiles('uv.lock') }}-
+      - shell: bash
+        run: |
+          status=0
+          for addon in $(uv run --locked python scripts/changed_path_selection.py --host-suites); do
+            echo "::group::$addon"
+            uv run --locked python -m angee.base.testing.host "$addon" -q --durations=10 || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
   uv:
     if: ${{ always() && inputs.uv-enabled }}
-    needs: [python-quality, select, uv-shard, uv-postgres]
+    needs: [python-quality, select, uv-shard, uv-postgres, addon-hosts]
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - run: |
-          echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }}"
+          echo "quality=${{ needs.python-quality.result }} select=${{ needs.select.result }} shards=${{ needs.uv-shard.result }} postgres=${{ needs.uv-postgres.result }} hosts=${{ needs.addon-hosts.result }}"
           test "${{ needs.python-quality.result }}" = success
           test "${{ needs.select.result }}" = success
           # The shards are skipped where select turned them off: the changed paths reach
@@ -335,6 +367,7 @@ jobs:
           test "${{ needs.uv-shard.result }}" = success || {
             test "${{ needs.select.outputs.sqlite }}" = false && test "${{ needs.uv-shard.result }}" = skipped; }
           test "${{ needs.uv-postgres.result }}" = success
+          test "${{ needs.addon-hosts.result }}" = success
 
   pnpm:
     if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}

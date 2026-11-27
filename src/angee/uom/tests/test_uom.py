@@ -12,15 +12,21 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from rebac import actor_context, system_context, to_object_ref
+from rebac import SubjectRef, actor_context, system_context, to_object_ref
+from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
+from rebac.resources import model_resource_type
 
+from angee.iam.testing import create_user
 from angee.uom.models import UomExpressions
-from angee.uom.testing.models import Uom, UomCategory
-from tests.conftest import create_user
+
+# The host's composer emits these; the tests read them from the registry.
+Uom = apps.get_model("uom", "Uom")
+UomCategory = apps.get_model("uom", "UomCategory")
 
 
 def _make_category(**fields: Any) -> Any:
@@ -47,6 +53,19 @@ def _shared_reader_exists(row: Any) -> bool:
     ).exists()
 
 
+
+def test_units_have_the_names_record_pickers_show() -> None:
+    """The irregular plurals come from the emitted models' Django metadata."""
+
+    assert (str(Uom._meta.verbose_name), str(Uom._meta.verbose_name_plural)) == (
+        "unit of measure",
+        "units of measure",
+    )
+    assert (str(UomCategory._meta.verbose_name), str(UomCategory._meta.verbose_name_plural)) == (
+        "unit of measure category",
+        "unit of measure categories",
+    )
+
 def test_native_categories_and_units_use_authenticated_reads(
     db: None,
 ) -> None:
@@ -71,6 +90,31 @@ def test_native_categories_and_units_use_authenticated_reads(
     assert not _shared_reader_exists(category)
     assert not _shared_reader_exists(unit)
 
+
+
+def test_reference_rows_follow_the_authenticated_reference_contract(db: None) -> None:
+    """Every authenticated principal reads units through scoped querysets; none may write; saves add no wildcard."""
+
+    del db
+    category = _make_category(name="Reference")
+    unit = _make_uom(category=category, name="Each", ratio=Decimal(1), rounding=Decimal(1), is_reference=True)
+    reader = create_user("uom-reference-reader")
+    with actor_context(reader), evaluator_scope():
+        for row in (category, unit):
+            scoped = type(row).objects.with_actor(reader).scoped().filter(pk=row.pk)
+            assert list(scoped.values_list("pk", flat=True)) == [row.pk]
+            assert not row.with_actor(reader).has_access("write")
+    with actor_context(SubjectRef.of("service/principal", "uom-reference-reader")):
+        assert UomCategory.objects.filter(pk=category.pk).exists()
+        assert Uom.objects.filter(pk=unit.pk).exists()
+    # Fresh rows: with_actor() above bound the reader to those instances.
+    with system_context(reason="uom reference inspect"):
+        for row in (UomCategory.objects.get(pk=category.pk), Uom.objects.get(pk=unit.pk)):
+            row.save()
+            assert not active_relationship_model().objects.filter(
+                resource_type=model_resource_type(row), resource_id=str(row.pk),
+                subject_type="auth/user", subject_id="*",
+            ).exists()
 
 @pytest.fixture()
 def units(db: None) -> SimpleNamespace:

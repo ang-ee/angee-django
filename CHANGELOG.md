@@ -691,6 +691,16 @@ live in code docstrings.
   textarea or button directly inside them and the data-attribute read-only
   path does. The public token-name list (`@angee/ui/tokens`) leaves out
   Tailwind's own `--tw-*` variables, so it is unchanged.
+- Testing: **New.** `python -m angee.base.testing.host angee.<addon>` runs an addon's
+  own `tests` package on a host the composer generates from the addon's dependency
+  closure, plus its `testing` app when it ships one. The composer emits the concrete
+  models, which the tests read from the app registry. pytest loads the
+  `testing.fixtures` plugin of each enabled app and no conftest above the addon.
+  `angee.uom` is the first such addon: its tests moved to `src/angee/uom/tests/`, and
+  `angee.uom.testing`, which held hand-built concrete models for the shared test host,
+  is removed. `angee.iam.testing.create_user` now owns the test-user helper, and
+  `tests.conftest` re-exports it. CI runs every addon host suite in its `addon hosts`
+  job (docs/checks.md#what-ci-actually-runs).
 - `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
   answers for `user`. It checked the ambient REBAC actor instead, so asking about
   someone else returned the current actor's answer, and asking outside any actor

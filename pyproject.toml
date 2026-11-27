@@ -255,6 +255,8 @@ exclude = [
   # Django-authored migrations live here. The composer owns its shape; lint
   # the abstract sources instead.
   "**/runtime",
+  # Addon test hosts (angee.base.testing.host) are emitted output too.
+  ".test-hosts",
   # Materialized addon migration sources are pinned by digest and immutable.
   # Addon migration templates (compose_migrations/) are source and stay checked.
   "**/runtime_migrations",
@@ -385,6 +387,7 @@ allow_indirect_imports = true
 source_modules = ["angee.**"]
 forbidden_modules = ["tests", "angee.*.testing", "angee.*.testing.**", "html5lib"]
 ignore_imports = [
+  "angee.*.tests.** -> angee.*.testing",
   "angee.*.tests.** -> angee.*.testing.**",
   "angee.*.tests.** -> tests",
   "angee.*.testing -> angee.*.testing.**",

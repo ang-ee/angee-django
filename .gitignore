@@ -10,6 +10,7 @@ build/
 .ruff_cache/
 .pytest_cache/
 .test-db/
+.test-hosts/
 .coverage
 htmlcov/
 .tox/

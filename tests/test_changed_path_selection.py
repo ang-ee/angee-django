@@ -75,3 +75,19 @@ def test_a_compose_migration_template_reaches_the_tests_that_import_it() -> None
 
     assert "tests/test_projects_due_rules.py" in tests
     assert tests != FULL_SUITE
+
+
+def test_host_suites_are_the_addon_test_packages_outside_the_shared_host() -> None:
+    """resources' tests run in the shared testpaths, projects' only module opts out of pytest, and
+    the examples' tests run in the examples profile."""
+
+    result = subprocess.run(
+        [sys.executable, "scripts/changed_path_selection.py", "--host-suites"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    )
+    suites = result.stdout.split()
+
+    assert "angee.uom" in suites
+    assert "angee.resources" not in suites
+    assert "angee.projects" not in suites
+    assert "example.notes" not in suites
