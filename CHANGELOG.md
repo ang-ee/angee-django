@@ -1729,7 +1729,7 @@ live in code docstrings.
     `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
     One matching organization is suggested at `0.4` as before. Each further
     organization costs one suggestion's statements.
-  - **The handle rule's two amendments.** The domain-spelling rule keeps as typed
+  - **The handle rule's three amendments.** The domain-spelling rule keeps as typed
     a name whose spelling would be longer than a domain name can be
     (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
     `URLValidator` bounds a host name). A name of ligatures that each read as many
