@@ -55,7 +55,6 @@ from hashlib import sha256
 from time import monotonic
 from typing import Any, TypeVar
 
-from celery.exceptions import SoftTimeLimitExceeded
 from django.core.exceptions import ValidationError
 from imapclient import IMAPClient
 from imapclient.exceptions import IMAPClientAbortError, IMAPClientError, LoginError
@@ -69,7 +68,7 @@ from angee.integrate.streams import CursorInvalid, StreamPage
 from angee.integrate.sync import current_progress_bridge
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
-from angee.messaging_integrate_imap.parser import fallback_message, parse_message
+from angee.messaging_integrate_imap.parser import parse_message_or_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -408,7 +407,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         self._load_credentials()
         try:
             self._sample_mailbox(mailbox, uidvalidity=uidvalidity)
-            self._own_addresses = self._resolve_own_addresses()
+            self._own_addresses = self.own_addresses()
             client = self._client_or_fail()
             prior = client.fetch(requested, [b"FLAGS", b"RFC822.SIZE"])
             if sum(int(item.get(b"RFC822.SIZE", 0)) for item in prior.values()) > MAX_SAMPLE_BYTES:
@@ -502,7 +501,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         """Plan the selected partition after validating its mailbox epoch."""
 
         client = self._client if self._client is not None else self._connect()
-        self._own_addresses = self._resolve_own_addresses()
+        self._own_addresses = self.own_addresses()
         boundary = self.bridge.imap_delivery_boundary()
         new_only = bool(boundary)
         if new_only and boundary.get("source_identity") != self._source_identity_digest():
@@ -720,33 +719,18 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                 continue
             flags = tuple(item.get(b"FLAGS", ()))
             internal_date = item.get(b"INTERNALDATE")
-            try:
-                messages.append(
-                    parse_message(
-                        bytes(raw),
-                        mailbox=work.name,
-                        uid=int(uid),
-                        uidvalidity=work.uidvalidity,
-                        flags=flags,
-                        internal_date=internal_date,
-                        own_addresses=self._own_addresses,
-                        truncated_bytes=int(item[b"RFC822.SIZE"]) if truncated else None,
-                    )
+            messages.append(
+                parse_message_or_fallback(
+                    bytes(raw),
+                    mailbox=work.name,
+                    uid=int(uid),
+                    uidvalidity=work.uidvalidity,
+                    flags=flags,
+                    internal_date=internal_date,
+                    own_addresses=self._own_addresses,
+                    truncated_bytes=int(item[b"RFC822.SIZE"]) if truncated else None,
                 )
-            except SoftTimeLimitExceeded:
-                raise
-            except Exception as error:  # noqa: BLE001 — one poison message must not stall the mailbox.
-                messages.append(
-                    fallback_message(
-                        bytes(raw),
-                        mailbox=work.name,
-                        uid=int(uid),
-                        uidvalidity=work.uidvalidity,
-                        flags=flags,
-                        internal_date=internal_date,
-                        error=error,
-                    )
-                )
+            )
         return messages
 
     @staticmethod
@@ -1001,9 +985,10 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             return ""
         return str(account.email or "").strip()
 
-    def _resolve_own_addresses(self) -> frozenset[str]:
-        """Return the account's own addresses for direction classification."""
+    def own_addresses(self) -> frozenset[str]:
+        """Resolve account addresses for live and offline direction classification, without connecting."""
 
+        self._load_credentials()
         addresses = {str(value).strip().lower() for value in (self.bridge.config.get("own_addresses") or [])}
         credential = self._credential
         material = credential.reveal() if credential is not None else {}

@@ -4373,6 +4373,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         explicit_thread: Any = None,
         expected_thread: Any = None,
         historical: bool = False,
+        preserve_existing: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/recipients/edges.
@@ -4414,12 +4415,18 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         this channel, and never moves a locally authored message. ``historical``
         suppresses the live message event and party-suggestion side effects while
         retaining original timestamps, content history and thread counters.
+        ``preserve_existing`` refuses to replace an existing envelope with a
+        different observation, as an older archive must not overwrite live mail.
+        An identical replay still heals late reply parents and thread membership.
+        It cannot be combined with explicit source-thread redirection.
         ``after_landing`` writes an addon's overlay and moderation before counters
         and live events; it also runs on unchanged observations without re-emitting.
         """
 
         created_by_id = created_by_id if created_by_id is not None else channel.owner_id
         thread_model = apps.get_model("messaging", "Thread")
+        if preserve_existing and (explicit_thread is not None or expected_thread is not None):
+            raise ValueError("Preserving existing messages cannot redirect an explicit source thread.")
         if explicit_thread is not None:
             if not isinstance(explicit_thread, thread_model) or explicit_thread.pk is None:
                 raise ValueError("Explicit ingestion requires a saved messaging Thread.")
@@ -4446,6 +4453,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     explicit_thread=explicit_thread,
                     expected_thread=expected_thread,
                     historical=historical,
+                    preserve_existing=preserve_existing,
                     after_landing=after_landing,
                 )
                 if message.message_type == "email":
@@ -4506,6 +4514,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         explicit_thread: Any = None,
         expected_thread: Any = None,
         historical: bool = False,
+        preserve_existing: bool = False,
         after_landing: Callable[[Any], None] | None = None,
     ) -> Any:
         handle_model = apps.get_model("parties", "Handle")
@@ -4567,6 +4576,12 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 if prior is None:
                     raise
                 created = False
+        # Both a prior row and a raced reservation are locked here. Preserve a
+        # different observation before it can resolve threads, handles or parts.
+        if preserve_existing and prior is not None and (prior.metadata or {}).get(_SYNC_HASH_KEY) != content_hash:
+            if after_landing is not None:
+                after_landing(prior)
+            return prior, ()
         authored_message = prior if prior is not None and prior.is_locally_written else None
         if authored_message is not None:
             thread = authored_message.thread

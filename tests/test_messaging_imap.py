@@ -1377,7 +1377,7 @@ def test_poison_message_lands_through_the_fallback_envelope(
     def explode(raw: bytes, **kwargs: Any) -> Any:
         raise ValueError("unparseable")
 
-    monkeypatch.setattr("angee.messaging_integrate_imap.backend.parse_message", explode)
+    monkeypatch.setattr("angee.messaging_integrate_imap.parser.parse_message", explode)
     messages = _drain(backend)
 
     assert len(messages) == 1
@@ -1396,14 +1396,14 @@ def test_unlisted_parser_failure_lands_the_fallback_and_keeps_the_page(
         _eml(message_id="<poison@x>", subject="Poison"), _eml(message_id="<next@x>", subject="Next"),
     )})
     backend = _backend()
-    parse = imap_backend.parse_message
+    parse = imap_parser.parse_message
 
     def explode_once(raw: bytes, **kwargs: Any) -> Any:
         if b"<poison@x>" in raw:
             raise failure
         return parse(raw, **kwargs)
 
-    monkeypatch.setattr(imap_backend, "parse_message", explode_once)
+    monkeypatch.setattr(imap_parser, "parse_message", explode_once)
     messages = {message.external_id: message for message in _drain(backend)}
 
     assert set(messages) == {"poison@x", "next@x"}
@@ -1677,7 +1677,7 @@ def test_imap_worker_cancellation_propagates(
         raise SoftTimeLimitExceeded
 
     if phase == "parse":
-        monkeypatch.setattr(imap_backend, "parse_message", cancelled)
+        monkeypatch.setattr(imap_parser, "parse_message", cancelled)
     else:
         imap_server.refuse(phase, SoftTimeLimitExceeded())
     stream = SimpleNamespace(partition="INBOX", generation=1, cursor={})
