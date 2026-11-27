@@ -38,6 +38,12 @@ const records: readonly Row[] = [
   { id: "d", title: "Delta", status: "open", rank: 0 },
 ];
 const fields = { id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" }, rank: { scalar: "Int" } } as const;
+/**
+ * An `order_by` key by key ("rank desc"), as the server reads it: a list in its order, and an object (a list
+ * of one) in its input type's own field order, here the fields' declared order, whatever order its keys came in.
+ */
+const serverOrder = (order: unknown) => [order ?? []].flat().flatMap((entry) =>
+  Object.keys(fields).filter((field) => field in (entry as object)).map((field) => `${field} ${(entry as Record<string, string>)[field]}`));
 const titleAndRank = [{ field: "title", header: "Title" }, { field: "rank", header: "Rank" }];
 const withStatus = [{ field: "status", header: "Status" }, ...titleAndRank];
 
@@ -106,9 +112,8 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
     router = createRouter({ routeTree: root.addChildren([tasks]), history: createMemoryHistory({ initialEntries: [path] }) });
     render(<RouterProvider router={router} />);
   } else render(tree);
-  const keys = (order: Record<string, string> | undefined) => Object.entries(order ?? {}).map(([field, direction]) => `${field} ${direction}`);
   const groupsRead = () => custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as {
-    order_by?: { field: string; direction: string }[]; rows_order_by?: Record<string, string>;
+    order_by?: { field: string; direction: string }[]; rows_order_by?: unknown;
   } | undefined;
   return {
     /** The list's view state and commands, as its toolbar and saved views use them. */
@@ -120,11 +125,11 @@ function renderList(order: Order, { columns = titleAndRank, initialState = {}, r
     /** How many reads of the list's records were made. */
     reads: () => getList.mock.calls.length,
     /** The order the last read of the list's records asked for, key by key. */
-    readOrder: () => keys((getList.mock.calls.at(-1)?.[0].meta?.gqlVariables as { order_by?: Record<string, string> } | undefined)?.order_by),
+    readOrder: () => serverOrder((getList.mock.calls.at(-1)?.[0].meta?.gqlVariables as { order_by?: unknown } | undefined)?.order_by),
     /** The order the last groups read asked for its groups. */
     groupOrder: () => groupsRead()?.order_by?.map(({ field, direction }) => `${field} ${direction.toLowerCase()}`),
     /** The order the last groups read asked its groups' records in. */
-    groupRowsOrder: () => keys(groupsRead()?.rows_order_by),
+    groupRowsOrder: () => serverOrder(groupsRead()?.rows_order_by),
     /** Hold every later read of the records until `release`. */
     hold: () => {
       let release!: () => void;
@@ -593,6 +598,16 @@ test("a saved view of a list in its inherited order stores no order, and applyin
   act(() => list.view().applyFavorite(saved!));
   await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
   expect([shown("Rank", "Title"), list.urlSort()]).toEqual([{ Rank: "descending", Title: "none" }, undefined]);
+});
+
+test("a saved view that holds the list's keys and directions in another priority reads the flat list again in that order", async () => {
+  const list = renderList(rankThenTitle);
+  await waitFor(() => expect(list.readOrder()).toEqual(["rank desc", "title asc"]));
+  const reads = list.reads();
+  act(() => list.view().applyFavorite({ id: "favorite:by-title", label: "By title",
+    sort: [{ field: "title", dir: "asc" }, { field: "rank", dir: "desc" }] }));
+  await waitFor(() => expect(list.reads()).toBeGreaterThan(reads));
+  expect(list.readOrder()).toEqual(["title asc", "rank desc"]);
 });
 
 test("a saved view whose order is an explicit null clears the list's order", async () => {

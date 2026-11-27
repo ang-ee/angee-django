@@ -13,6 +13,7 @@ import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
 import { querySortFromSorting } from "../model/state";
+import { navigationScopeKey } from "../record-navigation-context";
 import type { ListRecordFacts, ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 import { useValueStable } from "../../../lib/use-value-stable";
@@ -65,8 +66,9 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
   // table projections allocate an equivalent rows array after that parent
   // render; depending on raw object identity turns the publication into an
   // effect -> setState -> render loop. The query facts and row values are the
-  // snapshot identity, so retain one object until those facts actually change.
-  const snapshotKey = stableKey(snapshot);
+  // snapshot identity, so retain one object until those facts actually change, the order's
+  // priority among them (`navigationScopeKey`).
+  const snapshotKey = stableKey([snapshot, navigationScopeKey(navigationScope)]);
   const stableSnapshot = React.useMemo(() => snapshot, [snapshotKey]);
   const onListStateChangeRef = useLatestRef(onListStateChange);
   React.useEffect(() => {

@@ -49,3 +49,18 @@ caller a new setter on each update. Reported upstream as
 [47ng/nuqs#1636](https://github.com/47ng/nuqs/issues/1636) and fixed by
 [47ng/nuqs#1637](https://github.com/47ng/nuqs/pull/1637); remove the patch and
 its install-policy entry when the first nuqs release with the adapter fix is adopted.
+
+# Refine Hasura sorters as a list
+
+`refinedev-hasura-7.0.1.patch` makes `generateSorting` return a list, one object
+per sorter in the order given, where the stock provider merges a read's sorters
+into one `order_by` object. A GraphQL server rebuilds an input object in its
+input type's own field order, so an object carries no priority: a several-key
+read was ordered by whichever key the resource declares first. The patch changes
+the same lines in place in `dist/index.cjs`, `dist/index.mjs`, the three
+`generateSorting` declarations and the shipped sources, so the source maps keep
+their positions (their embedded source still shows the stock functions); the
+non-default naming path converts each entry of the list. The refine provider's
+sorted-read test and the proposals comparison test fail on an install without
+it. Remove the patch and its install-policy entry when the first
+`@refinedev/hasura` release that sends sorters as a list is adopted.

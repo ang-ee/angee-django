@@ -1020,13 +1020,18 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   predicates and required selections. Hand-building a resource view's Hasura
   `where` instead of using `ResourceQuery.toWhere` is a bug: the query owner
   validates canonical intent and translates it to the transport. This rule does
-  not prohibit variables for separate, authored GraphQL operations. A display
-  label never identifies a relation bucket. Invalid URL or favorite query state
-  must block dependent reads and offer recovery; dropping invalid constraints
-  silently broadens the user's query. Regression tests must exercise native
-  providers and table accessors, including grouping fields absent from visible
-  columns. Public API cutover guidance lives in the
-  [`@angee/ui` migration note](../../packages/ui/README.md#resource-query-migration).
+  not prohibit variables for separate, authored GraphQL operations. A list's
+  order goes on the wire as the list `ResourceQuery.toOrderBy` returns, one
+  single-key object per key in priority order, passed on as it is: a GraphQL
+  server reads one object's keys in its input type's own field order, so an
+  object carries no priority, and a read's `sorters` go the same way through
+  the patched Hasura provider ([stack](../stack.md)). A display label never
+  identifies a relation bucket. Invalid URL or favorite query state must block
+  dependent reads and offer recovery; dropping invalid constraints silently
+  broadens the user's query. Regression tests must exercise native providers
+  and table accessors, including grouping fields absent from visible columns.
+  Public API cutover guidance lives in the [`@angee/ui` migration
+  note](../../packages/ui/README.md#resource-query-migration).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`

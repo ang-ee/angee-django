@@ -98,7 +98,7 @@ test("unknown totals retain disabled next/last controls despite native unknown p
 test("a Notes descending declaration can clear and cycle without restoring the default", async () => {
   const order = { updated_at: "DESC" } as const;
   const f = await fixture({ initialPath: "/?keep=external", order });
-  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual({ updated_at: "desc" });
+  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual([{ updated_at: "desc" }]);
 
   for (const expected of [false, "asc", "desc", false] as const) {
     await act(async () => f.surface().table.getColumn("updated_at")!.toggleSorting());
@@ -112,7 +112,7 @@ test("a Notes descending declaration can clear and cycle without restoring the d
 
 test("an explicit URL sort takes precedence over a Notes descending declaration", async () => {
   const f = await fixture({ initialPath: "/?sort=title:asc&keep=external", order: { updated_at: "DESC" } });
-  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual({ title: "asc" });
+  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual([{ title: "asc" }]);
   expect(f.surface().table.getColumn("title")!.getIsSorted()).toBe("asc");
 });
 
@@ -185,7 +185,7 @@ test("native Router preserves page one, and a favorite with no order keeps the d
   expect(f.router.state.location.search).toEqual({ page: "1", filter: "", keep: "external" });
   expect(f.view().state).toMatchObject({ pagination: { pageIndex: 0 }, sorting: [{ id: "title", desc: false }], filter: {}, groupStack: [] });
   await waitFor(() => expect(f.calls.at(-1)).toMatchObject({ pagination: { currentPage: 1 }, filters: [] }));
-  expect(f.calls.at(-1)?.meta?.gqlVariables).toMatchObject({ order_by: { title: "asc" } });
+  expect(f.calls.at(-1)?.meta?.gqlVariables).toMatchObject({ order_by: [{ title: "asc" }] });
   expect(f.history.length).toBe(1);
 });
 

@@ -1324,7 +1324,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastActiveListCall()?.order).toEqual({ updatedAt: "desc", title: "asc" }),
+      expect(lastActiveListCall()?.order).toEqual([{ updatedAt: "desc" }, { title: "asc" }]),
     );
   });
 
@@ -1342,7 +1342,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastActiveListCall()?.order).toEqual({ title: "asc" }),
+      expect(lastActiveListCall()?.order).toEqual([{ title: "asc" }]),
     );
   });
 
@@ -1360,7 +1360,7 @@ describe("ResourceList", () => {
 
     expect(await screen.findByText("First")).toBeTruthy();
     await waitFor(() =>
-      expect(lastActiveListCall()?.order).toEqual({ priority: "desc" }),
+      expect(lastActiveListCall()?.order).toEqual([{ priority: "desc" }]),
     );
   });
 

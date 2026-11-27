@@ -20,7 +20,7 @@ export function pageSource(metadata: ModelMetadata, vault: string, scope?: Query
       document: KnowledgePages, models: [PAGE_MODEL], enabled: Boolean(vault),
       variables: (request: CollectionPageRequest) => ({
         where: query.toWhere(pageCollectionFilter(vault, request, scope)),
-        order: [query.toOrderBy(request.order ?? { title: "ASC" })],
+        order: query.toOrderBy(request.order ?? { title: "ASC" }),
         limit: request.pageSize, offset: (request.page - 1) * request.pageSize,
       }),
       select: (data) => ({
