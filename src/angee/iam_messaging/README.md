@@ -90,7 +90,13 @@ system channel, queued, in the action's transaction, with the administrator who
 asked as the cause. Messaging delivers it through the transport mailer once that
 transaction commits; Django's default mailer is not on its path. The account
 stores its address lower case; the handle owner lands it on the existing handle
-of that address in any letter case, and the mail carries that handle's spelling.
+of that address in any letter case, and the mail goes to the account's own
+spelling, which the recipient row records as the send gave it. A merge never
+redirects it: an address a contact administrator merged into another is recorded
+on the kept handle and mailed exactly as given, and a mail whose recorded address
+its handle no longer names is refused whole, failed with its reason on the system
+channel, and reaches no mailbox (messaging's System mail); the link it carried
+is issued but undelivered until an administrator sends another.
 
 A link is offered only where it can be built and its mail sent, read from
 settings alone (`SignInLink.deliverable()`): the deployment's public origin

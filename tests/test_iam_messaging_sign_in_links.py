@@ -65,7 +65,7 @@ from angee.iam_messaging.models import (
 )
 from angee.iam_messaging.testing.models import SignInLink
 from angee.messaging.tasks import deliver_message
-from angee.messaging.testing.models import Fragment, Handle, Message, Person
+from angee.messaging.testing.models import Fragment, Handle, Message, Person, Recipient
 from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_PRINTED
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
@@ -73,10 +73,11 @@ from tests.conftest import addon_schema, create_platform_admin
 from tests.iam_campaign import iam_admin as iam_admin
 from tests.test_iam_account_actions import _manager
 from tests.test_iam_login_throttle import LOGIN, _refusals
-from tests.test_messaging_compose import _refused
+from tests.test_messaging_compose import _merge_as_contact_administrator, _refused
 from tests.test_messaging_system_mail import (
     LOCMEM,
     SENDER,
+    UNNAMED,
     FailingTransport,
     _chained,
     _delivery_logged,
@@ -192,12 +193,13 @@ def _person(username: str, **attrs: Any) -> Any:
 
 
 def _mails(target: Any) -> list[Any]:
-    """The system mail recorded to ``target``'s address in any letter case, oldest first."""
+    """The system mail recorded to ``target``'s address in any letter case, oldest first: the address its recipient
+    row records as the send gave it, on whichever handle that row sits."""
 
     with system_context(reason=READ):
         return list(
             Message._base_manager.select_related("channel")
-            .filter(recipients__handle__value__iexact=target.email).order_by("pk"),
+            .filter(recipients__address__iexact=target.email).order_by("pk"),
         )
 
 
@@ -1048,18 +1050,27 @@ def _handles(address: str) -> list[str]:
         return list(Handle._base_manager.filter(value__iexact=address).values_list("value", flat=True))
 
 
-def test_an_account_whose_address_a_handle_spells_otherwise_is_mailed_at_the_handles_spelling(
+def _given(message: Any) -> list[tuple[Any, str]]:
+    """``message``'s recipient rows as ``(handle id, recorded address)``, in their order."""
+
+    with system_context(reason=READ):
+        return list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("handle_id", "address"))
+
+
+def test_an_account_whose_address_a_handle_spells_otherwise_is_mailed_at_its_own_spelling(
     deliverable, iam_admin, sent,
 ):
-    """The account stores its address lower case; the handle owner lands it on the handle as first spelled."""
+    """The account stores its address lower case; the handle owner lands it on the handle as first spelled, and the
+    mail goes to the account's own spelling, which the recipient row records as the send gave it."""
 
     with system_context(reason="tests.iam_messaging.sign_in_link.handle"):
-        Handle.objects.upsert(platform=Handle.Platform.EMAIL, value="Guest.Case@Example.COM")
+        handle = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value="Guest.Case@Example.COM")
     target = _person("guest.case")
     assert target.email == "guest.case@example.com"
     token = sent(target, iam_admin)
     assert _handles(target.email) == ["Guest.Case@Example.COM"]
-    assert _written(target).to == ["Guest.Case@Example.COM"]
+    assert _given(_mails(target)[-1]) == [(handle.pk, "guest.case@example.com")]
+    assert _written(target).to == ["guest.case@example.com"]
     assert _redeem(token) == target
 
 
@@ -1067,8 +1078,8 @@ def test_two_accounts_whose_addresses_differ_only_in_case_share_one_handle_and_k
     deliverable, iam_admin, sent,
 ):
     """Only a write past the user model's lower-casing (``update()``) stores a second spelling; the person-email
-    constraint compares stored values, so both accounts exist. Pinned, not decided: which key an account's address
-    and a handle share is the architect's question."""
+    constraint compares stored values, so both accounts exist. Their mails land on one handle, each going to its own
+    account's spelling, and each link signs in its own account only."""
 
     first = _person("guest-twin")
     second = _person("guest-twin-two")
@@ -1078,9 +1089,89 @@ def test_two_accounts_whose_addresses_differ_only_in_case_share_one_handle_and_k
     first_token, second_token = sent(first, iam_admin), sent(second, iam_admin)
     assert _handles(first.email) == ["guest-twin@example.com"]
     assert [message.pk for message in _mails(first)] == [message.pk for message in _mails(second)]
-    assert _written(second).to == ["guest-twin@example.com"]
+    with system_context(reason=READ):
+        assert [message.channel.backend.email_message(message).to for message in _mails(first)] == [
+            ["guest-twin@example.com"], ["Guest-Twin@Example.com"],
+        ]
     assert _redeem(second_token) == second
     assert _redeem(first_token) == first
+
+
+def _merged_away(username: str) -> tuple[Any, Any, Any, Any]:
+    """Merge the handle of the address an account ``username`` will have into another's, as a contact administrator
+    merges a client's two addresses before the client has an account, then create the account; return it, both
+    handles and the merge's changeset. Once an account holds an address, no contact administrator may give it to
+    another party, so the merge comes first."""
+
+    with system_context(reason="tests.iam_messaging.sign_in_link.merge"):
+        merged = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value=f"{username}@example.com")
+        kept = Handle.objects.upsert(platform=Handle.Platform.EMAIL, value=f"kept-{username}@example.net")
+    _merge_as_contact_administrator(kept, merged)
+    with system_context(reason="tests.iam_messaging.sign_in_link.merge"):
+        merge = Handle.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+    return _person(username), merged, kept, merge
+
+
+def test_an_account_whose_address_was_merged_into_another_is_mailed_at_its_own_address(deliverable, iam_admin, sent):
+    """A merge redirects the mail a person addresses, never system mail: the link's mail is recorded on the kept
+    handle with the account's own address and delivered to it, never to the kept handle's mailbox."""
+
+    target, merged, kept, _merge = _merged_away("guest-merged")
+    token = sent(target, iam_admin)
+    [message] = _mails(target)
+    assert _given(message) == [(kept.pk, target.email)]
+    assert _deliver(message)["delivered"]
+    assert mail.outbox[-1].to == [target.email]
+    assert _redeem(token) == target
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_merge_of_an_accounts_address_is_not_reverted_once_the_account_holds_it_and_its_link_is_delivered(
+    deliverable, iam_admin, sent,
+):
+    """Reverting the merge would give the account's address back to the contact's party, which parties refuses while
+    an account holds it; the merge stands, and the issued link's mail is delivered to the account's address."""
+
+    target, merged, kept, merge = _merged_away("guest-unreverted")
+    token = sent(target, iam_admin)
+    with actor_context(iam_admin), pytest.raises(PermissionDenied, match="This address cannot be given to this party"):
+        merge.with_actor(iam_admin).revert()
+    with system_context(reason=READ):
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
+    [message] = _mails(target)
+    assert _deliver(message)["delivered"]
+    assert mail.outbox[-1].to == [target.email]
+    assert _redeem(token) == target
+
+
+def test_a_link_whose_recorded_address_its_handle_no_longer_names_goes_to_no_mailbox_and_a_new_one_is_sent(
+    deliverable, iam_admin, sent,
+):
+    """System mail fails closed: a recipient row whose address its handle no longer names, reached here by a row
+    written past its check (the merge it was written under cannot be reverted while an account holds the address),
+    is refused whole with its stored reason, and nothing reaches any mailbox. The administrator who issued it was
+    answered "queued"; the failure shows on the system channel's message, failed with that reason, and the link is
+    issued and undelivered. A newly issued link is delivered to the account's own address and retires it."""
+
+    target = _person("guest-unnamed")
+    undelivered = sent(target, iam_admin)
+    [message] = _mails(target)
+    with system_context(reason="tests.iam_messaging.sign_in_link.unnamed"):
+        Recipient._base_manager.filter(message=message).update(address="intruder@elsewhere.test")
+    sent_before = len(mail.outbox)
+    assert not _deliver(message)["delivered"]
+    assert len(mail.outbox) == sent_before
+    with system_context(reason=READ):
+        stored = Message._base_manager.get(pk=message.pk)
+    assert (stored.status, stored.local_fact("delivery_error")) == ("failed", UNNAMED)
+    assert target.email not in UNNAMED
+    again = sent(target, iam_admin)
+    newer = _mails(target)[-1]
+    assert _given(newer)[0][1] == target.email
+    assert _deliver(newer)["delivered"]
+    assert mail.outbox[-1].to == [target.email]
+    assert _redeem(undelivered) is None
+    assert _redeem(again) == target
 
 
 # ---------- what is refused, before anything is written ----------
