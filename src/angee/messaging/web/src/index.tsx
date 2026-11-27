@@ -1,7 +1,7 @@
 export { messageFeedRows, messageFeedWindow, messageFeedRevalidation } from "./message-feed";
 import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
-import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
+import { Inbox, Mail, MessagesSquare, Reply, Send } from "lucide-react";
 
 import { AccessFollowers } from "./AccessFollowers";
 import { enMessagingMessages } from "./i18n";
@@ -59,8 +59,11 @@ export {
 export {
   ThreadTranscript,
   type ThreadTranscriptProps,
+  type ThreadTranscriptReply,
   type TranscriptOrder,
 } from "./ThreadTranscript";
+// A new email from the channels the viewer may send on; a host renders it in its header.
+export { NewMessageAction, type NewMessageActionProps } from "./NewMessageAction";
 // A message read like an email: the summary row every message list renders and
 // the reader a message's record composes (Messages, Nexus).
 export {
@@ -73,6 +76,14 @@ export {
 } from "./MessageSummary";
 export { MessageReader, type MessageReaderProps } from "./MessageReader";
 export type { MessageReaderData } from "./documents";
+
+/**
+ * The tones of a message's delivery status, scoped to the message's `status` field: an app that
+ * shows messages declares them in its `vocabulary` (messaging's own below; Nexus for its inbox).
+ * A draft is waiting, not a problem, so it is neutral (the shared word reads amber, as Uncertain
+ * does); Failed keeps the shared danger.
+ */
+export const MESSAGE_STATUS_TONES = { DRAFT: "neutral", QUEUED: "info", SENT: "success", UNCERTAIN: "warning" } as const;
 
 export interface MessagingAddonOptions {
   /** Composer shortcut for this app's Activity comment source. */
@@ -94,10 +105,12 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
     "messaging.threads": { parent: "messaging", label: "Threads", route: "messaging.threads", icon: "threads", sequence: 20 },
     "messaging.channels": { parent: "messaging", label: "Channels", route: "messaging.channels", icon: "channel", group: "platform" },
   },
-  icons: { inbox: Inbox, threads: MessagesSquare, send: Send, channel: Mail },
+  icons: { inbox: Inbox, threads: MessagesSquare, send: Send, reply: Reply, channel: Mail },
   i18n: { messaging: enMessagingMessages },
   // Channel pairing states on the composed status vocabulary: the overview and lists share them.
   statusTones: { paired: "success", logged_out: "danger", duplicate_account: "danger", awaiting_scan: "info", awaiting_password: "warning" },
+  // A message's delivery status, scoped to its field: the words are generic, so no global claim.
+  vocabulary: [{ app: "messaging", resources: { "messaging.Message": { fields: { status: { tones: MESSAGE_STATUS_TONES } } } } }],
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   // An email file (message/rfc822) previews as its message in `PreviewPane`.
   previews: messagingPreviews,

@@ -92,7 +92,7 @@ def _valid_sender(value: str) -> tuple[str, str]:
         name, address = apps.get_model("messaging", "Message").objects.clean_recipient(str(value or ""), key="channel")
     except ValidationError as error:
         raise ValidationError({"channel": ValidationError(
-            "Configure a valid sender address for this email channel (its from_email, else DEFAULT_FROM_EMAIL).",
+            "Configure a valid sender address for this email channel.",
             code="invalid",
         )}) from error
     require_carried(address, key="channel")
