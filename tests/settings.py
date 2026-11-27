@@ -12,6 +12,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django_compose.components import enabled_apps
 from django_compose.conf import apply_app_settings
 
+from angee.base.conf import disable_jit
+
 
 class BareGraphQLConfig(AppConfig):
     """Register the GraphQL folder addon without process-wide ready hooks."""
@@ -81,6 +83,7 @@ INSTALLED_APPS = [
     "angee.intake",
     "angee.webforms",
     "angee.webforms_messaging",
+    "angee.decisions_messaging",
     "angee.nexus",
     "angee.posts",
     "angee.platform",
@@ -124,6 +127,8 @@ _TEST_DB_DIR.mkdir(parents=True, exist_ok=True)
 _TEST_DB_FILE = str(_TEST_DB_DIR / "angee_pytest.sqlite3")
 if database_url := os.environ.get("DATABASE_URL"):
     DATABASES = {"default": environ.Env.db_url_config(database_url)}
+    # The PostgreSQL lane's sessions run as deployed ones do.
+    disable_jit(DATABASES["default"])
 else:
     # One clear refusal instead of dozens of failing tests (docs/checks.md#sqlite-version).
     if not (3, 53) <= sqlite3.sqlite_version_info < (3, 54):

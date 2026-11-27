@@ -28,7 +28,8 @@ export interface ResourceViewInitialState {
   columnVisibility?: VisibilityState;
   page?: number;
   pageSize?: number;
-  sort?: ResourceViewSort | null;
+  /** One key, or the whole order as a list; `null` clears the order. */
+  sort?: ResourceViewSort | readonly ResourceViewSort[] | null;
   /** Native declaration order, including secondary fields; `sort` overrides it. */
   sorting?: SortingState;
   filter?: QueryFilter;

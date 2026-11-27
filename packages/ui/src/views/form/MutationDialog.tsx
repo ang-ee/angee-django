@@ -14,7 +14,7 @@ import { fieldValidationSummary, shownFields, visibleFields } from "./form-view-
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
   SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formErrorsFromForm, formSubmitError, formSubmitOutcome, invalidFormSubmit,
-  useRefusalBannerFocus,
+  useRefusalFocus,
   markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
@@ -340,10 +340,11 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   const values = useWatch({ control: form.control });
   // The fields the values hold, hidden ones included, and of those the ones a control shows.
   const visible = visibleFields(fields, values);
-  const renderedFieldNames = shownFields(fields, values).map((field) => field.name);
+  const shownFieldNames = shownFields(fields, values).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
   const errors = formErrorsFromForm(form.formState.errors);
-  const { banner, focusBanner } = useRefusalBannerFocus(errors);
+  // Its fields lock while it submits: a refusal's focus waits until they are ready again.
+  const { banner, focus } = useRefusalFocus(errors, { form, ready: !submitting });
   const fieldByName = React.useMemo(() => new Map(fields.map((field) => [field.name, field])), [fields]);
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
     && visible
@@ -388,13 +389,13 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   // A refusal brings the person to it: the banner, which then also names the refused fields, or
   // the first refused field (`applyFormErrors` decides).
   const errorOptions = {
-    fieldNames: renderedFieldNames,
+    shownFieldNames,
     fallback: errorFallback ?? t("error.generic"),
-    focus: focusBanner,
+    focus,
     fieldSummary: (fieldErrors: Record<string, readonly string[]>) => fieldValidationSummary(fieldErrors, fieldByName, t),
   };
   const allowRootErrorRetry = async (): Promise<void> => {
-    if (!renderedFieldNames.some((name) => form.getFieldState(name).invalid)) {
+    if (!shownFieldNames.some((name) => form.getFieldState(name).invalid)) {
       await form.trigger(visible.map((field) => field.name));
     }
   };

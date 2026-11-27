@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +19,14 @@ import pytest
 import yaml
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldError, ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
+from django.db.models import F, Value
+from django.db.models.functions import Concat
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.translation import gettext_lazy
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from rebac import (
@@ -59,6 +64,7 @@ from angee.brandkit.models import (
 from angee.brandkit.models import BrandKit as SourceBrandKit
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
 from tests.conftest import File, addon_schema, create_platform_admin, create_user
 from tests.decision_table import seat_cells
@@ -242,7 +248,7 @@ def test_a_long_run_of_spaces_is_refused_in_linear_time() -> None:
 
 
 def test_every_write_that_reaches_the_database_checks_the_font_stack(db: None) -> None:
-    """``save``, ``bulk_create``, ``bulk_update`` and ``QuerySet.update`` refuse a stack the field does not admit."""
+    """``save``, ``bulk_create`` and ``QuerySet.update`` refuse a stack the field does not admit, of any type."""
 
     del db
     kit = _kit("Checked")
@@ -253,12 +259,64 @@ def test_every_write_that_reaches_the_database_checks_the_font_stack(db: None) -
             BrandKit.objects.bulk_create([BrandKit(**{**ANGEE, "name": "Bulk", "font_body": "Inter"})])
         with pytest.raises(ValidationError), transaction.atomic():
             BrandKit.objects.filter(pk=kit.pk).update(font_heading="a;b")
-        stored = BrandKit.objects.get(pk=kit.pk)
-        stored.font_body = "inherit, serif"
-        with pytest.raises(ValidationError), transaction.atomic():
-            BrandKit.objects.bulk_update([stored], ["font_body"])
+        with override_settings(SIMPLE_HISTORY_ENABLED=False), pytest.raises(ValidationError), transaction.atomic():
+            BrandKit.objects.filter(pk=kit.pk).update(font_heading=gettext_lazy("serif; color: red"))
         BrandKit.objects.filter(pk=kit.pk).update(font_heading='"Helvetica Neue", sans-serif')
         assert BrandKit.objects.get(pk=kit.pk).font_heading == "'Helvetica Neue', sans-serif"
+
+
+def _save_expression(rows: Any, kit: Any) -> None:
+    del rows
+    kit.font_body = Value("serif; color: red")
+    kit.save()
+
+
+def _bulk_update(value: Any) -> Callable[[Any, Any], None]:
+    def write(rows: Any, kit: Any) -> None:
+        del rows
+        kit.font_body = value
+        BrandKit.objects.bulk_update([kit], ["font_body"])
+
+    return write
+
+
+@pytest.mark.parametrize(
+    ("write", "history"),
+    [
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Value('"Inter", sans-serif')), True,
+            id="update-value-keeping-double-quotes",
+        ),
+        pytest.param(lambda rows, kit: rows.update(font_body=Value("serif; color: red")), True, id="update-value"),
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Value("serif; color: red")), False,
+            id="update-value-without-history",
+        ),
+        pytest.param(lambda rows, kit: rows.update(font_body=F("font_heading")), False, id="update-column"),
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Concat("font_heading", Value("; color: red"))), False,
+            id="update-function",
+        ),
+        pytest.param(_save_expression, False, id="save"),
+        pytest.param(_bulk_update(Value("serif; color: red")), False, id="bulk-update-expression"),
+        pytest.param(_bulk_update("Georgia, serif"), False, id="bulk-update"),
+    ],
+)
+def test_an_expression_write_of_a_font_stack_is_refused_whatever_it_would_store(
+    write: Callable[[Any, Any], None], history: bool, db: None,
+) -> None:
+    """The database computes an expression's result past the field's check, so the field refuses the expression.
+
+    That holds with history capture on or off, and for ``bulk_update``, which writes
+    every value through a ``Case`` expression.
+    """
+
+    del db
+    kit = _kit("Checked")
+    with override_settings(SIMPLE_HISTORY_ENABLED=history), system_context(reason="tests.brandkit.orm"):
+        with pytest.raises(FieldError, match="font_body"), transaction.atomic():
+            write(BrandKit.objects.filter(pk=kit.pk), BrandKit.objects.get(pk=kit.pk))
+        assert BrandKit._base_manager.values_list("font_body", flat=True).get(pk=kit.pk) == ANGEE["font_body"]
 
 
 def test_a_kit_refuses_a_bad_colour_and_a_bad_font_stack(db: None) -> None:
@@ -347,6 +405,52 @@ def test_a_save_that_does_not_set_the_default_leaves_it(db: None) -> None:
     assert _default_names() == ["Still default"]
 
 
+def test_the_kits_lock_is_one_statement_each_writer_that_needs_it_takes_once(db: None) -> None:
+    """The lock is :meth:`lock_default`'s one statement, and each writer takes it as often as it needs it.
+
+    A save takes it when it can move the default and not otherwise; the console
+    takes it before its subject, whatever the kit, and once more when its save moves
+    the default; a resource load that writes kits takes it once.
+    """
+
+    del db
+    admin = create_platform_admin("brandkit-lock-counter")
+    with CaptureQueriesContext(connection) as lock:
+        BrandKit.objects.lock_default()
+    (lock_statement,) = [query["sql"] for query in lock.captured_queries]
+
+    def locks(write: Callable[[], object]) -> int:
+        with CaptureQueriesContext(connection) as captured:
+            write()
+        return [query["sql"] for query in captured.captured_queries].count(lock_statement)
+
+    def save(kit: Any) -> Callable[[], object]:
+        def write() -> None:
+            with system_context(reason="tests.brandkit.lock"):
+                kit.save()
+
+        return write
+
+    def console(kit: Any, values: dict[str, Any]) -> Callable[[], object]:
+        variables = {"id": public_id_of(kit), "set": values}
+        return lambda: result_data(execute_schema(_schema(), _UPDATE_KIT, variables, user=admin))
+
+    first = BrandKit(**{**ANGEE, "name": "First"})
+    assert locks(save(first)) == 1  # the first kit takes the default
+    second = BrandKit(**{**ANGEE, "name": "Second"})
+    assert locks(save(second)) == 0  # a kit saved beside the default
+    second.accent = "#0e7490"
+    assert locks(save(second)) == 0  # an edit of a kit that is not the default
+    second.is_default = True
+    assert locks(save(second)) == 1  # a change of default
+    second.name = "Second, renamed"
+    assert locks(save(second)) == 1  # an edit of the default kit, which keeps it
+    assert locks(console(first, {"accent": "#0e7490"})) == 1  # a console edit of a kit that is not the default
+    assert locks(console(first, {"is_default": True})) == 2  # a console change of default
+    shipped = apps.get_app_config("brandkit")
+    assert locks(lambda: Resource.objects.load_addons((shipped,), tiers=[Resource.Tier.INSTALL])) == 1
+
+
 def test_the_constraint_refuses_a_second_default_written_past_the_save(db: None) -> None:
     del db
     _kit("First")
@@ -363,6 +467,57 @@ def test_the_default_cannot_be_unticked(db: None) -> None:
         with pytest.raises(ValidationError) as refused:
             default.full_clean()
     assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
+
+
+def test_a_save_of_a_kit_read_before_it_became_the_default_cannot_untick_it(db: None) -> None:
+    """``save`` rereads the stored flag under the row lock and refuses as ``clean`` does; saving other columns goes."""
+
+    del db
+    _kit("Default")
+    kit = _kit("Kit")
+    with system_context(reason="tests.brandkit.untick"):
+        stale = BrandKit.objects.get(pk=kit.pk)
+        promoted = BrandKit.objects.get(pk=kit.pk)
+        promoted.is_default = True
+        promoted.save()
+        stale.voice = "Edited."
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stale.save()
+        stale.save(update_fields=["voice"])
+    assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
+    assert _default_names() == ["Kit"]
+
+
+def test_a_revert_of_an_edit_and_a_change_of_default_in_one_changeset_restores_both(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The revert restores the kit that regains the default first, so restoring the other kit unticks nothing.
+
+    One changeset edits a kit and then makes it the default. Its first version comes
+    first in the changeset, so restored first it would be marked not the default
+    while it still is, which a save refuses.
+    """
+
+    del db
+    admin = create_platform_admin("brandkit-reverter")
+    _kit("Default")
+    kit = _kit("Kit")
+    with system_context(reason="tests.brandkit.revert"), django_capture_on_commit_callbacks(execute=True):
+        with changeset(fresh=True):
+            edited = BrandKit.objects.get(pk=kit.pk)
+            edited.voice = "Edited."
+            edited.save()
+            edited.is_default = True
+            edited.save()
+    assert _default_names() == ["Kit"]
+    snapshots: Any = BrandKit.history  # django-simple-history's manager, which the policy object stands in for
+    with system_context(reason="tests.brandkit.revert"):
+        boundary = snapshots.filter(id=kit.pk).order_by("-history_id").first().changeset
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
+        boundary.with_actor(admin).revert()
+    assert _default_names() == ["Default"]
+    with system_context(reason="tests.brandkit.read"):
+        assert BrandKit.objects.get(pk=kit.pk).voice == ANGEE["voice"]
 
 
 def test_the_default_cannot_be_deleted_on_any_delete_path(db: None) -> None:

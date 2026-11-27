@@ -162,9 +162,11 @@ class TimelineSelection:
         questions = list(decisions.open_for(*self.records))
         if questions:
             links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
+            # The schema hands these rows to ``DecisionType`` as a plain list, which no
+            # field hint reaches, so their per-reader answers are read here in one batch each.
             models.prefetch_related_objects(questions, models.Prefetch(
                 "records", queryset=with_record_reference_access(links),
-            ))
+            ), *decisions.model.reader_prefetches(self.actor))
         by_run = {run.pk: run for run in runs}
         for target in self.targets:
             identity = (target.content_type.pk, target.object_id)

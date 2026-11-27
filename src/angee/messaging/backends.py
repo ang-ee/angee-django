@@ -376,7 +376,8 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
         A backend without outbound email refuses with
         :class:`OutboundEmailChannelMissing`. Whatever a backend returns,
         ``MessageManager.compose`` lands the address in the handle owner's stored form
-        and refuses, under ``channel``, one the handle owner cannot land.
+        and refuses, under ``channel``, one the handle owner cannot land; the email
+        backend writes From as this returns it, whatever spelling the handle keeps.
         """
 
         raise OutboundEmailChannelMissing

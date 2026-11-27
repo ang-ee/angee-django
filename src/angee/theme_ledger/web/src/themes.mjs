@@ -199,5 +199,5 @@ export const themes = [defineTheme({
     density: "theme",
     elevation: "theme",
     logo: "theme",
-  }, { version: 2 }),
+  }, { version: 2, acceptsHostAppearanceSource: false }),
 })];

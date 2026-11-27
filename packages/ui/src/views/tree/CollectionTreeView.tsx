@@ -11,6 +11,7 @@ import { ResourceListFrame } from "../resource/ResourceListFrame";
 import { useResourceView } from "../resource/resource-view-context";
 import { ResourceViewUtilities } from "../resource/resource-view-utilities";
 import { useResourceViewSurface } from "../resource/resource-view-surface";
+import { listOrderChoice } from "../resource/list-body/cell-utils";
 import { useSearchCatalog } from "../resource/search/catalog";
 import { useResourceSearch } from "../resource/search/use-resource-search";
 import type { ResourceToolbarProps } from "../../toolbars";
@@ -165,7 +166,7 @@ export function CollectionTreeView<TRow extends Row>(
     pane: props.pane,
     sortOptions: props.columns.flatMap((column) => column.field && column.sortable !== false
       ? [{ value: column.field, label: typeof column.header === "string" ? column.header : column.field }] : []),
-    sorting: view.state.sorting, onSortingChange: view.setSorting,
+    order: listOrderChoice(surface.table),
     search, searchDeclaration: props.search, pager: surface.list, view: "list", availableViews: ["list"],
     onPageChange: view.setPage, onPageSizeChange: view.setPageSize,
     actions: props.toolbarActions, wrap: props.toolbarWrap,

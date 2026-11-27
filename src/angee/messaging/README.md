@@ -68,9 +68,40 @@ display name the email backend writes takes), is refused (`invalid`) under its
 role, never re-read. `compose` lands every address as typed, the channel's
 sender as configured, on the handle the handle owner finds for it
 (`HandleManager.find_identities`): any letter case or domain spelling of a
-stored address is that handle, and a message to it is addressed as the handle
-stores it, so an address with no handle yet is stored, shown and addressed as
-typed; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
+stored address is that handle, which keeps the spelling it was first stored in
+and is what the message shows and search finds. The recipient row records the
+address as typed (`Recipient.address`), and the message is mailed at it
+(`Recipient.envelope_address`), From as the channel configures it
+(`outbound_sender`; the sender's own while that is refused), so an address with
+no handle yet is stored, shown and addressed as typed; a provider's alias is a handle of its own. Only an address
+the caller handed is recorded: a recipient a reply inherits from its parent is
+answered as its handle stores it (a reply is handed no address of its own:
+To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one
+records none. A recorded address is always, as written, a spelling of its
+handle's address or of a handle merged into it (`Handle.is_spelling_of(...,
+merged=True)`, checked when the row is saved). Who writes decides what a
+merge does (`MessageManager._land_addressees`): a person's compose to an
+address a contact administrator merged into another records nothing and
+follows the merge to the kept handle's value, which is what a merge is for and
+why only a contact administrator may merge two addresses; system mail
+(`compose_as_system`, so `send_mail`) records the address on the kept
+handle's row and goes exactly there, so a merge never redirects an account's
+or a workflow's mail. A person's compose in another spelling of the kept
+handle's own address is mailed as typed. An address the
+transport cannot carry as typed (`carries_address`) records nothing and is
+mailed at the handle's value. The reader (`Recipient.envelope_address`) asks
+the message's channel what a recorded address the handle's merges no longer
+name means (the merge it was written under reverted, a row written past that
+check): on the system channel (`Channel.system_only`) the whole message is
+refused, settled failed with the reason "A recipient of this message no longer
+names the address it was written for.", so system mail is exact or not sent and
+never reaches the kept handle's mailbox, and a new mail lands on the address's
+own handle; a person's row, which records only spellings of its own handle and
+follows the handle, is mailed at the handle's value with a warning naming the
+row. The one place a recorded address can outlive its handle's value is
+`HandleManager.reidentify` (and `upsert`'s external-id path into it), which
+rewrites a live handle's value: the row keeps the spelling it was given, and
+the message is read as above each time. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
@@ -113,6 +144,10 @@ channel [`ChannelQuerySet.outbound_email_rule`](managers.py) admits, whose
 sender is checked only when a message is sent; and `message_recipient_limit`
 states the recipient bound.
 
+A channel's backend is chosen by connecting it, and its form shows the backend
+read-only: a channel whose backend is no longer registered (its addon removed) is
+not repaired there; connecting the channel again is the remedy.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and
@@ -132,7 +167,12 @@ permanently. Lock contention defers work without consuming an attempt.
 locks the row, decides eligibility and sets a bounded delivery lease; the dispatch
 publishes the reserved identifiers through the jobs owner's on-commit hook. The periodic
 `release_held_messages` task releases due drafts/retries and recovers expired
-unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. Retry
+unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. A
+message recorded while the broker is unreachable is not lost: the failed hand-off is logged at
+`ERROR` (`django.db.backends.base`) without failing the caller, the row stays queued, and the
+release (every 60 seconds, from the jobs beat scheduler) hands it off again once its dispatch
+lease has passed, `DELIVERY_TASK_EXPIRES` (300 seconds) after it was reserved, spending no
+delivery attempt. Retry
 settlement retains the enqueue-owned lease through the next scheduled attempt;
 terminal settlement clears it. Queued rows without a lease are never released
 automatically, even if they carry a due schedule.
@@ -265,7 +305,11 @@ Django's default mailer, `MAILERS["default"]`, is messaging's
 [`SystemMailer`](email.py), contributed by [`autoconfig.py`](autoconfig.py): it
 records each email Django sends (a password reset, `sendtestemail`, a link an
 addon mails) on the system channel, and messaging delivers it through the
-transport. A deployment states only the transport:
+transport. A consumer that sends its organisation's own mail may instead send it
+straight through the `transport` mailer by name (`TRANSPORT_MAILER_ALIAS`): that
+mail is outside messaging, which neither records, delivers nor retries it. This
+is a deliberate exception, and it ends when named system work can compose on an
+ordinary channel. A deployment states only the transport:
 
 ```yaml
 MAILERS:
@@ -276,6 +320,13 @@ MAILERS:
       port: 587
       use_tls: true
 ```
+
+An email channel sends from the address its own config names (`from_email`), else
+from the deployment's `DEFAULT_FROM_EMAIL` (`AnymailEmailChannelBackend.outbound_sender`).
+While that address is not one valid address the transport can carry, a send on the
+channel is refused under `channel`: the person sending reads only that the channel
+needs a valid sender address, and an operator fixes the channel's `from_email`, or
+`DEFAULT_FROM_EMAIL` when the channel names none.
 
 Settings load refuses, naming the edit, a mailer setting that collides with the
 one messaging owns: a deployment's own `MAILERS.default` (rename it to
@@ -392,7 +443,10 @@ takes, plus `carries_address`: a sender whose part before the `@` is outside
 ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
 `Message.objects.clean_system_recipient(entry, key=...)`, which
 `compose_as_system` applies to each recipient and a caller asks before offering
-a send; both read nothing.
+a send; both read nothing. A system mail is mailed exactly at the address its
+caller gave, after that rule, which its recipient row records, on whichever
+handle holds any spelling of it; it goes out from `DEFAULT_FROM_EMAIL` as
+configured, whatever spelling the sender's handle was first stored in.
 
 An error report hides every local of every frame of the system write, from the
 system mailer and `compose_as_system` down to the ORM's and the SQL's, and of
@@ -402,9 +456,11 @@ form is its preview: `Message.deliver` down, the worker's
 `run_message_delivery` down to the transport library's own frames, the release
 task's `release_held_messages` down, and the operator's `retry_delivery` and
 `acknowledge_delivery` down. Django's filter applies only with `DEBUG` off, so a
-debug page shows them all, and it never filters an exception's own message: a
-transport's or a database's error text can carry what the server echoed (an
-address, a line of the mail). An ordinary `compose`'s report
+debug page shows them all, and it never filters an exception's own message. A
+transport's error never leaves the delivery task: when recording its failure fails
+too, that failure is raised on its own and the transport's error is logged by its
+types alone. What is still not filtered is a database error's own text, and a
+caller's own frames above the system mailer. An ordinary `compose`'s report
 therefore shows hidden frames below the writer, while `compose`'s own frame is
 not marked. Frames above the system mailer are the caller's: Django's
 `send_mail` holds the message it was given, so a caller that mails a credential

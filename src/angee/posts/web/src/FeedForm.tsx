@@ -12,7 +12,7 @@ function FeedForm({ resource: _resource, ...props }: RegisteredFormProps): React
     <Form {...props} resource={FEED_MODEL}>
       <Field name="display_name" label={t("feed.name")} title createOnly />
       <Group label={t("feed.details")} columns={2}>
-        <Field name="feed_backend_class" label={t("feed.backend")} createOnly />
+        <Field name="feed_backend_class" label={t("feed.backend")} />
         <Field name="external_id" label={t("feed.externalId")} readOnly />
         <Field name="handle" label={t("feed.handle")} readOnly />
         <Field name="lifecycle" label={t("feed.lifecycle")} readOnly />

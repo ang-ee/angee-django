@@ -20,6 +20,7 @@ function DescriptorFieldListDemo(): React.ReactElement {
   // The list lives in an action form: its provider carries editor validation and the preset memory.
   const { form, run } = useActionForm<Record<string, unknown>>({
     defaultValues: { title: "Example", details: true, note: "" },
+    shownFieldNames: fields.map((field) => field.name),
     submit: (values) => { setSubmitted(values); return { status: "ok", data: null }; },
   });
   return <ActionFormProvider {...form}>

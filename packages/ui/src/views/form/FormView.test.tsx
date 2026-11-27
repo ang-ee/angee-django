@@ -1347,6 +1347,86 @@ describe("FormView", () => {
     expect(document.querySelectorAll("aside")).toHaveLength(1);
   });
 
+  test("a record whose implementation key is not registered opens, says so and offers the registered ones", async () => {
+    const backend = { name: "backend", kind: "enum" as const, readable: true, aggregatable: false,
+      creatable: true, updatable: true, requiredOnCreate: false,
+      values: [{ value: "LOCAL", description: "Local" }, { value: "STUB", description: "Stub" }] };
+    const resource = testDataResource("notes.Note", { fields: [backend], implFields: ["backend"] });
+    const record = { id: "note-1", title: "First", backend: null, permissions: ["read", "write"] };
+    const page = (locked: { readOnly?: boolean; createOnly?: boolean }) => renderWithProviders(<FormView resource="notes.Note"
+      id="note-1" fields={[{ name: "title", title: true }, { name: "backend", label: "Backend", ...locked }]}
+      acknowledgedSource={{ record, values: record }} />,
+    { types: { NoteType: { resource, fields: { backend } } } });
+
+    // The mark names the one fact; the control's accessible description explains it by case, so a
+    // screen reader hears it on focus.
+    const description = (element: Element) => (element.getAttribute("aria-describedby") ?? "").split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "").join(" ").trim();
+
+    page({});
+    const control = await screen.findByRole("combobox", { name: "Backend" });
+    expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+    expect(description(control)).toBe("Its implementation cannot run until another is chosen.");
+    fireEvent.click(control);
+    expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
+
+    // A selector read-only in this form cannot change here: declared so, or create-only by the page alone
+    // (the model's metadata does not make it create-only, so no repair is offered).
+    for (const locked of [{ readOnly: true }, { createOnly: true }]) {
+      cleanup();
+      page(locked);
+      expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+      const note = screen.getByText("Its implementation cannot run. It cannot be changed here.");
+      expect(note.className).toContain("sr-only");
+      expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+    }
+    // Create-only is the model's own fact in its metadata: the page states nothing, and on a stored record
+    // whose key is registered the field is locked (the repair, on a key not registered, is FormView.repair.test.tsx).
+    {
+      cleanup();
+      const createOnly = { ...backend, createOnly: true };
+      const published = testDataResource("notes.Note", { fields: [createOnly], implFields: ["backend"] });
+      const registered = { ...record, backend: "LOCAL" };
+      renderWithProviders(<FormView resource="notes.Note" id="note-1"
+        fields={[{ name: "title", title: true }, { name: "backend", label: "Backend" }]}
+        acknowledgedSource={{ record: registered, values: registered }} />,
+      { types: { NoteType: { resource: published, fields: { backend: createOnly } } } });
+      expect(await screen.findByText("Local")).toBeTruthy();
+      expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+      expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
+    }
+  });
+
+  test("a create form never marks an implementation key; a picked registered one clears the mark until discarded", async () => {
+    const backend = { name: "backend", kind: "enum" as const, readable: true, aggregatable: false,
+      creatable: true, updatable: true, requiredOnCreate: false,
+      values: [{ value: "LOCAL", description: "Local" }, { value: "STUB", description: "Stub" }] };
+    const resource = testDataResource("notes.Note", { fields: [backend], implFields: ["backend"] });
+    const schema = { types: { NoteType: { resource, fields: { backend } } } };
+    const fields = [{ name: "title", title: true }, { name: "backend", label: "Backend" }];
+
+    sdkMocks.record = null;
+    renderWithProviders(<FormView resource="notes.Note" fields={fields} />, schema);
+    expect(await screen.findByRole("combobox", { name: "Backend" })).toBeTruthy();
+    expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
+
+    cleanup();
+    const record = { id: "note-1", title: "First", backend: null, permissions: ["read", "write"] };
+    renderWithProviders(<FormView resource="notes.Note" id="note-1" fields={fields}
+      acknowledgedSource={{ record, values: record }} />, schema);
+    fireEvent.click(await screen.findByRole("combobox", { name: "Backend" }));
+    expect(screen.getByLabelText("Not registered: Backend")).toBeTruthy();
+    const local = await screen.findByRole("option", { name: "Local" });
+    fireEvent.pointerDown(local, { pointerType: "mouse" });
+    fireEvent.click(local);
+    await waitFor(() => expect(screen.queryByLabelText("Not registered: Backend")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+  });
+
   test("a rail child's permission gates the groups it declares", async () => {
     const renderRail = (permissions: string[]) => {
       const record = { id: "note-1", title: "First", permissions };
@@ -4147,7 +4227,9 @@ describe("FormView", () => {
     expect(draftAndError()).toEqual({ draft: true, error: true });
   });
 
-  test("guard: after a save that failed on its lines, a chosen pane dropped and returned gives way to the lines pane, which the failure selects again", async () => {
+  // Only a refusal's reveal selects a pane (`revealField`), once, when the refusal is answered: no effect of
+  // the lines selects them again when the strip returns, so the pane the person chose after it stands.
+  test("after a save that failed on its lines, a pane the person then chose, dropped and returned, is the selected one again", async () => {
     sdkMocks.record = { ...sdkMocks.record, wordCount: 5 };
     const submit = renderLinedNoteRefused();
     const selected = () => screen.queryAllByRole("tab").map((tab) => `${tab.textContent}${tab.getAttribute("aria-selected") === "true" ? "*" : ""}`);
@@ -4158,7 +4240,9 @@ describe("FormView", () => {
     await setWords("3", []);
     expect(screen.getByRole("heading", { name: "Lines" })).toBeTruthy();
     await setWords("7", ["Lines", "Extra"]);
-    await waitFor(() => expect(selected()).toEqual(["Lines*", "Extra"]));
+    // Past every timer: an effect that selected the lines again would have run by now.
+    await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+    expect(selected()).toEqual(["Lines", "Extra*"]);
   });
 
   test("a lone tab kept mounted, put behind a tab that appears ahead of it, stays mounted hidden and keeps its own state when it is lone again", async () => {
@@ -4275,7 +4359,8 @@ describe("FormView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await screen.findByText("Label is taken.");
     await screen.findByText("Code is taken.");
-    expect(document.activeElement).toBe(label);
+    // Focus follows the answer's render, through the form's own `setFocus`.
+    await waitFor(() => expect(document.activeElement).toBe(label));
   });
 
   test("a save the server refuses for a shown field and for a form-level reason moves focus to its banner, which also names the field", async () => {

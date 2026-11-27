@@ -221,6 +221,18 @@ describe("useRelationFacets", () => {
     expect(result.current[0]?.options[0]?.value).toBe("DRAFT");
   });
 
+  test("a declared facet whose read is refused carries its words", () => {
+    dataMocks.facets.mockReturnValue(resourceFacets({
+      status: [{ value: "draft", label: "DRAFT", count: 1, key: { status: "draft" } }],
+    }, { status: new Error("A record holds a value status no longer offers.") }));
+    const { result } = renderHook(
+      () => useRelationFacets("agents.InferenceModel", [{ field: "status" }]),
+      { wrapper: Metadata },
+    );
+    expect(result.current[0]?.error).toBe("A record holds a value status no longer offers.");
+    expect(result.current[0]?.options).toHaveLength(1);
+  });
+
   test("stays inert when the field is not a listable relation", () => {
     const { result } = renderHook(
       () =>
@@ -295,6 +307,7 @@ function facetOptions(): readonly ResourceFacetOption[] {
 
 function resourceFacets(
   facets: Record<string, readonly ResourceFacetOption[]>,
+  errors: Readonly<Record<string, Error>> = {},
 ) {
   return {
     facets: Object.fromEntries(
@@ -307,6 +320,7 @@ function resourceFacets(
         },
       ]),
     ),
+    errors,
     fetching: false,
     error: null,
     refetch: vi.fn(),

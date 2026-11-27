@@ -39,7 +39,7 @@ import {
 } from "./form-view-surface";
 import {
   FORM_VIEW_COLUMN_CLASS,
-  FormViewLinesPane,
+  FormViewLines,
   FormViewPaneGroup,
   FormViewRail,
   FormViewRecordHeader,
@@ -306,7 +306,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
   const paneContent = (pane: FormViewPane): React.ReactNode => {
     if (awaitingRecord || recordTabPending) return null;
     const active = activeRecordTab === pane.id;
-    if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLinesPane surface={surface} {...lineProps} />;
+    if (pane.id === EDITABLE_LINES_SECTION) return <FormViewLines surface={surface} {...lineProps} />;
     const paneSection = surface.paneSections.find((section) => section.pane === pane.id);
     if (paneSection) return <FormViewPaneGroup surface={surface} section={paneSection} />;
     const tab = recordTabById.get(pane.id);

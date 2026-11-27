@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { act, cleanup, render, renderHook } from "@testing-library/react";
-import { createElement } from "react";
+import { act, cleanup, render, renderHook, waitFor } from "@testing-library/react";
+import { Activity, createElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { useForm } from "react-hook-form";
 import { boundedGraphQLTransportError, type ActionOutcome } from "@angee/refine";
@@ -26,7 +26,7 @@ import {
   messagesForDottedPath,
   serverErrorsFromForm,
   useDottedPathFieldErrors,
-  useRefusalBannerFocus,
+  useRefusalFocus,
   validationErrorMap,
   validationErrorMessages,
   validationErrorsFromError,
@@ -308,9 +308,9 @@ describe("validationErrorMessages", () => {
 
 describe("useDottedPathFieldErrors", () => {
   test("binds and clears exact dotted descendants and summarizes unmatched keys", () => {
-    const fieldNames = ["review", "rows"];
+    const shownFieldNames = ["review", "rows"];
     const { result } = renderHook(() =>
-      useDottedPathFieldErrors(fieldNames),
+      useDottedPathFieldErrors(shownFieldNames),
     );
 
     act(() =>
@@ -472,7 +472,7 @@ describe("shared form submission errors", () => {
       applyFormErrors(result.current, invalidFormSubmit({
         fieldErrors: { "rows.0.title": ["Required", "Use a unique title"], rowsExtra: ["Unknown field"] },
         formErrors: ["Review the form"],
-      }), { fieldNames: ["rows"] });
+      }), { shownFieldNames: ["rows"] });
     });
     expect(result.current.getFieldState("rows.0.title").error).toMatchObject({
       type: "server", message: "Required Use a unique title", types: { server: ["Required", "Use a unique title"] },
@@ -487,20 +487,48 @@ describe("shared form submission errors", () => {
     });
   });
 
+  test("one form-level error reads as one list, so the list is new exactly when a new answer lands", () => {
+    const { result } = renderHook(() => useForm<Record<string, unknown>>());
+    act(() => result.current.setError("root.server", { type: "server", message: "Set by another owner." }));
+    const first = result.current.getFieldState("root.server").error!;
+    // A message alone, as another owner sets it: two reads of the one error object give the same list.
+    expect(formErrorsFromForm({ root: { server: first } })).toBe(formErrorsFromForm({ root: { server: first } }));
+    expect(formErrorsFromForm({ root: { server: first } })).toEqual(["Set by another owner."]);
+    act(() => result.current.setError("root.server", { type: "server", message: "Set by another owner." }));
+    const second = result.current.getFieldState("root.server").error!;
+    expect(second).not.toBe(first);
+    expect(formErrorsFromForm({ root: { server: second } })).not.toBe(formErrorsFromForm({ root: { server: first } }));
+  });
+
   test("a refusal bound to a rendered field is shown there once, not again as the fallback", () => {
     const { result } = renderHook(() => useForm<Record<string, unknown>>());
     act(() => {
       applyFormErrors(result.current, invalidFormSubmit({ fieldErrors: { url: ["The address is not allowed."] }, formErrors: [] }),
-        { fieldNames: ["url"], fallback: "Could not subscribe." });
+        { shownFieldNames: ["url"], fallback: "Could not subscribe." });
     });
     expect(result.current.getFieldState("url").error?.message).toBe("The address is not allowed.");
     expect(result.current.getFieldState("root.server").error).toBeUndefined();
     act(() => {
       result.current.clearErrors();
       applyFormErrors(result.current, invalidFormSubmit({ fieldErrors: {}, formErrors: [] }),
-        { fieldNames: ["url"], fallback: "Could not subscribe." });
+        { shownFieldNames: ["url"], fallback: "Could not subscribe." });
     });
     expect(result.current.getFieldState("root.server").error?.message).toBe("Could not subscribe.");
+  });
+
+  test("an empty list of shown fields claims none: every field reason shows on the banner, as `path: reason`, and the banner is asked", () => {
+    const { result } = renderHook(() => useForm<Record<string, unknown>>());
+    const focus = vi.fn();
+    act(() => {
+      applyFormErrors(result.current, invalidFormSubmit({
+        fieldErrors: { url: ["The address is not allowed."], "rows.0.qty": ["Too many."] }, formErrors: [],
+      }), { shownFieldNames: [], focus });
+    });
+    // Each reason is still set at its path, for a control a page renders itself.
+    expect(result.current.getFieldState("url").error?.message).toBe("The address is not allowed.");
+    expect(formErrorsFromForm({ root: { server: result.current.getFieldState("root.server").error } }))
+      .toEqual(["url: The address is not allowed.", "rows.0.qty: Too many."]);
+    expect(focus.mock.calls).toEqual([[undefined]]);
   });
 });
 
@@ -609,20 +637,22 @@ describe("where a refusal brings the person (applyFormErrors with `focus`)", () 
     const setError = vi.fn();
     const focus = vi.fn();
     applyFormErrors({ setError } as never, { status: "invalid", issues }, {
-      fieldNames: ["label", "code"],
+      shownFieldNames: ["label", "code"],
       fieldSummary: (errors) => `Fix: ${Object.keys(errors).join(", ")}`,
       fallback: "Save failed.",
       ...(ask ? { focus } : {}),
     });
+    // The binder never focuses itself (the form library's `shouldFocus`): the surface's hook does, when it can.
+    expect(setError.mock.calls.every(([, , options]) => options === undefined)).toBe(true);
     const banner = setError.mock.calls.find(([name]) => name === "root.server")?.[1] as { types: { server: string[] } } | undefined;
     return {
-      fieldFocused: setError.mock.calls.filter(([, , options]) => (options as { shouldFocus?: boolean } | undefined)?.shouldFocus).map(([name]) => name),
-      bannerAsked: focus.mock.calls.length,
+      fieldFocused: focus.mock.calls.flatMap(([field]) => field === undefined ? [] : [field]),
+      bannerAsked: focus.mock.calls.filter(([field]) => field === undefined).length,
       banner: banner?.types.server ?? [],
     };
   }
 
-  test("field reasons only: the first refused field in the form's order takes focus, and the banner is not asked", () => {
+  test("field reasons only: the surface is asked to focus the first refused field in the form's order, not the banner", () => {
     expect(refuse({ fieldErrors: { code: ["Taken."], label: ["Too long."] }, formErrors: [] }))
       .toEqual({ fieldFocused: ["label"], bannerAsked: 0, banner: ["Fix: code, label"] });
   });
@@ -647,57 +677,152 @@ describe("where a refusal brings the person (applyFormErrors with `focus`)", () 
   });
 });
 
-describe("useRefusalBannerFocus", () => {
+describe("useRefusalFocus", () => {
   afterEach(() => { cleanup(); document.body.replaceChildren(); });
-  /** A banner element and a refused field in the document, and the hook over a list of messages. */
+  /**
+   * A banner element and a refused field `label` in the document, and the hook over a list of
+   * messages. Its form's `setFocus` focuses `label`'s control on a timer, as the form library's
+   * own does; `none` names a field with no control to focus.
+   */
   function mount() {
     const banner = document.body.appendChild(document.createElement("div"));
     banner.tabIndex = -1;
     const field = document.body.appendChild(document.createElement("input"));
     field.setAttribute("aria-invalid", "true");
     const other = document.body.appendChild(document.createElement("button"));
-    const hook = renderHook(({ messages }: { messages: readonly string[] }) => {
-      const focus = useRefusalBannerFocus(messages);
+    const setFocus = vi.fn((name: string) => { setTimeout(() => { if (name === "label") field.focus(); }); });
+    const bannerFocused = vi.fn();
+    banner.addEventListener("focus", bannerFocused);
+    const hook = renderHook(({ messages, ready }: { messages: readonly string[]; ready: boolean }) => {
+      const focus = useRefusalFocus(messages, { form: { setFocus } as never, ready });
       focus.banner.ref.current = banner;
       return focus;
-    }, { initialProps: { messages: [] as readonly string[] } });
-    return { banner, field, other, hook };
+    }, { initialProps: { messages: [] as readonly string[], ready: true } });
+    return { banner, field, other, hook, setFocus, bannerFocused };
   }
 
   test("asked by the refusal's owner, the banner takes focus when the new list lands, also from a refused field", () => {
     const { banner, field, hook } = mount();
     field.focus();
-    hook.result.current.focusBanner();
+    act(() => hook.result.current.focus());
     expect(document.activeElement).toBe(field);
-    hook.rerender({ messages: ["The note is misconfigured."] });
+    hook.rerender({ messages: ["The note is misconfigured."], ready: true });
     expect(document.activeElement).toBe(banner);
+  });
+
+  test("asked for a field, it focuses that field through the form's own setFocus, and the banner keeps out", async () => {
+    const { field, other, hook, setFocus, bannerFocused } = mount();
+    other.focus();
+    act(() => hook.result.current.focus("label"));
+    hook.rerender({ messages: ["Fix: label"], ready: true });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(setFocus.mock.calls).toEqual([["label"]]);
+    expect(bannerFocused).not.toHaveBeenCalled();
+  });
+
+  // `ready` guards no path a shipped surface takes today: each commits the refusal and the end of
+  // its submit in one batch. It is what keeps the hook from depending on that batching, and this
+  // test is its one proof.
+  test("not ready (its controls locked), the request waits, and is carried out once the surface is ready", async () => {
+    const { field, other, hook, setFocus } = mount();
+    hook.rerender({ messages: [], ready: false });
+    other.focus();
+    act(() => hook.result.current.focus("label"));
+    hook.rerender({ messages: ["Fix: label"], ready: false });
+    expect(setFocus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(other);
+    hook.rerender({ messages: ["Fix: label"], ready: true });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(setFocus.mock.calls).toEqual([["label"]]);
+  });
+
+  test("a field whose control takes no focus leaves it to the banner", async () => {
+    const { banner, other, hook } = mount();
+    other.focus();
+    act(() => hook.result.current.focus("none"));
+    hook.rerender({ messages: ["Fix: none"], ready: true });
+    await waitFor(() => expect(document.activeElement).toBe(banner));
   });
 
   test("not asked, the banner leaves focus in a refused field, and takes it from anywhere else", () => {
     const { banner, field, other, hook } = mount();
     field.focus();
-    hook.rerender({ messages: ["Fix: code"] });
+    hook.rerender({ messages: ["Fix: code"], ready: true });
     expect(document.activeElement).toBe(field);
     other.focus();
-    hook.rerender({ messages: ["Fix: code, label"] });
+    hook.rerender({ messages: ["Fix: code, label"], ready: true });
     expect(document.activeElement).toBe(banner);
   });
 
   test("asking is spent by one list: a later list that is not asked for leaves a refused field its focus", () => {
     const { banner, field, hook } = mount();
-    hook.result.current.focusBanner();
-    hook.rerender({ messages: ["The note is misconfigured."] });
+    act(() => hook.result.current.focus());
+    hook.rerender({ messages: ["The note is misconfigured."], ready: true });
     expect(document.activeElement).toBe(banner);
     field.focus();
-    hook.rerender({ messages: ["Fix: code"] });
+    hook.rerender({ messages: ["Fix: code"], ready: true });
     expect(document.activeElement).toBe(field);
   });
 
   test("no list, no focus", () => {
     const { other, hook } = mount();
     other.focus();
-    hook.result.current.focusBanner();
-    hook.rerender({ messages: [] });
+    act(() => hook.result.current.focus());
+    hook.rerender({ messages: [], ready: true });
     expect(document.activeElement).toBe(other);
+  });
+
+  test("not asked, the same list still showing moves no focus when the surface is ready again", () => {
+    const { banner, other, hook, bannerFocused } = mount();
+    const list = ["The period is closed."];
+    hook.rerender({ messages: list, ready: true });
+    expect(document.activeElement).toBe(banner);
+    other.focus();
+    bannerFocused.mockClear();
+    // A submit that never answers (its check threw) locks and frees the controls with the old list showing.
+    hook.rerender({ messages: list, ready: false });
+    hook.rerender({ messages: list, ready: true });
+    expect(document.activeElement).toBe(other);
+    expect(bannerFocused).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["in the render of its request", false],
+    ["one render after its request, while the field's focus is on its way", true],
+  ] as const)("a field's own list, landing %s, is handled by the field: ready again, the banner keeps out", async (_when, apart) => {
+    const { field, other, hook, bannerFocused } = mount();
+    const list = ["Fix: label"];
+    if (apart) {
+      act(() => hook.result.current.focus("label"));
+      hook.rerender({ messages: list, ready: true });
+    } else {
+      act(() => { hook.result.current.focus("label"); hook.rerender({ messages: list, ready: true }); });
+    }
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    // The banner's turn is the timer after the field's: let it pass before the surface locks again.
+    await act(() => new Promise<void>((resolve) => { setTimeout(resolve); }));
+    other.focus();
+    hook.rerender({ messages: list, ready: false });
+    hook.rerender({ messages: list, ready: true });
+    expect(document.activeElement).toBe(other);
+    expect(bannerFocused).not.toHaveBeenCalled();
+  });
+
+  test("hidden while a field's focus is on its way, then shown again, it still carries out the next request", () => {
+    const setFocus = vi.fn();
+    const hook: { current?: ReturnType<typeof useRefusalFocus> } = {};
+    function Surface() {
+      hook.current = useRefusalFocus([], { form: { setFocus } as never });
+      return null;
+    }
+    const view = (mode: "visible" | "hidden") => createElement(Activity, { mode, children: createElement(Surface) });
+    const { rerender } = render(view("visible"));
+    act(() => hook.current!.focus("label"));
+    expect(setFocus).toHaveBeenCalledTimes(1);
+    // Hidden, the surface's effects are cleaned up with that field's focus still on its way.
+    act(() => rerender(view("hidden")));
+    act(() => rerender(view("visible")));
+    act(() => hook.current!.focus("label"));
+    expect(setFocus).toHaveBeenCalledTimes(2);
   });
 });

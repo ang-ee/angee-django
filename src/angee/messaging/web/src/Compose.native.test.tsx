@@ -1,0 +1,683 @@
+// @vitest-environment happy-dom
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import { enUiMessages as UI } from "@angee/ui/i18n/en";
+import { createUiTestProviders, recordFocusCalls, type RecordedFocusCall } from "@angee/ui/testing";
+
+import { ComposerStory } from "./Compose.stories";
+import {
+  MESSAGE, RECORDED, recordedSend, type ComposerFixture, type ComposerFixtureCall, type ComposerSeat,
+} from "./compose.fixtures.test-support";
+import { enMessagingMessages as M } from "./i18n";
+import { composeOutcome } from "./compose";
+
+// The virtualizer's windowing needs a real layout happy-dom lacks: every row renders.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getTotalSize: () => count * 96,
+    getVirtualItems: () => Array.from({ length: count }, (_, index) => ({ index, key: index, start: index * 96, size: 96 })),
+    measureElement: () => {},
+    scrollToIndex: () => {},
+  }),
+}));
+
+const { createClient, clearClients } = createUiTestProviders();
+let recorder: ReturnType<typeof recordFocusCalls> | undefined;
+afterEach(() => { recorder?.restore(); recorder = undefined; cleanup(); clearClients(); });
+
+/** One of the fragment's own words, as its bundle has it. */
+function word(key: string, values: Record<string, string | number> = {}): string {
+  const text = M[key] ?? M[`${key}_other`];
+  if (text === undefined) throw new Error(`The messaging bundle has no ${key}.`);
+  return Object.entries(values).reduce((sentence, [name, value]) => sentence.replace(`{${name}}`, String(value)), text);
+}
+
+/** One of the shared UI's words, as its bundle has it. */
+function ui(key: string): string {
+  const text = UI[key];
+  if (text === undefined) throw new Error(`The ui bundle has no ${key}.`);
+  return text;
+}
+
+/** The reasons a recorded in-band refusal gives under one argument (`validation_errors` is JSON on the wire). */
+function reasonsUnder(answer: ReturnType<typeof recordedSend>["answer"] | undefined, argument: string): readonly string[] {
+  if (!answer || !("data" in answer)) throw new Error("The refusal is not recorded in band.");
+  const errors = answer.data.compose_message?.validation_errors as Readonly<Record<string, readonly string[]>> | null | undefined;
+  return errors?.[argument] ?? [];
+}
+
+function recordedOk(seat: ComposerSeat, text: string): { id: string; message: string } {
+  const answer = recordedSend(seat, text).answer;
+  if (!("data" in answer) || !answer.data.compose_message?.ok) throw new Error(`The send of "${text}" was not written.`);
+  return { id: String(answer.data.compose_message.id), message: String(answer.data.compose_message.message) };
+}
+
+function mount(props: Partial<Parameters<typeof ComposerStory>[0]> & { surface: Parameters<typeof ComposerStory>[0]["surface"] }) {
+  const calls: ComposerFixtureCall[] = [];
+  let fixture: ComposerFixture | undefined;
+  const onSent = vi.fn();
+  const queryClient = createClient({ defaultOptions: { queries: { retry: false } } });
+  const story = (next: typeof props) => <ComposerStory {...next} onSent={onSent} onCall={(call) => calls.push(call)}
+    onFixture={(made) => { fixture = made; }} queryClient={queryClient} />;
+  const view = render(story(props));
+  return {
+    calls, onSent, queryClient,
+    /** The same story with other props: another conversation, say. */
+    rerender: (next: Partial<typeof props>) => view.rerender(story({ ...props, ...next })),
+    sends: () => calls.filter((call) => call.field === "compose_message").map((call) => call.args),
+    fixture: () => {
+      if (!fixture) throw new Error("The story has not handed over its fixture.");
+      return fixture;
+    },
+  };
+}
+
+async function openNewMessage(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole("button", { name: word("compose.newMessage") }));
+  return screen.findByRole("dialog", { name: word("compose.newMessage") });
+}
+
+/** Type one address into To, Cc or Bcc: a chip each. */
+function address(dialog: HTMLElement, field: string, ...entries: readonly string[]): void {
+  const input = within(dialog).getByRole("textbox", { name: field });
+  for (const entry of entries) fireEvent.change(input, { target: { value: `${entry},` } });
+}
+
+function fill(dialog: HTMLElement, values: { subject?: string; text: string }): void {
+  if (values.subject) fireEvent.change(within(dialog).getByRole("textbox", { name: word("compose.subject") }), { target: { value: values.subject } });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: word("compose.message") }), { target: { value: values.text } });
+}
+
+async function send(dialog: HTMLElement): Promise<void> {
+  const button = within(dialog).getByRole("button", { name: word("compose.send") });
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  // A real click moves focus to Send; `fireEvent.click` does not, which would leave it on the field it opened in.
+  act(() => button.focus());
+  fireEvent.click(button);
+}
+
+test("Ana's New message sends on her one channel, the chips as typed, and opens what it wrote", async () => {
+  const { sends, onSent } = mount({ surface: "new-message", seat: "ana" });
+  const dialog = await openNewMessage();
+  // One channel: fixed, labelled, and focus starts in To.
+  expect(await within(dialog).findByText("Support desk")).toBeTruthy();
+  await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: word("compose.to") })));
+  expect(within(dialog).getByText(word("compose.toHint", { count: RECORDED.seats.ana.recipientLimit }))).toBeTruthy();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  const written = recordedOk("ana", "Hello from Support.");
+  expect(await screen.findByText(written.message)).toBeTruthy();
+  await waitFor(() => expect(onSent).toHaveBeenCalledWith(written.id));
+  const [sent] = sends();
+  expect({ ...sent, idempotency_key: undefined }).toEqual({ ...recordedSend("ana", "Hello from Support.").variables, idempotency_key: undefined });
+  expect(sent?.idempotency_key).toEqual(expect.any(String));
+  expect(screen.queryByRole("dialog", { name: word("compose.newMessage") })).toBeNull();
+});
+
+/** Choose one option of the Channel picker. */
+/** The Channel picker: named for its field, then for its field and the channel chosen. */
+const CHANNEL_PICKER = new RegExp(`^${word("compose.channel")}`);
+
+async function chooseChannel(dialog: HTMLElement, label: string): Promise<void> {
+  fireEvent.click(within(dialog).getByRole("combobox", { name: CHANNEL_PICKER }));
+  const option = await screen.findByRole("option", { name: label });
+  fireEvent.pointerDown(option, { pointerType: "mouse", button: 0 });
+  fireEvent.pointerUp(option, { pointerType: "mouse", button: 0 });
+  fireEvent.click(option);
+  await waitFor(() => expect(within(dialog).getByRole("combobox", { name: CHANNEL_PICKER }).textContent).toContain(label));
+}
+
+/** The dialog's banner once it holds focus, as it does for a failure no field holds. */
+async function banner(dialog: HTMLElement): Promise<HTMLElement> {
+  let focused: HTMLElement | null = null;
+  await waitFor(() => {
+    focused = document.activeElement instanceof HTMLElement && document.activeElement.getAttribute("role") === "alert"
+      && dialog.contains(document.activeElement) ? document.activeElement : null;
+    expect(focused).not.toBeNull();
+  });
+  return focused!;
+}
+
+/** The banner's lines, one per reason it holds. */
+function bannerLines(node: HTMLElement): string[] {
+  const items = [...node.querySelectorAll("li")];
+  return items.length ? items.map((item) => item.textContent ?? "") : [node.textContent ?? ""];
+}
+
+/** The banner's line that names a refused field, whose own reason shows under it. */
+function namesField(label: string): string {
+  return ui("form.fixHighlightedFieldsNamed").replace("{fields}", label);
+}
+
+/**
+ * A refusal of one field brings the person to that field's control, once the control takes focus
+ * (`recordFocusCalls`: each call's target could take it), and never to the banner.
+ */
+async function expectFocusOn(control: () => HTMLElement, calls: readonly RecordedFocusCall[]): Promise<void> {
+  await waitFor(() => expect(document.activeElement).toBe(control()));
+  expect(document.activeElement?.getAttribute("aria-invalid")).toBe("true");
+  expect(calls.filter((call) => call.target.getAttribute("role") === "alert")).toEqual([]);
+  expect(calls.filter((call) => !call.takesFocus).map((call) => call.target.outerHTML.slice(0, 80))).toEqual([]);
+}
+
+test("Dana chooses among the channels the server lists as sendable, and Billing is refused at send under Channel", async () => {
+  const { calls, sends } = mount({ surface: "new-message", seat: "dana" });
+  const dialog = await openNewMessage();
+  const channel = await within(dialog).findByRole("combobox", { name: word("compose.channel") });
+  await waitFor(() => expect(document.activeElement).toBe(channel));
+  fill(dialog, { text: "Your invoice." });
+  address(dialog, word("compose.to"), "client@example.test");
+  // Send waits for a channel.
+  expect(within(dialog).getByRole("button", { name: word("compose.send") }).hasAttribute("disabled")).toBe(true);
+  await chooseChannel(dialog, "Billing desk");
+  // The picker offers what `sendable` lists: never Archive, which Dana reads and may not send on.
+  expect(calls.some((call) => call.field === "channels" && JSON.stringify(call.args.where ?? null).includes("sendable"))).toBe(true);
+  recorder = recordFocusCalls();
+  await send(dialog);
+  const refusal = recordedSend("dana", "Your invoice.").answer;
+  if (!("data" in refusal)) throw new Error("The recorded Billing send was answered with an error.");
+  const [reason = ""] = reasonsUnder(refusal, "channel");
+  expect(reason).toBeTruthy();
+  // Its reason shows once, under the field; the banner names the field; focus lands on the field.
+  expect(await within(dialog).findAllByText(reason)).toHaveLength(1);
+  expect(bannerLines(within(dialog).getByRole("alert"))).toEqual([namesField(word("compose.channel"))]);
+  await expectFocusOn(() => within(dialog).getByRole("combobox", { name: CHANNEL_PICKER }), recorder.calls);
+  expect(sends()).toHaveLength(1);
+});
+
+test.each([
+  ["an entry that is no address", ["ana"], "Hello."],
+  ["an encoded word", ["=?utf-8?q?Ana?= <ana@example.test>"], "Hello."],
+  ["more addresses than the bound", Array.from({ length: 51 }, (_, index) => `guest${index}@example.test`), "Hello, everyone."],
+])("a New message to %s is refused under To in the server's words, the values kept", async (_case, to, text) => {
+  mount({ surface: "new-message", seat: "ana" });
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), ...to);
+  fill(dialog, { text });
+  recorder = recordFocusCalls();
+  await send(dialog);
+  const answer = RECORDED.sends.find((entry) => entry.seat === "ana" && entry.variables.text === text
+    && JSON.stringify(entry.variables.to) === JSON.stringify(to))?.answer;
+  const [reason = ""] = reasonsUnder(answer, "to");
+  // Its reason shows once, under the field; the banner names the field; focus lands on the field.
+  expect(await within(dialog).findAllByText(reason)).toHaveLength(1);
+  expect(bannerLines(within(dialog).getByRole("alert"))).toEqual([namesField(word("compose.to"))]);
+  await expectFocusOn(() => within(dialog).getByRole("textbox", { name: word("compose.to") }), recorder.calls);
+  expect((within(dialog).getByRole("textbox", { name: word("compose.message") }) as HTMLTextAreaElement).value).toBe(text);
+});
+
+test("Send later sends the time with its offset, held, and the toast says it was scheduled", async () => {
+  const { sends } = mount({ surface: "new-message", seat: "ana" });
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { text: "See you tomorrow." });
+  expect(within(dialog).getByText(word("compose.sendLaterHint"))).toBeTruthy();
+  // A day next month, at 09:30 on the viewer's clock.
+  fireEvent.click(within(dialog).getByRole("button", { name: word("compose.sendLater") }));
+  fireEvent.click(await screen.findByRole("button", { name: "Go to the Next Month" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: /15th/ }))[0]!);
+  fireEvent.change(await screen.findByLabelText("Time"), { target: { value: "09:30" } });
+  await send(dialog);
+  expect((await screen.findAllByText(recordedOk("ana", "See you tomorrow.").message)).length).toBeGreaterThan(0);
+  const [sent] = sends();
+  expect(sent?.queued).toBe(false);
+  // The picked wall time in the viewer's zone, with its offset: the server never reads it in its own zone.
+  expect(String(sent?.scheduled_at)).toMatch(/^\d{4}-\d{2}-\d{2}T09:30:00(?:Z|[+-]\d{2}:\d{2})$/);
+});
+
+test("a lost answer is said in the dialog, and Send again carries the same key and lands on the original", async () => {
+  const { sends, onSent } = mount({ surface: "new-message", seat: "ana", lose: true });
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  expect(within(await banner(dialog)).getByText(ui("form.answerLostResend"))).toBeTruthy();
+  expect(onSent).not.toHaveBeenCalled();
+  await send(dialog);
+  const written = recordedOk("ana", "Hello from Support.");
+  await waitFor(() => expect(onSent).toHaveBeenCalledWith(written.id));
+  const [first, second] = sends();
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+});
+
+test("closed and opened again after a lost answer, the dialog's draft keeps its key", async () => {
+  const { sends } = mount({ surface: "new-message", seat: "ana", lose: true });
+  let dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  await banner(dialog);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  // It held typed values: the shared question first.
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: word("compose.newMessage") })).toBeNull());
+  dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  expect(await screen.findByText(recordedOk("ana", "Hello from Support.").message)).toBeTruthy();
+  const [first, second] = sends();
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+});
+
+test("reopened after a lost and dismissed mail, New message says an earlier attempt may already have been sent, and another mail is told the truth", async () => {
+  const { sends } = mount({ surface: "new-message", seat: "ana", lose: true });
+  let dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  await banner(dialog);
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: word("compose.newMessage") })).toBeNull());
+  dialog = await openNewMessage();
+  expect(within(dialog).getByText(word("compose.mayAlreadyBeSent")).closest("[role=status]")).toBeTruthy();
+  address(dialog, word("compose.to"), "ana");
+  fill(dialog, { text: "Hello." });
+  await send(dialog);
+  // Another mail under the kept key: the conflict, in words true for it; the note gives way to them.
+  expect(await within(dialog).findByText(word("compose.sentEarlier"))).toBeTruthy();
+  expect(within(dialog).queryByText(word("compose.mayAlreadyBeSent"))).toBeNull();
+  const [first, second] = sends();
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+});
+
+test("an edited send after a lost one is told the earlier version was sent, and the next send is a new draft", async () => {
+  const { sends } = mount({ surface: "new-message", seat: "ana", lose: true });
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  await banner(dialog);
+  fill(dialog, { subject: "Your order", text: "Hello from Support, again." });
+  await send(dialog);
+  expect(await within(dialog).findByText(word("compose.sentEarlier"))).toBeTruthy();
+  await banner(dialog);
+  await send(dialog);
+  await waitFor(() => expect(sends()).toHaveLength(3));
+  const [first, second, third] = sends();
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+  expect(third?.idempotency_key).not.toBe(first?.idempotency_key);
+});
+
+test("a lost Send now, then Send later: the hint says the earlier attempt keeps its timing, and the same key lands on the original, unscheduled", async () => {
+  const { sends, onSent } = mount({ surface: "new-message", seat: "ana", lose: true });
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  expect(within(dialog).getByText(word("compose.sendLaterHint"))).toBeTruthy();
+  await send(dialog);
+  await banner(dialog);
+  expect(await within(dialog).findByText(word("compose.sendLaterKeptHint"))).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: word("compose.sendLater") }));
+  fireEvent.click(await screen.findByRole("button", { name: "Go to the Next Month" }));
+  fireEvent.click((await screen.findAllByRole("button", { name: /15th/ }))[0]!);
+  fireEvent.change(await screen.findByLabelText("Time"), { target: { value: "09:30" } });
+  await send(dialog);
+  const written = recordedOk("ana", "Hello from Support.");
+  await waitFor(() => expect(onSent).toHaveBeenCalledWith(written.id));
+  expect((await screen.findAllByText(written.message)).length).toBeGreaterThan(0);
+  const [first, second] = sends();
+  expect(second?.queued).toBe(false);
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+});
+
+test("a denial after a lost answer says, in the dialog too, that an earlier attempt may already have been sent", async () => {
+  const { fixture } = mount({ surface: "new-message", seat: "ana", lose: true });
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { subject: "Your order", text: "Hello from Support." });
+  await send(dialog);
+  await banner(dialog);
+  fixture().as("anaRevoked");
+  await send(dialog);
+  const denied = recordedSend("anaRevoked", "Hello from Support.").answer;
+  if (!("error" in denied)) throw new Error("The revoked send was recorded as an answer.");
+  expect(await within(dialog).findByText(denied.error.message)).toBeTruthy();
+  expect(within(dialog).getByText(word("compose.mayAlreadyBeSent")).closest("[role=status]")).toBeTruthy();
+});
+
+test("a resolved answer tells the key's owner through the shared mapping: written, a conflict whatever carries it, else refused", () => {
+  const answer = (fields: Record<string, unknown>) => ({ compose_message: { ok: false, message: "Message not sent.", code: null, validation_errors: null, id: null, ...fields } });
+  expect(composeOutcome(answer({ ok: true, message: "Message queued for delivery.", id: "msg_1" }))).toBeNull();
+  expect(composeOutcome(answer({ code: "CREATION_KEY_CONFLICT" }))).toBe("conflict");
+  expect(composeOutcome(answer({ validation_errors: { to: ["ana is not one email address."] } }))).toBe("refused");
+  expect(composeOutcome(undefined)).toBe("refused");
+});
+
+// --- The reply box ---------------------------------------------------------------------------
+
+function transcriptList(): HTMLElement {
+  return screen.getByRole("list", { name: word("transcript.label") });
+}
+
+/** The row of one recorded message, found by its text. */
+async function row(text: string): Promise<HTMLElement> {
+  const found = (await screen.findAllByText(text)).map((node) => node.closest("li.group")).find(Boolean);
+  if (!(found instanceof HTMLElement)) throw new Error(`No transcript row reads "${text}".`);
+  return found;
+}
+
+function replyButtons(): HTMLElement[] {
+  return screen.queryAllByRole("button", { name: /^Reply to / });
+}
+
+/** The danger toasts showing, by title: Base UI labels each toast by its title, never the hidden announcer repeating it. */
+function dangerToasts(): string[] {
+  return [...document.querySelectorAll("[aria-labelledby][data-type='danger']")]
+    .map((toast) => document.getElementById(toast.getAttribute("aria-labelledby") ?? "")?.textContent ?? "");
+}
+
+/** Reply renders nothing until the gate answers: its read over the window's channels was asked, and every read settled. */
+async function gateAnswered({ calls, queryClient }: ReturnType<typeof mount>): Promise<void> {
+  await waitFor(() => expect(calls.some((call) => call.field === "channels" && JSON.stringify(call.args.where).includes("_in"))).toBe(true));
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+}
+
+/** The box has its answer, and told it: its note and any toast are set together with the end of sending. */
+async function answered(box: HTMLElement): Promise<void> {
+  await waitFor(() => expect(box.getAttribute("aria-busy")).toBeNull());
+}
+
+async function openReply(text: string): Promise<HTMLElement> {
+  const target = await row(text);
+  fireEvent.click(await within(target).findByRole("button", { name: /^Reply to / }));
+  return screen.findByRole("region", { name: /^Reply to / });
+}
+
+function typeReply(box: HTMLElement, text: string): HTMLTextAreaElement {
+  const input = within(box).getByRole("textbox", { name: M["composer.messageLabel"] }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: text } });
+  return input;
+}
+
+function submitReply(input: HTMLTextAreaElement): void {
+  fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+}
+
+test("Reply answers an email from the box docked under the conversation, sends only what an answer takes, and shows it Queued", async () => {
+  const { sends } = mount({ surface: "transcript", seat: "ana" });
+  const box = await openReply("Please add me.");
+  // As Messaging › Threads hosts it: no control moves the window.
+  expect(screen.queryByText(word("transcript.jumpDate"))).toBeNull();
+  // Reply opens the box it controls; pressed again it stays open, so it is no toggle.
+  const reply = within(await row("Please add me.")).getByRole("button", { name: /^Reply to / });
+  expect(reply.getAttribute("aria-expanded")).toBe("true");
+  expect(reply.getAttribute("aria-controls")).toBe(box.id);
+  expect(reply.hasAttribute("aria-pressed")).toBe(false);
+  expect(within(await row("Who can see this?")).getByRole("button", { name: /^Reply to / }).getAttribute("aria-expanded")).toBe("false");
+  expect(within(box).getByText(word("compose.sentFrom", { channel: "Support desk" }))).toBeTruthy();
+  // Described by its quote, so a second email of the same author reads apart.
+  expect(document.getElementById(box.getAttribute("aria-describedby") ?? "")?.textContent).toContain("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  // Two presses in one event turn, before the box can lock: its re-entry check keeps them to one request.
+  act(() => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+  });
+  const written = recordedOk("ana", "Thanks, adding you now.");
+  expect(await screen.findByText(written.message)).toBeTruthy();
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  expect(sends()).toHaveLength(1);
+  // The box gave focus back to the conversation.
+  await waitFor(() => expect(document.activeElement).toBe(transcriptList()));
+  const [sent] = sends();
+  // What the server receives: the arguments the document fills.
+  expect(Object.keys(sent ?? {}).filter((name) => sent?.[name] != null).sort()).toEqual(["idempotency_key", "parent", "queued", "text"]);
+  expect(sent).toMatchObject({ parent: MESSAGE.request, text: "Thanks, adding you now.", queued: true });
+  const written_row = await row("Thanks, adding you now.");
+  expect(within(written_row).getByText("Queued")).toBeTruthy();
+});
+
+test("a reply sent from an anchored conversation returns to the latest and gives focus to the list", async () => {
+  mount({ surface: "transcript", seat: "ana", anchor: `message:${MESSAGE.request}` });
+  const box = await openReply("Please add me.");
+  // As the inbox hosts it: its control moves the window.
+  expect(screen.getAllByText(word("transcript.jumpDate")).length).toBeGreaterThan(0);
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  await row("Thanks, adding you now.");
+  await waitFor(() => expect(document.activeElement).toBe(transcriptList()));
+});
+
+test("focus moved out of the transcript before the latest window renders stays where the person put it", async () => {
+  const { fixture } = mount({ surface: "transcript", seat: "ana", anchor: `message:${MESSAGE.request}` });
+  const box = await openReply("Please add me.");
+  const release = fixture().holdNextAnswer();
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  await within(box).findByRole("button", { name: word("compose.sending") });
+  // While it sends, the person moves on to a control outside the transcript: the pane's toolbar.
+  const elsewhere = screen.getByRole("button", { name: word("copies.showAll") });
+  act(() => elsewhere.focus());
+  await act(async () => release());
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  await row("Thanks, adding you now.");
+  expect(document.activeElement).toBe(elsewhere);
+});
+
+test("Reply is offered on the emails of a channel the seat may send on, and nowhere else", async () => {
+  const reader = mount({ surface: "transcript", seat: "ana", conversation: "sales" });
+  expect(await row("A quote, please.")).toBeTruthy();
+  await gateAnswered(reader);
+  expect(replyButtons()).toEqual([]);
+  cleanup();
+  mount({ surface: "transcript", seat: "dana", conversation: "sales" });
+  expect(await within(await row("A quote, please.")).findByRole("button", { name: /^Reply to / })).toBeTruthy();
+});
+
+test("a refused reply is toasted in the server's words and keeps its text", async () => {
+  mount({ surface: "transcript", seat: "ana" });
+  const box = await openReply("Who can see this?");
+  const input = typeReply(box, "Only you.");
+  submitReply(input);
+  const answer = recordedSend("ana", "Only you.").answer;
+  if (!("data" in answer)) throw new Error("The recorded refusal was answered with an error.");
+  expect((await screen.findAllByText(answer.data.compose_message?.message ?? "")).length).toBeGreaterThan(0);
+  expect(input.value).toBe("Only you.");
+  expect(screen.getByRole("region", { name: /^Reply to / })).toBeTruthy();
+});
+
+test("a reply's lost answer is told in the box's note, and Send again lands on the original", async () => {
+  const { sends } = mount({ surface: "transcript", seat: "ana", lose: true });
+  const box = await openReply("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  expect(await within(box).findByRole("status")).toHaveProperty("textContent", ui("form.answerLostResend"));
+  submitReply(input);
+  expect(await screen.findByText(recordedOk("ana", "Thanks, adding you now.").message)).toBeTruthy();
+  const [first, second] = sends();
+  expect(second?.idempotency_key).toBe(first?.idempotency_key);
+});
+
+test("a replay refused for a revoked right says an earlier attempt may already have been sent", async () => {
+  mount({ surface: "transcript", seat: "ana", lose: true, revokeAfterSend: true });
+  const box = await openReply("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  await within(box).findByText(ui("form.answerLostResend"));
+  submitReply(input);
+  const denied = recordedSend("anaRevoked", "Thanks, adding you now.").answer;
+  if (!("error" in denied)) throw new Error("The revoked replay was recorded as an answer.");
+  expect((await screen.findAllByText(denied.error.message)).length).toBeGreaterThan(0);
+  expect(await within(box).findByText(word("compose.replyMayAlreadyBeSent"))).toBeTruthy();
+});
+
+/** A data layer's notice recorder: the box tells its failures itself (`SURFACE_RENDERS_FAILURE`), so it opens none. */
+function noticeRecorder() {
+  return { open: vi.fn(), close: vi.fn() };
+}
+
+test("a reply's lost answer while the box is open is told by its note alone: no toast and no notice", async () => {
+  const notices = noticeRecorder();
+  mount({ surface: "transcript", seat: "ana", lose: true, notificationProvider: notices });
+  const box = await openReply("Please add me.");
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  await within(box).findByText(ui("form.answerLostResend"));
+  await answered(box);
+  expect(dangerToasts()).toEqual([]);
+  expect(notices.open).not.toHaveBeenCalled();
+});
+
+test("a reply denied while the box is open is toasted once, in the server's words, and the data layer opens no notice", async () => {
+  const notices = noticeRecorder();
+  mount({ surface: "transcript", seat: "ana", lose: true, revokeAfterSend: true, notificationProvider: notices });
+  const box = await openReply("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  await within(box).findByText(ui("form.answerLostResend"));
+  submitReply(input);
+  await within(box).findByText(word("compose.replyMayAlreadyBeSent"));
+  await answered(box);
+  const denied = recordedSend("anaRevoked", "Thanks, adding you now.").answer;
+  if (!("error" in denied)) throw new Error("The revoked replay was recorded as an answer.");
+  expect(dangerToasts()).toEqual([denied.error.message]);
+  expect(notices.open).not.toHaveBeenCalled();
+});
+
+test("Reply on another email retargets the box and keeps its text; Cancel asks first and returns to the row", async () => {
+  mount({ surface: "transcript", seat: "ana" });
+  let box = await openReply("Please add me.");
+  typeReply(box, "A draft I keep.");
+  box = await openReply("Who can see this?");
+  expect((within(box).getByRole("textbox", { name: M["composer.messageLabel"] }) as HTMLTextAreaElement).value).toBe("A draft I keep.");
+  expect(within(box).getByText("Who can see this?")).toBeTruthy();
+  fireEvent.click(within(box).getByRole("button", { name: M["composer.cancelReply"] }));
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.stay") }));
+  expect(screen.getByRole("region", { name: /^Reply to / })).toBeTruthy();
+  fireEvent.click(within(box).getByRole("button", { name: M["composer.cancelReply"] }));
+  fireEvent.click(await screen.findByRole("button", { name: ui("form.leave") }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  const target = await row("Who can see this?");
+  await waitFor(() => expect(document.activeElement).toBe(within(target).getByRole("button", { name: /^Reply to / })));
+});
+
+test("after a lost answer, Reply on another email keeps the conversation's draft: the note stays, the same key goes, and a conflict is told", async () => {
+  const { sends } = mount({ surface: "transcript", seat: "ana", lose: true });
+  let box = await openReply("Please add me.");
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  await within(box).findByText(ui("form.answerLostResend"));
+  box = await openReply("Who can see this?");
+  expect(within(box).getByRole("status").textContent).toBe(ui("form.answerLostResend"));
+  submitReply(within(box).getByRole("textbox", { name: M["composer.messageLabel"] }) as HTMLTextAreaElement);
+  // The first reply was written: the same key with another parent is the conflict, told; nothing is written twice.
+  expect(await within(box).findByText(word("compose.sentEarlier"))).toBeTruthy();
+  const [first, second] = sends();
+  expect(second).toMatchObject({ parent: MESSAGE.unaddressed, idempotency_key: first?.idempotency_key });
+});
+
+test("a box that went away while sending still reports a lost answer, through the shared late report under the box's own title", async () => {
+  const { fixture, rerender } = mount({ surface: "transcript", seat: "ana", lose: true });
+  const box = await openReply("Please add me.");
+  const release = fixture().holdNextAnswer();
+  submitReply(typeReply(box, "Thanks, adding you now."));
+  // While it sends, the box says so.
+  expect(await within(box).findByRole("button", { name: word("compose.sending") })).toBeTruthy();
+  expect(box.getAttribute("aria-busy")).toBe("true");
+  // The person moves to another conversation while it sends: the box goes.
+  rerender({ conversation: "sales" });
+  await waitFor(() => expect(screen.queryByRole("region", { name: /^Reply to / })).toBeNull());
+  await act(async () => release());
+  // Base UI stamps the toast's type on its title and description, never on the hidden announcer repeating them.
+  expect(await screen.findByText(word("compose.notSent"), { selector: "[data-type='danger']" })).toBeTruthy();
+  expect(screen.getByText(ui("form.answerLost"), { selector: "[data-type='danger']" })).toBeTruthy();
+});
+
+test("a request refused before it was sent is left to the connection boundary: no note, no toast", async () => {
+  const { fixture } = mount({ surface: "transcript", seat: "ana" });
+  const box = await openReply("Please add me.");
+  fixture().refuseNextAsUnsent();
+  const input = typeReply(box, "Thanks, adding you now.");
+  submitReply(input);
+  await waitFor(() => expect(input.readOnly).toBe(false));
+  expect(within(box).getByRole("status").textContent).toBe("");
+  expect(document.querySelector('[data-type="danger"]')).toBeNull();
+  expect(input.value).toBe("Thanks, adding you now.");
+});
+
+test("each message written here and going out shows its delivery; synced and received mail show none", async () => {
+  mount({ surface: "transcript", seat: "cleo", noReply: true });
+  const expected: Record<string, readonly string[]> = {
+    "We are on it.": ["Queued"],
+    "Done: you are in.": ["Sent"],
+    "Your access is ready.": ["Failed", word("transcript.attempts", { count: 2 }), word("transcript.deliveryDetails")],
+    "Checking with the team.": ["Queued", word("transcript.nextTry"), "1 attempt"],
+    "One more thing.": ["Uncertain", "1 attempt", word("transcript.deliveryDetails")],
+    "Reminder.": ["Draft", word("transcript.sendsAt")],
+  };
+  for (const [text, words] of Object.entries(expected)) {
+    const target = await row(text);
+    for (const expectedWord of words) expect(within(target).getByText(expectedWord, { exact: false })).toBeTruthy();
+  }
+  // Cleo reads no sender of what went out: each names the channel it went out from.
+  expect(within(await row("We are on it.")).getByText("Support desk")).toBeTruthy();
+  // Delivery details only where delivery went wrong: Failed and Uncertain, not Queued, a retry, Sent or Draft.
+  for (const text of ["We are on it.", "Checking with the team.", "Done: you are in.", "Reminder."]) {
+    expect(within(await row(text)).queryByRole("link", { name: word("transcript.deliveryDetails") })).toBeNull();
+  }
+  // When it goes out or is tried again is the recorded time, as a machine-readable time.
+  const transcript = RECORDED.seats.cleo.transcripts.support;
+  if (!("data" in transcript)) throw new Error("Cleo's Support transcript is not recorded.");
+  for (const [text, id] of [["Reminder.", MESSAGE.scheduled], ["Checking with the team.", MESSAGE.retrying]] as const) {
+    const due = transcript.data.thread_message_feed.messages.find((message) => message.id === id)?.scheduled_at;
+    expect(due).toBeTruthy();
+    const times = [...(await row(text)).querySelectorAll("time")].map((time) => Date.parse(time.dateTime));
+    expect(times).toContain(Date.parse(String(due)));
+  }
+  const failed = within(await row("Your access is ready.")).getByRole("link", { name: word("transcript.deliveryDetails") });
+  expect(failed.getAttribute("href")).toContain(MESSAGE.failed);
+  for (const text of ["Sent from the desk's own mail client.", "Please add me."]) {
+    const quiet = await row(text);
+    for (const label of ["Draft", "Queued", "Sent", "Failed", "Uncertain", "Synced"]) expect(within(quiet).queryByText(label)).toBeNull();
+  }
+  // A host that offers no Reply reads no gate and shows none.
+  expect(replyButtons()).toEqual([]);
+});
+
+test("a reader who may send nowhere sees neither New message nor Reply", async () => {
+  const view = mount({ surface: "transcript", seat: "ben", withNewMessage: true });
+  await row("Please add me.");
+  await waitFor(() => expect(view.calls.some((call) => call.field === "message_recipient_limit")).toBe(true));
+  await gateAnswered(view);
+  expect(screen.queryByRole("button", { name: word("compose.newMessage") })).toBeNull();
+  expect(replyButtons()).toEqual([]);
+});
+
+test("under a preview nothing sends: the box is read-only and the dialog's Send is off", async () => {
+  const { sends } = mount({ surface: "transcript", seat: "ana", preview: true, withNewMessage: true });
+  const box = await openReply("Please add me.");
+  expect(within(box).getByText(ui("viewAs.readOnly"))).toBeTruthy();
+  const input = within(box).getByRole("textbox", { name: M["composer.messageLabel"] }) as HTMLTextAreaElement;
+  expect(input.readOnly).toBe(true);
+  submitReply(input);
+  const dialog = await openNewMessage();
+  address(dialog, word("compose.to"), "client@example.test");
+  fill(dialog, { text: "Hello from Support." });
+  expect(within(dialog).getByRole("button", { name: word("compose.send") }).hasAttribute("disabled")).toBe(true);
+  await act(async () => undefined);
+  expect(sends()).toEqual([]);
+});
+
+// --- The message page --------------------------------------------------------------------------
+
+test.each([
+  ["Cleo, who manages Support, on the failed message", "cleo", "failed", { reason: true, verbs: [M["messages.retryDelivery"]] }],
+  ["Cleo on the uncertain message", "cleo", "uncertain", { reason: true, verbs: [M["messages.retryDelivery"], M["messages.markAsSent"]] }],
+  ["Ana, who wrote on Support, on the failed message", "ana", "failed", { reason: false, verbs: [] }],
+] as const)("the message page reads why delivery failed and offers its verbs only to %s who may act", async (_case, seat, state, { reason, verbs }) => {
+  mount({ surface: "message-page", seat, message: MESSAGE[state], pane: "envelope" });
+  const page = RECORDED.messagePage[seat][state];
+  if (!("data" in page) || !page.data.messages_by_pk) throw new Error("The message page row is not recorded.");
+  const row = page.data.messages_by_pk;
+  // The page opens on its Envelope, as its stories do.
+  expect((await screen.findByRole("tab", { name: word("messages.groupEnvelope") })).getAttribute("aria-selected")).toBe("true");
+  expect(await screen.findByText(word("messages.deliveryAttempts"))).toBeTruthy();
+  expect(screen.getAllByText(String(row.delivery_attempts)).length).toBeGreaterThan(0);
+  if (reason) expect(screen.getAllByText(String(row.delivery_error)).length).toBeGreaterThan(0);
+  else expect(screen.queryByText(word("messages.deliveryError"))).toBeNull();
+  for (const verb of [M["messages.retryDelivery"], M["messages.markAsSent"]]) {
+    expect(screen.queryAllByRole("button", { name: verb }).length > 0).toBe((verbs as readonly (string | undefined)[]).includes(verb));
+  }
+});

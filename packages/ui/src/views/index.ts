@@ -121,7 +121,7 @@ export {
   dirtyControlBandClassName,
   type SaveDiscardActionsProps,
 } from "./form/SaveDiscardActions";
-export { useWatch, useFormState, type ResolverResult } from "react-hook-form";
+export { useController, useWatch, useFormState, type ResolverResult } from "react-hook-form";
 export {
   useActionForm,
   type UseActionFormOptions,
@@ -139,7 +139,7 @@ export {
   SURFACE_RENDERS_FAILURE,
   applyFormErrors,
   formErrorsFromForm,
-  useRefusalBannerFocus,
+  useRefusalFocus,
   type FormSubmitConflictCode,
   type FormSubmitResult,
   useDottedPathFieldErrors,

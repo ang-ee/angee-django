@@ -223,6 +223,24 @@ test("a save the lines fail on the server selects the lines pane", async () => {
   expect(await screen.findByText("This field is required.")).toBeTruthy();
 });
 
+test("a save refused because the lines changed elsewhere says so on the banner and leaves the selected pane", async () => {
+  const f = await fixture({ publicView: true, formProps: {
+    recordTabs: [{ id: "evidence", label: "Evidence", render: () => <p>Evidence pane</p> }],
+  } });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("tab", { name: "Evidence" }));
+  expect(await screen.findByText("Evidence pane")).toBeTruthy();
+  await f.refresh([{ id: "x", label: "Xray", quantity: 40, position: 0 }, ...initialLines.map((row, index) => ({ ...row, position: index + 1 }))]);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The rendered form words the conflict; it is a reason no field shows, so nothing selects a pane for it,
+  // the lines included.
+  await waitFor(() => expect(f.surface().saveErrors).toEqual(["These lines changed on the server. Discard local changes to load the saved lines before saving again."]));
+  // Past every timer: an effect that selected the lines for it would have run by now.
+  await act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
+  expect(screen.getByRole("tab", { name: "Evidence" }).getAttribute("aria-selected")).toBe("true");
+  expect(f.custom).not.toHaveBeenCalled();
+});
+
 test("a declared lines group renders the lines in its place, titled by the group, and nothing trails", async () => {
   await fixture({ publicView: true, formProps: {
     linesTabLabel: "Unused trailing label",

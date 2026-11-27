@@ -11,6 +11,7 @@ round-trips.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,7 +19,7 @@ import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, models
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, isolate_apps, override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -30,13 +31,19 @@ from rebac import (
 )
 from strawberry import auto
 
+from angee.base.fields import ImplClassField
+from angee.base.models.identity import SqidMixin
+from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.testing.queries import statement_startswith
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
+from angee.graphql.impl import IMPL_CHOICES_REFUSED
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.graphql.testing.documents import execute_schema, measure_graphql_document, result_data
+from angee.graphql.testing.documents import execute_schema, graphql_request, measure_graphql_document, result_data
 from tests.conftest import SchemaAddon, create_platform_admin, create_user
 from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
+from tests.tables import model_tables, store_column
+from tests.test_impl import _BaseImpl
 
 
 @strawberry_django.type(DocumentLine)
@@ -1190,3 +1197,48 @@ def test_insert_decodes_each_public_id_once(db: None, key: str | None, statement
     with system_context(reason="test read"):
         created = Document.objects.get(sqid=read.data["insert_documents_prod_one"]["id"])
         assert created.lines.get().product_id == product.pk
+
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(ANGEE_TEST_IMPLS={"typed": "tests.test_impl._TypedConfigImpl"})
+@isolate_apps()
+def test_a_lines_save_naming_a_create_only_selector_asks_the_choices_admission() -> None:
+    """The lines save patches its parent as the update does, so a patch naming a create-only selector asks the
+    same admission first (``require_selectors_admitted``): the actor it refuses changes nothing, in its words;
+    the one it admits repairs a retired key.
+
+    No shipped resource declares lines over a model with a create-only selector, so the gate is pinned on the
+    write backend's ``save``, which the ``<res>_save`` root calls with its decoded patch.
+    """
+
+    class SelectorDocument(SqidMixin, ImplDefaultsMixin):
+        sqid_prefix = "sdc_"
+        adapter = ImplClassField(_BaseImpl, create_only=True)
+        config = models.JSONField(default=dict)
+
+        class Meta:
+            app_label = "tests"
+
+    class SelectorDocumentLine(models.Model):
+        document = models.ForeignKey(SelectorDocument, on_delete=models.CASCADE, related_name="lines")
+        position = models.PositiveIntegerField(default=0)
+
+        class Meta:
+            app_label = "tests"
+
+    backend = AngeeHasuraWriteBackend(SelectorDocument, lines=HasuraLines(field="lines", model=SelectorDocumentLine))
+
+    def request(user: Any) -> Any:
+        return SimpleNamespace(context=SimpleNamespace(request=graphql_request(user)))
+
+    with model_tables((SelectorDocument, SelectorDocumentLine)):
+        row = SelectorDocument.objects.create(adapter="typed", config={"retries": 1})
+        store_column(SelectorDocument, row.pk, "adapter", "retired")
+
+        with pytest.raises(PermissionDenied, match=IMPL_CHOICES_REFUSED):
+            backend.save(request(create_user("lines-selector-refused")), row.sqid, {"adapter": "typed"}, None)
+        assert SelectorDocument.objects.filter(pk=row.pk).values_list("adapter", flat=True).get() == "retired"
+
+        backend.save(request(create_platform_admin("lines-selector-admitted")), row.sqid, {"adapter": "typed"}, None)
+        repaired = SelectorDocument.objects.get(pk=row.pk)
+        assert (repaired.adapter, repaired.config) == ("typed", {"endpoint": "https://example.test", "retries": 1})

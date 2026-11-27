@@ -12,8 +12,11 @@ import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
+import { querySortFromSorting } from "../model/state";
+import { navigationScopeKey } from "../record-navigation-context";
 import type { ListRecordFacts, ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
+import { useValueStable } from "../../../lib/use-value-stable";
 
 export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
@@ -63,8 +66,9 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
   // table projections allocate an equivalent rows array after that parent
   // render; depending on raw object identity turns the publication into an
   // effect -> setState -> render loop. The query facts and row values are the
-  // snapshot identity, so retain one object until those facts actually change.
-  const snapshotKey = stableKey(snapshot);
+  // snapshot identity, so retain one object until those facts actually change, the order's
+  // priority among them (`navigationScopeKey`).
+  const snapshotKey = stableKey([snapshot, navigationScopeKey(navigationScope)]);
   const stableSnapshot = React.useMemo(() => snapshot, [snapshotKey]);
   const onListStateChangeRef = useLatestRef(onListStateChange);
   React.useEffect(() => {
@@ -204,19 +208,31 @@ export function useResourceViewTableState<TRow extends Row>({
   effectiveColumnVisibility: VisibilityState;
   setColumnVisibility: OnChangeFn<VisibilityState>;
   pagination: PaginationState;
+  /** The table's sorting: each group axis's key, ascending (its column carries the groups' direction), then the list's order without the keys an axis shares. */
   sorting: SortingState;
   grouping: GroupingState;
-  /** The table's `meta`, which each list surface sets (resource, presentation, grouped): the list's group axes, read by its headers. */
+  /** The table's `meta`, which each list surface sets (resource, presentation, grouped): the list's group axes and its order, read by its headers. */
   meta: TableMeta<TRow>;
   rowSelection: RowSelectionState;
   handlePaginationChange: OnChangeFn<PaginationState>;
   handleSortingChange: OnChangeFn<SortingState>;
   handleRowSelectionChange: (updater: Parameters<OnChangeFn<RowSelectionState>>[0], table: Table<TRow>) => void;
 } {
+  const groupAxes = React.useMemo(() => tableGroupAxes(groupStack, modelMetadata, columns, query), [groupStack, modelMetadata, columns, query]);
+  // The list's whole order, as its view holds it or inherits it: what it stores, puts in its URL
+  // and saves in a view, and what its headers read (`TableMeta.sorting`).
+  const order = React.useMemo(() => {
+    const declared = resourceView.state.sorting && querySortFromSorting(resourceView.state.sorting);
+    return (query ?? queryForColumns(columns, modelMetadata, groupStack)).sortFrom(declared ?? sortOrder);
+  }, [query, columns, modelMetadata, groupStack, resourceView.state.sorting, sortOrder]);
+  // The direction each axis's groups go in under the order (`GroupAxis.direction`), which their
+  // columns' comparators carry; the same array while none turns, so the columns are built again
+  // only when a group's direction turns.
+  const directions = useValueStable(groupAxes.map((axis) => axis.direction(order)));
   const tableColumns = React.useMemo(
     () =>
-      buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
-    [columns, groupStack, modelMetadata, clientOperations, query],
+      buildColumns(columns, { axes: groupAxes, directions, metadata: modelMetadata, clientOperations, query }),
+    [columns, groupAxes, directions, modelMetadata, clientOperations, query],
   );
   const columnVisibility = React.useMemo(() => ({
     ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
@@ -242,16 +258,23 @@ export function useResourceViewTableState<TRow extends Row>({
   React.useEffect(() => {
     if (pagination !== statePagination) resourceView.setPagination(pagination);
   }, [pagination, resourceView.setPagination, statePagination]);
-  // The whole order, which a browser-sorted surface sorts its rows by; a header shows only the
-  // key the rows visibly follow (`headerSort`).
-  const sorting = React.useMemo<SortingState>(() => {
-    const declared = resourceView.state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" }));
-    return (query ?? queryForColumns(columns, modelMetadata, groupStack)).sortFrom(declared ?? sortOrder)
-      .map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
-  }, [query, columns, modelMetadata, groupStack, resourceView.state.sorting, sortOrder]);
-  const groupAxes = React.useMemo(() => tableGroupAxes(groupStack, modelMetadata, columns, query), [groupStack, modelMetadata, columns, query]);
+  const listSorting = React.useMemo<SortingState>(
+    () => order.map(({ field, direction }) => ({ id: field, desc: direction === "DESC" })),
+    [order],
+  );
+  // What the table sorts by: each group axis's key, ascending, since its column's comparator
+  // carries the groups' direction (`buildColumns`), so the groups follow their own axis, then the
+  // order's keys no axis shares, which each group's records follow. A turned direction is a new
+  // order, so a new sorting, which the table sorts again with the columns built for it. Nothing
+  // reads an axis key's `desc` here: the headers, a press and the Order select read the order
+  // (`TableMeta.sorting`), and a press reaches the table's own toggle only on a column no axis
+  // shares, whose key this hands as the order holds it.
+  const sorting = React.useMemo<SortingState>(() => [
+    ...groupAxes.map((axis) => ({ id: axis.id, desc: false })),
+    ...listSorting.filter(({ id }) => !groupAxes.some((axis) => axis.shares(id))),
+  ], [groupAxes, listSorting]);
   const grouping = React.useMemo(() => groupAxes.map((axis) => axis.id), [groupAxes]);
-  const meta = React.useMemo<TableMeta<TRow>>(() => ({ groupAxes }), [groupAxes]);
+  const meta = React.useMemo<TableMeta<TRow>>(() => ({ groupAxes, sorting: listSorting }), [groupAxes, listSorting]);
   const rowSelection = resourceView.state.rowSelection;
   const handlePaginationChange = React.useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
@@ -269,9 +292,10 @@ export function useResourceViewTableState<TRow extends Row>({
       resourceView.setRowSelection(updater, (id) => table.getCoreRowModel().rowsById[id]?.original),
     [resourceView.setRowSelection],
   );
+  // A change applies to the list's order, never to the keys the table is handed for its groups.
   const handleSortingChange = React.useCallback<OnChangeFn<SortingState>>(
-    (updater) => resourceView.setSorting(functionalUpdate(updater, sorting)),
-    [resourceView.setSorting, sorting],
+    (updater) => resourceView.setSorting(functionalUpdate(updater, listSorting)),
+    [resourceView.setSorting, listSorting],
   );
 
   return {

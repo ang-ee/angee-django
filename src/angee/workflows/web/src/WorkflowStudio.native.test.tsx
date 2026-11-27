@@ -4,6 +4,7 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { useRouter } from "@tanstack/react-router";
 import { StudioStory } from "./WorkflowStudio.stories";
 import type { GraphEditorProps } from "@angee/ui";
+import { recordFocusCalls } from "@angee/ui/testing";
 const guards = vi.hoisted(() => ({ callbacks: [] as unknown[] }));
 const graph = vi.hoisted(() => ({ props: undefined as GraphEditorProps | undefined, router: undefined as ReturnType<typeof useRouter> | undefined }));
 vi.mock("@angee/ui", async (importOriginal) => {
@@ -130,6 +131,30 @@ test.each([[true, false, "Draft could not be saved. Resolve the highlighted issu
     expect(screen.getByText("Threshold is too small.")).toBeTruthy();
     if (saveInvalid) expect(screen.queryByText(/Draft saved\./)).toBeNull();
   });
+
+test("a refused save brings focus from Save to the banner that says the draft was not saved", async () => {
+  render(<StudioStory saveInvalid />);
+  const key = await selectEntry();
+  fireEvent.change(key, { target: { value: "entry" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Label" }), { target: { value: "Edited" } });
+  const save = screen.getByRole("button", { name: "Save draft" });
+  await waitFor(() => expect(save.matches("[disabled], [aria-disabled='true']")).toBe(false));
+  // A click moves no focus in the test DOM: Save holds it first, as a person's press leaves it.
+  save.focus();
+  const recorder = recordFocusCalls();
+  try {
+    fireEvent.click(save);
+    // The save form's own form-level reason; the studio's issue banner beside it is not this form's.
+    const banner = (await screen.findByText("Could not save the draft.")).closest<HTMLElement>("[role='alert']");
+    expect(banner).not.toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(banner));
+    // The banner is what was asked to take focus, and the test DOM shows it can.
+    expect(recorder.calls.map((call) => ({ banner: call.target === banner, takesFocus: call.takesFocus })))
+      .toEqual([{ banner: true, takesFocus: true }]);
+  } finally {
+    recorder.restore();
+  }
+});
 
 test("an unused invalid FormSpec cannot break the Studio or its working inspector", async () => {
   render(<StudioStory badUnusedSchema />);

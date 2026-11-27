@@ -243,26 +243,29 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   act(() => f.surface.setScopePageSize(leafKey, 50));
   act(() => f.surface.setScopePage(leafKey, 2));
   await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 50 }));
-  fireEvent.click(screen.getByRole("button", { name: "Sort Title (not sorted)" }));
-  await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: false }]));
+  // Title is a grouping column here: its header shows its groups ascending, so its press turns them.
+  fireEvent.click(screen.getByRole("button", { name: "Sort Title (currently ascending)" }));
+  await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: true }]));
   // Sorting resets row windows while keeping the same group tree expanded.
   await waitFor(() => expect(f.header(1)?.expanded).toBe(true));
   expect(f.view.paginationByScope[leafKey]).toEqual({ pageIndex: 0, pageSize: 50 });
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual({ title: "asc" }));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual([{ title: "desc" }]));
   expect(f.view.state.filter).toEqual({ title: { iContains: "kept" } });
   expect(JSON.stringify(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where)).toContain('"_ilike":"%kept%"');
-  // Title is a grouping column here: a group's records share it, so its header shows no sort.
-  expect(screen.getByRole("columnheader", { name: "Title" }).getAttribute("aria-sort")).toBe("none");
+  // Its sort button shows its groups' direction; its aria-sort says none, as a grouping column's does: aria-sort is on
+  // one header at a time, the key the records follow, and here they follow none.
+  expect(screen.getByRole("button", { name: "Sort Title (currently descending)" }).closest("th")?.getAttribute("aria-sort")).toBe("none");
 });
 
 
-test("grouped shift-click replaces the sort using the same single-sort contract as flat views", async () => {
+test("grouped shift-click is the same single-sort press as a click: the other level's key stays, behind the pressed one", async () => {
   const f = fixture();
   await waitFor(() => expect(f.header(1)).toBeDefined());
-  fireEvent.click(screen.getByRole("button", { name: "Sort Title (not sorted)" }));
-  await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: false }]));
-  fireEvent.click(screen.getByRole("button", { name: "Sort Status (not sorted)" }), { shiftKey: true });
-  await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "status", desc: false }]));
+  fireEvent.click(screen.getByRole("button", { name: "Sort Title (currently ascending)" }));
+  await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: true }]));
+  // Status and title are both grouping keys here: the press turns status's groups and keeps title's key.
+  fireEvent.click(screen.getByRole("button", { name: "Sort Status (currently ascending)" }), { shiftKey: true });
+  await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "status", desc: true }, { id: "title", desc: true }]));
 });
 
 test("a failed root group query preserves page and unknown total instead of querying page one", async () => {

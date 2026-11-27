@@ -122,6 +122,8 @@ parent's exposed kinds as `concrete_kinds`.
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
 shape stays the same. Its base class names the implementation registry setting.
+A stored key the registry no longer names is **not registered**: the row loads,
+its GraphQL read is null and the console labels it so.
 
 **`Meta`** — Django's model options class. Keep Angee facts out of `Meta` unless
 the owning library explicitly supports them, such as `rebac_resource_type`.
@@ -391,7 +393,9 @@ a sender is read; the message's source keeps its `From` header. See
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
 addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+(`Recipient.address`, empty for one no caller handed as an address), which the message
+is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
@@ -409,7 +413,8 @@ channel they send from. See
 
 **System mailer** — Django's default mailer wherever messaging is installed,
 `SystemMailer`: it records each email Django sends as **System mail** and sends
-nothing itself. See [messaging's contracts](../src/angee/messaging/README.md).
+nothing itself. A consumer's own mail sent straight through the **Transport
+mailer** by name is a deliberate exception, outside messaging. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **System channel** — messaging's install row `messaging.system_channel` (backend
 `system`), where **System mail** is written. Administrators alone read it, no
@@ -426,7 +431,10 @@ The console composes through the `compose_message` mutation, offers a new email
 on the channels its `sendable` filter keeps (`reply` on a channel
 `ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
 `MessageManager.recipient_limit`, as `message_recipient_limit`. A message
-messaging wrote, rather than synced, is `Message.is_locally_written`.
+messaging wrote, rather than synced, is `Message.is_locally_written`. Its pages
+write through `useComposeMessage`: **New message**, a new email
+(`NewMessageAction`), and **Reply**, an answer from the box a transcript docks
+under its conversation where its host opts in (`ThreadTranscript`'s `reply`).
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
@@ -541,7 +549,9 @@ evidence gates.
 
 **Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
 for an email address, the address lower-cased (not case-folded) with its domain
-in the one spelling the email backend sends it in (IDNA 2003); none for a value
+in one spelling, each label read through IDNA 2003 into Unicode (the
+domain-spelling rule, `Handle.normalize_email_domain`), so the spellings the
+email backend sends as one domain are one; none for a value
 with no `@`, which is no address, nor on any other platform, where the value
 itself is the address. A live email handle is unique by it.
 
@@ -555,6 +565,11 @@ may merge. Which handle an address lands on is the spelling key's, except at two
 sites still open for a ruling, where it picks the handle a provider's alias lands
 on: a directory adoption's handle that found the person, and a claimant's email
 handle.
+
+**Domain key** — an organization's domain in the one spelling the domain-spelling rule
+gives (`Handle.normalize_email_domain`), stored as `Organization.domain_key`
+beside the domain as typed; `Organization.domain_filter` finds an organization
+by any spelling of its domain through it. Several organizations may share one.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
@@ -716,7 +731,8 @@ source ([host and user precedence](frontend/appearance.md#host-and-user-preceden
 
 **Brand kit** — a deployment's brand facts, one `angee.brandkit` row per kit; once
 any exists, exactly one is the **default kit**. A theme owns structure and applies a
-kit (see the [brand kit README](../src/angee/brandkit/README.md)).
+kit, unless its options decline the host appearance source (see the
+[brand kit README](../src/angee/brandkit/README.md)).
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.

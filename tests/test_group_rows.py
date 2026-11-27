@@ -483,3 +483,127 @@ def test_group_rows_read_every_column_through_its_own_field(
         group["key"][key]: [(row["name"], row["status"]) for row in group["rows"]]
         for group in data["status_group_things_groups"]
     } == expected
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        pytest.param("ASC", ["alpha", "beta", None], id="ascending"),
+        pytest.param("DESC", ["beta", "alpha", None], id="descending"),
+    ],
+)
+def test_groups_go_in_the_asked_direction_and_the_group_without_a_value_stays_last(
+    direction: str, expected: list[str | None],
+) -> None:
+    """A relation's groups come by label, then identity, in the direction the read asks, the empty group last.
+
+    It is the read a list grouped on the server sends (``GroupAxis.groupBy`` through
+    ``ResourceQuery.toGroupRead`` in ``@angee/metadata``): every key in the list's direction with
+    ``nulls: LAST``. strawberry-django-aggregates (``>= 0.15.0, < 0.16`` in ``docs/stack.md``) owns
+    that order and its null placement. SQLite and PostgreSQL put nulls at opposite ends by default,
+    so the file's place in ``.github/postgres-selection.txt`` runs it on both.
+    """
+
+    @strawberry_django.type(StatusGroupThing)
+    class DirectedGroupThingType(AngeeNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        DirectedGroupThingType,
+        model=StatusGroupThing,
+        name="directed_group_things",
+        filterable=["id", "name", "parent"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["parent"],
+        get_queryset=lambda info: StatusGroupThing.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = _schema(resource, DirectedGroupThingType)
+    with model_tables((ResourceParent, StatusGroupThing)):
+        with system_context(reason="test.group_rows.direction.seed"):
+            # Beta is created first: the identities' order is the reverse of the labels'.
+            beta, alpha = (ResourceParent.objects.create(name=name) for name in ("beta", "alpha"))
+            StatusGroupThing.objects.create(name="n1")
+            StatusGroupThing.objects.create(name="a1", parent=alpha)
+            StatusGroupThing.objects.create(name="b1", parent=beta)
+            StatusGroupThing.objects.create(name="n2")
+
+        with system_context(reason="test.group_rows.direction.read"):
+            data = result_data(execute_schema(schema, """
+                query {
+                  directed_group_things_groups(
+                    group_by: [{field: PARENT}, {field: PARENT__NAME}]
+                    order_by: [
+                      {field: "parent__name", direction: DIRECTION, nulls: LAST}
+                      {field: "parent_id", direction: DIRECTION, nulls: LAST}
+                    ]
+                  ) {
+                    key { parent_id parent__name }
+                    aggregate { count }
+                  }
+                }
+            """.replace("DIRECTION", direction)))
+    groups = data["directed_group_things_groups"]
+    assert [group["key"]["parent__name"] for group in groups] == expected
+    assert groups[-1]["key"]["parent_id"] is None
+    assert [group["aggregate"]["count"] for group in groups] == [1, 1, 2]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        pytest.param("ASC", ["2026-01", "2026-03"], id="ascending"),
+        pytest.param("DESC", ["2026-03", "2026-01"], id="descending"),
+    ],
+)
+def test_month_buckets_go_in_the_asked_direction(direction: str, expected: list[str]) -> None:
+    """A date's month buckets come in the direction the read asks, by the bucket's own key.
+
+    A list grouped by month on the server asks for its months by the extraction's key in the
+    direction its order holds for the date (``GroupAxis.direction`` in ``@angee/metadata``);
+    strawberry-django-aggregates (``>= 0.15.0, < 0.16`` in ``docs/stack.md``) orders by that key.
+    """
+
+    @strawberry_django.type(DatedGroupThing)
+    class MonthGroupThingType(AngeeNode):
+        name: auto
+
+    resource = hasura_model_resource(
+        MonthGroupThingType,
+        model=DatedGroupThing,
+        name="month_group_things",
+        filterable=["id", "name", "happened_at"],
+        sortable=["name"],
+        aggregatable=["id"],
+        groupable=["happened_at"],
+        get_queryset=lambda info: DatedGroupThing.objects.all(),
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = _schema(resource, MonthGroupThingType)
+    with model_tables((DatedGroupThing,)):
+        with system_context(reason="test.group_rows.month_direction.seed"):
+            for name, month, day in (("b", 3, 20), ("a", 1, 15), ("c", 3, 10)):
+                DatedGroupThing.objects.create(name=name, happened_at=datetime(2026, month, day, 12, tzinfo=UTC))
+
+        with system_context(reason="test.group_rows.month_direction.read"):
+            data = result_data(execute_schema(schema, """
+                query {
+                  month_group_things_groups(
+                    group_by: [{field: HAPPENED_AT, granularity: MONTH}]
+                    order_by: [{field: "happened_at_month", direction: DIRECTION, nulls: LAST}]
+                  ) {
+                    key { happened_at_month_range { from } }
+                    aggregate { count }
+                  }
+                }
+            """.replace("DIRECTION", direction)))
+    groups = data["month_group_things_groups"]
+    assert [group["key"]["happened_at_month_range"]["from"][:7] for group in groups] == expected
+    assert sorted(group["aggregate"]["count"] for group in groups) == [1, 2]

@@ -14,6 +14,7 @@ function NotionConnectionForm({ resource: _resource, ...props }: RegisteredFormP
     <Form {...props} resource={NOTION_CONNECTION_MODEL}>
       <Field name="display_name" title />
       <Field name="owner" />
+      <Field name="backend_class" />
       <Field name="credential" />
       <Field name="vault" readOnly />
       <Field name="rewrite_page_links" />

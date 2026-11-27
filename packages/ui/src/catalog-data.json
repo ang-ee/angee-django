@@ -8150,6 +8150,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useController",
+    "source": "packages/ui/src/views/index.ts",
+    "kind": null,
+    "reason": "upstream re-export",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDashboardRegistry",
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": "surface",
@@ -8720,7 +8729,7 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useRefusalBannerFocus",
+    "name": "useRefusalFocus",
     "source": "packages/ui/src/views/form/validation-errors.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",

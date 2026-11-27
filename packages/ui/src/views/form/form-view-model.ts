@@ -288,12 +288,35 @@ export function addFieldSelection(
   paths.add(field.name);
 }
 
+/** Whether `value` is a form's values object (a plain object, not a list). */
+export function isFormValues(value: unknown): value is FormValues {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The selector a save's `data` has lost while it still sends a path that selector's repair seeded
+ * (`seeds`: the seeded paths by selector), or null. Such a save would write the config one
+ * implementation's choice carried under the implementation the record stores, so it is refused.
+ */
+export function repairSelectorLost(data: FormValues, seeds: ReadonlyMap<string, readonly string[]>): string | null {
+  for (const [selector, seeded] of seeds) {
+    if (!Object.hasOwn(data, selector) && seeded.some((path) => Object.hasOwn(data, path))) return selector;
+  }
+  return null;
+}
+
+/**
+ * The form's mode lock: an `editOnly` field is read-only on a create, a `createOnly` one on an edit,
+ * unless `choosable` says the record lets it be chosen once more (a create-only selector whose stored
+ * key is not registered, `storedImplementationUnregistered`).
+ */
 export function withModeLockedFields(
   fields: readonly FieldDescriptor[],
   isCreate: boolean,
+  choosable?: (field: FieldDescriptor) => boolean,
 ): readonly FieldDescriptor[] {
   return fields.map((field) => {
-    const locked = isCreate ? field.editOnly : field.createOnly;
+    const locked = isCreate ? field.editOnly : field.createOnly && !choosable?.(field);
     return locked && !field.readOnly ? { ...field, readOnly: true } : field;
   });
 }
@@ -588,8 +611,8 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
  * The fields a form shows a control of for `values`, in its order: those visible for them,
  * resolved against them (`visibleFields`, which applies `showWhen` once), that are not hidden:
  * `isFieldControlVisible` for a whole list, each field resolved first. A refusal's binder claims
- * the reasons of these (the record form's save and both form dialogs), and the rule checks ask
- * only these.
+ * the reasons of these (their names are `applyFormErrors`'s `shownFieldNames` on the record form's
+ * save and both form dialogs), and the rule checks ask only these.
  */
 export function shownFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
   return visibleFields(fields, values).filter((field) => !field.hidden);

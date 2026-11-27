@@ -86,7 +86,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
-    useAngeeFacets: () => ({ facets: [], fetching: false }),
+    useAngeeFacets: () => ({ facets: [], errors: {}, fetching: false }),
     useAngeeGroupBy: (...args: unknown[]) => {
       groupByCalls.value.push(args);
       return { groups: [], total: undefined, fetching: false, error: null };

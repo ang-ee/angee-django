@@ -33,8 +33,10 @@ whole declaration, so no word of a bare family may start with a digit, be a lone
 hyphen or start with a hyphen and a digit, or be a CSS-wide keyword (`inherit`,
 `initial`, `unset`, `default`, `revert`, `revert-layer`); quote such a family
 instead, as in `'Font Awesome 5 Free'`. Double quotes are stored as single quotes. The field checks every write that reaches the
-database, not only a full clean, and its check takes time linear in the value's
-length.
+database, not only a full clean: it checks a value of any type, and refuses an
+expression (`F()`, `Value()`, a function, or `bulk_update`, which writes through
+`Case`), whose result the database computes past the check. Its check takes time
+linear in the value's length.
 
 A logo must be an image storage's `FileManager.ingest_image` put on its image
 drive, which every signed-in user reads; `BrandKit.clean` refuses any other file
@@ -53,7 +55,32 @@ console and the resource loader) keep exactly one default:
   constraint refuses a second default written any other way;
 - the default kit cannot be unticked (`BrandKit.clean`) or deleted
   (`BrandKit.delete_blocker`, enforced on every delete path, which locks the row
-  first): make another kit the default first.
+  first): make another kit the default first;
+- changes of default made at once take turns: every kit is locked, in key order
+  (`BrandKitManager.lock_default`), before any kit row by a save that can move
+  the default, every console write and changeset revert of a kit
+  (`BrandKit.lock_subject`), every delete (`BrandKit.lock_for_delete`) and a
+  resource load that writes kits, once before its first row (`BrandKitResource`),
+  so the second change waits and then takes the default from the first;
+- a save that marks a stored kit not the default rereads its flag under the
+  kit's row lock and refuses as `BrandKit.clean` does, so an edit cleaned before
+  its kit became the default never leaves no default;
+- a changeset revert restores the kit that was the default before the changeset
+  ahead of every other kit (`BrandKitHistory.revert_order`), so the kit that took
+  the default is restored after it has lost it again, whichever the changeset
+  wrote first. The revert restores a row the changeset deleted before the rows
+  that point at it, so when the previous default points at one (a purged file it
+  showed as a logo or dark logo), another kit can go ahead of it and the revert is
+  refused with the untick message.
+
+Two writers take kit rows without that lock. A file purge clears the logo or
+dark logo of every kit that shows the file, under the history capture's row lock,
+in scan order: when the file shows on two or more kits it can deadlock with a
+change of default, and one of the two then fails with a database error (on one
+kit it holds a single kit row, which closes no cycle). And an empty table has no
+row to lock: of two first kits created at once, the second fails on the
+one-default constraint with a database error, which a person does not reach
+because provisioning loads the first kit.
 
 `BrandKit.objects.default()` returns the default kit the actor reads, or `None`:
 before any kit exists, as in a database before its first resource load; after a
@@ -105,7 +132,9 @@ For a host theme that accepts the shared palette customisation
 root and answers the theme's options with the default kit's ten colours over the
 build's options for that theme, else over the theme's defaults: the build's
 font, radius, density, elevation and logo treatment stay (`brandKitOptions` in
-`web/src/appearance.ts`). It sends no read for a fixed theme or no theme, and
+`web/src/appearance.ts`). It sends no read for a fixed theme or no theme, which is
+what `createApp` asks about for a theme whose options decline the host appearance
+source (Fyltr and Ledger), and
 answers nothing with no default kit, after a failed read, for a kit the theme's
 parser refuses, or for build options of another version or that the parser
 refuses. The theme derives every token from those inputs, dark
@@ -116,7 +145,9 @@ backdrop of the framework's own sign-in hero, which a host with no brand shows. 
 kit's contrast warnings are about mail; the app shows none. The kit's name, logos
 and fonts do not reach the app.
 
-An administrator's save refetches the read, so their own app re-themes at once.
+Mail takes the default kit whatever theme the app wears; the app takes it only on a
+theme that accepts the host appearance source. An administrator's save refetches the
+read, so their own app on such a theme re-themes at once.
 The kit has no live root, so a changed kit reaches another open session on its
 next load, which first repaints from the device's boot cache.
 

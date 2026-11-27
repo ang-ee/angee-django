@@ -179,7 +179,7 @@ export function resolveThemeOptions(definition, envelope) {
     throw new TypeError(`Theme ${definition.id} options version ${version} is unsupported.`);
   }
   const value = definition.options.parse(raw);
-  const resolved = definition.options.resolve(value);
+  const resolved = definition.options.resolve(value, definition.tokens);
   const tokens = {
     shared: { ...definition.tokens.shared, ...(resolved.shared ?? {}) },
     light: { ...definition.tokens.light, ...(resolved.light ?? {}) },
@@ -267,18 +267,28 @@ const LOGO_KEYS = new Set(["theme", "brand", "accent", "mono", "star", "corner"]
  * Build the bounded option contract shared by customizable theme addons.
  * Defaults describe the authored base; equal values emit no overrides, so the
  * base theme remains byte-for-byte authoritative until a user changes a field.
+ * The link and the brand, accent and status text colours a value derives read at
+ * 4.5:1 on their own fills and on every surface of their scheme (canvas, sheets,
+ * popover, inset) where any colour can, and come nearest it where none can. A
+ * surface the value leaves at its default counts as the theme's definition states
+ * it (`resolve`'s `base`), else as the defaults derive it, asked for 1% more. A text
+ * is worked out only when its own colour changes, so a value that changes only
+ * surfaces keeps the theme's own link and tone texts.
+ * `acceptsHostAppearanceSource` defaults to true; `defineTheme` refuses a non-boolean.
  */
 export function createThemeCustomizationOptions(defaults, configuration = {}) {
   const normalizedDefaults = parseThemeCustomization(defaults);
   const version = configuration.version ?? 1;
   if (!Number.isSafeInteger(version) || version < 1) throw new TypeError("Theme customization version must be a positive integer.");
+  const { acceptsHostAppearanceSource = true } = configuration;
   return {
     version,
     defaults: normalizedDefaults,
     capability: "palette-customization",
+    acceptsHostAppearanceSource,
     parse: parseThemeCustomization,
-    resolve(value) {
-      return resolveThemeCustomization(parseThemeCustomization(value), normalizedDefaults);
+    resolve(value, base) {
+      return resolveThemeCustomization(parseThemeCustomization(value), normalizedDefaults, base);
     },
   };
 }
@@ -316,18 +326,20 @@ export function parseThemeCustomization(value) {
   };
 }
 
-function resolveThemeCustomization(value, defaults) {
+function resolveThemeCustomization(value, defaults, base) {
   const shared = {};
   const light = {};
   const dark = {};
-  if (value.brand !== defaults.brand) applyBrandPalette(value.brand, light, dark);
-  if (value.accent !== defaults.accent) applyAccentPalette(value.accent, light, dark);
   if (value.neutral !== defaults.neutral) applyNeutralPalette(value.neutral, light, dark);
   if (value.canvas !== defaults.canvas) applyCanvasPalette(value.canvas, light, dark);
   if (value.surface !== defaults.surface) applySurfacePalette(value.surface, light, dark);
   if (value.rail !== defaults.rail) applyRailPalette(value.rail, light, dark);
+  // The surfaces come first: the brand, accent and status inks are worked out against them.
+  const surfaces = paintedSurfaces(defaults, light, dark, base);
+  if (value.brand !== defaults.brand) applyBrandPalette(value.brand, light, dark, surfaces);
+  if (value.accent !== defaults.accent) applyAccentPalette(value.accent, light, dark, surfaces);
   for (const role of ["success", "warning", "danger", "info"]) {
-    if (value[role] !== defaults[role]) applyStatusPalette(role, value[role], light, dark);
+    if (value[role] !== defaults[role]) applyStatusPalette(role, value[role], light, dark, surfaces);
   }
   if (value.font !== defaults.font && value.font !== "theme") shared["--font-family-sans"] = FONT_STACKS[value.font];
   if (value.radius !== defaults.radius && value.radius !== "theme") assignScale(shared, ["--r-2", "--r-4", "--r-6", "--r-8", "--r-10", "--r-12"], RADIUS_TOKENS[value.radius]);
@@ -341,20 +353,56 @@ function resolveThemeCustomization(value, defaults) {
   return { shared, light, dark };
 }
 
-function applyBrandPalette(color, light, dark) {
+/** The surfaces text is drawn on, in each scheme. */
+const SURFACE_TOKENS = Object.freeze(["--surface-canvas", "--surface-sheet", "--surface-sheet-2", "--surface-popover", "--surface-inset"]);
+
+/** WCAG 2's AA minimum contrast for body text. */
+const TEXT_CONTRAST = 4.5;
+
+/**
+ * The contrast text asks for on a stand-in surface instead: the bar and 1% over it. A stand-in is what the
+ * defaults derive for a surface the theme's definition states no colour of its own for (the stock theme's live
+ * only in its stylesheet); it can be a little lighter in light than the surface painted, and hundredth steps
+ * land text that close to the bar. Stock's sheet-2 stand-in is about 0.9% off its real colour and its inset
+ * about 0.2%; the inset binds, being the darkest, and the real sheet-2 is lighter than it.
+ */
+const STAND_IN_CONTRAST = TEXT_CONTRAST * 1.01;
+
+/**
+ * The surfaces a customisation paints, per scheme, each with the contrast text must reach on it: the
+ * colour it emits, else the theme definition's own six-digit colour (`base`, its authored tokens), else
+ * the stand-in its defaults derive.
+ */
+function paintedSurfaces(defaults, light, dark, base) {
+  const derived = { light: {}, dark: {} };
+  applyNeutralPalette(defaults.neutral, derived.light, derived.dark);
+  applyCanvasPalette(defaults.canvas, derived.light, derived.dark);
+  applySurfacePalette(defaults.surface, derived.light, derived.dark);
+  const painted = (scheme, emitted) => SURFACE_TOKENS.map((name) => {
+    const stated = emitted[name] ?? base?.[scheme]?.[name] ?? base?.shared?.[name];
+    return typeof stated === "string" && HEX_COLOR.test(stated)
+      ? { color: stated.toLowerCase(), minimum: TEXT_CONTRAST }
+      : { color: derived[scheme][name], minimum: STAND_IN_CONTRAST };
+  });
+  return { light: painted("light", light), dark: painted("dark", dark) };
+}
+
+function applyBrandPalette(color, light, dark, surfaces) {
   const lightSoft = mixHex(color, "#ffffff", 0.88);
+  const lightTint = mixHex(color, "#ffffff", 0.94);
   const darkBrand = mixHex(color, "#ffffff", 0.16);
   const darkSoft = mixHex(color, "#0b0f14", 0.76);
+  const darkTint = mixHex(darkBrand, "#0b0f14", 0.82);
   Object.assign(light, {
     "--brand": color,
     "--brand-hover": mixHex(color, "#000000", 0.14),
     "--brand-active": mixHex(color, "#000000", 0.28),
     "--brand-soft": lightSoft,
-    "--brand-soft-text": readableTintText(color, lightSoft),
+    "--brand-soft-text": readableTintText(color, [lightSoft, lightTint], surfaces.light),
     "--text-on-brand": readableText(color),
     "--brand-line": mixHex(color, "#ffffff", 0.48),
-    "--brand-tint": mixHex(color, "#ffffff", 0.94),
-    "--text-link": readableTintText(color, "#ffffff"),
+    "--brand-tint": lightTint,
+    "--text-link": readableTintText(color, [], surfaces.light),
     "--border-focus": color,
     "--ring": `0 0 0 3px ${withAlpha(color, 0.30)}`,
   });
@@ -363,35 +411,37 @@ function applyBrandPalette(color, light, dark) {
     "--brand-hover": mixHex(color, "#ffffff", 0.30),
     "--brand-active": mixHex(color, "#ffffff", 0.44),
     "--brand-soft": darkSoft,
-    "--brand-soft-text": readableTintText(darkBrand, darkSoft),
+    "--brand-soft-text": readableTintText(darkBrand, [darkSoft, darkTint], surfaces.dark),
     "--text-on-brand": readableText(darkBrand),
     "--brand-line": withAlpha(darkBrand, 0.40),
-    "--brand-tint": mixHex(darkBrand, "#0b0f14", 0.82),
-    "--text-link": readableTintText(darkBrand, "#11141a"),
+    "--brand-tint": darkTint,
+    "--text-link": readableTintText(darkBrand, [], surfaces.dark),
     "--border-focus": darkBrand,
     "--ring": `0 0 0 3px ${withAlpha(darkBrand, 0.35)}`,
   });
 }
 
-function applyAccentPalette(color, light, dark) {
+function applyAccentPalette(color, light, dark, surfaces) {
   const lightSoft = mixHex(color, "#ffffff", 0.88);
+  const lightTint = mixHex(color, "#ffffff", 0.94);
   const darkAccent = mixHex(color, "#ffffff", 0.16);
   const darkSoft = mixHex(color, "#0b0f14", 0.76);
+  const darkTint = mixHex(darkAccent, "#0b0f14", 0.82);
   Object.assign(light, {
     "--accent": color,
     "--on-accent": readableText(color),
     "--accent-soft": lightSoft,
-    "--accent-soft-text": readableTintText(color, lightSoft),
+    "--accent-soft-text": readableTintText(color, [lightSoft, lightTint], surfaces.light),
     "--accent-line": mixHex(color, "#ffffff", 0.48),
-    "--accent-tint": mixHex(color, "#ffffff", 0.94),
+    "--accent-tint": lightTint,
   });
   Object.assign(dark, {
     "--accent": darkAccent,
     "--on-accent": readableText(darkAccent),
     "--accent-soft": darkSoft,
-    "--accent-soft-text": readableTintText(darkAccent, darkSoft),
+    "--accent-soft-text": readableTintText(darkAccent, [darkSoft, darkTint], surfaces.dark),
     "--accent-line": withAlpha(darkAccent, 0.40),
-    "--accent-tint": mixHex(darkAccent, "#0b0f14", 0.82),
+    "--accent-tint": darkTint,
   });
 }
 
@@ -435,25 +485,27 @@ function assignRailPalette(target, color) {
   });
 }
 
-function applyStatusPalette(role, color, light, dark) {
+function applyStatusPalette(role, color, light, dark, surfaces) {
   const darkColor = mixHex(color, "#ffffff", 0.14);
   const lightSoft = mixHex(color, "#ffffff", 0.86);
+  const lightTint = mixHex(color, "#ffffff", 0.94);
   const darkSoft = mixHex(color, "#0b0f14", 0.76);
+  const darkTint = mixHex(darkColor, "#0b0f14", 0.82);
   Object.assign(light, {
     [`--${role}`]: color,
     [`--on-${role}`]: readableText(color),
     [`--${role}-soft`]: lightSoft,
-    [`--${role}-text`]: readableTintText(color, lightSoft),
+    [`--${role}-text`]: readableTintText(color, [lightSoft, lightTint], surfaces.light),
     [`--${role}-line`]: mixHex(color, "#ffffff", 0.48),
-    [`--${role}-tint`]: mixHex(color, "#ffffff", 0.94),
+    [`--${role}-tint`]: lightTint,
   });
   Object.assign(dark, {
     [`--${role}`]: darkColor,
     [`--on-${role}`]: readableText(darkColor),
     [`--${role}-soft`]: darkSoft,
-    [`--${role}-text`]: readableTintText(darkColor, darkSoft),
+    [`--${role}-text`]: readableTintText(darkColor, [darkSoft, darkTint], surfaces.dark),
     [`--${role}-line`]: withAlpha(darkColor, 0.40),
-    [`--${role}-tint`]: mixHex(darkColor, "#0b0f14", 0.82),
+    [`--${role}-tint`]: darkTint,
   });
   if (role === "danger") {
     light["--danger-hover"] = mixHex(color, "#000000", 0.14);
@@ -481,8 +533,8 @@ function applyNeutralPalette(color, light, dark) {
     "--text-muted": mixHex(color, "#000000", 0.30),
     "--text-subtle": mixHex(color, "#ffffff", 0.24),
     "--text-inverse": readableText(lightRail),
-    "--text-on-rail": readableTintText(mixHex(color, "#ffffff", 0.58), lightRail),
-    "--text-on-rail-mut": readableTintText(mixHex(color, "#ffffff", 0.34), lightRail),
+    "--text-on-rail": readableTintText(mixHex(color, "#ffffff", 0.58), [lightRail]),
+    "--text-on-rail-mut": readableTintText(mixHex(color, "#ffffff", 0.34), [lightRail]),
     "--text-on-rail-hi": readableText(lightRail),
     "--border-subtle": mixHex(color, "#ffffff", 0.78),
     "--border-default": mixHex(color, "#ffffff", 0.65),
@@ -502,8 +554,8 @@ function applyNeutralPalette(color, light, dark) {
     "--text-muted": mixHex(color, "#ffffff", 0.46),
     "--text-subtle": mixHex(color, "#ffffff", 0.30),
     "--text-inverse": readableText(mixHex(color, "#ffffff", 0.84)),
-    "--text-on-rail": readableTintText(mixHex(color, "#ffffff", 0.72), darkRail),
-    "--text-on-rail-mut": readableTintText(mixHex(color, "#ffffff", 0.48), darkRail),
+    "--text-on-rail": readableTintText(mixHex(color, "#ffffff", 0.72), [darkRail]),
+    "--text-on-rail-mut": readableTintText(mixHex(color, "#ffffff", 0.48), [darkRail]),
     "--text-on-rail-hi": readableText(darkRail),
     "--border-subtle": mixHex(color, "#000000", 0.60),
     "--border-default": mixHex(color, "#000000", 0.42),
@@ -522,6 +574,7 @@ function assignScale(target, names, values) {
 }
 
 function channels(hex) {
+  if (typeof hex !== "string" || !HEX_COLOR.test(hex)) throw new TypeError(`A colour to mix or measure must be #rrggbb, not ${String(hex)}.`);
   return [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)].map((part) => Number.parseInt(part, 16));
 }
 
@@ -544,8 +597,10 @@ function relativeLuminance(hex) {
 }
 
 function contrastRatio(left, right) {
-  const first = relativeLuminance(left);
-  const second = relativeLuminance(right);
+  return luminanceContrast(relativeLuminance(left), relativeLuminance(right));
+}
+
+function luminanceContrast(first, second) {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
@@ -553,14 +608,43 @@ function readableText(background) {
   return contrastRatio("#11141a", background) >= contrastRatio("#ffffff", background) ? "#11141a" : "#ffffff";
 }
 
-function readableTintText(color, background) {
-  if (contrastRatio(color, background) >= 4.5) return color;
-  const target = readableText(background);
-  for (let step = 1; step <= 10; step += 1) {
-    const candidate = mixHex(color, target, step / 10);
-    if (contrastRatio(candidate, background) >= 4.5) return candidate;
+/** A text colour moves toward an ink in hundredths, as the mail palette's (`readable_color`) does. */
+const TINT_STEPS = 100;
+
+/**
+ * `color` if it reaches the bar on each background it is drawn on, else the nearest hundredth-step mix of
+ * it toward the ink of the background it reads least on that does. Where none does, as when the
+ * backgrounds pull opposite ways, the colour, or a step toward either ink, that comes nearest the bar
+ * where it reads worst. Each fill asks for `TEXT_CONTRAST`; each of `paintedSurfaces`' surfaces states
+ * its own minimum.
+ */
+function readableTintText(color, fills, surfaces = []) {
+  // Each background's luminance is worked out once, and each candidate's once.
+  const backgrounds = [...fills.map((fill) => ({ color: fill, minimum: TEXT_CONTRAST })), ...surfaces]
+    .map((background) => ({ ...background, luminance: relativeLuminance(background.color) }));
+  const reach = (luminance, background) => luminanceContrast(luminance, background.luminance) / background.minimum;
+  const worst = (candidate) => {
+    const luminance = relativeLuminance(candidate);
+    return Math.min(...backgrounds.map((background) => reach(luminance, background)));
+  };
+  const own = relativeLuminance(color);
+  if (Math.min(...backgrounds.map((background) => reach(own, background))) >= 1) return color;
+  const weakest = backgrounds.reduce((least, background) => (reach(own, background) < reach(own, least) ? background : least));
+  const ink = readableText(weakest.color);
+  for (let step = 1; step <= TINT_STEPS; step += 1) {
+    const candidate = mixHex(color, ink, step / TINT_STEPS);
+    if (worst(candidate) >= 1) return candidate;
   }
-  return target;
+  let best = color;
+  let bestWorst = worst(color);
+  for (const toward of ["#11141a", "#ffffff"]) {
+    for (let step = 1; step <= TINT_STEPS; step += 1) {
+      const candidate = mixHex(color, toward, step / TINT_STEPS);
+      const candidateWorst = worst(candidate);
+      if (candidateWorst > bestWorst) [best, bestWorst] = [candidate, candidateWorst];
+    }
+  }
+  return best;
 }
 
 function assertTokenLayer(layer, owner) {
@@ -619,6 +703,7 @@ function assertThemeOptions(id, options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) throw new TypeError(`Theme ${id} options must be an object.`);
   if (!Number.isSafeInteger(options.version) || options.version < 1) throw new TypeError(`Theme ${id} options version must be a positive integer.`);
   if (options.capability !== undefined && options.capability !== "palette-customization") throw new TypeError(`Theme ${id} options capability is unsupported.`);
+  if (options.acceptsHostAppearanceSource !== undefined && typeof options.acceptsHostAppearanceSource !== "boolean") throw new TypeError(`Theme ${id} options acceptsHostAppearanceSource must be a boolean.`);
   if (typeof options.parse !== "function" || typeof options.resolve !== "function") throw new TypeError(`Theme ${id} options must provide parse and resolve functions.`);
   options.parse(options.defaults);
 }
