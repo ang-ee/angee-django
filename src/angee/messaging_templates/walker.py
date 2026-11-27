@@ -70,8 +70,12 @@ from angee.messaging_templates.engine import (
     BRAND_PATHS,
     INVALID_VALUES,
     MARKUP_FILTERS,
+    MESSAGE_TEMPLATE_REFUSED,
+    RENDER_FAILED,
+    SUBJECT_TOO_LONG,
     VALUE_NOT_LINKABLE,
     VALUE_NOT_PRINTED,
+    VALUES_TOO_LARGE,
     BudgetedIncludeNode,
     BudgetedLoopBody,
     MessageTemplateEngine,
@@ -183,7 +187,7 @@ def refusals_only() -> Iterator[None]:
     ``RecursionError`` pass unconverted: they say the process ran out of room, not
     that the row cannot render, and no admitted row and values reach either. Any
     other exception is logged with its traceback, then becomes
-    ``ValidationError(code="render_failed")``.
+    ``ValidationError(code=RENDER_FAILED)``.
     """
 
     try:
@@ -193,7 +197,7 @@ def refusals_only() -> Iterator[None]:
     except Exception as error:
         logger.exception("A message template failed to render.")
         raise ValidationError(
-            "The message template did not render: %(error)s", code="render_failed",
+            "The message template did not render: %(error)s", code=RENDER_FAILED,
             params={"error": f"{type(error).__name__}: {error}"},
         ) from error
 
@@ -560,7 +564,7 @@ class TemplateWalk:
             raise ValidationError(f"The values are not JSON: {error}", code=INVALID_VALUES) from error
         if len(text) > VALUES_JSON_LIMIT:
             raise ValidationError(
-                f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code="values_too_large",
+                f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code=VALUES_TOO_LARGE,
             )
         try:
             text.encode()
@@ -789,7 +793,7 @@ def _one_line(text: str, name: str) -> str:
     if len(line) > SUBJECT_LIMIT:
         raise ValidationError(
             "The rendered %(name)s is over %(limit)s characters.",
-            code="subject_too_long", params={"name": name, "limit": SUBJECT_LIMIT},
+            code=SUBJECT_TOO_LONG, params={"name": name, "limit": SUBJECT_LIMIT},
         )
     return line
 
@@ -1412,7 +1416,7 @@ class TemplateWalker:
 
         walk = self.judge(root, rows)
         if walk.refusals:
-            raise _refused(walk.refusals, "message_template_refused")
+            raise _refused(walk.refusals, MESSAGE_TEMPLATE_REFUSED)
         return walk
 
     @refusals_only()

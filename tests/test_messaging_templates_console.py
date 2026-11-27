@@ -4,6 +4,7 @@ server, and an administrator's test send."""
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import Iterator
@@ -31,6 +32,7 @@ from rebac.testing import install_schema
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
+from angee.messaging_templates.engine import NOT_A_TEMPLATE
 from angee.messaging_templates.models import (
     BASE_LAYOUT,
     SHIPPED_DEFAULT_MESSAGE,
@@ -296,7 +298,7 @@ def test_the_test_send_answers_as_the_frameworks_actions_do(installed: Any) -> N
         message = apps.get_model("messaging", "Message")._base_manager.get(sqid=sent["id"])
     assert sent == {"ok": True, "message": "A test of this message template is queued.", "code": None,
                     "id": message.sqid, "validation_errors": None}
-    assert {key: answer(admin, block)[key] for key in ("ok", "code")} == {"ok": False, "code": "not_a_template"}
+    assert {key: answer(admin, block)[key] for key in ("ok", "code")} == {"ok": False, "code": NOT_A_TEMPLATE}
     refused = answer(admin, unrenderable)
     assert (refused["ok"], refused["id"]) == (False, None) and refused["message"].startswith("name ")
     unknown_kit = answer(admin, template, kit="bkt_unknown")
@@ -1335,3 +1337,30 @@ def test_a_replayed_insert_returns_the_row_it_created(db: None) -> None:
     first = result_data(_insert(admin, "part", "fresh", idempotency="console-create"))
     assert result_data(_insert(admin, "part", "fresh", idempotency="console-create")) == first
     assert len(_rows("part", "fresh")) == 1 and _claimed("console-create")
+
+
+def test_a_failure_in_the_keyed_test_send_mutation_leaves_no_traceback_in_any_log_and_no_part_of_the_mail(
+    installed: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """What protects the resolver's frame, which holds the written message, without a mark of its own: the schema
+    records an unexpected error's class, path and frames as text and detaches the exception, so no log record carries
+    a traceback whose frames a report could show, and the answer names nothing of the mail."""
+
+    del installed
+    admin = create_platform_admin("messaging-templates-console-reporter")
+    _row()  # the base layout
+    template = _row("template", "tests.reported", layout="base", source="Hello {{ name }}.",
+                    variables={"name": "A name."}, sample={"name": "SECRET-marker"})
+
+    def refusing(self: Any, created: Any) -> None:
+        raise RuntimeError("The changeset refused the record.")
+
+    monkeypatch.setattr(changeset_model(), "record_created", refusing)
+    with caplog.at_level(logging.DEBUG):
+        result = execute_schema(_schema(), _KEYED_SEND_TEST, {"id": public_id_of(template), "key": "reported-1"},
+                                user=admin)
+    (error,) = result.errors
+    assert error.extensions == {"code": "INTERNAL"} and "SECRET-marker" not in error.message
+    assert any("Unexpected GraphQL resolver error (RuntimeError)" in record.getMessage() for record in caplog.records)
+    assert [record for record in caplog.records if record.exc_info] == []
+    assert all("SECRET-marker" not in record.getMessage() for record in caplog.records)

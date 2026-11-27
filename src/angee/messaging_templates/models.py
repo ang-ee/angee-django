@@ -76,7 +76,7 @@ from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.brandkit.models import BrandKit
 from angee.graphql.capabilities import held_permissions
-from angee.messaging_templates.engine import clean_link
+from angee.messaging_templates.engine import NO_BRAND_KIT, NOT_A_TEMPLATE, NOT_EFFECTIVE, clean_link
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
@@ -753,6 +753,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             raise refusal
         return self._render_and_record(row, reason=reason, to=to, values=values, kit=kit, must_print=must_print)
 
+    @sensitive_variables()
     def send_test(
         self, row: TemplateT, *, actor: User, kit: BrandKit | None = None, idempotency_key: str | None = None,
     ) -> Message:
@@ -838,7 +839,6 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 require_changeset().record_created(message)
                 return message
 
-    @sensitive_variables()
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
         subject_prefix: str = "", must_print: Iterable[str] = (),
@@ -1282,9 +1282,9 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         """
 
         if not self.handler.carries_message_fields:
-            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code="not_a_template")
+            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code=NOT_A_TEMPLATE)
         if not self.is_effective:
-            return ValidationError(NOT_EFFECTIVE_MESSAGE, code="not_effective")
+            return ValidationError(NOT_EFFECTIVE_MESSAGE, code=NOT_EFFECTIVE)
         return None
 
     def _row_fact(self, name: str) -> bool:
@@ -1558,7 +1558,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if kit is None:
             kit = apps.get_model("brandkit", "BrandKit").objects.default()
         if kit is None:
-            raise ValidationError(NO_BRAND_KIT_MESSAGE, code="no_brand_kit")
+            raise ValidationError(NO_BRAND_KIT_MESSAGE, code=NO_BRAND_KIT)
         return cast(BrandKit, kit)
 
     @classmethod

@@ -41,7 +41,13 @@ from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient
-from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_LINKABLE, VALUE_NOT_PRINTED
+from angee.messaging_templates.engine import (
+    INVALID_VALUES,
+    NOT_A_TEMPLATE,
+    NOT_EFFECTIVE,
+    VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED,
+)
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
@@ -220,8 +226,8 @@ def test_a_layout_block_or_overridden_default_is_refused_before_anything_renders
     _greeting(key="tests.shipped")
     with system_context(reason="tests.messaging_templates.send.load"):
         refused = {
-            "not_a_template": [MessageTemplate.objects.get(kind="layout"), _row("block", "card"), _row("part", "end")],
-            "not_effective": [MessageTemplate._base_manager.get(pk=shipped.pk)],
+            NOT_A_TEMPLATE: [MessageTemplate.objects.get(kind="layout"), _row("block", "card"), _row("part", "end")],
+            NOT_EFFECTIVE: [MessageTemplate._base_manager.get(pk=shipped.pk)],
         }
     walked, audits = _walks(monkeypatch), _audits()
     for code, rows in refused.items():
@@ -774,6 +780,27 @@ def test_a_failure_out_of_a_preview_of_unsaved_edits_reports_no_sample_or_patch(
     with actor_context(tester), pytest.raises((ValueError, RuntimeError)) as raised:
         row.preview(patch=patch)
     assert "preview" in [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
+    assert _leaks(raised.value) == []
+
+
+def test_a_failure_after_a_keyed_test_send_wrote_its_message_reports_no_part_of_the_mail(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The keyed path holds the written message, whose string form is its preview: a failure after the write, with
+    the marker in the sample and so in the body, shows it in no frame from ``send_test`` down."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-keyed-reporter")
+    row = _greeting(key="tests.keyed_reported", sample={**SAMPLE, "name": "SECRET-marker"})
+
+    def refusing(self: Any, created: Any) -> None:
+        raise RuntimeError("The changeset refused the record.")
+
+    monkeypatch.setattr(changeset_model(), "record_created", refusing)
+    with pytest.raises(RuntimeError) as raised:
+        MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="reported-1")
+    frames = [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
+    assert "send_test" in frames and frames[-1] == "refusing"
     assert _leaks(raised.value) == []
 
 

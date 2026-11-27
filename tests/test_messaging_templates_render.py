@@ -56,7 +56,12 @@ from angee.messaging_templates.engine import (
     ALLOWED_FILTERS,
     ALLOWED_TAGS,
     INVALID_VALUES,
+    MESSAGE_TEMPLATE_REFUSED,
+    NO_BRAND_KIT,
     RENDER_BUDGET,
+    RENDER_BUDGET_EXCEEDED,
+    RENDER_FAILED,
+    SUBJECT_TOO_LONG,
     VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
     RenderBudget,
@@ -1929,7 +1934,7 @@ def test_any_other_failure_is_logged_then_refused_as_render_failed(
             _render(template, {"name": "Ana"}, kit)
         with system_context(reason="tests.messaging_templates.render.preview"):
             preview = template.preview(kit=kit)
-    assert [item.code for item in caught.value.error_list] == ["render_failed"]
+    assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
     assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
     assert preview.rendered is None
     assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
@@ -1959,7 +1964,7 @@ def test_the_walk_and_the_warnings_are_inside_the_contract(
         patched.setattr(_TreeWalker, "close", lambda walker, tree: 1 / 0)
         with pytest.raises(ValidationError) as caught:
             _render(template, {"name": "Ana"}, kit)
-        assert [item.code for item in caught.value.error_list] == ["render_failed"]
+        assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
         with system_context(reason="tests.messaging_templates.render.preview"):
             assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
     monkeypatch.setattr(TemplateWalk, "unused", property(lambda walk: 1 / 0))
@@ -1983,20 +1988,20 @@ def test_a_caller_tells_each_refusal_apart_by_its_code(
     template = _mail("{{ order.total }} {{ name }}", {"order.total": "x", "name": "x"}, key="tests.codes")
     assert codes(template, {"order": "x"}) == {INVALID_VALUES}
     assert codes(template, {"order": {"total": None}, "name": None}) == {INVALID_VALUES}
-    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {"message_template_refused"}
+    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {MESSAGE_TEMPLATE_REFUSED}
     looping = _mail("{% for i in items %}" + "{{ i|upper }}{{ i|lower }}{{ i|title }}" * 2 + "{% endfor %}",
                     {"items.*": "x"}, key="tests.looping")
     assert codes(looping, {"items": ["a"] * 501}) == {INVALID_VALUES}
-    assert codes(looping, {"items": ["a" * 90] * 500}) == {"render_budget"}
+    assert codes(looping, {"items": ["a" * 90] * 500}) == {RENDER_BUDGET_EXCEEDED}
     long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
-    assert codes(long_subject, {"name": "n" * 600}) == {"subject_too_long"}
+    assert codes(long_subject, {"name": "n" * 600}) == {SUBJECT_TOO_LONG}
     monkeypatch.setitem(register.filters, "upper", _failing(RuntimeError))
-    assert codes(looping, {"items": ["a"]}) == {"render_failed"}
+    assert codes(looping, {"items": ["a"]}) == {RENDER_FAILED}
     with system_context(reason="tests.messaging_templates.render.kit"):
         BrandKit.objects.filter(pk=kit.pk).update(is_default=False)
     with pytest.raises(ValidationError) as caught, system_context(reason="tests.messaging_templates.render"):
         template.render({"order": {"total": 1}, "name": "Ana"})
-    assert {item.code for item in caught.value.error_list} == {"no_brand_kit"}
+    assert {item.code for item in caught.value.error_list} == {NO_BRAND_KIT}
 
 
 def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> None:
