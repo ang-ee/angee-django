@@ -2543,9 +2543,13 @@ from another:
   create-only implementation selector), published only where this resource
   writes the field. It implies no create path, which is `creatable` alone.
 
-A record form locks a `createOnly` field on an edit except while the stored key
-is not registered, when the field can be chosen once more (a repair); it offers
-the field on a create only where it is `creatable`. A page cannot unlock what
+A record form locks a `createOnly` field on an edit except while the record its
+draft was made against stores a key that is not registered, when the field can
+be chosen once more (a repair, `repairChoosable`); it offers the field on a
+create only where it is `creatable`. While the repair's answer or a save is
+pending the selector is `loading`; a refused answer keeps it read-only with the
+server's words; a save that would send the repair's config without its selector
+is refused on the client. A page cannot unlock what
 the model's metadata locks: its own `createOnly: false` over a create-only
 selector changes nothing, and its own `createOnly: true` on a field the model
 does not make create-only locks it on an edit with no repair. The repair is

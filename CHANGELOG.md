@@ -81,7 +81,10 @@ live in code docstrings.
   the column as itself, so a stale save never restores a retired key over one
   committed since. A repair saved with `update_fields` must name the config
   too, and a stale row that would write another config is refused as stale
-  (code `stale`). `angee.graphql`: every update input carries its model's
+  (code `stale`). A save of a row that holds such a key reads the stored key and
+  config under the row's lock (`row_lock_queryset`) in its own transaction, so a
+  stale save racing a repair waits for it and is refused as stale; any other save
+  opens no transaction. `angee.graphql`: every update input carries its model's
   create-only selectors (`create_only_selectors`, derived once in
   `hasura_model_resource`), so `channels_set_input`,
   `notion_connections_set_input`, `feeds_set_input` (both selectors) and any
@@ -97,11 +100,14 @@ live in code docstrings.
   not registered (the administrator-or-policy admission of a choices read
   without a record is not asked: a repair is the writer's act), and refused as
   the write is otherwise (not found, or "Implementation selection is
-  create-only."). `@angee/ui`: the record form
-  offers a create-only selector once more while its stored key is not
-  registered, sets the config the chosen implementation carries over, and
-  saves the selector with that config; afterwards the selector is locked
-  again. A resource with no update root
+  create-only."); a selector with no repair (its model composes no
+  `ImplDefaultsMixin`, or the selector is not create-only) is refused in words
+  under the field. `@angee/ui`: the record form
+  offers a create-only selector (one the model's metadata makes create-only,
+  never a page's own flag) once more while the record its draft was made
+  against stores a key that is not registered, sets the config the chosen
+  implementation carries over, and saves the selector with that config, never
+  the config alone; afterwards the selector is locked again. A resource with no update root
   (calendar sources, directories, mounts) or a selector a connect flow chose is
   repaired by installing the implementation's addon again or by connecting the
   record again.
