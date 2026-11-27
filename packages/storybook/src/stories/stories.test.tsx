@@ -14,6 +14,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import preview from "../../.storybook/preview";
 import * as FormViewStories from "./FormView.stories";
 import * as ListViewStories from "./ListView.stories";
+import * as RefusedSubmitStories from "./RefusedSubmit.stories";
 
 setProjectAnnotations([preview]);
 afterEach(() => { vi.restoreAllMocks(); });
@@ -60,9 +61,11 @@ test.each(paths)("%s imports", (path) => {
 
 /** The stories a browser pass reads, each checked by its own test below and so not rendered again here. */
 const RECORD_STORIES = ["EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit"] as const;
+const REFUSED_SUBMIT_STORIES = ["MutationDialog", "ActionTypedArguments", "ActionSchemaArguments"] as const;
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
   "./ListView.stories.tsx PaneWithOrder",
+  ...REFUSED_SUBMIT_STORIES.map((name) => `./RefusedSubmit.stories.tsx ${name}`),
 ]);
 /** The stories not rendered here, each with why. */
 const NOT_RENDERED: ReadonlyMap<string, string> = new Map([
@@ -189,3 +192,34 @@ test("Views/ListView / Pane With Order checks the key the rows follow, offers no
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
+
+const refusedSubmit = composeStories(RefusedSubmitStories);
+
+// Where focus lands is a browser's to show, so these do not read it: they read what the refusal says and where.
+test.each(REFUSED_SUBMIT_STORIES)(
+  "Views/RefusedSubmit / %s, refusing the date, says why once, under the date, and the banner names it, with the reason about the whole submit when asked",
+  async (name) => {
+    const said = consoleMessages();
+    const Story = refusedSubmit[name];
+    for (const formReason of [false, true]) {
+      const view = render(<Story refuse="date" formReason={formReason} />);
+      const dialog = await screen.findByRole("dialog", { name: "Send the form" });
+      const send = await within(dialog).findByRole<HTMLButtonElement>("button", { name: "Send" });
+      await waitFor(() => expect(send.disabled).toBe(false));
+      fireEvent.click(send);
+      const [reason, ...again] = await within(dialog).findAllByText("This value was refused.");
+      expect(again).toEqual([]);
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "Date" }).getAttribute("aria-describedby")?.split(" "))
+        .toContain(reason!.id));
+      // The banner's lines: one message is its body, several a list.
+      const banner = dialog.querySelector("[role='alert']");
+      const items = [...banner?.querySelectorAll("li") ?? []].map((item) => item.textContent);
+      expect(items.length ? items : [banner?.textContent]).toEqual([
+        ...(formReason ? ["This submit was refused as a whole."] : []), "Please fix the highlighted fields: Date.",
+      ]);
+      view.unmount();
+    }
+    expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+    expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+  },
+);
