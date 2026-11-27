@@ -158,6 +158,16 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
             status=self.model.StatementStatus.ASSERTED, applied=True, snak=self.model.StatementSnak.VALUE
         )
 
+    def confirmed(self) -> Self:
+        """The applied statements (:meth:`applied`: current, asserted, applied) whose stance is a confirmation.
+
+        The stance is ``Statement.CONFIRMED_STANCE``, a person's or a seed's preferred statement with a
+        value, which ``Statement.is_confirmed`` checks of a row; that property checks no status, so a
+        confirmation that is not applied (a withdrawn one, say) is one as a row and is not here.
+        """
+
+        return self.applied().filter(**self.model.CONFIRMED_STANCE)
+
     def provenance(self, field: str) -> Self:
         """Return the applied assertions, including a preferred dismissal."""
 
@@ -1132,24 +1142,13 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         """
 
         manager = self.statements_for(aspect)
-        return manager.set(
-            aspect=aspect,
-            values=values,
-            rank=manager.model.StatementRank.PREFERRED,
-            **members,
-        )
+        return manager.set(aspect=aspect, values=values, **manager.model.CONFIRMED_STANCE, **members)
 
     def dismiss_statement(self, *, aspect: str, **members: Any) -> Any:
         """Write the acting person's preferred no-value statement of ``aspect`` on this subject."""
 
         manager = self.statements_for(aspect)
-        return manager.set(
-            aspect=aspect,
-            values={},
-            rank=manager.model.StatementRank.PREFERRED,
-            snak=manager.model.StatementSnak.NO_VALUE,
-            **members,
-        )
+        return manager.set(aspect=aspect, values={}, **manager.model.DISMISSED_STANCE, **members)
 
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         raise ImproperlyConfigured("Pair aspects require the endpoint's apply_pair hook.")
@@ -1251,6 +1250,24 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         WITHDRAWN = "withdrawn"
         QUARANTINED = "quarantined"
         DEPRECATED = "deprecated"
+
+    CONFIRMED_STANCE: ClassVar[Mapping[str, str]] = {"rank": StatementRank.PREFERRED, "snak": StatementSnak.VALUE}
+    """A confirmation's stance, column by column: a preferred statement with a value.
+
+    Only a person or a seed source asserts a preferred statement (``stance_constraint``). The verb
+    ``confirm_statement`` writes it, :attr:`is_confirmed` checks a row's stance alone, and
+    ``confirmed()`` keeps the applied statements with it, so all three read this one mapping.
+    ``is_confirmed`` checks no status: a confirmation that is not applied (a withdrawn one, say) is
+    still one as a row and is absent from ``confirmed()``, on purpose. A source's later stance on the
+    same key replaces its row (``set``), so a person who dismisses what they confirmed leaves a
+    dismissal, not a confirmation beside it.
+    """
+    DISMISSED_STANCE: ClassVar[Mapping[str, str]] = {"rank": StatementRank.PREFERRED, "snak": StatementSnak.NO_VALUE}
+    """A dismissal's stance, column by column: a preferred statement asserting no value.
+
+    The verb ``dismiss_statement`` writes it and :attr:`is_dismissed` checks a row's stance alone; a
+    query for dismissals filters by this mapping and the status it needs.
+    """
 
     history = StatementHistory(inherit=True)
     objects = StatementManager()
@@ -1452,11 +1469,11 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
 
     @property
     def is_confirmed(self) -> bool:
-        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.VALUE
+        return all(getattr(self, name) == value for name, value in self.CONFIRMED_STANCE.items())
 
     @property
     def is_dismissed(self) -> bool:
-        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.NO_VALUE
+        return all(getattr(self, name) == value for name, value in self.DISMISSED_STANCE.items())
 
     def member_values(self) -> dict[str, Any]:
         """This stance's member identity, as the subject verbs take it."""

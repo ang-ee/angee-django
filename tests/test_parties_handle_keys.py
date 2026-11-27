@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from io import StringIO
 from typing import Any
+from unittest import mock
 
 import pytest
 from django.apps import apps
@@ -18,16 +19,17 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
 from django.db import IntegrityError, connection, transaction
-from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
 from django_compose.provision import ProvisionContext
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.models.identity import public_id_of
 from angee.messaging.testing.models import Channel, Handle, Message, Party, Person, Reaction, Recipient, Thread
-from angee.parties.managers import EmailBasis, KeyRepair, ValueOwned
+from angee.parties.managers import REPAIR_BATCH, EmailBasis, KeyRepair, ValueOwned
 from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
 from tests.conftest import create_platform_admin, create_user, make_integration
@@ -74,24 +76,21 @@ def _behind() -> int:
 
 @contextmanager
 def _unsaveable(handle: Any) -> Iterator[None]:
-    """While it lasts, a save of ``handle`` raises; a second attempt at it fails the test instead of spinning."""
+    """While it lasts, writing ``handle``'s keys raises; a second attempt at it fails the test instead of spinning."""
 
     attempts: list[Any] = []
+    derive = Handle.derived_keys
 
-    def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
-        del sender, kwargs
-        if instance.pk != handle.pk:
-            return
+    def refuse(row: Any) -> dict[str, Any]:
+        if row.pk != handle.pk:
+            return derive(row)
         if attempts:
             pytest.fail("One run attempted the same row twice.")
-        attempts.append(instance.pk)
+        attempts.append(row.pk)
         raise RuntimeError("This row cannot be saved.")
 
-    pre_save.connect(refuse, sender=Handle)
-    try:
+    with mock.patch.object(Handle, "derived_keys", refuse):
         yield
-    finally:
-        pre_save.disconnect(refuse, sender=Handle)
 
 
 def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -> None:
@@ -126,8 +125,17 @@ def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -
             Handle.objects.upsert(platform="email", value="fay@example.test", **{name: current})
 
 
+def _writes(queries: CaptureQueriesContext) -> list[str]:
+    statements = [query["sql"] for query in queries]
+    return [sql for sql in statements if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+
+
 def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spelling_after_one_run(owner: Any) -> None:
-    """A row stored before the rule had a version is selected: its key is saved again, its value stays as typed."""
+    """A row stored before the rule had a version is selected: its key is saved again, its value stays as typed.
+
+    A repair is no edit: the keys are written alone, with one version, and ``updated_at`` stays; a run with nothing
+    behind writes nothing at all, not even its elevation's audit row.
+    """
 
     with system_context(reason="tests.parties.handle_keys"):
         ada = Person.objects.create(display_name="Ada Example", created_by=owner)
@@ -135,6 +143,7 @@ def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spel
         Party.objects.assert_handle(ada, held, asserted_by=owner)
     stale = _stored_with(owner, "ada@xn--bcher-kva.example", "ada@xn--bcher-kva.example")
     _key, _version, value, versions = _row(stale)
+    updated_at = Handle._base_manager.values_list("updated_at", flat=True).get(pk=stale.pk)
 
     def found() -> list[tuple[Any, EmailBasis]]:
         with system_context(reason="tests.parties.handle_keys"):
@@ -147,8 +156,26 @@ def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spel
 
     assert found() == [(ada.pk, EmailBasis.HELD)]
     assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
-    assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
+    assert Handle._base_manager.values_list("updated_at", flat=True).get(pk=stale.pk) == updated_at
+    with CaptureQueriesContext(connection) as queries:
+        assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
+    assert _writes(queries) == []
     assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
+
+
+def test_an_address_whose_domain_would_read_longer_than_a_domain_name_keeps_it_as_typed(owner: Any) -> None:
+    """A name of ligatures reads past ``Handle.DOMAIN_NAME_LIMIT``: the rule keeps it as typed, so both keys fit
+    their columns on every database, as the handle saves and as the repair writes them."""
+
+    ligatures = ".".join(["ﷺﷺ"] * 84)
+    with system_context(reason="tests.parties.handle_keys"):
+        handle = Handle.objects.upsert(platform="email", value=f"Ada@{ligatures}", created_by_id=owner.pk)
+    stored = Handle._base_manager.get(pk=handle.pk)
+    assert (stored.spelling_key, stored.normalized_value) == (f"ada@{ligatures}", f"ada@{ligatures}")
+
+    behind = _stored_with(owner, f"bob@{ligatures}", "behind")
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=1)
+    assert _keyed(behind) == (f"bob@{ligatures}", Handle.NORMALIZATION_VERSION)
 
 
 def test_a_run_given_a_cap_stops_at_it_and_the_next_run_takes_the_rest(owner: Any) -> None:
@@ -255,7 +282,7 @@ def test_a_bumped_version_selects_every_row_keyed_before_it(owner: Any, monkeypa
 def test_a_run_without_a_cap_saves_batch_after_batch_until_no_row_is_behind(owner: Any) -> None:
     """The whole backlog in one run: a row left with a stale key is one the lookups that read keys would miss."""
 
-    count = Handle.objects.REPAIR_LIMIT + 1
+    count = REPAIR_BATCH + 1
     with system_context(reason="tests.parties.handle_keys"):
         Handle._base_manager.bulk_create(
             Handle(platform="other", value=f"name-{index}", normalized_value=f"name-{index}", created_by=owner)
@@ -268,12 +295,12 @@ def test_a_run_without_a_cap_saves_batch_after_batch_until_no_row_is_behind(owne
     assert _behind() == 0
 
 
-def test_a_row_whose_save_raises_is_counted_and_left_behind_while_every_other_row_is_saved(
+def test_a_row_whose_key_write_raises_is_counted_and_left_behind_while_every_other_row_is_saved(
     owner: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """One row never stops the backlog and is never selected again in the run; the next run takes it."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(5)]
     refused = stale[2]
     before = _row(refused)
@@ -294,12 +321,12 @@ def test_a_row_whose_save_raises_is_counted_and_left_behind_while_every_other_ro
     assert _keyed(refused) == ("ada-2@bücher.example", Handle.NORMALIZATION_VERSION)
 
 
-def test_a_capped_run_passes_a_row_whose_save_raises_and_still_saves_its_share(
+def test_a_capped_run_passes_a_row_whose_key_write_raises_and_still_saves_its_share(
     owner: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The cap counts saved rows, so a row that cannot be saved neither uses it up nor holds the run on itself."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(4)]
 
     with _unsaveable(stale[0]):
@@ -329,7 +356,7 @@ def test_an_operator_who_asks_for_a_share_sees_where_the_cap_stopped_the_run(own
 def test_without_a_cap_the_command_saves_every_batch_and_never_prints_the_cap_line(
     owner: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     for index in range(5):
         _stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind")
     output, errors = StringIO(), StringIO()
@@ -344,7 +371,7 @@ def test_without_a_cap_the_command_saves_every_batch_and_never_prints_the_cap_li
 def test_an_operator_sees_how_many_rows_could_not_be_saved(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Rows that failed are reported apart from rows a cap left: without a cap there is no cap line for them."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(3)]
     output, errors = StringIO(), StringIO()
 
@@ -361,7 +388,7 @@ def test_an_operator_sees_how_many_rows_could_not_be_saved(owner: Any, monkeypat
 def test_every_provision_saves_the_whole_backlog(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A deployment never depends on someone running the command, and a provision with nothing behind says so."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(5)]
     parties: Any = apps.get_app_config("parties")
 
@@ -436,17 +463,39 @@ _IDNA_2003: dict[str, str] = {
     "straße.example": "strasse.example",
 }
 
+# A ligature reads as many letters: U+FDFA as 18. A name of 84 labels of two (251 characters typed) would read as 3,107.
+_LIGATURES = ".".join(["ﷺﷺ"] * 84)
+_LONGER_THAN_A_DOMAIN: dict[str, str] = {
+    "ﷺ.example": "صلى الله عليه وسلم.example",
+    _LIGATURES: _LIGATURES,
+}
+
+# The local part's case: every character lower-cased but a non-ASCII one whose lower case would be ASCII or of another
+# length, kept so that no non-ASCII character turns into another mailbox's ASCII letter; only ASCII whitespace trims.
+_LOCAL_PARTS: dict[str, str] = {
+    "JOSÉ@example.test": "josé@example.test",
+    "MÜLLER@example.test": "müller@example.test",
+    "\u212aate@example.test": "\u212aate@example.test",  # the Kelvin sign: kept, never kate@'s
+    "\u0130stanbul@example.test": "\u0130stanbul@example.test",  # İ: kept, never i and a combining dot
+    "\u212bngstr\u00f6m@example.test": "\u00e5ngstr\u00f6m@example.test",  # the Angstrom sign folds onto å
+    "\u2126hm@example.test": "\u03c9hm@example.test",  # the Ohm sign folds onto ω
+    "\u00a0kate@example.test": "\u00a0kate@example.test",  # a no-break space is no ASCII whitespace: kept
+}
+
 NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
     1: (_VERSION_1_VALUES, _DOMAINS),
     2: (
         # The person-matching key: version 1's outputs, but for a domain with surrounding whitespace, which is now
-        # read through the domain rule before the Gmail check, and the spellings IDNA 2003 sends as one domain.
+        # read through the domain-spelling rule before the Gmail check, the spellings IDNA 2003 sends as one domain,
+        # a name too long to be a domain, and the local part's case rule.
         {
             **_VERSION_1_VALUES,
             ("email", "a.b@ gmail.com"): "ab@gmail.com",
             **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
+            **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
+            **{("email", value): key for value, key in _LOCAL_PARTS.items()},
         },
-        {**_DOMAINS, **_IDNA_2003},
+        {**_DOMAINS, **_IDNA_2003, **_LONGER_THAN_A_DOMAIN},
         # The spelling key: letter case and domain spelling on email; none for what is no address, or off email.
         {
             ("email", "ada@example.test"): "ada@example.test",
@@ -462,6 +511,8 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
             ("email", '"ADA EXAMPLE"@example.test'): '"ada example"@example.test',
             ("email", "a.b@ gmail.com"): "a.b@gmail.com",
             **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
+            **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
+            **{("email", value): key for value, key in _LOCAL_PARTS.items()},
             ("email", "n/a"): "",
             ("imessage", "Ada@Example.test"): "",
             ("phone", "+1 787 555 0100"): "",
@@ -478,13 +529,23 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
 The first mapping is ``Handle.normalize_value`` by ``(platform, value)``, with every
 platform in it; the second is ``Handle.normalize_email_domain`` by domain; from version 2,
 the third is ``Handle.spelling_key_of`` by ``(platform, value)``, with every platform in it.
-A change of the rule adds an entry under the new version number; the entries of earlier
-versions stay as the record of what they returned.
+
+A released version's outputs never change: a host stores keys under its number, and only a
+new number makes provisioning write them again. A release is a tag (``v0.2.0`` the latest)
+and the changelog's dated section; no release carries the version yet, so versions 1 and 2
+are both unreleased. Version 1 is pinned as it was first stored; version 2, amended while
+unreleased (a name too long to be a domain kept as typed, the local part's case rule), is
+pinned as it will ship. Once a version is released, a change of the rule adds an entry under
+a new number and leaves the released ones as the record of what they returned.
 """
 
 
-def test_changing_what_the_normalization_rule_returns_means_bumping_its_version() -> None:
-    """Stored keys are saved again only when the version moves, so an output may not change under one number."""
+def test_the_rule_returns_what_its_version_pins_and_a_released_versions_outputs_never_change() -> None:
+    """Stored keys are written again only when the version moves, so a released number's outputs never change.
+
+    The rule as it is must return what the sample pins under ``Handle.NORMALIZATION_VERSION``: a version still
+    unreleased is amended in its entry, a released one is left as it shipped and the rule moves to a new number.
+    """
 
     version = Handle.NORMALIZATION_VERSION
     assert version in NORMALIZATION_SAMPLE, (
@@ -501,9 +562,73 @@ def test_changing_what_the_normalization_rule_returns_means_bumping_its_version(
         {sample: Handle.spelling_key_of(*sample) for sample in spellings},
     )
     assert returned == (values, domains, spellings), (
-        f"The normalization rule no longer returns what version {version} pinned. Bump Handle.NORMALIZATION_VERSION "
-        "and check in the new outputs under the new number: provisioning saves stored keys again only when it moves."
+        f"The normalization rule no longer returns what version {version} pinned. A released version's outputs never "
+        "change: if a release carries it, bump Handle.NORMALIZATION_VERSION and check in the new outputs under the new "
+        "number, since provisioning writes stored keys again only when it moves; if none does, amend its entry."
     )
+
+
+def test_the_local_part_keeps_exactly_the_characters_whose_lower_case_would_be_ascii_or_of_another_length() -> None:
+    """The kept set is computed from ``str.lower``, never listed: today it is the Kelvin sign and ``İ``.
+
+    A later Unicode version that widens or narrows the set fails here, where the change is seen.
+    """
+
+    kept = {
+        character for character in map(chr, range(0x80, 0x110000))
+        if character.lower() != character and Handle.normalize_local_part(character) == character
+    }
+    assert kept == {"\u212a", "\u0130"}
+    assert Handle.normalize_local_part("\u212aATE") == "\u212aate"
+    assert Handle.normalize_local_part("\u212bNGSTR\u00d6M") == "\u00e5ngstr\u00f6m"
+
+
+_OLD_ASCII_RULE_DOMAINS = ("example.test", "Example.TEST", "xn--bcher-kva.example", "gmail.com", " Bücher.Example ")
+
+
+@settings(deadline=None, max_examples=200)
+@given(
+    local=st.text(alphabet=st.characters(min_codepoint=0, max_codepoint=127, exclude_characters="@"), max_size=24),
+    domain=st.sampled_from(_OLD_ASCII_RULE_DOMAINS),
+    pad=st.sampled_from(("", " ", "\t", " \n ")),
+)
+def test_an_ascii_local_part_keys_as_the_rule_before_the_local_part_rule_keyed_it(
+    local: str, domain: str, pad: str,
+) -> None:
+    """For a local part of ASCII characters the keys are what the whole-value ``lower()`` rule gave."""
+
+    value = f"{pad}{local}@{domain}{pad}"
+    before = value.strip().lower()
+    before_local, _, before_domain = before.rpartition("@")
+    old_spelling = f"{before_local}@{Handle.normalize_email_domain(before_domain)}"
+
+    assert Handle.spelling_key_of("email", value) == old_spelling
+    assert Handle.normalize_value("email", value) == Handle.normalize_value("email", before)
+
+
+def test_an_address_in_another_case_of_a_non_ascii_letter_is_one_handle_and_a_sign_that_reads_ascii_is_its_own(
+    owner: Any,
+) -> None:
+    """``JOSÉ@`` and ``josé@``, ``MÜLLER@`` and
+    ``müller@`` land on one handle each; the Kelvin sign is no ``k``, so its address is a handle of
+    its own, never ``kate@``'s; a leading no-break space is no ASCII whitespace, so that value is no address and keys as
+    typed, never ``kate@``'s either."""
+
+    def land(value: str) -> Any:
+        with system_context(reason="tests.parties.handle_keys.local_part"):
+            return Handle.objects.upsert(platform="email", value=value, created_by_id=owner.pk).pk
+
+    assert land("JOSÉ@example.test") == land("josé@example.test")
+    assert land("MÜLLER@example.test") == land("müller@example.test")
+    kate = land("Kate@example.test")
+    kelvin = land("\u212aate@example.test")
+    assert kelvin != kate
+    assert Handle._base_manager.get(pk=kelvin).spelling_key == "\u212aate@example.test"
+    assert not Handle._base_manager.get(pk=kate).is_spelling_of("\u212aate@example.test")
+    assert Handle._base_manager.get(pk=kate).is_spelling_of("KATE@example.test")
+    assert Handle.is_email_address("\u00a0kate@example.test") is False
+    assert Handle.spelling_key_of("email", "\u00a0kate@example.test") == "\u00a0kate@example.test"
+    assert Handle.is_email_address(" kate@example.test ") is True
 
 
 def _spelled(owner: Any, *values: str) -> list[Any]:
@@ -876,3 +1001,24 @@ def test_the_repair_folds_only_spellings_of_an_email_address_never_a_shared_pers
     assert [_stored(row) for row in rows] == [
         (key, Handle.NORMALIZATION_VERSION, None) for key in ("", "", "a.b@gmail.com", "ab@gmail.com", "", "")
     ]
+
+
+def test_an_addresss_domain_is_its_spelling_keys_and_none_off_email() -> None:
+    """``Handle.domain_of`` is what a caller compares an address's domain by."""
+
+    assert Handle.domain_of("email", " Ada@XN--BCHER-KVA.Example ") == "bücher.example"
+    assert Handle.domain_of("email", "no address") == ""
+    assert Handle.domain_of("phone", "+1 555 0100") == ""
+
+
+def test_the_email_handles_at_a_domain_are_found_by_any_spelling_of_it(owner: Any) -> None:
+    """``HandleQuerySet.at_domain`` reads the stored key's domain through the rule; no domain names no handle."""
+
+    with system_context(reason="tests.parties.handle_keys"):
+        punycode, unicode, other = (
+            Handle.objects.upsert(platform="email", value=value, created_by_id=owner.pk)
+            for value in ("ada@xn--bcher-kva.example", "bob@bücher.example", "carl@other.example")
+        )
+        assert set(Handle.objects.at_domain("BÜCHER.example").values_list("pk", flat=True)) == {punycode.pk, unicode.pk}
+        assert not Handle.objects.at_domain("").exists()
+        assert set(Handle.objects.at_domain("other.example").values_list("pk", flat=True)) == {other.pk}

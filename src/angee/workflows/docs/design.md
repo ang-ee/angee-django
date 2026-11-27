@@ -45,9 +45,12 @@ How the ontology maps to this addon.
 
 - **Records of a step:** `StepRecord` replaces `StepArtifact` and `WorkflowRunEvidence`.
   `ctx.record(record, operation="read", label="")` records a read, created, changed,
-  deleted or called record; `ctx.load` records reads. Admission inputs use the same
-  relation without a step. `step.records` and `WorkflowRun.objects.about(record_or_records)`
-  expose both directions. Identities obey the target's current read scope.
+  deleted or called record; `ctx.load` authorizes and loads without recording. Admission
+  links the subject and each declared input relation through the same relation without a
+  step. `WorkflowRun.objects.about(record_or_records)` walks up to ancestors and its
+  inverse `runs.concerns(Model)` walks down to every descendant, both through one
+  recursive common table expression over the run's parent step; `step.records` lists
+  one step's links. Identities obey the target's current read scope.
 - **Asking:** the existing ask-and-wait step outcome creates a decision with its concern links and resumes on the
   answer. `ctx.ask(request, state=...)` retains the current decision in
   `StepRun.decision`. A continuation may ask again after that question is answered;

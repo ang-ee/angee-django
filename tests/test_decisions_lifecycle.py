@@ -1,15 +1,20 @@
 """A question records a permissioned, optimistic verdict without applying actions."""
 
+import re
+from pathlib import Path
+
 import pytest
+from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from pydantic import ValidationError as ContractError
 from rebac import RelationshipTuple, current_actor, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.actors import is_sudo
 
+import angee.decisions
 from angee.base.models.locks import StaleRevisionError
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.decisions.signals import decision_answered
+from angee.decisions.signals import decision_answered, decision_asked
 from angee.decisions.testing.models import Decision
 from tests.conftest import create_platform_admin, create_user, vault_for
 
@@ -43,6 +48,114 @@ def request_for(people, **changes):
             **changes,
         }
     )
+
+
+@pytest.fixture
+def asked():
+    """Each ``decision_asked`` receipt: the question, and the authority the receiver holds."""
+
+    received = []
+
+    def collect(sender, decision, **kwargs):
+        received.append((decision.pk, current_actor(), is_sudo()))
+
+    decision_asked.connect(collect, weak=False)
+    try:
+        yield received
+    finally:
+        decision_asked.disconnect(collect)
+
+
+def test_ask_announces_the_admitted_question_once_without_authority_from_decisions(people, asked):
+    requester, *_ = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+    assert asked == [(question.pk, None, False)]
+
+
+def test_a_refused_ask_announces_nothing(people, asked):
+    requester, *_ = people
+    with pytest.raises(ValidationError, match="At least one assignee must be allowed to answer"):
+        Decision.objects.ask(request_for(people, assignees=(requester,)), actor=requester)
+    assert asked == [] and not Decision.system_queryset().exists()
+
+
+def test_an_asked_receiver_error_rolls_the_admission_back(people):
+    requester, *_ = people
+
+    def refuse(sender, decision, **kwargs):
+        raise RuntimeError("receiver bug")
+
+    decision_asked.connect(refuse, weak=False)
+    try:
+        with pytest.raises(RuntimeError, match="receiver bug"):
+            Decision.objects.ask(request_for(people), actor=requester)
+    finally:
+        decision_asked.disconnect(refuse)
+    assert not Decision.system_queryset().exists()
+
+
+def test_a_supersede_announces_its_replacement_once_inside_the_supersede_context(people, asked):
+    requester, *_ = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+    asked.clear()
+    with system_context(reason="test.supersede_announces"):
+        replacement = Decision.objects.supersede(question, request_for(people), actor=requester, reason="Rephrased")
+    assert [(pk, sudo) for pk, _actor, sudo in asked] == [(replacement.pk, True)]
+
+
+def test_deciders_are_the_active_people_who_may_read_and_answer_each_question(people):
+    requester, reviewer, other, outsider, subject = people
+    admin = create_platform_admin("deciders-admin")
+    service = get_user_model().objects.create_user(username="deciders-service", kind="service")
+    write_relationships([RelationshipTuple(to_object_ref(subject), "viewer", to_subject_ref(service))])
+    assigned = Decision.objects.ask(request_for(people, assignees=(reviewer, service)), actor=requester)
+    unassigned = Decision.objects.ask(request_for(people, assignees=()), actor=requester)
+    assert assigned.with_actor(service).has_access("act")
+    rows = Decision.system_queryset().filter(pk__in=(assigned.pk, unassigned.pk))
+    assert rows.deciders() == {assigned.pk: [reviewer, admin], unassigned.pk: [admin]}
+    with system_context(reason="test.deciders.inactive"):
+        get_user_model().objects.filter(pk=reviewer.pk).update(is_active=False)
+    assert rows.deciders()[assigned.pk] == [admin]
+
+
+def test_deciders_and_put_to_are_one_rule_read_from_each_side(people):
+    requester, reviewer, other, outsider, subject = people
+    admin = create_platform_admin("put-to-admin")
+    service = get_user_model().objects.create_user(username="put-to-service", kind="service")
+    write_relationships([RelationshipTuple(to_object_ref(subject), "viewer", to_subject_ref(service))])
+    question = Decision.objects.ask(request_for(people, assignees=(reviewer, service)), actor=requester)
+    everyone = (requester, reviewer, other, outsider, admin, service)
+
+    def sides():
+        put = [person for person in everyone if Decision.objects.put_to(person).filter(pk=question.pk).exists()]
+        return Decision.system_queryset().filter(pk=question.pk).deciders()[question.pk], put
+
+    assert sides() == ([reviewer, admin], [reviewer, admin])
+    with system_context(reason="test.put_to.inactive"):
+        get_user_model().objects.filter(pk=reviewer.pk).update(is_active=False)
+    assert sides() == ([admin], [admin])
+    assert not Decision.system_queryset().put_to(None).exists()
+
+
+def test_administrators_and_for_administrator_are_one_rule_read_from_each_side(people):
+    requester, reviewer, other, outsider, subject = people
+    admin = create_platform_admin("administrators-admin")
+    retired = create_platform_admin("administrators-retired")
+    question = Decision.objects.ask(request_for(people, assignees=(reviewer,)), actor=requester)
+    with system_context(reason="test.administrators.inactive"):
+        get_user_model().objects.filter(pk=retired.pk).update(is_active=False)
+    everyone = (requester, reviewer, other, outsider, admin, retired)
+    put = [person for person in everyone if Decision.objects.for_administrator(person).filter(pk=question.pk).exists()]
+    assert Decision.system_queryset().filter(pk=question.pk).administrators() == {question.pk: [admin]}
+    assert put == [admin], "the assignee is no administrator, and an administrator is put a question assigned to others"
+
+
+def test_the_console_path_is_the_record_route_the_decisions_fragment_declares(people):
+    requester, *_ = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+    manifest = (Path(angee.decisions.__file__).with_name("web") / "src" / "index.ts").read_text()
+    (collection,) = re.findall(r'resourcePageRoutes\(\s*"decisions\.inbox",\s*"([^"]+)"', manifest)
+    assert question.get_absolute_url() == f"{collection}/{question.public_id}" == f"/decisions/{question.sqid}"
 
 
 def test_one_question_lifecycle_and_audit(people):
