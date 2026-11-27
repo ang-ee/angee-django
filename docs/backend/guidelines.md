@@ -501,11 +501,12 @@ Use these owners instead of maintaining another contract in an addon:
   registered" group exists yet. A
   `create_only` selector holding such a key may move, once, to a registered
   key: the config its implementations own is carried over
-  ([`ImplBase.carried_config`](../../src/angee/base/implementations.py): the
-  keys the new class reads kept, its defaults filling the rest and replacing a
-  kept value it refuses, the defaults alone where a rule across keys refuses
-  them; a key the new class does not read is dropped: choosing a class chooses
-  its config's shape, and the repair read shows that config before the save),
+  ([`ImplBase.carried_config`](../../src/angee/base/implementations.py), since
+  choosing a class chooses its config's shape: kept, a stored value the new
+  class reads and accepts; reset to its default, a value it refuses, and every
+  value where a rule across keys refuses them together; dropped, a key it does
+  not read, extras included; nothing reports the change beyond the result, which
+  the repair read shows before the save),
   a config sent with the selector is validated as sent, the new key is written
   only while the row still holds the old one, and afterwards the selector is
   create-only again.

@@ -46,7 +46,10 @@ class ImplChoice:
     category: str
     defaults: JSON = strawberry.field(description=(
         "What choosing this implementation sets: an insert's defaults, or, in a resource's repair read "
-        "(<resource>_repair_choices), the config it carries over from that record's stored config."
+        "(<resource>_repair_choices), the config it carries over from that record's stored config. Carried "
+        "over: a stored value the implementation reads and accepts is kept; a value it refuses is reset to "
+        "its default, and where a rule across keys refuses the values together every value is reset to its "
+        "defaults; a key it does not read, an extra its config would allow included, is dropped."
     ))
     config_schema: JSON | None
 

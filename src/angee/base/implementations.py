@@ -158,13 +158,18 @@ class ImplBase:
     def carried_config(cls, stored: Any) -> dict[str, Any]:
         """The config this implementation carries over from another implementation's ``stored`` config.
 
-        Choosing an implementation chooses its config's shape, so the result is valid by construction:
-        the stored keys its wire contract names (by alias) keep their values, its defaults fill the keys
-        it names that the stored config lacks, and any other key is dropped. A kept value the config
-        refuses falls back to its default; a refusal that names no key (a rule across several, such as
-        one value smaller than another) falls back to the defaults alone. The result is normalized as a
-        save normalizes it. An implementation without a config model leaves a row's config untyped, so
-        it carries the stored config whole.
+        Choosing an implementation chooses its config's shape, so the result is valid by construction,
+        and nothing it changes is reported beyond the result itself (a repair read shows it before the
+        save):
+
+        - **kept:** a stored value under a key its wire contract names (by alias) that the config accepts;
+        - **reset to the default:** a kept value the config refuses; and every value, the defaults alone,
+          where a refusal names no key (a rule across several, such as one value smaller than another);
+          the defaults also fill the keys it names that the stored config lacks;
+        - **dropped:** every other key, an extra its config would allow included.
+
+        The result is normalized as a save normalizes it. An implementation without a config model leaves
+        a row's config untyped, so it carries the stored config whole.
         """
 
         given = dict(stored) if isinstance(stored, Mapping) else {}

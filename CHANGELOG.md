@@ -69,11 +69,14 @@ live in code docstrings.
   `InferenceProvider`, `NotionConnection`) holding such a key may move, once,
   to a registered key, by a code-level save (`ImplDefaultsMixin.save`) or,
   through the API, by an update the create flow's admission admits (below): the config its implementations own is carried
-  over by `ImplBase.carried_config`, valid by construction (the stored keys the
-  new class reads kept, its defaults filling the rest and replacing a kept value
-  it refuses, the defaults alone where a rule across keys refuses them; a key it
-  does not read is dropped, since choosing a class chooses its config's shape,
-  and the repair read shows that config before the save); a config sent with
+  over by `ImplBase.carried_config`, valid by construction, since choosing a
+  class chooses its config's shape: **kept**, a stored value the new class reads
+  and accepts; **reset to the class's default**, a value it refuses, and every
+  value (the defaults alone) where a rule across keys refuses them together, so a
+  feed stored with `quota_limit: 5` repairs to `quota_limit: 10000` and a
+  wrong-typed `local_root` to the bridge class's default; **dropped**, a key it
+  does not read, extras included. Nothing reports what changed beyond the result:
+  the repair read shows the carried config before the save; a config sent with
   the selector is validated and saved as sent; the new key is written only
   while the row still holds the old one, so of two repairs at once one wins and
   the other is refused as create-only; afterwards the selector is create-only
