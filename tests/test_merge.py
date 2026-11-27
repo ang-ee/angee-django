@@ -199,8 +199,9 @@ def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None
         survivor.name = "Mobile phones"
         survivor.save(update_fields=("name",))
         assert boundary.pk not in survivor.revertable_changesets((boundary,), actor=curator)
-        with pytest.raises(ValidationError, match="A later change to this record prevents this revert."):
+        with pytest.raises(ValidationError) as refusal:
             boundary.with_actor(curator).revert()
+        assert refusal.value.code == "later_change"
     assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 

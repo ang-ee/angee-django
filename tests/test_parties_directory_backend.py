@@ -1992,9 +1992,10 @@ def test_reverting_a_dismissal_after_someone_took_the_address_in_another_letter_
     person, handle = _existing(_user("someone-else"), email="Ada@Example.COM")
     assert handle.pk == confirmed.handle_id
 
-    with actor_context(owner), pytest.raises(ValidationError, match="a later write prevents revert"):
+    with actor_context(owner), pytest.raises(ValidationError) as refusal:
         dismissal.with_actor(owner).revert()
 
+    assert refusal.value.code == "later_change"
     assert Party.statements.model._base_manager.get(pk=confirmed.pk).is_dismissed
     handle.refresh_from_db()
     assert (handle.party_id, handle.value) == (person.pk, "ada@example.com")
