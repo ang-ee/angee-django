@@ -46,7 +46,9 @@ live in code docstrings.
 - `angee.parties`: **Changed behaviour.** An email handle is one address whatever
   its letter case or domain spelling. A handle has a spelling key,
   `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
-  address trimmed and lower-cased, not case-folded, its domain in one Unicode
+  address trimmed of ASCII whitespace, its local part lower-cased but for a
+  non-ASCII character whose lower case would be ASCII or of another length,
+  which is kept (`Handle.normalize_local_part`), not case-folded, its domain in one Unicode
   spelling of those the email backend sends as one, so a punycode label and its Unicode,
   NFD and NFC, full-width letters and their ASCII, and `ß` and `ss` are one
   domain (`Handle.normalize_email_domain` takes each label through the
@@ -79,7 +81,10 @@ live in code docstrings.
   repair has not reached compares as it will, and two phone handles whose
   numbers the rule reads only as their digits (`Handle.is_fallback_key`:
   `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
-  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 3. A consumer rule
+  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2: this rule,
+  with two amendments made before any release carries it, a domain whose spelling would
+  be longer than a domain name can be kept as typed, and an email local part lower-cased
+  but for a non-ASCII character whose lower case would be ASCII or of another length. A consumer rule
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
@@ -170,13 +175,26 @@ live in code docstrings.
     `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
     One matching organization is suggested at `0.4` as before. Each further
     organization costs one suggestion's statements.
-  - **A name too long for a domain is kept as typed.** The domain-spelling rule
-    keeps as typed a name whose spelling would be longer than a domain name can
-    be (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
+  - **The handle rule's two amendments.** The domain-spelling rule keeps as typed
+    a name whose spelling would be longer than a domain name can be
+    (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
     `URLValidator` bounds a host name). A name of ligatures that each read as many
     letters (U+FDFA reads as 18) could otherwise key past the 512-character
     columns: an organization's save raised `DataError` on PostgreSQL, and a handle
-    of such an address could not be stored. `Handle.NORMALIZATION_VERSION` is 3.
+    of such an address could not be stored. An email address's local part is
+    lower-cased character by character (`Handle.normalize_local_part`), but a
+    non-ASCII character whose lower case would be ASCII or of another length is
+    kept as typed, so no non-ASCII character turns into another mailbox's ASCII
+    letter: the Kelvin sign (U+212A) is no `k`, so its address is never `kate@`'s
+    handle, and `İ` stays `İ`, while `JOSÉ@` and `josé@`, `MÜLLER@` and
+    `müller@` stay one handle each and the Angstrom and Ohm signs still fold onto
+    `å` and `ω`. The kept characters are computed from `str.lower`, and a test
+    pins today's two. An address is trimmed of ASCII whitespace only
+    (`Handle.ADDRESS_WHITESPACE`): a value beginning with a no-break or another
+    non-ASCII space is no address (`Handle.is_email_address`), and its spelling key
+    keeps the space, so it is never another address's handle. The spelling key,
+    and through it the person-matching key and `Handle.is_spelling_of`, read a
+    local part only through `normalize_local_part`.
   - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,
     value)` is an email address's domain in the rule's spelling (`""` off email
     or with no `@`); `HandleQuerySet.at_domain(domain)` is the email handles at a
@@ -210,7 +228,9 @@ live in code docstrings.
     `renormalize_handles` walks through it; `HandleManager.REPAIR_LIMIT`
     is now only the holder repair's default cap. The new provision repair
     `renormalize_organization_domains` (`OrganizationManager.renormalize_domains` on
-    `Organization.objects`, a `PartyManager` of its own,
+    `Organization.objects`, a `PartyManager` of its own, so a host model
+    inheriting `Organization` that declares its own manager derives it from
+    `OrganizationManager`, where one from `PartyManager` fails the type check;
     also a command) walks through it too, reading every organization's domain and
     key and writing the key of each one whose key is not its domain's, on its
     most derived row; it returns a `KeyRepair`. It reads the whole table at every
@@ -231,12 +251,13 @@ live in code docstrings.
     so neither the suggestion nor a consumer's `domain_filter` finds an
     organization by domain; provision keys them all, writing one history version
     per organization and no `updated_at`, at about 14 statements a row (5,000
-    rows took 446 seconds on a machine under load 44 to 51). The handle rule's
-    version moves to 3, so the next provision writes every handle's keys again
-    (`renormalize_handles`, at about 65 rows a second): once from a release
-    before this one, as the move to 2 already did, and once more on a host
-    already keyed at 2. No `rebac sync` and no SDL change: the key is in no
-    GraphQL type.
+    rows took 446 seconds on a machine under load 44 to 51). The handle rule stays
+    at version 2, amended before any release: a host already keyed at 2 by the
+    unamended rule (one tracking main) keeps those keys, and only an email handle
+    whose domain reads to 254 to 512 characters, or whose local part holds a
+    Kelvin sign, an `İ` or a leading non-ASCII space, keys otherwise under the
+    amended rule. No `rebac sync` and no SDL change: the key is in no GraphQL
+    type.
     **Rollback:** older code runs beside the column (its database default fills
     an insert); a host leaving this code for good removes the column and its
     indexes with a reviewed migration.

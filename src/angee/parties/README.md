@@ -353,7 +353,17 @@ domain (IDNA 2003, as Django's `punycode` writes it): a punycode label and its
 Unicode, NFD and NFC, full-width letters and their ASCII, `ß` and `ss`. A label
 the standard library's `idna` codec cannot read or write stays as typed, so
 `xn--strae-oqa` (IDNA 2008's spelling of `straße`) is a domain of its own. A
-value with no `@` is no address and has no spelling key. A save that would keep a
+value with no `@` is no address and has no spelling key. A local part is
+lower-cased character by character (`Handle.normalize_local_part`), but a
+non-ASCII character whose lower case would be ASCII or of another length is kept
+as typed, so that no non-ASCII character turns into another mailbox's ASCII
+letter: the Kelvin sign is no `k`, so its address is never `kate@`'s handle, and
+`İ` stays `İ`, while `JOSÉ@` and `josé@` are one handle. The kept characters are
+computed from `str.lower`, never listed; a test pins today's two. An address is
+trimmed of ASCII whitespace only (`Handle.ADDRESS_WHITESPACE`): a value that
+begins with a non-ASCII space is no address, and its key keeps the space. The
+spelling key, the person-matching key and `Handle.is_spelling_of` read a local
+part only through `normalize_local_part`. A save that would keep a
 second live handle of an address is refused on `value` before it writes
 (`ValueOwned`, `Handle.value_owner`). A provider's alias (a Gmail dot or
 plus-tag) is a handle of its own, grouped with the others by the person-matching
@@ -409,8 +419,11 @@ are written); the handle repair selects by its version's index, the organization
 repair by a full scan, since `domain` is written like any field. A repair is no
 edit: each writes its key columns alone, by a queryset update that records one
 version of the row in the run's changeset, so `updated_at` (which orders lists)
-stays as it was. A run that finds nothing stale writes nothing, not even its
-system elevation's audit row. The row lock is PostgreSQL's `FOR NO KEY UPDATE`:
+stays as it was. A queryset update sends no `post_save`: a repaired handle key (the
+person-matching key is a field of the handle's GraphQL type) reaches an open list
+or subscription when it refetches. A row with no history yet gets a baseline
+version first, in its own changeset, as well as the repair's. A run that finds
+nothing stale writes nothing, not even its system elevation's audit row. The row lock is PostgreSQL's `FOR NO KEY UPDATE`:
 neither repair writes a column another row's foreign key references (the
 organization repair writes `domain_key`, which no index makes unique; the handle
 repair writes `spelling_key`, `normalized_value` and `normalized_version`,
