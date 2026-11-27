@@ -113,6 +113,7 @@ tests/test_messaging_inbox_read.py
 tests/test_inbox_explorer.py
 tests/test_inbox_part_reads.py
 tests/test_group_rows.py
+tests/test_hasura_order_contract.py
 tests/test_optimistic_lock.py
 tests/test_ownership_seams.py
 tests/test_portfolio_concurrency.py

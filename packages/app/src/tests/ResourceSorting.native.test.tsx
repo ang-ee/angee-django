@@ -14,6 +14,8 @@ const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } },
 });
 afterEach(() => { cleanup(); clearClients(); });
+/** The fields an `order_by` names, as the server reads its list: an object alone is a list of one. */
+const orderFields = (order: unknown) => [order ?? []].flat().flatMap((entry) => Object.keys(entry as object));
 async function fixture(initialSort = "thread.title.text") {
   const resource = testDataResource("messaging.Message", {
     roots: { aggregate: "messages_aggregate" }, typeNames: { filter: "messages_bool_exp", order: "messages_order_by" },
@@ -26,7 +28,7 @@ async function fixture(initialSort = "thread.title.text") {
   const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as (typeof bodies)[number];
     bodies.push(body);
-    if (body.variables.order_by && "unsupported" in (body.variables.order_by as object)) {
+    if (orderFields(body.variables.order_by).includes("unsupported")) {
       return new Response(JSON.stringify({ errors: [{ message: "Field 'unsupported' is not defined by type 'messages_order_by'." }] }), { headers: { "content-type": "application/json" } });
     }
     return new Response(JSON.stringify({ data: { messages: [{ id: "message-1", sent_at: "2026-09-05", thread: { title: { text: "Thread" } }, sender: { party: { display_name: "Sender" } } }], messages_aggregate: { aggregate: { count: 1 } } } }), { headers: { "content-type": "application/json" } });
@@ -48,7 +50,7 @@ async function fixture(initialSort = "thread.title.text") {
 
 test("native Table keeps dotted display IDs while Refine sends declared flat order fields", async () => {
   const f = await fixture();
-  expect(f.bodies[0]?.variables.order_by).toEqual({ thread__title__text: "desc" });
+  expect(f.bodies[0]?.variables.order_by).toEqual([{ thread__title__text: "desc" }]);
   expect(f.surface().table.getColumn("thread.title.text")?.getIsSorted()).toBe("desc");
   expect(f.surface().table.getColumn("sender.party.display_name")?.getCanSort()).toBe(false);
   expect(f.surface().table.getColumn("title")?.getCanSort()).toBe(false);
@@ -56,10 +58,10 @@ test("native Table keeps dotted display IDs while Refine sends declared flat ord
   expect(screen.getByText("Title").closest("button")).toBeNull();
   expect(screen.getByText("Thread").closest("button")).not.toBeNull();
   await act(async () => fireEvent.click(screen.getByText("Sent")));
-  await waitFor(() => expect(f.bodies.at(-1)?.variables.order_by).toEqual({ sent_at: "asc" }));
+  await waitFor(() => expect(f.bodies.at(-1)?.variables.order_by).toEqual([{ sent_at: "asc" }]));
   await act(async () => f.surface().table.getColumn("thread.title.text")!.toggleSorting(false));
-  await waitFor(() => expect(f.bodies.at(-1)?.variables.order_by).toEqual({ thread__title__text: "asc" }));
-  expect(f.bodies.some(({ variables }) => variables.order_by && "thread" in (variables.order_by as object))).toBe(false);
+  await waitFor(() => expect(f.bodies.at(-1)?.variables.order_by).toEqual([{ thread__title__text: "asc" }]));
+  expect(f.bodies.some(({ variables }) => orderFields(variables.order_by).includes("thread"))).toBe(false);
 });
 
 test("unknown active URL sorts fail at the query boundary before transport", async () => {

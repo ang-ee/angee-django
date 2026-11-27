@@ -249,7 +249,7 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   // Sorting resets row windows while keeping the same group tree expanded.
   await waitFor(() => expect(f.header(1)?.expanded).toBe(true));
   expect(f.view.paginationByScope[leafKey]).toEqual({ pageIndex: 0, pageSize: 50 });
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual({ title: "desc" }));
+  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual([{ title: "desc" }]));
   expect(f.view.state.filter).toEqual({ title: { iContains: "kept" } });
   expect(JSON.stringify(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where)).toContain('"_ilike":"%kept%"');
   // Its sort button shows its groups' direction; its aria-sort says none, as a grouping column's does: aria-sort is on

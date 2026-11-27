@@ -184,6 +184,44 @@ live in code docstrings.
   (`ConnectWithAccountAction`) and the `statusbar` and `visibility` widgets,
   which hand the form no focus target either; and a refused member of a rows,
   object or list field.
+- `@angee/metadata`, `@angee/refine`, `@angee/ui`, storage, knowledge:
+  **Changed contract.** A list's order reaches the server as an ordered list,
+  so a list ordered by two keys or more reads in the priority it shows. A
+  GraphQL server rebuilds an input object in its type's own field order, so a
+  read's `order_by: { due: "desc", title: "asc" }` sorted by whichever of the
+  two the resource declares sortable first; only a list of single-key objects
+  keeps the priority asked. And the read's key, the list batch hash and a
+  grouped list's scope comparison serialize an object with its keys sorted, so
+  `due desc, title asc` and `title asc, due desc` were one request: a pure
+  priority swap from a saved view, a link or back and forward read nothing
+  again, flat or grouped. `ResourceQuery.toOrderBy` returns one single-key
+  object per key, in priority order (`[{ due: "desc" }, { title: "asc" }]`),
+  and an empty list for no order; `@angee/refine` names the shape
+  `ListOrderBy` and takes it where a list's order goes (`listQueryMeta`,
+  `GroupRowsRequest.orderBy` and so `rows_order_by`,
+  `AngeeListBatchScope.orderBy`), where an object no longer type-checks.
+  `@refinedev/hasura` 7.0.1 merges a read's `sorters` into one object; the
+  install policy now patches it
+  (`packages/scripts/patches/refinedev-hasura-7.0.1.patch`), so its
+  `generateSorting` returns one object per sorter in the order given, a dotted
+  field nested as before, with or without a document of the read's own, and
+  the proposals comparison reads its topics by position, then key, and its
+  proposals by state, then age, with no caller of `sorters` changing. The
+  record pager's captured scope and the navigation scope a list publishes
+  compare their order in its priority (`navigationScopeKey`), as a gantt's bar
+  order now does, so they follow a swap too. Storage's folder and knowledge's
+  page sources pass `toOrderBy`'s list on as it is. Upgrade: pass
+  `toOrderBy`'s result on as it is; a caller that wrapped it in a list unwraps
+  it, since the server refuses a list inside a list. A project that installs
+  through Angee's pnpm policy gets the library patch; one that does not keeps
+  the stock merge, so its reads of several `sorters` are ordered by the
+  server's field order. The server's
+  side is pinned by a contract test (`tests/test_hasura_order_contract.py`): a
+  list read and a group's page of rows order by their keys in the priority
+  their list gives, whichever order the resource declares its sortable
+  columns in. Not in this change: the server refusing an order object of
+  several keys; a declared `order={{…}}` stays an object, read in its written
+  key order.
 - `@angee/ui`: **Changed contract.** A refusal's focus reaches the refused
   field whatever control draws it. In a `MutationDialog` and an
   `ActionFormDialog`, typed or schema-driven, a refused select, combobox, date,

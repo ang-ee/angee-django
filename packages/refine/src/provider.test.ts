@@ -187,6 +187,45 @@ describe("Angee Hasura provider defaults", () => {
     expect(queries[1]).toContain("backend_class");
   });
 
+  test("a sorted read without a document sends a list and keeps the priority", async () => {
+    const requests: { query: string; variables: Record<string, unknown> }[] = [];
+    const provider = createAngeeHasuraDataProvider({
+      url: "https://example.invalid/graphql", auth: (request) => request,
+      fetch: async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)));
+        return jsonResponse({ topics: [{ id: "top_1" }], topics_aggregate: { aggregate: { count: 1 } } });
+      },
+    });
+    /** The request a read of `topics` with these sorters sent. */
+    const sent = async (sorters?: { field: string; order: "asc" | "desc" }[], meta: Record<string, unknown> = { fields: ["id"] }) => {
+      expect(await provider.getList({ resource: "topics", sorters, meta })).toEqual({ data: [{ id: "top_1" }], total: 1 });
+      return requests.at(-1)!;
+    };
+    // The stock provider merges sorters into one object; the install policy patches it (`patches/refinedev-hasura-7.0.1.patch`).
+    const unpatched = "@refinedev/hasura is not patched: install it through packages/scripts/pnpm-policy.cjs";
+
+    // Two sorters in both priorities are two orders, under the provider's own list document.
+    const first = await sent([{ field: "sort_order", order: "asc" }, { field: "key", order: "desc" }]);
+    expect(first.variables.order_by, unpatched).toEqual([{ sort_order: "asc" }, { key: "desc" }]);
+    expect(first.query).toContain("$order_by: [topics_order_by!]");
+    expect((await sent([{ field: "key", order: "desc" }, { field: "sort_order", order: "asc" }])).variables.order_by, unpatched)
+      .toEqual([{ key: "desc" }, { sort_order: "asc" }]);
+    // A dotted sorter nests, and two under one relation both stay.
+    expect((await sent([{ field: "owner.name", order: "asc" }, { field: "owner.email", order: "desc" }])).variables.order_by, unpatched)
+      .toEqual([{ owner: { name: "asc" } }, { owner: { email: "desc" } }]);
+    // One sorter is a list of one.
+    expect((await sent([{ field: "position", order: "asc" }])).variables.order_by, unpatched).toEqual([{ position: "asc" }]);
+    // No sorters send no order, as before; an empty list of sorters is an empty order (it was `{}`).
+    expect(await sent()).not.toHaveProperty("variables.order_by");
+    expect((await sent([])).variables.order_by).toEqual([]);
+    // A read with its own document: without an order of its own its sorters arrive as a list; its own `order_by` still wins.
+    const authored = parse("query Topics($order_by: [topics_order_by!]) { topics(order_by: $order_by) { id } topics_aggregate { aggregate { count } } }");
+    const own = await sent([{ field: "key", order: "asc" }, { field: "name", order: "desc" }], { gqlQuery: authored });
+    expect([own.query.includes("query Topics"), own.variables.order_by], unpatched).toEqual([true, [{ key: "asc" }, { name: "desc" }]]);
+    expect((await sent([{ field: "key", order: "asc" }], { gqlQuery: authored, gqlVariables: { order_by: [{ name: "desc" }] } })).variables.order_by)
+      .toEqual([{ name: "desc" }]);
+  });
+
   test("bounds native transport errors while preserving safe validation fields", () => {
     const sentinel = "request-variable-secret";
     const normalized = boundedGraphQLTransportError({

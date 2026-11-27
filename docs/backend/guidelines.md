@@ -1920,6 +1920,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
   alias that needs an annotation is declared on `hasura_model_resource`. Lazy
   preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
   boundary; extend that owner rather than re-walking selections in Angee.
+- **A read's order is a list.** `order_by` takes a list of single-key objects
+  and applies them in the list's order, on a list read and on a group's page of
+  rows ([contract test](../../tests/test_hasura_order_contract.py)). One object
+  of several keys carries no priority: GraphQL keeps no key order of an input
+  object, and the server reads its fields in the order type's own field order,
+  the resource's `sortable` order, so a client never sends one.
 - **Public-id lookups preserve their authorization boundary.** Use
   `require_instance_for_id` for required reads with the original queryset.
   `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are

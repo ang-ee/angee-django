@@ -453,8 +453,8 @@ describe("ResourceQuery", () => {
   });
   test("sorts only via declared canonical paths and exact wire keys", () => {
     const query = ResourceQuery.from(resource());
-    expect(query.toOrderBy()).toEqual({ message_count: "desc" });
-    expect(query.toOrderBy({ count: "ASC" })).toEqual({ message_count: "asc" });
+    expect(query.toOrderBy()).toEqual([{ message_count: "desc" }]);
+    expect(query.toOrderBy({ count: "ASC" })).toEqual([{ message_count: "asc" }]);
     expect(query.toSorters([{ field: "count", direction: "DESC" }])).toEqual([
       { field: "message_count", order: "desc" },
     ]);
@@ -462,6 +462,24 @@ describe("ResourceQuery", () => {
       /cannot be sorted/,
     );
     expect(() => query.toOrderBy({ count: "sideways" })).toThrow(/ASC\/DESC/);
+  });
+  test("a list read's order is one single-key object per key, in its priority: a server reads one object's keys in its type's order", () => {
+    const query = ResourceQuery.fromContract(testResourceQuery({ fields: {
+      due: testQueryField("due", { scalar: "Date", sort: { field: "due" } }),
+      title: testQueryField("title", { sort: { field: "title" } }),
+      // A relation's member sorts on its flat wire key.
+      "owner.name": testQueryField("owner.name", { sort: { field: "owner__name" } }),
+    } }));
+    // The same keys and directions in two priorities are two orders.
+    expect(query.toOrderBy([{ field: "due", direction: "DESC" }, { field: "title", direction: "ASC" }]))
+      .toEqual([{ due: "desc" }, { title: "asc" }]);
+    expect(query.toOrderBy([{ field: "title", direction: "ASC" }, { field: "due", direction: "DESC" }]))
+      .toEqual([{ title: "asc" }, { due: "desc" }]);
+    // A declared order object is read in its written key order.
+    expect(query.toOrderBy({ "owner.name": "ASC", due: "DESC" })).toEqual([{ owner__name: "asc" }, { due: "desc" }]);
+    // No order is an empty list, which orders nothing.
+    expect(query.toOrderBy([])).toEqual([]);
+    expect(query.toOrderBy({})).toEqual([]);
   });
   test("removes selected facet constraints while preserving other boolean branches", () => {
     const query = ResourceQuery.from(resource());
