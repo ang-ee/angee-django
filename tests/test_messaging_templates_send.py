@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import email.policy
+import logging
 import traceback
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -17,6 +18,7 @@ import pytest
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.template.base import Template as DjangoTemplate
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils.html import escape
@@ -45,6 +47,7 @@ from angee.messaging_templates.engine import (
     INVALID_VALUES,
     NOT_A_TEMPLATE,
     NOT_EFFECTIVE,
+    RENDER_FAILED,
     VALUE_NOT_LINKABLE,
     VALUE_NOT_PRINTED,
 )
@@ -802,6 +805,48 @@ def test_a_failure_after_a_keyed_test_send_wrote_its_message_reports_no_part_of_
     frames = [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
     assert "send_test" in frames and frames[-1] == "refusing"
     assert _leaks(raised.value) == []
+
+
+@pytest.mark.parametrize("caller", ["send_as_system", "test send", "preview"])
+def test_an_engine_failure_quoting_a_value_logs_the_templates_identity_and_type_and_never_the_value(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, caller: str,
+) -> None:
+    """An engine exception whose text quotes a value the render was given (a sign-in link): the one error record
+    names the template and the exception's type; no record holds the value, in its message, its arguments, its
+    exception or its traceback; the refusal the caller gets is as before."""
+
+    del system_channel
+    link = "https://app.example.test/sign-in#token=SECRET-marker"
+    row = _decision(key="tests.decision_failing", sample={"link": link})
+    tester = create_platform_admin("messaging-templates-failing-render")
+
+    def failing(self: Any, *args: Any, **kwargs: Any) -> str:
+        raise RuntimeError(f"engine failed near {link}")
+
+    monkeypatch.setattr(DjangoTemplate, "render", failing)
+    with caplog.at_level(logging.DEBUG):
+        if caller == "preview":
+            with actor_context(tester):
+                preview = row.preview()
+            refusals = [(warning.code, warning.detail) for warning in preview.warnings]
+            assert refusals == [(TemplateWarningCode.RENDER_ERROR,
+                                 f"The message template did not render: RuntimeError: engine failed near {link}")]
+        else:
+            with pytest.raises(ValidationError) as refusal:
+                if caller == "test send":
+                    MessageTemplate.objects.send_test(row, actor=tester)
+                else:
+                    _send(row, {"link": link})
+            assert [(item.code, item.message % (item.params or {})) for item in refusal.value.error_list] == [
+                (RENDER_FAILED, f"The message template did not render: RuntimeError: engine failed near {link}")]
+    for record in caplog.records:
+        held = (record.getMessage(), repr(record.args), repr(record.exc_info), str(record.exc_text))
+        assert all("SECRET-marker" not in text for text in held), record
+    named = [record for record in caplog.records if record.name == "angee.messaging_templates.walker"]
+    assert [(record.levelno, record.getMessage()) for record in named] == [(
+        logging.ERROR,
+        "A message template failed to render: the template tests.decision_failing in en raised RuntimeError.",
+    )]
 
 
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:

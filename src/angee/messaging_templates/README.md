@@ -213,7 +213,9 @@ walk), `value_not_linkable` (a value printed through `url` that gives no link),
 `value_not_printed` (a value passed in `must_print` that a body does not
 print; see [Sending as system work](#sending-as-system-work)), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
-any other failure, which is logged with its traceback first. Every code
+any other failure, which is logged first as one error record naming the row (its
+kind, key and language) and the exception's type, never its message or its traceback,
+which may quote a value the render was given. Every code
 `send_as_system` returns from this addon is a constant of
 `angee.messaging_templates.engine`, to compare against rather than retype: the
 row's `NOT_A_TEMPLATE` and `NOT_EFFECTIVE`, and the render's `INVALID_VALUES`,

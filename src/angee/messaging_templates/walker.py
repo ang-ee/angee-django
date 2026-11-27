@@ -178,7 +178,7 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def refusals_only() -> Iterator[None]:
+def refusals_only(root: WalkedRow) -> Iterator[None]:
     """The one owner of "only ``ValidationError`` leaves" a walk, ``prepare()``, a render's passes or its warnings.
 
     Every public entry of a walk runs inside it, so ``MessageTemplate.render``,
@@ -186,8 +186,10 @@ def refusals_only() -> Iterator[None]:
     whole. A ``ValidationError`` passes as it is. ``MemoryError`` and
     ``RecursionError`` pass unconverted: they say the process ran out of room, not
     that the row cannot render, and no admitted row and values reach either. Any
-    other exception is logged with its traceback, then becomes
-    ``ValidationError(code=RENDER_FAILED)``.
+    other exception is logged, then becomes ``ValidationError(code=RENDER_FAILED)``:
+    one error record naming ``root`` (its kind, key and language) and the
+    exception's type, never its message or its traceback, which may quote a value
+    the render was given (a sign-in link).
     """
 
     try:
@@ -195,7 +197,10 @@ def refusals_only() -> Iterator[None]:
     except (ValidationError, MemoryError, RecursionError):
         raise
     except Exception as error:
-        logger.exception("A message template failed to render.")
+        logger.error(
+            "A message template failed to render: the %s %s in %s raised %s.",
+            root.kind, root.key, root.language, type(error).__name__,
+        )
         raise ValidationError(
             "The message template did not render: %(error)s", code=RENDER_FAILED,
             params={"error": f"{type(error).__name__}: {error}"},
@@ -245,6 +250,7 @@ class WalkedKind(Protocol):
 class WalkedRow(Protocol):
     """What the walker and the renderer read of a row: its columns, its kind's handler and its fingerprint."""
 
+    kind: Any
     key: str
     language: str
     format: Any
@@ -521,7 +527,6 @@ class TemplateWalk:
                 unused.append(path)
         return unused
 
-    @refusals_only()
     def prepare(self, values: Any) -> dict[str, Any]:
         """Return ``values`` as the render reads them, or raise ``ValidationError`` naming each path.
 
@@ -555,54 +560,56 @@ class TemplateWalk:
         (:class:`_DatePrinter`).
         """
 
-        if not isinstance(values, Mapping):
-            raise ValidationError("Pass the values as an object of names to values.", code=INVALID_VALUES)
-        try:
-            text = json.dumps(values, cls=DjangoJSONEncoder, ensure_ascii=False)
-            data = json.loads(text)
-        except (TypeError, ValueError, RecursionError) as error:
-            raise ValidationError(f"The values are not JSON: {error}", code=INVALID_VALUES) from error
-        if len(text) > VALUES_JSON_LIMIT:
-            raise ValidationError(
-                f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code=VALUES_TOO_LARGE,
+        with refusals_only(self.root):
+            if not isinstance(values, Mapping):
+                raise ValidationError("Pass the values as an object of names to values.", code=INVALID_VALUES)
+            try:
+                text = json.dumps(values, cls=DjangoJSONEncoder, ensure_ascii=False)
+                data = json.loads(text)
+            except (TypeError, ValueError, RecursionError) as error:
+                raise ValidationError(f"The values are not JSON: {error}", code=INVALID_VALUES) from error
+            if len(text) > VALUES_JSON_LIMIT:
+                raise ValidationError(
+                    f"The values are {len(text)} characters of JSON, over {VALUES_JSON_LIMIT}.", code=VALUES_TOO_LARGE,
+                )
+            try:
+                text.encode()
+            except UnicodeEncodeError as error:
+                raise ValidationError(
+                    "The values hold a character no mail can encode, a lone surrogate.", code=INVALID_VALUES,
+                ) from error
+            errors = _value_errors(data)
+            if errors:
+                raise _refused(errors, INVALID_VALUES)
+            tree = _tree(self.declared)
+            shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
+            errors.extend(
+                f"{_dotted(path)} is required and missing or null." for path in sorted(self.required)
+                if _lacks(shaped, path)
             )
-        try:
-            text.encode()
-        except UnicodeEncodeError as error:
-            raise ValidationError(
-                "The values hold a character no mail can encode, a lone surrogate.", code=INVALID_VALUES,
-            ) from error
-        errors = _value_errors(data)
-        if errors:
-            raise _refused(errors, INVALID_VALUES)
-        tree = _tree(self.declared)
-        shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
-        errors.extend(
-            f"{_dotted(path)} is required and missing or null." for path in sorted(self.required)
-            if _lacks(shaped, path)
-        )
-        if errors:
-            raise _refused(errors, INVALID_VALUES)
-        filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
-        for path in sorted(self.float_paths):
-            errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
-                          if isinstance(number, (int, float)) and not isinstance(number, bool) and not _finite(number))
-        if errors:
-            raise _refused(errors, INVALID_VALUES)
-        for path in sorted(self.link_paths):
-            for link in _at(filled, path):
-                try:
-                    clean_link(link, path=_dotted(path))
-                except ValidationError as refusal:
-                    errors.extend(refusal.messages)
-        if errors:
-            raise _refused(errors, VALUE_NOT_LINKABLE)
-        printer = _DatePrinter(self.date_paths)
-        for path in sorted(self.date_paths):
-            _parse_dates(filled, path, path, printer, errors)
-        if errors:
-            raise _refused(errors, INVALID_VALUES)
-        return filled
+            if errors:
+                raise _refused(errors, INVALID_VALUES)
+            filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
+            for path in sorted(self.float_paths):
+                errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
+                              if isinstance(number, (int, float)) and not isinstance(number, bool)
+                              and not _finite(number))
+            if errors:
+                raise _refused(errors, INVALID_VALUES)
+            for path in sorted(self.link_paths):
+                for link in _at(filled, path):
+                    try:
+                        clean_link(link, path=_dotted(path))
+                    except ValidationError as refusal:
+                        errors.extend(refusal.messages)
+            if errors:
+                raise _refused(errors, VALUE_NOT_LINKABLE)
+            printer = _DatePrinter(self.date_paths)
+            for path in sorted(self.date_paths):
+                _parse_dates(filled, path, path, printer, errors)
+            if errors:
+                raise _refused(errors, INVALID_VALUES)
+            return filled
 
     @sensitive_variables()
     def render(
@@ -644,7 +651,7 @@ class TemplateWalk:
         if isinstance(must_print, str):
             raise TypeError("Pass must_print as an iterable of paths, not one path.")
         must_print = tuple(must_print)
-        with refusals_only():
+        with refusals_only(self.root):
             unprinted = self._unprinted(must_print)
             if unprinted:
                 raise _refused(unprinted, VALUE_NOT_PRINTED)
@@ -734,7 +741,6 @@ class TemplateWalk:
             mail_globals=mail_globals,
         )
 
-    @refusals_only()
     def preview_warnings(self, rendered: RenderedMessage, sample: Mapping[str, Any]) -> list[TemplateWarning]:
         """Return what a preview of ``rendered``, the row's ``sample`` rendered, warns about.
 
@@ -743,37 +749,39 @@ class TemplateWalk:
         text and its size, raw or quoted-printable.
         """
 
-        warnings: list[TemplateWarning] = []
-        carries_message_fields = self.root.handler.carries_message_fields
-        if carries_message_fields and len(rendered.subject) > SUBJECT_WARNING_LENGTH:
-            warnings.append(TemplateWarning(
-                TemplateWarningCode.SUBJECT_LENGTH, f"The subject is {len(rendered.subject)} characters long.",
-            ))
-        if carries_message_fields and not rendered.preheader:
-            warnings.append(TemplateWarning(
-                TemplateWarningCode.PREHEADER,
-                "The preheader is missing: an inbox shows the start of the body after the subject instead.",
-            ))
-        elif carries_message_fields and len(rendered.preheader) > PREHEADER_WARNING_LENGTH:
-            warnings.append(TemplateWarning(
-                TemplateWarningCode.PREHEADER, f"The preheader is {len(rendered.preheader)} characters long.",
-            ))
-        warnings.extend(
-            TemplateWarning(TemplateWarningCode.UNUSED_VARIABLE, f"Nothing reads {path}.") for path in self.unused
-        )
-        if isinstance(self.root.variables, dict) and "unsubscribe_url" in self.root.variables:
-            stop = sample.get("unsubscribe_url")
-            if not isinstance(stop, str) or rendered.bodies_without(stop):
+        with refusals_only(self.root):
+            warnings: list[TemplateWarning] = []
+            carries_message_fields = self.root.handler.carries_message_fields
+            if carries_message_fields and len(rendered.subject) > SUBJECT_WARNING_LENGTH:
                 warnings.append(TemplateWarning(
-                    TemplateWarningCode.STOP_LINK, "The HTML or plain-text body lacks the sample's unsubscribe_url.",
+                    TemplateWarningCode.SUBJECT_LENGTH, f"The subject is {len(rendered.subject)} characters long.",
                 ))
-        if not rendered.plain_text.strip():
-            warnings.append(TemplateWarning(TemplateWarningCode.PLAIN_TEXT, "The plain-text body is empty."))
-        raw = rendered.html.encode()
-        size = max(len(raw), len(quopri.encodestring(raw)))
-        if size > SIZE_WARNING_BYTES:
-            warnings.append(TemplateWarning(TemplateWarningCode.SIZE, f"The HTML is {size} bytes."))
-        return warnings
+            if carries_message_fields and not rendered.preheader:
+                warnings.append(TemplateWarning(
+                    TemplateWarningCode.PREHEADER,
+                    "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+                ))
+            elif carries_message_fields and len(rendered.preheader) > PREHEADER_WARNING_LENGTH:
+                warnings.append(TemplateWarning(
+                    TemplateWarningCode.PREHEADER, f"The preheader is {len(rendered.preheader)} characters long.",
+                ))
+            warnings.extend(
+                TemplateWarning(TemplateWarningCode.UNUSED_VARIABLE, f"Nothing reads {path}.") for path in self.unused
+            )
+            if isinstance(self.root.variables, dict) and "unsubscribe_url" in self.root.variables:
+                stop = sample.get("unsubscribe_url")
+                if not isinstance(stop, str) or rendered.bodies_without(stop):
+                    warnings.append(TemplateWarning(
+                        TemplateWarningCode.STOP_LINK,
+                        "The HTML or plain-text body lacks the sample's unsubscribe_url.",
+                    ))
+            if not rendered.plain_text.strip():
+                warnings.append(TemplateWarning(TemplateWarningCode.PLAIN_TEXT, "The plain-text body is empty."))
+            raw = rendered.html.encode()
+            size = max(len(raw), len(quopri.encodestring(raw)))
+            if size > SIZE_WARNING_BYTES:
+                warnings.append(TemplateWarning(TemplateWarningCode.SIZE, f"The HTML is {size} bytes."))
+            return warnings
 
 
 ENCODED_WORD_OPENER = re.compile(r"=\?(?=[^?]*\?[bq]\?)", re.IGNORECASE)
@@ -1406,7 +1414,6 @@ class TemplateWalker:
 
     # -- the walk --------------------------------------------------------------
 
-    @refusals_only()
     def walk(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
         """Walk ``root`` and every row it reaches in its language, read through ``rows``.
 
@@ -1414,23 +1421,24 @@ class TemplateWalker:
         ``message_template_refused``.
         """
 
-        walk = self.judge(root, rows)
-        if walk.refusals:
-            raise _refused(walk.refusals, MESSAGE_TEMPLATE_REFUSED)
-        return walk
+        with refusals_only(root):
+            walk = self.judge(root, rows)
+            if walk.refusals:
+                raise _refused(walk.refusals, MESSAGE_TEMPLATE_REFUSED)
+            return walk
 
-    @refusals_only()
     def judge(self, root: WalkedRow, rows: RowReader) -> TemplateWalk:
         """Walk ``root`` as :meth:`walk` does, and return the walk with its refusals and the rows it reached."""
 
-        root_name = root.handler.template_name(root.key)
-        walk = TemplateWalk(root=root, root_name=root_name, language=str(root.language), rows={root_name: root})
-        checks = self._gather(walk, rows)
-        if not walk.refusals:
-            self._declare(walk)
-        if not walk.refusals:
-            self._walk_trees(walk, checks)
-        return walk
+        with refusals_only(root):
+            root_name = root.handler.template_name(root.key)
+            walk = TemplateWalk(root=root, root_name=root_name, language=str(root.language), rows={root_name: root})
+            checks = self._gather(walk, rows)
+            if not walk.refusals:
+                self._declare(walk)
+            if not walk.refusals:
+                self._walk_trees(walk, checks)
+            return walk
 
     def _gather(self, walk: TemplateWalk, reader: RowReader) -> dict[str, _RowCheck]:
         """Rows reached, level by level, each counted before it is parsed and checked alone.

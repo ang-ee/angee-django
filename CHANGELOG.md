@@ -535,6 +535,11 @@ live in code docstrings.
   not one. Code that builds or judges a link without a request calls it instead
   of reading the setting; the callers that read it today move onto it in their
   own changes.
+- `angee.messaging_templates`: **A failed render's log names the row and the exception's type, never the
+  exception's text.** A render that fails unforeseen logs one error record naming the
+  row (its kind, key and language) and the exception's type, without its message or
+  traceback, which may quote a value the render was given, such as a sign-in link; the
+  caller's `render_failed` refusal is as before.
 - `angee.messaging_templates`: **A render never sends an empty link in place of a value it was given.**
   Before rendering, each value a row prints through `url` (a Markdown link's
   destination among them) that `url` would empty and that is not blank is
