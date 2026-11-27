@@ -30,6 +30,7 @@ import {
   type BaseAddonRoute,
   type CreateAppInput,
   type RefineLayoutChromeProps,
+  retryAppQuery,
 } from "./create-app";
 import { MenuTree } from "@angee/ui/chrome/menu-tree";
 import { ChromePlaceProvider, useChromeMenuTree, useChromePlace } from "@angee/ui/chrome/refine-menu";
@@ -2652,4 +2653,17 @@ test("a preset opening on a contributed view kind needs a resource#views child o
   expect(() => createApp(input({ "resource#views": { "nexus.graph": { content: graph } } }))).not.toThrow();
   expect(() => createApp(input({ "tasks.Task#views": { "nexus.graph": { content: graph } } })))
     .toThrow(/Resource view "desk.graph" opens on view kind "nexus.graph", which no addon contributes to "notes.Note#views"/);
+});
+
+describe("the app's retry rule for a failed read", () => {
+  const refusal = { response: { status: 200, errors: [{ message: "Not allowed.", extensions: { code: "PERMISSION_DENIED" } }] } };
+
+  test("a refused request is never retried: a retry repeats the answer", () => {
+    expect(retryAppQuery(0, refusal)).toBe(false);
+  });
+
+  test("a failure a retry can fix is retried three times, then given up", () => {
+    const lost = new TypeError("Failed to fetch");
+    expect([0, 1, 2, 3].map((failures) => retryAppQuery(failures, lost))).toEqual([true, true, true, false]);
+  });
 });

@@ -17,15 +17,21 @@ test.each([
   expect(screen.queryAllByRole("button").map((button) => button.textContent)).toEqual(labels);
 });
 
-test("pending disables both actions and marks Save busy", () => {
+test("pending disables both actions and marks Save busy, and Save keeps the focus of whoever pressed it", () => {
   const onDiscard = vi.fn();
   const onSave = vi.fn();
-  render(<SaveDiscardActions isDirty pending onDiscard={onDiscard} onSave={onSave} />);
+  const view = render(<SaveDiscardActions isDirty onDiscard={onDiscard} onSave={onSave} />);
+  screen.getByRole("button", { name: "Save" }).focus();
+  view.rerender(<SaveDiscardActions isDirty pending onDiscard={onDiscard} onSave={onSave} />);
   const discard = screen.getByRole("button", { name: "Discard" });
   const save = screen.getByRole("button", { name: "Save" });
 
   expect(discard.hasAttribute("disabled")).toBe(true);
-  expect(save.hasAttribute("disabled")).toBe(true);
+  // Disabled to the pointer and to assistive technology, yet still in the tab order: a `disabled`
+  // button drops focus to the page, and the keyboard user loses their place while the save runs.
+  expect(save.getAttribute("aria-disabled")).toBe("true");
+  expect(save.hasAttribute("disabled")).toBe(false);
+  expect(document.activeElement).toBe(save);
   expect(save.getAttribute("aria-busy")).toBe("true");
   expect(discard.hasAttribute("aria-busy")).toBe(false);
   fireEvent.click(discard);

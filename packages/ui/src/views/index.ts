@@ -85,6 +85,7 @@ export {
 } from "./relation/RelationPicker";
 export {
   MutationDialog,
+  type KeyedMutationDialogProps,
   type MutationDialogParseValues,
   type MutationDialogProps,
   type MutationDialogValues,
@@ -109,7 +110,7 @@ export {
   type FormSpecWire,
 } from "./form/form-spec-schema";
 export { structuredFieldErrors, textValue, type FieldRuleError } from "./form/field-values";
-export { useUnsavedChangesNavigationGuard } from "./form/use-unsaved-changes-navigation-guard";
+export { pathnameChanges, useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./form/use-unsaved-changes-navigation-guard";
 export {
   ActionFormDialog,
   type ActionFormDialogProps,
@@ -127,13 +128,19 @@ export {
   type UseActionFormResult,
 } from "./form/use-action-form";
 export { ActionFormProvider } from "./form/ActionFormProvider";
+export { useLateAnswerReport, type LateAnswer } from "./form/late-answer";
 export {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
   invalidFormSubmit,
   formSubmitError,
+  formSubmitOutcome,
   savedFormSubmitResult,
+  SURFACE_RENDERS_FAILURE,
   applyFormErrors,
+  formErrorsFromForm,
+  useRefusalBannerFocus,
+  type FormSubmitConflictCode,
   type FormSubmitResult,
   useDottedPathFieldErrors,
   directDottedPathMessages,
@@ -273,6 +280,7 @@ export {
   type SectionHeadingProps,
   type RecordRailField,
   type RecordRailGroupProps,
+  type FormNextSave,
   type FormSubmit,
   type FormSubmitAcknowledgement,
   type FormSubmitContext,

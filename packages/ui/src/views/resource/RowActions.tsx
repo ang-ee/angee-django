@@ -191,7 +191,7 @@ export function useDescriptorRowActions<TRow extends Row>(
   const rowActions = actions.map((action) => defineRowAction<TRow>({
     kind: "page",
     id: action.id,
-    label: typeof action.label === "string" ? action.label : action.id,
+    label: descriptorLabel(action),
     ...(action.icon ? { icon: action.icon } : {}),
     variant: action.danger ? "danger" : "ghost",
     primary: action.primary,
@@ -220,8 +220,9 @@ export function useDescriptorRowActions<TRow extends Row>(
           if (!result || !("status" in result)) return result;
           if (result.status === "ok") return result.data;
           return result.status === "conflict"
-            ? { ok: false, message: result.message }
-            : { ok: false, message: result.issues.formErrors.join(" ") || action.id,
+            ? { ok: false, message: result.message, ...(result.code ? { code: result.code } : {}) }
+            // A refusal of fields only has no form-level reason: the toast is titled by the verb.
+            : { ok: false, message: result.issues.formErrors.join(" ") || descriptorLabel(action),
                 validationErrors: result.issues.fieldErrors };
         });
         return;
@@ -236,6 +237,11 @@ export function useDescriptorRowActions<TRow extends Row>(
       context={{ record: options.contextRecord?.(active.row) ?? active.row, selectedIds: [String(active.row.id)] }}
       open onOpenChange={(open) => { if (!open) setActive(null); }} /> : null,
   };
+}
+
+/** A descriptor's label as row-action text: its label when it is a string, its id otherwise. */
+function descriptorLabel(action: ActionDescriptor): string {
+  return typeof action.label === "string" ? action.label : action.id;
 }
 
 function descriptorConfirmation(confirm: ActionConfirm | ((record: Row) => ActionConfirm), row: Row): ActionConfirm {

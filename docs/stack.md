@@ -287,7 +287,7 @@ settings or through the `ANGEE_WEB_STATEMENT_TIMEOUT` environment variable.
 | i18next | Runtime translation, plural defaults and interpolation | `@angee/ui` owns the shared native initializer and provider-less defaults; `@angee/app` owns the composed active instance and provider; addons contribute namespace-relative bundles |
 | date-fns + @date-fns/tz | Date and relative-time formatting; calendar-bucket arithmetic in a named timezone | Date and timestamp widgets; `@angee/storybook` resource snapshots bucket date groups as the server does |
 | @number-flow/react | Animated numeric text, Intl formatting and reduced-motion-aware transitions | `MetricTile` provides the typed numeric path, binds shared motion tokens and keeps animation opt-in |
-| use-debounce | Debounced React values and callbacks | Search and filter inputs |
+| use-debounce | Debounced React values and callbacks | Search and filter inputs; the pause before a preview reads a record form's unsaved edits |
 | Tailwind 4 | Token styling engine | Semantic token set |
 | tailwind-merge | Safe class merging | `cn()` helper |
 | lucide-react | Icons | Name-referenced icon registry |
@@ -405,7 +405,7 @@ calendar.
 | @testing-library/react | React component and hook test rendering | Provider-wrapped render and hook harnesses |
 | Playwright | Browser tests | `@angee/e2e` harness: workspace-isolated runner, role `storageState` login, GraphQL `api` fixture, Page Object base ([E2E guide](frontend/e2e.md)) |
 | @playwright/mcp | Interactive browser-driving for host coding agents | Repo-root `.mcp.json` server (npx-run, pinned), using Playwright MCP's native per-project persistent profile in the OS cache; source checkouts own no browser state. The agent navigates to the stack's configured `ANGEE_UI_PORT`. Container MCP services keep their declared stack-owned profile mount. Distinct from `@angee/e2e` (the deterministic test runner) and `agents.MCPServer` (the MCP config rendered for operator-provisioned product agents) |
-| Storybook | Component workshop | `@angee/ui` and addon previews |
+| Storybook | Component workshop | `@angee/ui` and addon previews; the workshop package's story check composes its stories through the portable-stories API (`composeStories` over the preview's annotations) |
 | GitHub Actions | CI | Implemented build/type/test lanes and repository policies; [Checks](checks.md#what-ci-actually-runs) distinguishes local requirements and manual browser verification |
 | Copier | Project and addon templates | Angee templates |
 

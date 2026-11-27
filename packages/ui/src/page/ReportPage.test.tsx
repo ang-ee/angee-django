@@ -3,18 +3,20 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import * as React from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { ModalsHost, ToastProvider } from "../feedback";
+import { ToastProvider } from "../feedback";
 import { createUiTestProviders } from "../testing";
 import { ReportPage } from "./ReportPage";
 
+// A report page renders under the app's router, as its parameters dialog guards route moves.
 const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: { mutations: { retry: false }, queries: { retry: false } } },
+  router: true,
 });
 
 afterEach(() => { cleanup(); clearClients(); });
 
 function renderPage(children: React.ReactElement): void {
-  render(<Provider><ModalsHost><ToastProvider>{children}</ToastProvider></ModalsHost></Provider>);
+  render(<Provider><ToastProvider>{children}</ToastProvider></Provider>);
 }
 
 test("a configured run shows its subject header, views and page verbs", async () => {

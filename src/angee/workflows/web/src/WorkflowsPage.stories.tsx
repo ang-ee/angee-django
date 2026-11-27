@@ -39,7 +39,7 @@ export function CatalogueStory({ appearance, list = false, unavailable = false, 
   onRequest?: (request: GraphQLWireRequest) => void;
 }) {
   const schemas = useMemo(() => {
-    const fixture = storySchema({
+    return storySchema({
       workflow_step_outcomes: () => [{ node: "entry", outcomes: { done: "Done", error: "Error" }, issues: [] }],
       workflow_step_choices: () => [{ key: "echo", label: "Echo", icon: "", category: "", defaults: {}, config_schema: null, internal: false, outcomes: { done: "Done", error: "Error" }, issues: [] }],
       // The studio's own read carries the authoring draft; the page's record read carries the viewer's permissions.
@@ -64,12 +64,11 @@ export function CatalogueStory({ appearance, list = false, unavailable = false, 
       notes_by_pk: () => ({ id: "nte_7", display_name: "Review notes" }),
       workflow: () => [workflowFixture],
       workflow_aggregate: () => ({ aggregate: { count: 1 } }),
-    }, onRequest).public!;
-    return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
+    }, { schema: "console", onRequest, resources: [
       workflowResourceFixture, workflowVersionFixture, runResourceFixture, runSubjectFixture,
       stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, userResourceFixture,
       triggerResourceFixture,
-    ] } } } };
+    ] });
   }, [unavailable, queryError, onRequest, writer]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/workflows"
     initialEntry={list ? "/workflows" : "/workflows/wfl_review"} runtime={runtime} resourceName="workflows.Workflow" resourceLabel="Workflows" operationDocuments={documents}>

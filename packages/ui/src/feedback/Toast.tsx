@@ -120,10 +120,13 @@ export function useToast(): ToastApi {
 
 function ToastViewport(): ReactElement {
   const { toasts } = BaseToast.useToastManager<ToastData>();
+  const t = useUiT();
 
   return (
     <BaseToast.Portal>
       <BaseToast.Viewport
+        // The region's name in the app's language; the library's own default is English only.
+        aria-label={t("toast.region")}
         className={cn(
           "pointer-events-none fixed inset-x-4 bottom-4 z-toast h-[var(--toast-frontmost-height)]",
           "sm:bottom-5 sm:left-auto sm:right-5 sm:w-96",

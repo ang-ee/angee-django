@@ -2,9 +2,9 @@
 
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { createElement } from "react";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { useForm } from "react-hook-form";
-import { boundedGraphQLTransportError } from "@angee/refine";
+import { boundedGraphQLTransportError, type ActionOutcome } from "@angee/refine";
 import { errorFromUnknown } from "../../data/errors";
 import { enUiBundle } from "../../i18n";
 import { createAngeeI18nInstance } from "../../runtime/i18n";
@@ -13,10 +13,12 @@ import { fieldErrorMessages } from "./form-view-model";
 import {
   actionFormSubmitResult,
   actionOutcomeSubmitResult,
-  invalidFormSubmit,
-  formSubmitError,
   applyFormErrors,
   directDottedPathMessages,
+  formErrorsFromForm,
+  formSubmitError,
+  formSubmitOutcome,
+  invalidFormSubmit,
   jsonSchemaErrorMessage,
   lineRowErrorsFromDottedPaths,
   markMemberErrors,
@@ -24,9 +26,12 @@ import {
   messagesForDottedPath,
   serverErrorsFromForm,
   useDottedPathFieldErrors,
+  useRefusalBannerFocus,
   validationErrorMap,
   validationErrorMessages,
   validationErrorsFromError,
+  type FormSubmitResult,
+  type ValidationErrors,
 } from "./validation-errors";
 
 const t = createAngeeI18nInstance(enUiBundle).getFixedT(null, "ui");
@@ -454,8 +459,9 @@ describe("shared form submission errors", () => {
   test("adapts action outcomes without losing accepted data or issue messages", () => {
     const outcome = { ok: true, message: "Saved", id: "one" };
     expect(actionFormSubmitResult({ saved: outcome }, "saved")).toEqual({ status: "ok", data: outcome, message: "Saved" });
-    expect(actionFormSubmitResult({ saved: { ok: false, message: "Review", id: null, validation_errors: { title: ["Required"] } } }, "saved")).toEqual({
-      status: "invalid", issues: { fieldErrors: { title: ["Required"] }, formErrors: ["Review"] },
+    // The wire's message joins the refusal's reasons: the field's reason stays under its key, said once.
+    expect(actionFormSubmitResult({ saved: { ok: false, message: "Required", id: null, validation_errors: { title: ["Required"] } } }, "saved")).toEqual({
+      status: "invalid", issues: { fieldErrors: { title: ["Required"] }, formErrors: [] },
     });
     expect(actionFormSubmitResult(null, "saved")).toEqual({ status: "invalid", issues: { fieldErrors: {}, formErrors: [] } });
   });
@@ -471,7 +477,14 @@ describe("shared form submission errors", () => {
     expect(result.current.getFieldState("rows.0.title").error).toMatchObject({
       type: "server", message: "Required Use a unique title", types: { server: ["Required", "Use a unique title"] },
     });
-    expect(result.current.getFieldState("root.server").error?.message).toBe("Review the form rowsExtra: Unknown field");
+    // The form-level messages stay several: a list, read by its one reader; the message is their text, one per line.
+    const stored = result.current.getFieldState("root.server").error;
+    expect(formErrorsFromForm({ root: { server: stored } })).toEqual(["Review the form", "rowsExtra: Unknown field"]);
+    expect(formErrorsFromForm({ root: { server: { type: "server", message: "Set by another owner." } } })).toEqual(["Set by another owner."]);
+    expect(formErrorsFromForm({})).toEqual([]);
+    expect(stored).toMatchObject({
+      type: "server", message: "Review the form\nrowsExtra: Unknown field", types: { server: ["Review the form", "rowsExtra: Unknown field"] },
+    });
   });
 
   test("a refusal bound to a rendered field is shown there once, not again as the fallback", () => {
@@ -491,17 +504,92 @@ describe("shared form submission errors", () => {
   });
 });
 
-test("normalized action outcomes retain their transport-owned validation map", () => {
-  const outcome = { ok: false, message: "Review", validationErrors: { title: ["Required"] } };
-  expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit({ fieldErrors: outcome.validationErrors, formErrors: ["Review"] }));
+// Each shape of refusal the server sends (`ActionResult.from_error`): its `message` joins every
+// validation message, a refused target's is the verb's summary, and non-field reasons sit under `__all__`.
+test.each<[string, ActionOutcome, ValidationErrors]>([
+  ["one field: its reason under its key, and no form-level reason",
+    { ok: false, message: "Too early.", validationErrors: { date: ["Too early."] } },
+    { fieldErrors: { date: ["Too early."] }, formErrors: [] }],
+  ["two fields: both under their keys, and no form-level reason",
+    { ok: false, message: "Write a subject.; Too early.", validationErrors: { subject: ["Write a subject."], date: ["Too early."] } },
+    { fieldErrors: { subject: ["Write a subject."], date: ["Too early."] }, formErrors: [] }],
+  ["fields and a non-field reason: only that reason at form level, without its key",
+    { ok: false, message: "Too early.; The period is closed.", validationErrors: { date: ["Too early."], __all__: ["The period is closed."] } },
+    { fieldErrors: { date: ["Too early."] }, formErrors: ["The period is closed."] }],
+  ["non-field reasons only, with a map: each reason once, at form level",
+    { ok: false, message: "The period is closed.; The ledger is locked.", validationErrors: { __all__: ["The period is closed.", "The ledger is locked."] } },
+    { fieldErrors: {}, formErrors: ["The period is closed.", "The ledger is locked."] }],
+  ["a plain message with no map: the message stands in",
+    { ok: false, message: "The period is closed." },
+    { fieldErrors: {}, formErrors: ["The period is closed."] }],
+  ["a map whose only key holds no reason (`__all__`): the message stands in",
+    { ok: false, message: "Send failed.", validationErrors: { __all__: [] } },
+    { fieldErrors: {}, formErrors: ["Send failed."] }],
+  ["a map whose only key holds no reason (a field's): the message stands in, and the empty key binds nothing",
+    { ok: false, message: "Send failed.", validationErrors: { to: [] } },
+    { fieldErrors: { to: [] }, formErrors: ["Send failed."] }],
+  ["a domain error in band: the message stands in",
+    { ok: false, message: "RECORD_ACCESS_SUBJECT_REFUSED", code: "RECORD_ACCESS_SUBJECT_REFUSED" },
+    { fieldErrors: {}, formErrors: ["RECORD_ACCESS_SUBJECT_REFUSED"] }],
+  ["a refused target: its reason, not the verb's summary",
+    { ok: false, message: "Confirm failed.", validationErrors: { __all__: ["You are not allowed to modify this sales order."] } },
+    { fieldErrors: {}, formErrors: ["You are not allowed to modify this sales order."] }],
+  ["a reason under a key no field has: left in the map, for the binder to show",
+    { ok: false, message: "A saved project is required.", validationErrors: { target: ["A saved project is required."] } },
+    { fieldErrors: { target: ["A saved project is required."] }, formErrors: [] }],
+])("an action's refusal says each reason once: %s", (_shape, outcome, issues) => {
+  expect(actionOutcomeSubmitResult(outcome)).toEqual(invalidFormSubmit(issues));
 });
 
-test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT"])("decodes %s as the shared form conflict", (code) => {
+test.each(["STALE_REVISION", "CREATION_KEY_CONFLICT"] as const)("decodes %s as the shared form conflict, carrying its code", (code) => {
   const error = { graphQLErrors: [{ message: "Record changed", extensions: { code } }] };
-  expect(formSubmitError(error)).toEqual({ status: "conflict", message: "Record changed" });
+  expect(formSubmitError(error)).toEqual({ status: "conflict", code, message: "Record changed" });
 });
 
-test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
+test("an action outcome refused with a conflict code is a conflict carrying it; any other code stays a refusal", () => {
+  expect(actionOutcomeSubmitResult({ ok: false, code: "CREATION_KEY_CONFLICT", message: "Created earlier." }))
+    .toEqual({ status: "conflict", code: "CREATION_KEY_CONFLICT", message: "Created earlier." });
+  expect(actionOutcomeSubmitResult({ ok: false, code: "VALIDATION", message: "Review" }))
+    .toEqual(invalidFormSubmit({ fieldErrors: {}, formErrors: ["Review"] }));
+});
+
+test.each<[string, FormSubmitResult<unknown>, ReturnType<typeof formSubmitOutcome>]>([
+  ["an accepted result confirms the key", { status: "ok", data: null }, null],
+  ["a creation-key conflict says the key is spent", { status: "conflict", code: "CREATION_KEY_CONFLICT", message: "x" }, "conflict"],
+  ["a stale revision refuses it", { status: "conflict", code: "STALE_REVISION", message: "x" }, "refused"],
+  ["a bare conflict is a stale one and refuses it", { status: "conflict", message: "x" }, "refused"],
+  ["a validation refusal refuses it", { status: "invalid", issues: { fieldErrors: {}, formErrors: ["x"] } }, "refused"],
+  ["issues marked unconfirmed keep it as possibly written", { status: "invalid", issues: { fieldErrors: {}, formErrors: ["x"] }, outcome: "unconfirmed" }, "unconfirmed"],
+])("what a submit's result tells its key: %s", (_name, result, outcome) => {
+  expect(formSubmitOutcome(result)).toBe(outcome);
+});
+
+test.each([
+  ["with the surface's sentence", "It may have been sent.", ["It may have been sent."]],
+  ["without one, reading what the transport tells", undefined, ["Request failed."]],
+])("a lost answer converted to a result is marked unconfirmed, %s", (_name, answerLost, formErrors) => {
+  const result = formSubmitError(boundedGraphQLTransportError(new TypeError("Failed to fetch")), "Could not create.", answerLost);
+  expect(result).toMatchObject({ status: "invalid", outcome: "unconfirmed", issues: { fieldErrors: {} } });
+  expect(result.status === "invalid" && result.issues.formErrors.slice(0, 1)).toEqual(formErrors);
+  expect(formSubmitOutcome(result)).toBe("unconfirmed");
+});
+
+test("a caller's own refusal worded from its message is no lost answer", () => {
+  const result = formSubmitError("Could not create.", undefined, "It may have been sent.");
+  expect(result).toEqual(invalidFormSubmit({ fieldErrors: {}, formErrors: ["Could not create."] }));
+  expect(formSubmitOutcome(result)).toBe("refused");
+});
+
+test("a creation-key conflict does not lock a draft as a stale edit does: its form error is its own type", () => {
+  const { result } = renderHook(() => useForm<Record<string, unknown>>());
+  act(() => { applyFormErrors(result.current, { status: "conflict", code: "CREATION_KEY_CONFLICT", message: "Created earlier." }); });
+  expect(result.current.getFieldState("root.server").error?.type).toBe("creationKeyConflict");
+  act(() => { applyFormErrors(result.current, { status: "conflict", message: "Record changed" }); });
+  expect(result.current.getFieldState("root.server").error?.type).toBe("conflict");
+});
+
+test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" }, { status: "invalid", issues: {} },
+  { status: "invalid", issues: { fieldErrors: {}, formErrors: [] }, outcome: "refused" }])("malformed submit results fail loudly instead of becoming a retryable form error: %j", (malformed) => {
   const { result } = renderHook(() => useForm<Record<string, unknown>>());
   expect(() => {
     try {
@@ -512,4 +600,104 @@ test.each([undefined, { id: "old-result" }, { status: "later" }, { status: "ok" 
     }
   }).toThrow(/FormSubmitResult contract/);
   expect(result.current.getFieldState("root.server").error).toBeUndefined();
+});
+
+describe("where a refusal brings the person (applyFormErrors with `focus`)", () => {
+  type Issues = { fieldErrors: Record<string, string[]>; formErrors: string[] };
+  /** Apply a refusal to a form that shows `label` and `code`, in that order, and report what was asked. */
+  function refuse(issues: Issues, ask = true) {
+    const setError = vi.fn();
+    const focus = vi.fn();
+    applyFormErrors({ setError } as never, { status: "invalid", issues }, {
+      fieldNames: ["label", "code"],
+      fieldSummary: (errors) => `Fix: ${Object.keys(errors).join(", ")}`,
+      fallback: "Save failed.",
+      ...(ask ? { focus } : {}),
+    });
+    const banner = setError.mock.calls.find(([name]) => name === "root.server")?.[1] as { types: { server: string[] } } | undefined;
+    return {
+      fieldFocused: setError.mock.calls.filter(([, , options]) => (options as { shouldFocus?: boolean } | undefined)?.shouldFocus).map(([name]) => name),
+      bannerAsked: focus.mock.calls.length,
+      banner: banner?.types.server ?? [],
+    };
+  }
+
+  test("field reasons only: the first refused field in the form's order takes focus, and the banner is not asked", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."], label: ["Too long."] }, formErrors: [] }))
+      .toEqual({ fieldFocused: ["label"], bannerAsked: 0, banner: ["Fix: code, label"] });
+  });
+
+  test("a form-level reason beside a field reason: the banner is asked, carries the line naming the field, and no field takes focus", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."] }, formErrors: ["The note is misconfigured."] }))
+      .toEqual({ fieldFocused: [], bannerAsked: 1, banner: ["The note is misconfigured.", "Fix: code"] });
+  });
+
+  test("a reason of a field the form does not show counts as one no field shows", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."], secret: ["Refused."] }, formErrors: [] }))
+      .toEqual({ fieldFocused: [], bannerAsked: 1, banner: ["Fix: code", "secret: Refused."] });
+  });
+
+  test("a failure that names nothing: the banner is asked and holds the fallback", () => {
+    expect(refuse({ fieldErrors: {}, formErrors: [] })).toEqual({ fieldFocused: [], bannerAsked: 1, banner: ["Save failed."] });
+  });
+
+  test("an owner that does not ask moves no focus, whatever the refusal holds", () => {
+    expect(refuse({ fieldErrors: { code: ["Taken."] }, formErrors: [] }, false)).toMatchObject({ fieldFocused: [], bannerAsked: 0 });
+    expect(refuse({ fieldErrors: { code: ["Taken."] }, formErrors: ["The note is misconfigured."] }, false)).toMatchObject({ fieldFocused: [], bannerAsked: 0 });
+  });
+});
+
+describe("useRefusalBannerFocus", () => {
+  afterEach(() => { cleanup(); document.body.replaceChildren(); });
+  /** A banner element and a refused field in the document, and the hook over a list of messages. */
+  function mount() {
+    const banner = document.body.appendChild(document.createElement("div"));
+    banner.tabIndex = -1;
+    const field = document.body.appendChild(document.createElement("input"));
+    field.setAttribute("aria-invalid", "true");
+    const other = document.body.appendChild(document.createElement("button"));
+    const hook = renderHook(({ messages }: { messages: readonly string[] }) => {
+      const focus = useRefusalBannerFocus(messages);
+      focus.banner.ref.current = banner;
+      return focus;
+    }, { initialProps: { messages: [] as readonly string[] } });
+    return { banner, field, other, hook };
+  }
+
+  test("asked by the refusal's owner, the banner takes focus when the new list lands, also from a refused field", () => {
+    const { banner, field, hook } = mount();
+    field.focus();
+    hook.result.current.focusBanner();
+    expect(document.activeElement).toBe(field);
+    hook.rerender({ messages: ["The note is misconfigured."] });
+    expect(document.activeElement).toBe(banner);
+  });
+
+  test("not asked, the banner leaves focus in a refused field, and takes it from anywhere else", () => {
+    const { banner, field, other, hook } = mount();
+    field.focus();
+    hook.rerender({ messages: ["Fix: code"] });
+    expect(document.activeElement).toBe(field);
+    other.focus();
+    hook.rerender({ messages: ["Fix: code, label"] });
+    expect(document.activeElement).toBe(banner);
+  });
+
+  test("asking is spent by one list: a later list that is not asked for leaves a refused field its focus", () => {
+    const { banner, field, hook } = mount();
+    hook.result.current.focusBanner();
+    hook.rerender({ messages: ["The note is misconfigured."] });
+    expect(document.activeElement).toBe(banner);
+    field.focus();
+    hook.rerender({ messages: ["Fix: code"] });
+    expect(document.activeElement).toBe(field);
+  });
+
+  test("no list, no focus", () => {
+    const { other, hook } = mount();
+    other.focus();
+    hook.result.current.focusBanner();
+    hook.rerender({ messages: [] });
+    expect(document.activeElement).toBe(other);
+  });
 });

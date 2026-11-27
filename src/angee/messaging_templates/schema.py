@@ -33,16 +33,24 @@ render, and what ``compose_as_system`` refuses, as its docstring says. A row's
 ``hasura_filter_expressions``.
 ``message_template_preview`` renders a row with its sample for a caller who may
 preview it (``MessageTemplate.preview``), in the kit it names or the default one;
-it refuses as the verbs do: a signed-out caller gets the session's GraphQL error,
-and a reader who may not preview the row a ``PERMISSION_DENIED`` GraphQL error.
-Its rendered message carries the row's ``language`` and the ``direction`` of the
-mail's own text (``RenderedMessage.direction``, a ``MessageTemplateTextDirection``),
-for a page that shows the subject, preheader or plain text outside the HTML.
+with a ``patch``, the resource's own ``message_templates_set_input`` decoded as
+the update decodes it (``MessageTemplateWriteBackend.patch_values``), it renders
+the row as that patch would save it, for a caller who may also write the row,
+and saves nothing. It refuses as the verbs do: a signed-out caller gets the
+session's GraphQL error, and a reader who may not preview the row, or write it
+with a patch, a ``PERMISSION_DENIED`` GraphQL error. What the row or its patch
+would be refused for comes back in band, one warning a refusal, each naming its
+column (``field``): ``SAVE_REFUSED`` for what saving the patch would refuse,
+``RENDER_ERROR`` for what does not render. Its rendered message carries the row's
+``language`` and the ``direction`` of the mail's own text
+(``RenderedMessage.direction``, a ``MessageTemplateTextDirection``), for a page
+that shows the subject, preheader or plain text outside the HTML.
 """
 
 from __future__ import annotations
 
-from typing import Any, cast
+from collections.abc import Mapping
+from typing import Annotated, Any, cast
 
 import strawberry
 import strawberry_django
@@ -52,6 +60,7 @@ from django.db.models.expressions import BaseExpression
 from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.optimizer import optimize
+from strawberry_django_hasura import input_to_dict
 
 from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
@@ -206,6 +215,19 @@ class MessageTemplateType(AngeeNode):
 class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
     """Write semantics for message templates: create belongs to the manager factory."""
 
+    def patch_values(self, data: Mapping[str, Any]) -> dict[str, Any]:
+        """Decode a set-input patch as the update decodes its input, applying it to no row: its native values.
+
+        The update's own steps: input extensions split off, refused here, since
+        the preview a patch is for writes nothing; enum member names and public
+        ids decoded by the base. Reads no row.
+        """
+
+        values, extensions = self._split_input(data)
+        if extensions:
+            raise ValueError(f"A patch takes columns alone, not {', '.join(sorted(extensions))}.")
+        return self._decode_public_id_fields(values)
+
     def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Create the deployment's own row; a keyed insert is claimed first, then the manager decides create.
 
@@ -222,6 +244,8 @@ class MessageTemplateWriteBackend(AngeeHasuraWriteBackend):
         return MessageTemplate.objects.create_own(**values)
 
 
+_WRITE_BACKEND = MessageTemplateWriteBackend(MessageTemplate)
+
 _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
     MessageTemplateType,
     model=MessageTemplate,
@@ -232,9 +256,11 @@ _MESSAGE_TEMPLATE_RESOURCE = hasura_model_resource(
     groupable=["kind", "language", "format", "is_baseline"],
     insertable=["kind", "key", "language", "name"],
     updatable=list(MessageTemplate.edited_fields),
-    write_backend=MessageTemplateWriteBackend(MessageTemplate),
+    write_backend=_WRITE_BACKEND,
     id_column="sqid",
 )
+_PATCH_INPUT = cast(type, _MESSAGE_TEMPLATE_RESOURCE.set_input_type)
+"""The resource's own update input, ``message_templates_set_input``: the edited columns a preview's patch writes."""
 
 
 def _named_brand_kit(info: strawberry.Info, brand_kit: PublicID | None) -> Any:
@@ -292,11 +318,16 @@ class MessageTemplatePreviewQuery:
     @strawberry.field
     def message_template_preview(
         self, info: strawberry.Info, template: PublicID, brand_kit: PublicID | None = None,
+        patch: Annotated[Any, strawberry.argument(graphql_type=_PATCH_INPUT | None)] = None,
     ) -> TemplatePreview:
-        """Render the row with its sample in the named kit, or the default one, and say what it warns about."""
+        """Render the row with its sample, or as ``patch`` would save it, in the named kit or the default one, and
+        say what it warns about."""
 
         row = authorized_permission_target(info, MessageTemplate, template, "read")
-        return row.preview(kit=_named_brand_kit(info, brand_kit))
+        return row.preview(
+            kit=_named_brand_kit(info, brand_kit),
+            patch=None if patch is None else _WRITE_BACKEND.patch_values(input_to_dict(patch)),
+        )
 
 
 schemas = {
