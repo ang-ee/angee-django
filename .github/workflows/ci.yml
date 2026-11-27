@@ -5,14 +5,16 @@ on:
     branches: [main]
   pull_request:
 
-# A new push to a pull request cancels the run it supersedes; every main commit runs.
-# A pull request's run tests its merge commit (`framework-ref` is `github.sha`), which is the
-# tree main gets, so a push to main repeats nothing of it: it runs the quality lane and the
-# PostgreSQL selection, which a pull request runs in part only. That holds while main has not
-# moved since the pull request's run started; merge only then, or run the pull request again.
+# A new push to a pull request cancels the run it supersedes, and a new push to main cancels
+# main's run still in progress, whose tree the new one contains; each pull request and main
+# have a group of their own. A pull request's run tests its merge commit (`framework-ref` is
+# `github.sha`), which is the tree main gets, so a push to main repeats only what a pull
+# request runs in part: the quality lane, the whole SQLite suite and the PostgreSQL selection.
+# The packages and the composed stack hold while main has not moved since the pull request's
+# run started; merge only then, or run the pull request again.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -31,9 +33,10 @@ jobs:
       framework-repository: ${{ github.repository }}
       framework-ref: ${{ github.sha }}
       # Match the bridge dependency artifacts to this framework's manifests.
-      bridges-ref: "b5bfc0aa85b95f9c7655f61c9fcdcc51ad91c349"
+      bridges-ref: "07eaa2dca70244a7f00b92e812e90ab6991b6135"
       # CI_RUNS_ON (a JSON runs-on value) moves every job to self-hosted runners; a
-      # pull request from a fork always runs on GitHub-hosted ones.
+      # pull request from a fork always runs on GitHub-hosted ones. This public
+      # repository leaves it unset (docs/checks.md#what-ci-actually-runs).
       runs-on: ${{ (github.event.pull_request.head.repo.fork && '"ubuntu-latest"') || vars.CI_RUNS_ON || '"ubuntu-latest"' }}
 
   # The public repository's guards, one job: no secret anywhere in the history

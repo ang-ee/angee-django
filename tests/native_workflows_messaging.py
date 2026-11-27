@@ -271,6 +271,15 @@ class MessageTriggerTests(TransactionTestCase):
         self.assertTrue(trigger.enabled)
         self.assertEqual(trigger.channel_id, replacement.pk)
 
+    def test_a_changed_channel_is_a_changed_rule_so_a_reapplied_row_disables_the_trigger(self):
+        """The channel is the message source's scope field: the rule a resource load or an edit compares."""
+        trigger = self.trigger()
+        stored = Trigger.system_queryset().get(pk=trigger.pk)
+        trigger.channel = self.make_channel("replacement-rule")
+        self.assertTrue(trigger.changes_rule_of(stored))
+        trigger.channel_id = stored.channel_id
+        self.assertFalse(trigger.changes_rule_of(stored))
+
     def test_admission_rechecks_current_message_channel(self):
         """Moving a pending message cannot bypass its trigger's authored scope."""
         trigger = self.trigger()

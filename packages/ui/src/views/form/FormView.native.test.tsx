@@ -13,10 +13,11 @@ import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, type RuntimeViewAs } from "../../runtime";
 import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
+import { OperationDocumentsProvider, boundedGraphQLTransportError, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import gql from "graphql-tag";
 import { useList, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
+import { useDraftScope } from "../../lib/idempotency-key";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
 import {
@@ -69,6 +70,28 @@ const preview: RuntimeViewAs = {
   viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
   viewablePeople: [], enter: () => undefined, exit: () => undefined,
 };
+
+test("a bound field marks the stored record's unregistered implementation key by the form's own model; the same name under a scope does not", async () => {
+  const backend = { name: "backend", kind: "enum" as const, values: [{ value: "LOCAL", description: "Local" }], readable: true,
+    filterable: false, sortable: false, aggregatable: false, groupable: false, creatable: true, updatable: true, requiredOnCreate: false };
+  const resourceMetadata = { ...resource, fields: [...(resource.fields ?? []), backend], implFields: ["backend"] };
+  // The third binds through a model this host does not know: the mark still reads the form's own model.
+  for (const [scope, marked, model] of [["", true, "notes.Note"], ["config", false, "notes.Note"], ["", true, "notes.Elsewhere"]] as const) {
+    cleanup();
+    // The form saves the selector, so the bound control takes edits.
+    await fixture({ resourceMetadata, record: { backend: null, config: { backend: null } }, mountedFields: [],
+      viewFields: [...fields, { name: "backend" }],
+      boundFields: [{ field: { name: "backend", label: "Backend", widget: "select", options: [{ value: "LOCAL", label: "Local" }] }, scope, resource: model }] });
+    expect((await screen.findAllByText("Backend")).length).toBeGreaterThan(0);
+    expect(Boolean(screen.queryByLabelText("Not registered: Backend"))).toBe(marked);
+    if (marked) {
+      // The bound control is described by the explanation, as the form's own rows are.
+      const described = (screen.getByRole("combobox", { name: "Backend" }).getAttribute("aria-describedby") ?? "").split(" ")
+        .map((describedBy) => document.getElementById(describedBy)?.textContent ?? "").join(" ");
+      expect(described).toContain("Its implementation cannot run until another is chosen.");
+    }
+  }
+});
 
 test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {
   const submit = vi.fn(async () => ({ status: "ok" as const, data: { id: "created" } }));
@@ -161,7 +184,7 @@ async function fixture(options: {
   presenceValues?: boolean;
   relationValues?: boolean;
   acknowledgedSource?: FormViewAcknowledgedSource;
-  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[];
+  boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[];
   publicView?: boolean;
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
@@ -210,7 +233,7 @@ async function fixture(options: {
         }],
       } : resource);
   const formModel = schemaFieldMetadataFromDataResources([formResource]).labels["notes.Note"]!;
-  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
       dataResource: formResource, modelMetadata: formModel, formFields: viewFields, fieldByName, refineFields,
@@ -225,7 +248,7 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
-  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
+  function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = options.viewFields ?? fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean; resource?: string }[] }) {
     return <Provider resources={[formResource]} dataProvider={provider} queryClient={client}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
@@ -258,7 +281,7 @@ async function fixture(options: {
   if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
     await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
   }
-  return { surface: () => surface, onSaved, getOne, update, client,
+  return { surface: () => surface, onSaved, getOne, update, client, router,
     setRecord: (next: Row) => { record = next; },
     setAcknowledgedSource: (next: FormViewAcknowledgedSource) => { acknowledgedSource = next; },
     rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
@@ -305,6 +328,22 @@ test("registry widgets receive live sibling values in record forms", async () =>
   await waitFor(() => expect(screen.getByLabelText("Sibling title").textContent).toBe("First"));
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Changed" } });
   expect(screen.getByLabelText("Sibling title").textContent).toBe("Changed");
+});
+
+test("a form names its draft to the surfaces inside it: a create form of its resource embedded in it is a draft of its own", async () => {
+  // As a list of the form's own resource, embedded in it, names its inline create form's draft.
+  function Embedded(): React.ReactElement {
+    return <output aria-label="Embedded draft">{useDraftScope("record.create:console:notes.Note")}</output>;
+  }
+  const read: WidgetDefinition["read"] = () => <Embedded />;
+  const f = await fixture({ publicView: true, widgets: { embedded: { read, edit: read } } });
+  const viewFields: FieldDescriptor[] = [{ name: "title", label: "Title" }, { name: "body", widget: "embedded" }];
+  f.rerender({ viewFields });
+  await waitFor(() => expect(screen.getByLabelText("Embedded draft").textContent)
+    .toBe("record.edit:console:notes.Note:note-1/record.create:console:notes.Note"));
+  f.rerender({ recordId: null, viewFields });
+  await waitFor(() => expect(screen.getByLabelText("Embedded draft").textContent)
+    .toBe("record.create:console:notes.Note/record.create:console:notes.Note"));
 });
 
 test("header extras render from the same live record context as the title", async () => {
@@ -440,6 +479,28 @@ test("a pane focuses a sheet field's native control in place", async () => {
 });
 
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
+
+test("a record's tab switch keeps a dirty form and asks nothing; any other search change asks, alone or with the tab, as leaving does", async () => {
+  const f = await fixture();
+  edit("title", "Local edit");
+  // The form publishes its dirty state a render after the value, as the person's next move finds it.
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { await f.router.history.push("/?recordTab=activity"); });
+  await waitFor(() => expect(f.router.history.location.search).toBe("?recordTab=activity"));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
+
+  act(() => { void f.router.history.push("/?recordTab=activity&page=2"); });
+  const asked = await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" });
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+  fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+  act(() => { void f.router.history.push("/?recordTab=history&page=2"); });
+  expect(await screen.findByRole("alertdialog", { name: "Unsaved changes - leave without saving?" })).toBeTruthy();
+  expect(f.router.history.location.search).toBe("?recordTab=activity");
+  expect(f.surface().form.getValues("title")).toBe("Local edit");
+});
 
 test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
   const f = await fixture({ readOnlyWhen: (record) => record.status === "confirmed" });
@@ -871,7 +932,7 @@ test("a failed save keeps the preset's value for the retry, which writes it once
   stored.update.mockRejectedValueOnce(new Error("Unavailable"));
   fireEvent.click(await screen.findByRole("button", { name: "Save" }));
   await waitFor(() => expect(stored.update).toHaveBeenCalledOnce());
-  await waitFor(() => expect(stored.surface().saveError).not.toBeNull());
+  await waitFor(() => expect(stored.surface().saveErrors).not.toEqual([]));
   expect(stored.isDirty()).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(stored.update).toHaveBeenCalledTimes(2));
@@ -1616,12 +1677,14 @@ test("updates send the edit baseline revision and retain a stale draft", async (
   expect(f.surface().form.getValues("title")).toBe("Local edit");
 });
 
-test("create retries reuse the form session's idempotency key", async () => {
+test("create retries reuse the form session's idempotency key, and a lost answer says the retry is safe", async () => {
   const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
   edit("title", "New record");
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce(new Error("Unavailable"));
   await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key: the keyed create's lost-answer sentence.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostResend"]);
   await act(async () => f.surface().submitForm());
   expect(f.update).toHaveBeenCalledTimes(2);
   const key = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
@@ -1649,13 +1712,33 @@ test("CREATION_KEY_CONFLICT keeps the draft and renews the next attempt's key", 
   edit("deadline", "2026-09-28");
   f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Conflict", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveConflict).toBe(true);
+  // A spent key is no stale edit: the stale banner and its reload are not offered.
+  expect(f.surface().saveConflict).toBe(false);
   expect(f.surface().form.getValues("title")).toBe("My record");
   const first = f.update.mock.calls[0]?.[0].meta?.gqlVariables?.idempotency_key;
   await act(async () => f.surface().submitForm());
   const next = f.update.mock.calls[1]?.[0].meta?.gqlVariables?.idempotency_key;
   expect(next).toEqual(expect.any(String));
   expect(next).not.toBe(first);
+});
+
+test("a create whose key an earlier attempt spent is told in the form's own words, with nothing to undo; a stale edit keeps its banner", async () => {
+  const f = await fixture({ id: null, rootArguments: true, publicView: true,
+    viewFields: [{ name: "title", label: "Title" }, { name: "deadline", label: "Deadline" }] });
+  fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), { target: { value: "My record" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Deadline" }), { target: { value: "2026-09-28" } });
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "CREATION_KEY_CONFLICT", extensions: { code: "CREATION_KEY_CONFLICT" } }] });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  expect(await screen.findByText("Created earlier")).toBeTruthy();
+  expect(screen.getByText("An earlier attempt to save from this form already created a record; find it among the existing ones before saving again.")).toBeTruthy();
+  expect(screen.queryByText("CREATION_KEY_CONFLICT")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reload saved record" })).toBeNull();
+  expect((screen.getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe("My record");
+
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Changed", extensions: { code: "STALE_REVISION" } }] });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  expect(await screen.findByText("Record changed")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Reload saved record" })).toBeTruthy();
 });
 
 test("custom create owners receive a retry-stable key that clears on acceptance", async () => {
@@ -1672,6 +1755,59 @@ test("custom create owners receive a retry-stable key that clears on acceptance"
   edit("title", "Two");
   await act(async () => f.surface().submitForm());
   expect(submit.mock.calls[2]?.[1].idempotencyKey).not.toBe(first);
+});
+
+test("a custom create owner's lost answer says only that it may have been sent: the form cannot tell that its owner sends the key", async () => {
+  const submit = vi.fn<FormSubmit>().mockRejectedValueOnce(boundedGraphQLTransportError(new TypeError("Failed to fetch")));
+  const f = await fixture({ id: null, submit, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "One");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  // The fixture's translator answers with the key.
+  expect(f.surface().saveErrors).toEqual(["form.answerLostMaybeSent"]);
+});
+
+test("a new record is one draft: a refused create keeps its key for the corrected retry, and discarding it then starts a new draft", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "Refused");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Invalid.", extensions: {
+    code: "VALIDATION", validationErrors: { title: ["Taken."] }, formErrors: [] } }] });
+  await act(async () => f.surface().submitForm());
+  f.update.mockRejectedValueOnce({ graphQLErrors: [{ message: "Invalid.", extensions: {
+    code: "VALIDATION", validationErrors: { title: ["Taken."] }, formErrors: [] } }] });
+  edit("title", "Corrected");
+  await act(async () => f.surface().submitForm());
+  act(() => f.surface().discardChanges());
+  edit("title", "Another record");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const [refused, corrected, afterDiscard] = f.update.mock.calls.map(([call]) => call.meta?.gqlVariables?.idempotency_key);
+  expect(refused).toEqual(expect.any(String));
+  expect(corrected).toBe(refused);
+  expect(afterDiscard).not.toBe(refused);
+});
+
+test("a create whose answer was lost keeps its key when the form is discarded, or left and returned to: the record may exist, and the identical retry replays to it", async () => {
+  const f = await fixture({ id: null, rootArguments: true, mountedFields: ["title", "body", "deadline"] });
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  f.update.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  await act(async () => f.surface().submitForm());
+  act(() => f.surface().discardChanges());
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  f.rerender({ recordId: "note-1" });
+  f.rerender({ recordId: null });
+  edit("title", "Lost");
+  edit("deadline", "2026-09-28");
+  await act(async () => f.surface().submitForm());
+  const keys = f.update.mock.calls.filter(([call]) => call.meta?.gqlVariables?.idempotency_key).map(([call]) => call.meta?.gqlVariables?.idempotency_key);
+  expect(keys).toHaveLength(3);
+  expect(new Set(keys).size).toBe(1);
+  // The server answers the same key with the same content with the record it created: the form lands on it.
+  expect(f.onSaved.mock.lastCall?.[0]).toMatchObject({ id: "note-1", title: "Lost" });
 });
 
 test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and receives corrected retry values without native insert capabilities", async (owner) => {
@@ -1711,7 +1847,7 @@ test.each(["submit", "createSubmit"] as const)("%s owns custom create fields and
   expect(f.update).not.toHaveBeenCalled();
   expect(f.onSaved).toHaveBeenCalledOnce();
   expect(f.surface().formIsDirty).toBe(false);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
 });
 
 test("native create submissions retain their resource-owned writable field restriction", async () => {
@@ -1837,7 +1973,7 @@ test("a missing custom response reports failure and retains the draft", async ()
   const f = await fixture({ submit: async () => savedFormSubmitResult<Row>(undefined, "No record returned.") });
   edit("title", "Unsaved");
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBe("No record returned.");
+  expect(f.surface().saveErrors).toEqual(["No record returned."]);
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
@@ -1858,7 +1994,8 @@ test("nested server errors and root failures share the native form store", async
   edit("title", "Rejected");
   await act(async () => f.surface().submitForm());
   expect(f.surface().form.getFieldState("lines.0.title").error?.message).toBe("Invalid line");
-  expect(f.surface().saveError).toBe("Cannot save lines.0.title: Invalid line");
+  // The form-level reason, the line naming the refused field the form shows, then the reason no field shows.
+  expect(f.surface().saveErrors).toEqual(["Cannot save", "form.fixHighlightedFieldsNamed", "lines.0.title: Invalid line"]);
   expect(f.surface().serverFieldErrors).toMatchObject({ "lines.0.title": ["Invalid line"] });
   act(() => f.surface().clearServerFieldError("title"));
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
@@ -2206,7 +2343,7 @@ test.each(["invalid", "conflict"] as const)("a typed %s result keeps the edit ba
   expect(f.onSaved).not.toHaveBeenCalled();
   expect(f.surface().form.formState.errors.root?.server?.type).toBe(status === "conflict" ? "conflict" : "server");
   await act(async () => f.surface().submitForm());
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().form.getFieldState("title").error).toBeUndefined();
   expect(f.surface().formIsDirty).toBe(false);
   expect(f.onSaved).toHaveBeenCalledTimes(1);
@@ -2218,7 +2355,7 @@ test("a post-save callback failure does not convert an acknowledged save into a 
   edit("title", "Accepted");
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow("Continuation failed"); });
   expect(f.surface().formIsDirty).toBe(false);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().form.getValues("title")).toBe("Accepted");
 });
 
@@ -2317,7 +2454,7 @@ test("an outdated custom save result fails loudly without presenting a retry ban
   const f = await fixture({ submit });
   edit("title", "Already saved");
   await act(async () => { await expect(f.surface().submitForm()).rejects.toThrow(/FormSubmitResult contract/); });
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.onSaved).not.toHaveBeenCalled();
 });
 
@@ -2395,7 +2532,7 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
     }
   });
   if (mode === "rejected") {
-    expect(surface.saveError).toBe("Refused");
+    expect(surface.saveErrors).toEqual(["Refused"]);
     expect(write).not.toHaveBeenCalled();
     expect(getList).toHaveBeenCalledTimes(3);
     expect(custom).toHaveBeenCalledTimes(2);
@@ -2408,4 +2545,34 @@ test.each(["create", "update", "patch", "nested", "command", "rejected"] as cons
     expect(custom.mock.calls.filter(([params]) => params.meta?.gqlQuery === currentSummary)).toHaveLength(2);
   }
   expect(unrelatedTitle).toBe("Before");
+});
+
+test.each([
+  { where: "a field of the sheet", title: false },
+  { where: "the form's title", title: true },
+])("a record form's relation offers inline edit of its selected record, and `relationEdit: null` declines it, on $where", async ({ title }) => {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  const rows: Record<string, Row> = {
+    "note-1": { id: "note-1", title: "Child", parent: { id: "note-2", title: "Parent note" } },
+    "note-2": { id: "note-2", title: "Parent note" },
+  };
+  const form = (relationEdit?: null) => <Provider resources={[resource]}
+    dataProvider={{ getOne: async ({ id }) => ({ data: rows[String(id)] ?? {} }),
+      getList: async () => ({ data: [rows["note-2"]!], total: 1 }) }}>
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: defaultWidgets }}>
+      <FormView resource="notes.Note" id="note-1" fields={[
+        ...(title ? [] : [{ name: "title", label: "Title", title: true }]),
+        { name: "parent", label: "Parent", kind: "relation", widget: "many2one", ...(title ? { title: true } : {}), ...(relationEdit === null ? { relationEdit } : {}) },
+      ]} />
+    </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
+  </Provider>;
+
+  const view = render(form());
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(await screen.findByRole("button", { name: "Edit record" })).toBeTruthy();
+  view.unmount();
+
+  render(form(null));
+  await screen.findByRole("combobox", { name: /Parent/ });
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
 });

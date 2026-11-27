@@ -107,7 +107,7 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       return currentSteps.slice(offset, offset + limit);
     };
     const count = (rows: readonly unknown[]) => ({ aggregate: { count: rows.length } });
-    const fixture = storySchema({
+    return storySchema({
       cancel_workflow_run: action("cancel_workflow_run"),
       reprocess_workflow_run: action("reprocess_workflow_run"),
       retry_step: action("retry_step"),
@@ -148,12 +148,11 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       workflow_aggregate: () => ({ aggregate: { count: 1 } }),
       workflowrun: runRows,
       workflowrun_aggregate: (args) => count(runRows(args)),
-    }, onRequest).public!;
-    return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
+    }, { schema: "console", onRequest, resources: [
       runResourceFixture, recordResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
       workflowVersionFixture, attemptResourceFixture, userResourceFixture,
       triggerEventResourceFixture, watchResourceFixture, decisionResourceFixture,
-    ] } } } };
+    ] });
   }, [waiting, redacted, unavailable, queryError, rejectAction, run, steps, children, evidence, onRequest, graph]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} collectionPath="/workflows/runs"
     initialEntry={initialEntry ?? (list ? "/workflows/runs" : "/workflows/runs/wfr_review")} runtime={runtime}

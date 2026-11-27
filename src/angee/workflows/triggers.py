@@ -50,6 +50,7 @@ from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import AngeeQuerySet, by_key, row_lock_paths
 from angee.base.signals import connect_for_models
 from angee.iam.identity import group_subject_type, user_label
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
 if TYPE_CHECKING:
     from angee.workflows.models import Trigger, TriggerEvent
@@ -607,6 +608,17 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         )
         return rows.first() if skip_locked else rows.get()
 
+    def lock_stored(self, trigger: Any) -> Any:
+        """Return ``trigger``'s committed row under its workflow's lock, then its own.
+
+        Every writer that reads a trigger to change it (enabling, disabling, revoking a
+        grant, a save, a resource load re-applying its row) takes these two locks, the
+        workflow's first. One writer taking them the other way round deadlocks against
+        the rest, so the order is written here once.
+        """
+        self.lock_grants(trigger.workflow_id)
+        return self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+
     def reconcile_grants(self, trigger: Any, targets: tuple[TriggerGrantTarget, ...]) -> None:
         """Reconcile this trigger's contributed tuples without dropping shared grants."""
         old = {TriggerGrantTarget.from_stored(value) for value in trigger.granted_targets}
@@ -693,8 +705,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         trigger.workflow.require_access("write", actor)
         moment = timezone.now()
         with transaction.atomic(), actor_context(actor):
-            self.lock_grants(trigger.workflow_id)
-            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current = self.lock_stored(trigger)
             current.with_actor(actor)
             targets, first = self._enable_targets(current, actor, moment)
             self.reconcile_grants(current, targets)
@@ -710,8 +721,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         """Stop admission and release this trigger's source grants."""
         trigger.workflow.require_access("write", actor)
         with transaction.atomic(), system_context(reason="workflows.disable_trigger"):
-            self.lock_grants(trigger.workflow_id)
-            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current = self.lock_stored(trigger)
             current.workflow.require_access("write", actor)
             self._disable(current, "")
             current.refresh_from_db()
@@ -729,8 +739,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         trigger.workflow.require_access("write", actor)
         target = TriggerGrantTarget(ObjectRef(resource_type, resource_id), relation)
         with transaction.atomic(), actor_context(actor):
-            self.lock_grants(trigger.workflow_id)
-            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            current = self.lock_stored(trigger)
             current.workflow.require_access("write", actor)
             held = {TriggerGrantTarget.from_stored(value) for value in current.granted_targets}
             if target not in held:
@@ -841,7 +850,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
                     evaluated_at=F("changed_at"), rejection=reason,
                 )
                 return False
-            except (ValidationError, PermissionDenied) as error:
+            except (ValidationError, PermissionDenied, CreationKeyConflict) as error:
                 events.system_queryset().filter(pk=current.pk).update(
                     evaluated_at=F("changed_at"), rejection=exception_text(error),
                 )

@@ -1,0 +1,5159 @@
+{
+ "backlinks": {
+  "mtl_block_button_en_shipped": [
+   {
+    "display_name": "Invoice sent",
+    "id": "mtl_template_example_invoice_sent_en",
+    "is_overridden": false,
+    "key": "example.invoice_sent",
+    "kind": "TEMPLATE",
+    "language": "en"
+   },
+   {
+    "display_name": "Invoice sent",
+    "id": "mtl_template_example_invoice_sent_en_shipped",
+    "is_overridden": true,
+    "key": "example.invoice_sent",
+    "kind": "TEMPLATE",
+    "language": "en"
+   },
+   {
+    "display_name": "Password reset",
+    "id": "mtl_template_example_password_reset_en",
+    "is_overridden": false,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en"
+   },
+   {
+    "display_name": "Password reset",
+    "id": "mtl_template_example_password_reset_en_shipped",
+    "is_overridden": true,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en"
+   },
+   {
+    "display_name": "Reminder",
+    "id": "mtl_template_example_reminder_en",
+    "is_overridden": false,
+    "key": "example.reminder",
+    "kind": "TEMPLATE",
+    "language": "en"
+   },
+   {
+    "display_name": "Welcome (Arabic)",
+    "id": "mtl_template_example_welcome_ar",
+    "is_overridden": false,
+    "key": "example.welcome",
+    "kind": "TEMPLATE",
+    "language": "ar"
+   },
+   {
+    "display_name": "Welcome",
+    "id": "mtl_template_example_welcome_en_shipped",
+    "is_overridden": false,
+    "key": "example.welcome",
+    "kind": "TEMPLATE",
+    "language": "en"
+   }
+  ],
+  "mtl_block_notice_en": [
+   {
+    "display_name": "Password reset",
+    "id": "mtl_template_example_password_reset_en",
+    "is_overridden": false,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en"
+   }
+  ],
+  "mtl_block_quote_en": [],
+  "mtl_block_record_card_en": [],
+  "mtl_template_example_invoice_sent_en": [],
+  "mtl_template_example_password_reset_en": [],
+  "mtl_template_example_reminder_en": [],
+  "mtl_template_example_welcome_ar": [],
+  "mtl_template_example_welcome_en_shipped": []
+ },
+ "delete": {
+  "mtl_block_notice_en": {
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": true,
+    "refusals": [
+     "Other message templates use this block, which would no longer resolve without this row: give its key a row in the default language first."
+    ],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_block_notice_en",
+     "object_label": "Notice"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
+  "mtl_block_quote_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_block_quote_en"
+    ],
+    "rows": [
+     {
+      "id": "mtl_block_quote_en_shipped",
+      "is_effective": true,
+      "is_overridden": false
+     }
+    ]
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_block_quote_en",
+     "object_label": "Quote"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
+  "mtl_block_record_card_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_block_record_card_en"
+    ],
+    "rows": [
+     {
+      "id": "mtl_block_record_card_en_shipped",
+      "is_effective": true,
+      "is_overridden": false
+     }
+    ]
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_block_record_card_en",
+     "object_label": "Record card"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
+  "mtl_template_example_invoice_sent_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_template_example_invoice_sent_en"
+    ],
+    "rows": [
+     {
+      "id": "mtl_template_example_invoice_sent_en_shipped",
+      "is_effective": true,
+      "is_overridden": false
+     }
+    ]
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_template_example_invoice_sent_en",
+     "object_label": "Invoice sent"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
+  "mtl_template_example_password_reset_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_template_example_password_reset_en"
+    ],
+    "rows": [
+     {
+      "id": "mtl_template_example_password_reset_en_shipped",
+      "is_effective": true,
+      "is_overridden": false
+     }
+    ]
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_template_example_password_reset_en",
+     "object_label": "Password reset"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
+  "mtl_template_example_reminder_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_template_example_reminder_en"
+    ],
+    "rows": []
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_template_example_reminder_en",
+     "object_label": "Reminder"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  },
+  "mtl_template_example_welcome_ar": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [
+     "mtl_template_example_welcome_ar"
+    ],
+    "rows": []
+   },
+   "preview": {
+    "blocked": [],
+    "deleted": [
+     {
+      "count": 1,
+      "label": "message templates"
+     }
+    ],
+    "has_blockers": false,
+    "refusals": [],
+    "root": {
+     "children": [],
+     "label": "message template",
+     "object_id": "mtl_template_example_welcome_ar",
+     "object_label": "Welcome (Arabic)"
+    },
+    "total_deleted_count": 1,
+    "updated": []
+   }
+  }
+ },
+ "insert": [
+  {
+   "changes": {
+    "backlinks": {
+     "mtl_template_example_announcement_en": []
+    },
+    "previews": {
+     "mtl_template_example_announcement_en": {
+      "rendered": {
+       "direction": "LTR",
+       "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>A message from Angee</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"A message from Angee\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p style=\"margin:0 0 16px\">Write this message here.</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+       "language": "en",
+       "plain_text": "Angee\n\nWrite this message here.\n\nAngee\n",
+       "preheader": "",
+       "subject": "A message from Angee"
+      },
+      "warnings": [
+       {
+        "code": "PREHEADER",
+        "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+        "field": null
+       }
+      ]
+     }
+    },
+    "removed": [],
+    "rows": [
+     {
+      "can_keep_override": false,
+      "can_override": false,
+      "carries_message_fields": true,
+      "created_at": "2026-11-24T09:00:00+00:00",
+      "description": "",
+      "display_name": "Announcement",
+      "format": "MARKDOWN",
+      "has_updated_default": false,
+      "id": "mtl_template_example_announcement_en",
+      "is_baseline": false,
+      "is_effective": true,
+      "is_overridden": false,
+      "key": "example.announcement",
+      "kind": "TEMPLATE",
+      "language": "en",
+      "layout": "base",
+      "name": "Announcement",
+      "overrides_default": false,
+      "permissions": [
+       "delete",
+       "preview",
+       "write"
+      ],
+      "preheader": "",
+      "redacted_fields": [],
+      "sample": {},
+      "source": "Write this message here.",
+      "subject": "A message from {{ brand.name }}",
+      "text_source": "",
+      "updated_at": "2026-11-24T09:00:00+00:00",
+      "variables": {}
+     }
+    ]
+   },
+   "object": {
+    "key": "example.announcement",
+    "kind": "template",
+    "language": "en",
+    "name": "Announcement"
+   }
+  },
+  {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [
+      "A shipped default has this kind, key and language: override it instead."
+     ],
+     "validationErrors": {}
+    },
+    "message": "A shipped default has this kind, key and language: override it instead.",
+    "path": [
+     "insert_message_templates_one"
+    ]
+   },
+   "object": {
+    "key": "base",
+    "kind": "layout",
+    "language": "en",
+    "name": "Base"
+   }
+  },
+  {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [
+      "This deployment already has a message template with this kind, key and language."
+     ],
+     "validationErrors": {}
+    },
+    "message": "This deployment already has a message template with this kind, key and language.",
+    "path": [
+     "insert_message_templates_one"
+    ]
+   },
+   "object": {
+    "key": "notice",
+    "kind": "block",
+    "language": "en",
+    "name": "Notice"
+   }
+  },
+  {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [],
+     "validationErrors": {
+      "key": [
+       "Use lower-case names of letters, digits and underscores, joined by dots."
+      ]
+     }
+    },
+    "message": "Use lower-case names of letters, digits and underscores, joined by dots.",
+    "path": [
+     "insert_message_templates_one"
+    ]
+   },
+   "object": {
+    "key": "Not A Key",
+    "kind": "block",
+    "language": "en",
+    "name": "Bad key"
+   }
+  },
+  {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [
+      "parts/chain2: includes nest over 3 deep"
+     ],
+     "validationErrors": {}
+    },
+    "message": "parts/chain2: includes nest over 3 deep",
+    "path": [
+     "insert_message_templates_one"
+    ]
+   },
+   "object": {
+    "key": "nested",
+    "kind": "part",
+    "language": "de",
+    "name": "Nested"
+   }
+  }
+ ],
+ "keep": {
+  "mtl_block_record_card_en": {
+   "changes": {
+    "backlinks": {},
+    "previews": {},
+    "removed": [],
+    "rows": [
+     {
+      "has_updated_default": false,
+      "id": "mtl_block_record_card_en"
+     }
+    ]
+   },
+   "result": {
+    "id": "mtl_block_record_card_en",
+    "message": "Override kept.",
+    "ok": true,
+    "validation_errors": null
+   }
+  }
+ },
+ "keepRefused": {
+  "mtl_block_record_card_en": {
+   "id": null,
+   "message": "Keep message template override failed.",
+   "ok": false,
+   "validation_errors": {
+    "__all__": [
+     "MessageTemplate 'mtl_block_record_card_en' was not found."
+    ]
+   }
+  }
+ },
+ "kits": [
+  {
+   "display_name": "Angee",
+   "id": "bkt_angee",
+   "is_default": true,
+   "name": "Angee"
+  },
+  {
+   "display_name": "Sandstone",
+   "id": "bkt_sandstone",
+   "is_default": false,
+   "name": "Sandstone"
+  }
+ ],
+ "member": {
+  "mtl_block_button_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_footer_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_header_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_notice_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_quote_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_quote_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_record_card_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_block_record_card_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_layout_base_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_layout_compact_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_layout_compact_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_layout_letter_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_layout_letter_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain0_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain1_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain2_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_chain3_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_greeting_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_greeting_es_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_ignore_notice_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_ignore_notice_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_ignore_notice_es_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_nested_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_signature_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_part_signature_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_invoice_sent_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_invoice_sent_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_password_reset_en": {
+   "can_keep_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_password_reset_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_reminder_en": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_welcome_ar": {
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  },
+  "mtl_template_example_welcome_en_shipped": {
+   "can_override": false,
+   "permissions": [],
+   "redacted_fields": [
+    "sample"
+   ],
+   "sample": null
+  }
+ },
+ "metadata": {
+  "brandkit.BrandKit": {
+   "aggregateFields": [
+    "id"
+   ],
+   "aggregateMeasures": [],
+   "appLabel": "brandkit",
+   "canonicalLabel": "brandkit.BrandKit",
+   "capabilities": [
+    "list",
+    "detail",
+    "aggregate",
+    "groups",
+    "create",
+    "update",
+    "delete",
+    "deletePreview"
+   ],
+   "concreteKinds": [],
+   "contextFields": [],
+   "createArguments": [
+    {
+     "name": "idempotency_key",
+     "type": "String"
+    }
+   ],
+   "createFields": [
+    "name",
+    "is_default",
+    "brand",
+    "accent",
+    "neutral",
+    "canvas",
+    "surface",
+    "rail",
+    "success",
+    "warning",
+    "danger",
+    "info",
+    "font_heading",
+    "font_body",
+    "footer_organization",
+    "footer_address",
+    "voice"
+   ],
+   "defaultMeasures": [
+    {
+     "field": null,
+     "input": null,
+     "op": "count"
+    }
+   ],
+   "fields": [
+    {
+     "aggregatable": true,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "id",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "ID",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "display_name",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "list",
+     "name": "redacted_fields",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "name",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "is_default",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "switch"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "brand",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "accent",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "neutral",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "canvas",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "surface",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "rail",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "success",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "warning",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "danger",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "info",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "color"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "font_heading",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "font_body",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "relation",
+     "name": "logo",
+     "readable": true,
+     "relationModelLabel": "storage.File",
+     "relationObject": true,
+     "requiredOnCreate": false,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "many2one"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "relation",
+     "name": "logo_dark",
+     "readable": true,
+     "relationModelLabel": "storage.File",
+     "relationObject": true,
+     "requiredOnCreate": false,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "many2one"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "footer_organization",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "footer_address",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "voice",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "created_at",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "DateTime",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "datetime"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "updated_at",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "DateTime",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "datetime"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "list",
+     "name": "contrast_warnings",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "angee.brandkit.contrastWarnings"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "has_open_decisions",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    }
+   ],
+   "grantable": [],
+   "history": true,
+   "implFields": [],
+   "linesResource": null,
+   "mergeable": false,
+   "modelLabel": "brandkit.BrandKit",
+   "modelName": "brandkit",
+   "query": {
+    "axes": {
+     "is_default": {
+      "drill": {
+       "field": "is_default",
+       "jsonPath": null,
+       "kind": "value",
+       "nullMode": "isNull",
+       "rangeKey": null,
+       "valueKey": "is_default",
+       "valueMap": [],
+       "valueTransform": null
+      },
+      "extractions": [],
+      "field": "is_default",
+      "identityPath": "is_default",
+      "kind": "column",
+      "labelPath": null,
+      "paths": [
+       "is_default"
+      ],
+      "server": {
+       "input": "IS_DEFAULT",
+       "key": "is_default",
+       "labelInput": null,
+       "labelKey": null,
+       "valueMap": []
+      }
+     }
+    },
+    "fields": {
+     "accent": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "accent",
+       "paths": [
+        "accent"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "brand": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "brand",
+       "paths": [
+        "brand"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "canvas": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "canvas",
+       "paths": [
+        "canvas"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "contrast_warnings": {
+      "filter": null,
+      "kind": "list",
+      "nullable": false,
+      "relation": null,
+      "row": null,
+      "scalar": null,
+      "sort": null,
+      "values": []
+     },
+     "created_at": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "created_at",
+       "paths": [
+        "created_at"
+       ]
+      },
+      "scalar": "DateTime",
+      "sort": {
+       "field": "created_at"
+      },
+      "values": []
+     },
+     "danger": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "danger",
+       "paths": [
+        "danger"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "display_name": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "display_name",
+       "paths": [
+        "display_name"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "font_body": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "font_body",
+       "paths": [
+        "font_body"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "font_heading": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "font_heading",
+       "paths": [
+        "font_heading"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "footer_address": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "footer_address",
+       "paths": [
+        "footer_address"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "footer_organization": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "footer_organization",
+       "paths": [
+        "footer_organization"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "has_open_decisions": {
+      "filter": {
+       "field": "has_open_decisions",
+       "operators": [
+        "exact",
+        "ne",
+        "isNull"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "has_open_decisions",
+       "paths": [
+        "has_open_decisions"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "id": {
+      "filter": {
+       "field": "id",
+       "operators": [
+        "exact",
+        "ne",
+        "inList",
+        "notInList",
+        "isNull"
+       ],
+       "scalar": "String",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "id",
+       "paths": [
+        "id"
+       ]
+      },
+      "scalar": "ID",
+      "sort": null,
+      "values": []
+     },
+     "info": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "info",
+       "paths": [
+        "info"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "is_default": {
+      "filter": {
+       "field": "is_default",
+       "operators": [
+        "exact",
+        "ne",
+        "isNull"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "is_default",
+       "paths": [
+        "is_default"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": {
+       "field": "is_default"
+      },
+      "values": []
+     },
+     "logo": {
+      "filter": null,
+      "kind": "relation",
+      "nullable": true,
+      "relation": {
+       "identityPath": "logo.id",
+       "labelPath": "logo.title",
+       "model": "storage.File"
+      },
+      "row": {
+       "path": "logo.id",
+       "paths": [
+        "logo.id"
+       ]
+      },
+      "scalar": "ID",
+      "sort": null,
+      "values": []
+     },
+     "logo_dark": {
+      "filter": null,
+      "kind": "relation",
+      "nullable": true,
+      "relation": {
+       "identityPath": "logo_dark.id",
+       "labelPath": "logo_dark.title",
+       "model": "storage.File"
+      },
+      "row": {
+       "path": "logo_dark.id",
+       "paths": [
+        "logo_dark.id"
+       ]
+      },
+      "scalar": "ID",
+      "sort": null,
+      "values": []
+     },
+     "name": {
+      "filter": {
+       "field": "name",
+       "operators": [
+        "exact",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "inList",
+        "notInList",
+        "isNull",
+        "contains",
+        "iContains",
+        "startsWith",
+        "iStartsWith",
+        "endsWith",
+        "iEndsWith",
+        "like",
+        "iLike",
+        "notLike",
+        "notILike",
+        "iRegex"
+       ],
+       "scalar": "String",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "name",
+       "paths": [
+        "name"
+       ]
+      },
+      "scalar": "String",
+      "sort": {
+       "field": "name"
+      },
+      "values": []
+     },
+     "neutral": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "neutral",
+       "paths": [
+        "neutral"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "rail": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "rail",
+       "paths": [
+        "rail"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "redacted_fields": {
+      "filter": null,
+      "kind": "list",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "redacted_fields",
+       "paths": [
+        "redacted_fields"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "success": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "success",
+       "paths": [
+        "success"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "surface": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "surface",
+       "paths": [
+        "surface"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "updated_at": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "updated_at",
+       "paths": [
+        "updated_at"
+       ]
+      },
+      "scalar": "DateTime",
+      "sort": {
+       "field": "updated_at"
+      },
+      "values": []
+     },
+     "voice": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "voice",
+       "paths": [
+        "voice"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "warning": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "warning",
+       "paths": [
+        "warning"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     }
+    },
+    "identity": {
+     "field": "id"
+    },
+    "sort": {
+     "default": [
+      {
+       "direction": "DESC",
+       "field": "is_default"
+      },
+      {
+       "direction": "ASC",
+       "field": "name"
+      }
+     ]
+    }
+   },
+   "recordEdges": [
+    "integrate.RecordLink"
+   ],
+   "recordRepresentation": "name",
+   "recordSearchFields": [],
+   "requiredCreateFields": [
+    "name",
+    "brand",
+    "accent",
+    "neutral",
+    "canvas",
+    "surface",
+    "rail",
+    "success",
+    "warning",
+    "danger",
+    "info",
+    "font_heading",
+    "font_body"
+   ],
+   "resourceType": "brandkit/brand_kit",
+   "revisionFields": [],
+   "roots": {
+    "aggregate": "brand_kits_aggregate",
+    "changes": null,
+    "create": "insert_brand_kits_one",
+    "delete": "delete_brand_kits_by_pk",
+    "deletePreview": "brand_kits_delete",
+    "detail": "brand_kits_by_pk",
+    "groups": "brand_kits_groups",
+    "groupsCount": "brand_kits_groups_count",
+    "list": "brand_kits",
+    "repairChoices": null,
+    "save": null,
+    "update": "update_brand_kits_by_pk"
+   },
+   "rowModel": "server",
+   "saveArguments": [],
+   "schemaName": "console",
+   "subjectField": null,
+   "subtitle": {
+    "created": "created_at",
+    "updated": "updated_at",
+    "wordCount": null
+   },
+   "typeNames": {
+    "aggregate": "brand_kits_aggregate",
+    "createInput": "brand_kits_insert_input",
+    "deletePayload": "DeletePreview",
+    "filter": "brand_kits_bool_exp",
+    "groupBySpec": "brandKitsgroupbyspec",
+    "groupKey": "brandKitsgroupkey",
+    "groupOrder": "brandKitsgrouporder",
+    "grouped": "brand_kits_group",
+    "having": "brandKitshaving",
+    "node": "BrandKitType",
+    "order": "brand_kits_order_by",
+    "query": "brandKits_Query",
+    "updateInput": "brand_kits_set_input"
+   },
+   "updateArguments": [],
+   "updateFields": [
+    "name",
+    "is_default",
+    "brand",
+    "accent",
+    "neutral",
+    "canvas",
+    "surface",
+    "rail",
+    "success",
+    "warning",
+    "danger",
+    "info",
+    "font_heading",
+    "font_body",
+    "footer_organization",
+    "footer_address",
+    "voice"
+   ]
+  },
+  "messaging_templates.MessageTemplate": {
+   "aggregateFields": [
+    "id"
+   ],
+   "aggregateMeasures": [],
+   "appLabel": "messaging_templates",
+   "canonicalLabel": "messaging_templates.MessageTemplate",
+   "capabilities": [
+    "list",
+    "detail",
+    "aggregate",
+    "groups",
+    "create",
+    "update",
+    "delete",
+    "deletePreview"
+   ],
+   "concreteKinds": [],
+   "contextFields": [],
+   "createArguments": [
+    {
+     "name": "idempotency_key",
+     "type": "String"
+    }
+   ],
+   "createFields": [
+    "kind",
+    "key",
+    "language",
+    "name"
+   ],
+   "defaultMeasures": [
+    {
+     "field": null,
+     "input": null,
+     "op": "count"
+    }
+   ],
+   "fields": [
+    {
+     "aggregatable": true,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "id",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "ID",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "display_name",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "list",
+     "name": "redacted_fields",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "enum",
+     "name": "kind",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [
+      {
+       "description": "Layout",
+       "value": "LAYOUT"
+      },
+      {
+       "description": "Template",
+       "value": "TEMPLATE"
+      },
+      {
+       "description": "Block",
+       "value": "BLOCK"
+      },
+      {
+       "description": "Part",
+       "value": "PART"
+      }
+     ],
+     "widget": "select"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "key",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "language",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": true,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "name",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": true,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "description",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "enum",
+     "name": "format",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [
+      {
+       "description": "Markdown",
+       "value": "MARKDOWN"
+      },
+      {
+       "description": "HTML",
+       "value": "HTML"
+      }
+     ],
+     "widget": "select"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "subject",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "preheader",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "source",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "text_source",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "layout",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "String",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "variables",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "JSON",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "json"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "sample",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "JSON",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": true,
+     "values": [],
+     "widget": "json"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "is_baseline",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "switch"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "created_at",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "DateTime",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "datetime"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "updated_at",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "DateTime",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": "datetime"
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "list",
+     "name": "permissions",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "carries_message_fields",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "list",
+     "name": "backlinks",
+     "readable": true,
+     "relationModelLabel": "messaging_templates.MessageTemplate",
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": null,
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "is_effective",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "is_overridden",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "has_updated_default",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "overrides_default",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "can_override",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "can_keep_override",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    },
+    {
+     "aggregatable": false,
+     "archivable": false,
+     "creatable": false,
+     "createOnly": false,
+     "currencyField": null,
+     "kind": "scalar",
+     "name": "has_open_decisions",
+     "readable": true,
+     "relationModelLabel": null,
+     "relationObject": false,
+     "requiredOnCreate": false,
+     "scalar": "Boolean",
+     "statusDisplay": null,
+     "trashable": false,
+     "updatable": false,
+     "values": [],
+     "widget": null
+    }
+   ],
+   "grantable": [],
+   "history": true,
+   "implFields": [],
+   "linesResource": null,
+   "mergeable": false,
+   "modelLabel": "messaging_templates.MessageTemplate",
+   "modelName": "messagetemplate",
+   "query": {
+    "axes": {
+     "format": {
+      "drill": {
+       "field": "format",
+       "jsonPath": null,
+       "kind": "value",
+       "nullMode": "isNull",
+       "rangeKey": null,
+       "valueKey": "format",
+       "valueMap": [
+        {
+         "from": "MARKDOWN",
+         "to": "markdown"
+        },
+        {
+         "from": "HTML",
+         "to": "html"
+        }
+       ],
+       "valueTransform": null
+      },
+      "extractions": [],
+      "field": "format",
+      "identityPath": "format",
+      "kind": "column",
+      "labelPath": null,
+      "paths": [
+       "format"
+      ],
+      "server": {
+       "input": "FORMAT",
+       "key": "format",
+       "labelInput": null,
+       "labelKey": null,
+       "valueMap": []
+      }
+     },
+     "is_baseline": {
+      "drill": {
+       "field": "is_baseline",
+       "jsonPath": null,
+       "kind": "value",
+       "nullMode": "isNull",
+       "rangeKey": null,
+       "valueKey": "is_baseline",
+       "valueMap": [],
+       "valueTransform": null
+      },
+      "extractions": [],
+      "field": "is_baseline",
+      "identityPath": "is_baseline",
+      "kind": "column",
+      "labelPath": null,
+      "paths": [
+       "is_baseline"
+      ],
+      "server": {
+       "input": "IS_BASELINE",
+       "key": "is_baseline",
+       "labelInput": null,
+       "labelKey": null,
+       "valueMap": []
+      }
+     },
+     "kind": {
+      "drill": {
+       "field": "kind",
+       "jsonPath": null,
+       "kind": "value",
+       "nullMode": "isNull",
+       "rangeKey": null,
+       "valueKey": "kind",
+       "valueMap": [
+        {
+         "from": "LAYOUT",
+         "to": "layout"
+        },
+        {
+         "from": "TEMPLATE",
+         "to": "template"
+        },
+        {
+         "from": "BLOCK",
+         "to": "block"
+        },
+        {
+         "from": "PART",
+         "to": "part"
+        }
+       ],
+       "valueTransform": null
+      },
+      "extractions": [],
+      "field": "kind",
+      "identityPath": "kind",
+      "kind": "column",
+      "labelPath": null,
+      "paths": [
+       "kind"
+      ],
+      "server": {
+       "input": "KIND",
+       "key": "kind",
+       "labelInput": null,
+       "labelKey": null,
+       "valueMap": []
+      }
+     },
+     "language": {
+      "drill": {
+       "field": "language",
+       "jsonPath": null,
+       "kind": "value",
+       "nullMode": "isNull",
+       "rangeKey": null,
+       "valueKey": "language",
+       "valueMap": [],
+       "valueTransform": null
+      },
+      "extractions": [],
+      "field": "language",
+      "identityPath": "language",
+      "kind": "column",
+      "labelPath": null,
+      "paths": [
+       "language"
+      ],
+      "server": {
+       "input": "LANGUAGE",
+       "key": "language",
+       "labelInput": null,
+       "labelKey": null,
+       "valueMap": []
+      }
+     }
+    },
+    "fields": {
+     "backlinks": {
+      "filter": null,
+      "kind": "list",
+      "nullable": true,
+      "relation": null,
+      "row": null,
+      "scalar": null,
+      "sort": null,
+      "values": []
+     },
+     "can_keep_override": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "can_keep_override",
+       "paths": [
+        "can_keep_override"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "can_override": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "can_override",
+       "paths": [
+        "can_override"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "carries_message_fields": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "carries_message_fields",
+       "paths": [
+        "carries_message_fields"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "created_at": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "created_at",
+       "paths": [
+        "created_at"
+       ]
+      },
+      "scalar": "DateTime",
+      "sort": null,
+      "values": []
+     },
+     "description": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "description",
+       "paths": [
+        "description"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "display_name": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "display_name",
+       "paths": [
+        "display_name"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "format": {
+      "filter": {
+       "field": "format",
+       "operators": [
+        "exact",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "inList",
+        "notInList",
+        "isNull",
+        "contains",
+        "iContains",
+        "startsWith",
+        "iStartsWith",
+        "endsWith",
+        "iEndsWith",
+        "like",
+        "iLike",
+        "notLike",
+        "notILike",
+        "iRegex"
+       ],
+       "scalar": "String",
+       "valueMap": [
+        {
+         "from": "MARKDOWN",
+         "to": "markdown"
+        },
+        {
+         "from": "HTML",
+         "to": "html"
+        }
+       ],
+       "values": []
+      },
+      "kind": "enum",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "format",
+       "paths": [
+        "format"
+       ]
+      },
+      "scalar": null,
+      "sort": null,
+      "values": [
+       {
+        "description": "Markdown",
+        "value": "MARKDOWN"
+       },
+       {
+        "description": "HTML",
+        "value": "HTML"
+       }
+      ]
+     },
+     "has_open_decisions": {
+      "filter": {
+       "field": "has_open_decisions",
+       "operators": [
+        "exact",
+        "ne",
+        "isNull"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "has_open_decisions",
+       "paths": [
+        "has_open_decisions"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "has_updated_default": {
+      "filter": {
+       "field": "has_updated_default",
+       "operators": [
+        "exact",
+        "ne"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "has_updated_default",
+       "paths": [
+        "has_updated_default"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "id": {
+      "filter": {
+       "field": "id",
+       "operators": [
+        "exact",
+        "ne",
+        "inList",
+        "notInList",
+        "isNull"
+       ],
+       "scalar": "String",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "id",
+       "paths": [
+        "id"
+       ]
+      },
+      "scalar": "ID",
+      "sort": null,
+      "values": []
+     },
+     "is_baseline": {
+      "filter": {
+       "field": "is_baseline",
+       "operators": [
+        "exact",
+        "ne",
+        "isNull"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "is_baseline",
+       "paths": [
+        "is_baseline"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "is_effective": {
+      "filter": {
+       "field": "is_effective",
+       "operators": [
+        "exact",
+        "ne"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "is_effective",
+       "paths": [
+        "is_effective"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "is_overridden": {
+      "filter": {
+       "field": "is_overridden",
+       "operators": [
+        "exact",
+        "ne"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "is_overridden",
+       "paths": [
+        "is_overridden"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "key": {
+      "filter": {
+       "field": "key",
+       "operators": [
+        "exact",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "inList",
+        "notInList",
+        "isNull",
+        "contains",
+        "iContains",
+        "startsWith",
+        "iStartsWith",
+        "endsWith",
+        "iEndsWith",
+        "like",
+        "iLike",
+        "notLike",
+        "notILike",
+        "iRegex"
+       ],
+       "scalar": "String",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "key",
+       "paths": [
+        "key"
+       ]
+      },
+      "scalar": "String",
+      "sort": {
+       "field": "key"
+      },
+      "values": []
+     },
+     "kind": {
+      "filter": {
+       "field": "kind",
+       "operators": [
+        "exact",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "inList",
+        "notInList",
+        "isNull",
+        "contains",
+        "iContains",
+        "startsWith",
+        "iStartsWith",
+        "endsWith",
+        "iEndsWith",
+        "like",
+        "iLike",
+        "notLike",
+        "notILike",
+        "iRegex"
+       ],
+       "scalar": "String",
+       "valueMap": [
+        {
+         "from": "LAYOUT",
+         "to": "layout"
+        },
+        {
+         "from": "TEMPLATE",
+         "to": "template"
+        },
+        {
+         "from": "BLOCK",
+         "to": "block"
+        },
+        {
+         "from": "PART",
+         "to": "part"
+        }
+       ],
+       "values": []
+      },
+      "kind": "enum",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "kind",
+       "paths": [
+        "kind"
+       ]
+      },
+      "scalar": null,
+      "sort": {
+       "field": "kind"
+      },
+      "values": [
+       {
+        "description": "Layout",
+        "value": "LAYOUT"
+       },
+       {
+        "description": "Template",
+        "value": "TEMPLATE"
+       },
+       {
+        "description": "Block",
+        "value": "BLOCK"
+       },
+       {
+        "description": "Part",
+        "value": "PART"
+       }
+      ]
+     },
+     "language": {
+      "filter": {
+       "field": "language",
+       "operators": [
+        "exact",
+        "ne",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "inList",
+        "notInList",
+        "isNull",
+        "contains",
+        "iContains",
+        "startsWith",
+        "iStartsWith",
+        "endsWith",
+        "iEndsWith",
+        "like",
+        "iLike",
+        "notLike",
+        "notILike",
+        "iRegex"
+       ],
+       "scalar": "String",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "language",
+       "paths": [
+        "language"
+       ]
+      },
+      "scalar": "String",
+      "sort": {
+       "field": "language"
+      },
+      "values": []
+     },
+     "layout": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "layout",
+       "paths": [
+        "layout"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "name": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "name",
+       "paths": [
+        "name"
+       ]
+      },
+      "scalar": "String",
+      "sort": {
+       "field": "name"
+      },
+      "values": []
+     },
+     "overrides_default": {
+      "filter": {
+       "field": "overrides_default",
+       "operators": [
+        "exact",
+        "ne"
+       ],
+       "scalar": "Boolean",
+       "valueMap": [],
+       "values": []
+      },
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "overrides_default",
+       "paths": [
+        "overrides_default"
+       ]
+      },
+      "scalar": "Boolean",
+      "sort": null,
+      "values": []
+     },
+     "permissions": {
+      "filter": null,
+      "kind": "list",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "permissions",
+       "paths": [
+        "permissions"
+       ]
+      },
+      "scalar": null,
+      "sort": null,
+      "values": []
+     },
+     "preheader": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "preheader",
+       "paths": [
+        "preheader"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "redacted_fields": {
+      "filter": null,
+      "kind": "list",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "redacted_fields",
+       "paths": [
+        "redacted_fields"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "sample": {
+      "filter": null,
+      "kind": "json",
+      "nullable": true,
+      "relation": null,
+      "row": {
+       "path": "sample",
+       "paths": [
+        "sample"
+       ]
+      },
+      "scalar": "JSON",
+      "sort": null,
+      "values": []
+     },
+     "source": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "source",
+       "paths": [
+        "source"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "subject": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "subject",
+       "paths": [
+        "subject"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "text_source": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "text_source",
+       "paths": [
+        "text_source"
+       ]
+      },
+      "scalar": "String",
+      "sort": null,
+      "values": []
+     },
+     "updated_at": {
+      "filter": null,
+      "kind": "scalar",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "updated_at",
+       "paths": [
+        "updated_at"
+       ]
+      },
+      "scalar": "DateTime",
+      "sort": {
+       "field": "updated_at"
+      },
+      "values": []
+     },
+     "variables": {
+      "filter": null,
+      "kind": "json",
+      "nullable": false,
+      "relation": null,
+      "row": {
+       "path": "variables",
+       "paths": [
+        "variables"
+       ]
+      },
+      "scalar": "JSON",
+      "sort": null,
+      "values": []
+     }
+    },
+    "identity": {
+     "field": "id"
+    },
+    "sort": {
+     "default": [
+      {
+       "direction": "ASC",
+       "field": "kind"
+      },
+      {
+       "direction": "ASC",
+       "field": "key"
+      },
+      {
+       "direction": "ASC",
+       "field": "language"
+      }
+     ]
+    }
+   },
+   "recordEdges": [
+    "integrate.RecordLink"
+   ],
+   "recordRepresentation": "name",
+   "recordSearchFields": [],
+   "requiredCreateFields": [
+    "kind",
+    "key",
+    "language",
+    "name"
+   ],
+   "resourceType": "messaging_templates/message_template",
+   "revisionFields": [],
+   "roots": {
+    "aggregate": "message_templates_aggregate",
+    "changes": null,
+    "create": "insert_message_templates_one",
+    "delete": "delete_message_templates_by_pk",
+    "deletePreview": "message_templates_delete",
+    "detail": "message_templates_by_pk",
+    "groups": "message_templates_groups",
+    "groupsCount": "message_templates_groups_count",
+    "list": "message_templates",
+    "repairChoices": null,
+    "save": null,
+    "update": "update_message_templates_by_pk"
+   },
+   "rowModel": "server",
+   "saveArguments": [],
+   "schemaName": "console",
+   "subjectField": null,
+   "subtitle": {
+    "created": "created_at",
+    "updated": "updated_at",
+    "wordCount": null
+   },
+   "typeNames": {
+    "aggregate": "message_templates_aggregate",
+    "createInput": "message_templates_insert_input",
+    "deletePayload": "DeletePreview",
+    "filter": "message_templates_bool_exp",
+    "groupBySpec": "messageTemplatesgroupbyspec",
+    "groupKey": "messageTemplatesgroupkey",
+    "groupOrder": "messageTemplatesgrouporder",
+    "grouped": "message_templates_group",
+    "having": "messageTemplateshaving",
+    "node": "MessageTemplateType",
+    "order": "message_templates_order_by",
+    "query": "messageTemplates_Query",
+    "updateInput": "message_templates_set_input"
+   },
+   "updateArguments": [],
+   "updateFields": [
+    "name",
+    "description",
+    "format",
+    "subject",
+    "preheader",
+    "source",
+    "text_source",
+    "layout",
+    "variables",
+    "sample"
+   ]
+  }
+ },
+ "opened": {
+  "button": "mtl_block_button_en_shipped",
+  "conditionalInclude": "mtl_template_example_reminder_en",
+  "invoiceSent": "mtl_template_example_invoice_sent_en",
+  "notice": "mtl_block_notice_en",
+  "passwordReset": "mtl_template_example_password_reset_en",
+  "quote": "mtl_block_quote_en",
+  "recordCard": "mtl_block_record_card_en",
+  "welcome": "mtl_template_example_welcome_en_shipped",
+  "welcomeArabic": "mtl_template_example_welcome_ar"
+ },
+ "override": {
+  "mtl_template_example_welcome_en_shipped": {
+   "changes": {
+    "backlinks": {
+     "mtl_template_example_welcome_en": []
+    },
+    "previews": {
+     "mtl_template_example_welcome_en": {
+      "rendered": {
+       "direction": "LTR",
+       "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>Welcome to Angee</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">Your account is ready to use.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"Welcome to Angee\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p style=\"margin:0 0 16px\">Hi Ana,</p>\n\n<p style=\"margin:0 0 16px\">Your Angee account is ready. Sign in to finish setting it up.</p>\n<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#e7b008\"><a class=\"brand-on-primary\" href=\"https://app.example.test/sign-in\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#11141a;text-decoration:none\">Sign in</a></td></tr></table><p style=\"margin:0 0 16px\">If you did not expect this email, you can ignore it.</p>\n<p style=\"margin:0 0 16px\">Warm regards,\nthe Angee team</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+       "language": "en",
+       "plain_text": "Angee\n\nHi Ana,\n\nYour Angee account is ready. Sign in to finish setting it up.\n\nSign in: https://app.example.test/sign-in\nIf you did not expect this email, you can ignore it.\n\nWarm regards,\nthe Angee team\n\nAngee\n",
+       "preheader": "Your account is ready to use.",
+       "subject": "Welcome to Angee"
+      },
+      "warnings": []
+     }
+    },
+    "removed": [],
+    "rows": [
+     {
+      "can_keep_override": true,
+      "can_override": false,
+      "carries_message_fields": true,
+      "created_at": "2026-11-24T09:00:00+00:00",
+      "description": "Sent when a person's account is ready.",
+      "display_name": "Welcome",
+      "format": "MARKDOWN",
+      "has_updated_default": false,
+      "id": "mtl_template_example_welcome_en",
+      "is_baseline": false,
+      "is_effective": true,
+      "is_overridden": false,
+      "key": "example.welcome",
+      "kind": "TEMPLATE",
+      "language": "en",
+      "layout": "base",
+      "name": "Welcome",
+      "overrides_default": true,
+      "permissions": [
+       "delete",
+       "preview",
+       "write"
+      ],
+      "preheader": "Your account is ready to use.",
+      "redacted_fields": [],
+      "sample": {
+       "person": {
+        "first_name": "Ana"
+       },
+       "sign_in_url": "https://app.example.test/sign-in"
+      },
+      "source": "{% include \"parts/greeting\" with person=person only %}\n\nYour {{ brand.name }} account is ready. Sign in to finish setting it up.\n\n{% include \"blocks/button\" with label=\"Sign in\" url=sign_in_url only %}\n\n{% include \"parts/ignore_notice\" only %}\n\n{% include \"parts/signature\" only %}",
+      "subject": "Welcome to {{ brand.name }}",
+      "text_source": "",
+      "updated_at": "2026-11-24T09:00:00+00:00",
+      "variables": {
+       "person.first_name": "The recipient's first name; may be empty.",
+       "sign_in_url": "Where the person signs in."
+      }
+     },
+     {
+      "id": "mtl_template_example_welcome_en_shipped",
+      "is_effective": false,
+      "is_overridden": true
+     }
+    ]
+   },
+   "result": {
+    "id": "mtl_template_example_welcome_en",
+    "message": "Message template overridden.",
+    "ok": true,
+    "validation_errors": null
+   }
+  }
+ },
+ "previews": {
+  "mtl_block_button_en_shipped": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#e7b008\"><a class=\"brand-on-primary\" href=\"https://app.example.test/tasks/tsk_18\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#11141a;text-decoration:none\">Open the record</a></td></tr></table>",
+    "language": "en",
+    "plain_text": "Open the record: https://app.example.test/tasks/tsk_18\n",
+    "preheader": "",
+    "subject": ""
+   },
+   "warnings": []
+  },
+  "mtl_block_notice_en": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<p class=\"brand-text\" style=\"margin:0 0 16px;padding:12px 16px;border:1px solid #e0e0e2;color:#19191b\">Our offices close on Friday.</p>",
+    "language": "en",
+    "plain_text": "Our offices close on Friday.\n",
+    "preheader": "",
+    "subject": ""
+   },
+   "warnings": []
+  },
+  "mtl_block_quote_en": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 20px\"><tr><td class=\"brand-border\" style=\"padding:12px 16px;border-left:4px solid #e0e0e2\"><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\">Tomás Rey</p><p class=\"brand-text\" style=\"margin:0;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\">The tuner can come on Thursday at ten.<br>Shall I confirm?</p></td></tr></table>",
+    "language": "en",
+    "plain_text": "Tomás Rey wrote:\nThe tuner can come on Thursday at ten.\nShall I confirm?\n",
+    "preheader": "",
+    "subject": ""
+   },
+   "warnings": []
+  },
+  "mtl_block_record_card_en": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:14px 16px;border:1px solid #e0e0e2\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#4f4f55\">Task</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\">Book the piano tuner</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">In progress</p></td></tr></table>",
+    "language": "en",
+    "plain_text": "Task: Book the piano tuner (In progress)\n",
+    "preheader": "",
+    "subject": ""
+   },
+   "warnings": []
+  },
+  "mtl_template_example_invoice_sent_en": {
+   "rendered": null,
+   "warnings": [
+    {
+     "code": "RENDER_ERROR",
+     "detail": "invoice.due is required and missing or null.",
+     "field": null
+    },
+    {
+     "code": "RENDER_ERROR",
+     "detail": "invoice.total is required and missing or null.",
+     "field": null
+    },
+    {
+     "code": "RENDER_ERROR",
+     "detail": "invoice.url is required and missing or null.",
+     "field": null
+    }
+   ]
+  },
+  "mtl_template_example_password_reset_en": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>Reset your Angee password</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"Reset your Angee password\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p style=\"margin:0 0 16px\">Hi Ana,</p>\n\n<p style=\"margin:0 0 16px\">Someone asked to reset the password of your Angee account.</p>\n<p class=\"brand-text\" style=\"margin:0 0 16px;padding:12px 16px;border:1px solid #e0e0e2;color:#19191b\">The link works for one hour.</p><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#e7b008\"><a class=\"brand-on-primary\" href=\"https://app.example.test/reset/abc\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#11141a;text-decoration:none\">Choose a new password</a></td></tr></table><p style=\"margin:0 0 16px\">Warm regards,\nthe Angee team</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+    "language": "en",
+    "plain_text": "Angee\n\nHi Ana,\n\nSomeone asked to reset the password of your Angee account.\n\nThe link works for one hour.\nChoose a new password: https://app.example.test/reset/abc\nWarm regards,\nthe Angee team\n\nAngee\n",
+    "preheader": "",
+    "subject": "Reset your Angee password"
+   },
+   "warnings": [
+    {
+     "code": "PREHEADER",
+     "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+     "field": null
+    },
+    {
+     "code": "UNUSED_VARIABLE",
+     "detail": "Nothing reads support_url.",
+     "field": null
+    }
+   ]
+  },
+  "mtl_template_example_reminder_en": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>A reminder from Angee</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">Your booking is tomorrow.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"A reminder from Angee\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p>Hi Ana,</p>\n<p>Your booking is tomorrow.</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+    "language": "en",
+    "plain_text": "Angee\n\nHi Ana,\n\nYour booking is tomorrow.\n\nAngee\n",
+    "preheader": "Your booking is tomorrow.",
+    "subject": "A reminder from Angee"
+   },
+   "warnings": []
+  },
+  "mtl_template_example_welcome_ar": {
+   "rendered": {
+    "direction": "RTL",
+    "html": "<!doctype html>\n<html lang=\"ar\" dir=\"rtl\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>مرحبا بك في Angee</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"ar\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"ar\" dir=\"rtl\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">حسابك جاهز.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"ar\" dir=\"rtl\" role=\"article\" aria-roledescription=\"email\" aria-label=\"مرحبا بك في Angee\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"rtl\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:right\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:right\"><p style=\"margin:0 0 16px\">حسابك في Angee جاهز. سجّل الدخول لإكمال إعداده.</p>\n<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#e7b008\"><a class=\"brand-on-primary\" href=\"https://app.example.test/sign-in\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#11141a;text-decoration:none\">تسجيل الدخول</a></td></tr></table></td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:right\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+    "language": "ar",
+    "plain_text": "Angee\n\nحسابك في Angee جاهز. سجّل الدخول لإكمال إعداده.\n\nتسجيل الدخول: https://app.example.test/sign-in\n\nAngee\n",
+    "preheader": "حسابك جاهز.",
+    "subject": "مرحبا بك في Angee"
+   },
+   "warnings": []
+  },
+  "mtl_template_example_welcome_en_shipped": {
+   "rendered": {
+    "direction": "LTR",
+    "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>Welcome to Angee</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">Your account is ready to use.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"Welcome to Angee\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p style=\"margin:0 0 16px\">Hi Ana,</p>\n\n<p style=\"margin:0 0 16px\">Your Angee account is ready. Sign in to finish setting it up.</p>\n<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#e7b008\"><a class=\"brand-on-primary\" href=\"https://app.example.test/sign-in\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#11141a;text-decoration:none\">Sign in</a></td></tr></table><p style=\"margin:0 0 16px\">If you did not expect this email, you can ignore it.</p>\n<p style=\"margin:0 0 16px\">Warm regards,\nthe Angee team</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+    "language": "en",
+    "plain_text": "Angee\n\nHi Ana,\n\nYour Angee account is ready. Sign in to finish setting it up.\n\nSign in: https://app.example.test/sign-in\nIf you did not expect this email, you can ignore it.\n\nWarm regards,\nthe Angee team\n\nAngee\n",
+    "preheader": "Your account is ready to use.",
+    "subject": "Welcome to Angee"
+   },
+   "warnings": []
+  }
+ },
+ "previewsInKit": {
+  "bkt_sandstone": {
+   "mtl_template_example_welcome_en_shipped": {
+    "rendered": {
+     "direction": "LTR",
+     "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>Welcome to Sandstone</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#c06f30 !important}\n.brand-text{color:#e9e8e7 !important}\n.brand-muted{color:#b6b2b0 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#c27336 !important}\n.brand-border{border-color:#302d2b !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#c06f30 !important}\n[data-ogsc] .brand-text{color:#e9e8e7 !important}\n[data-ogsc] .brand-muted{color:#b6b2b0 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#c27336 !important}\n[data-ogsc] .brand-border{border-color:#302d2b !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">Your account is ready to use.&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"Welcome to Sandstone\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e1e0df\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Georgia, &#x27;Times New Roman&#x27;, serif;color:#1a1918\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#b45309;margin:0 8px\"></span>Sandstone</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px system-ui, sans-serif;color:#1a1918;text-align:left\"><p style=\"margin:0 0 16px\">Hi Ana,</p>\n\n<p style=\"margin:0 0 16px\">Your Sandstone account is ready. Sign in to finish setting it up.</p>\n<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#b45309\"><a class=\"brand-on-primary\" href=\"https://app.example.test/sign-in\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px system-ui, sans-serif;color:#ffffff;text-decoration:none\">Sign in</a></td></tr></table><p style=\"margin:0 0 16px\">If you did not expect this email, you can ignore it.</p>\n<p style=\"margin:0 0 16px\">Warm regards,\nthe Sandstone team</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e1e0df;font:14px/20px system-ui, sans-serif;color:#544f4c;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px system-ui, sans-serif;color:#544f4c\">Sandstone · 1 Example Street, 12345 Example City</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+     "language": "en",
+     "plain_text": "Sandstone\n\nHi Ana,\n\nYour Sandstone account is ready. Sign in to finish setting it up.\n\nSign in: https://app.example.test/sign-in\nIf you did not expect this email, you can ignore it.\n\nWarm regards,\nthe Sandstone team\n\nSandstone · 1 Example Street, 12345 Example City\n",
+     "preheader": "Your account is ready to use.",
+     "subject": "Welcome to Sandstone"
+    },
+    "warnings": []
+   }
+  }
+ },
+ "rows": [
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The one action an email asks for. Real text on the brand's primary colour, 44px tall.",
+   "display_name": "Button",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_button_en_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "button",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Button",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "label": "Open the record",
+    "url": "https://app.example.test/tasks/tsk_18"
+   },
+   "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:{{ brand.light.primary }}\"><a class=\"brand-on-primary\" href=\"{{ url|url }}\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px {{ brand.font.body }};color:{{ brand.light.on_primary }};text-decoration:none\">{{ label }}</a></td></tr></table>",
+   "subject": "",
+   "text_source": "{{ label }}: {{ url|url }}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "label": "What the button says.",
+    "url": "Where it goes."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Who sent the email and, when the mail can be stopped, how to stop it.",
+   "display_name": "Footer",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_footer_en_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "footer",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Footer",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "unsubscribe": "https://app.example.test/forms/email-preferences"
+   },
+   "source": "<p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ brand.footer.organization }}{% if brand.footer.address %} · {{ brand.footer.address }}{% endif %}</p>\n{% if unsubscribe %}<p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\"><a class=\"brand-muted\" href=\"{{ unsubscribe|url }}\" style=\"color:{{ brand.light.muted }};text-decoration:underline\">Stop these emails</a></p>{% endif %}",
+   "subject": "",
+   "text_source": "{{ brand.footer.organization }}{% if brand.footer.address %} · {{ brand.footer.address }}{% endif %}\n{% if unsubscribe %}Stop these emails: {{ unsubscribe|url }}{% endif %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "unsubscribe": "Where the recipient stops this kind of email; the line is left out when empty."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The brand mark at the top of every email. It reads the brand kit and takes no arguments.",
+   "display_name": "Header",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_header_en_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "header",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Header",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "<p class=\"brand-text\" style=\"margin:0;font:700 20px/28px {{ brand.font.heading }};color:{{ brand.light.text }}\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:{{ brand.light.primary }};margin:0 8px\"></span>{{ brand.name }}</p>",
+   "subject": "",
+   "text_source": "{{ brand.name }}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "A short boxed note, for news a mail must not bury.",
+   "display_name": "Notice",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_notice_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "notice",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Notice",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "text": "Our offices close on Friday."
+   },
+   "source": "<p class=\"brand-text\" style=\"margin:0 0 16px;padding:12px 16px;border:1px solid {{ brand.light.border }};color:{{ brand.light.text }}\">{{ text }}</p>",
+   "subject": "",
+   "text_source": "{{ text }}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "text": "What the note says."
+   }
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Someone's words, set apart on a thicker rule.",
+   "display_name": "Quote",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_quote_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "quote",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Quote",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "author": "Tomás Rey",
+    "body": "The tuner can come on Thursday at ten.\nShall I confirm?"
+   },
+   "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 20px\"><tr><td class=\"brand-border\" style=\"padding:12px 16px;border-left:4px solid {{ brand.light.border }}\"><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 14px/20px {{ brand.font.body }};color:{{ brand.light.text }}\">{{ author }}</p><p class=\"brand-text\" style=\"margin:0;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}\">{{ body|linebreaksbr }}</p></td></tr></table>",
+   "subject": "",
+   "text_source": "{{ author }} wrote:\n{{ body }}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "author": "Who said it.",
+    "body": "What they said, as plain text."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Someone's words, set apart on a rule; a comment, a message, a reply.",
+   "display_name": "Quote",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_quote_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "quote",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Quote",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "author": "Tomás Rey",
+    "body": "The tuner can come on Thursday at ten.\nShall I confirm?"
+   },
+   "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 20px\"><tr><td class=\"brand-border\" style=\"padding:12px 16px;border-left:3px solid {{ brand.light.border }}\"><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 14px/20px {{ brand.font.body }};color:{{ brand.light.text }}\">{{ author }}</p><p class=\"brand-text\" style=\"margin:0;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}\">{{ body|linebreaksbr }}</p></td></tr></table>",
+   "subject": "",
+   "text_source": "{{ author }} wrote:\n{{ body }}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "author": "Who said it.",
+    "body": "What they said, as plain text."
+   }
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The record an email is about; what it is, its title and its state.",
+   "display_name": "Record card",
+   "format": "HTML",
+   "has_updated_default": true,
+   "id": "mtl_block_record_card_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "record_card",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Record card",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "kind": "Task",
+    "status": "In progress",
+    "title": "Book the piano tuner"
+   },
+   "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:14px 16px;border:1px solid {{ brand.light.border }}\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}\">{{ kind }}</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}\">{{ title }}</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ status }}</p></td></tr></table>",
+   "subject": "",
+   "text_source": "{{ kind }}: {{ title }} ({{ status }})",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "kind": "What the record is, such as Task, Invoice or Event.",
+    "status": "Its current state.",
+    "title": "Its title."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The record an email is about; what it is, its title and its state.",
+   "display_name": "Record card",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_block_record_card_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "record_card",
+   "kind": "BLOCK",
+   "language": "en",
+   "layout": "",
+   "name": "Record card",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "kind": "Task",
+    "status": "In progress",
+    "title": "Book the piano tuner"
+   },
+   "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:16px;border:1px solid {{ brand.light.border }}\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}\">{{ kind }}</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}\">{{ title }}</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ status }}</p></td></tr></table>",
+   "subject": "",
+   "text_source": "{{ kind }}: {{ title }} ({{ status }})",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "kind": "What the record is, such as Task, Invoice or Event.",
+    "status": "Its current state.",
+    "title": "Its title."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The wrapper every message template renders into. Header, content, footer, at most 600px wide.",
+   "display_name": "Base",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_layout_base_en_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "base",
+   "kind": "LAYOUT",
+   "language": "en",
+   "layout": "",
+   "name": "Base",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "unsubscribe_url": "https://app.example.test/forms/email-preferences"
+   },
+   "source": "<!doctype html>\n<html lang=\"{{ lang }}\" dir=\"{{ dir }}\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>{{ subject }}</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:{{ brand.dark.canvas }} !important}\n.brand-surface{background:{{ brand.dark.surface }} !important}\n.brand-primary{background:{{ brand.dark.primary }} !important}\n.brand-text{color:{{ brand.dark.text }} !important}\n.brand-muted{color:{{ brand.dark.muted }} !important}\n.brand-on-primary{color:{{ brand.dark.on_primary }} !important}\n.brand-link{color:{{ brand.dark.link }} !important}\n.brand-border{border-color:{{ brand.dark.border }} !important}\n}\n[data-ogsb] .brand-canvas{background:{{ brand.dark.canvas }} !important}\n[data-ogsb] .brand-surface{background:{{ brand.dark.surface }} !important}\n[data-ogsb] .brand-primary{background:{{ brand.dark.primary }} !important}\n[data-ogsc] .brand-text{color:{{ brand.dark.text }} !important}\n[data-ogsc] .brand-muted{color:{{ brand.dark.muted }} !important}\n[data-ogsc] .brand-on-primary{color:{{ brand.dark.on_primary }} !important}\n[data-ogsc] .brand-link{color:{{ brand.dark.link }} !important}\n[data-ogsc] .brand-border{border-color:{{ brand.dark.border }} !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"{{ lang }}\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:{{ brand.light.canvas }}\">\n<div lang=\"{{ lang }}\" dir=\"{{ dir }}\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">{{ preheader }}&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"{{ lang }}\" dir=\"{{ dir }}\" role=\"article\" aria-roledescription=\"email\" aria-label=\"{{ subject }}\" class=\"brand-canvas\" style=\"padding:24px 12px;background:{{ brand.light.canvas }}\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"{{ dir }}\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:{{ brand.light.surface }};border:1px solid {{ brand.light.border }}\">\n<tr><td style=\"padding:28px 32px 4px;text-align:{% if dir == 'rtl' %}right{% else %}left{% endif %}\">{% include \"blocks/header\" only %}</td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }};text-align:{% if dir == 'rtl' %}right{% else %}left{% endif %}\">{% block content %}{% endblock %}</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid {{ brand.light.border }};font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }};text-align:{% if dir == 'rtl' %}right{% else %}left{% endif %}\">{% include \"blocks/footer\" with unsubscribe=unsubscribe_url only %}</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+   "subject": "",
+   "text_source": "{% include \"blocks/header\" only %}\n\n{% block content %}{% endblock %}\n\n{% include \"blocks/footer\" with unsubscribe=unsubscribe_url only %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "unsubscribe_url": "Where the recipient stops this kind of email; the footer leaves the line out when empty."
+   }
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "A narrow column without header or footer.",
+   "display_name": "Compact",
+   "format": "HTML",
+   "has_updated_default": true,
+   "id": "mtl_layout_compact_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "compact",
+   "kind": "LAYOUT",
+   "language": "en",
+   "layout": "",
+   "name": "Compact",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "<!doctype html>\n<html lang=\"{{ lang }}\" dir=\"{{ dir }}\">\n<head>\n<meta charset=\"utf-8\">\n<title>{{ subject }}</title>\n</head>\n<body style=\"margin:0;padding:24px 12px;background:{{ brand.light.canvas }}\">\n<div style=\"max-width:600px;margin:0 auto;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}\">{% block content %}{% endblock %}</div>\n</body>\n</html>",
+   "subject": "",
+   "text_source": "{% block content %}{% endblock %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "A narrow column without header or footer.",
+   "display_name": "Compact",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_layout_compact_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "compact",
+   "kind": "LAYOUT",
+   "language": "en",
+   "layout": "",
+   "name": "Compact",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "<!doctype html>\n<html lang=\"{{ lang }}\" dir=\"{{ dir }}\">\n<head>\n<meta charset=\"utf-8\">\n<title>{{ subject }}</title>\n</head>\n<body style=\"margin:0;padding:24px 12px;background:{{ brand.light.canvas }}\">\n<div style=\"max-width:480px;margin:0 auto;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}\">{% block content %}{% endblock %}</div>\n</body>\n</html>",
+   "subject": "",
+   "text_source": "{% block content %}{% endblock %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "One plain column, for mail that reads as a letter.",
+   "display_name": "Letter (ours)",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_layout_letter_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "letter",
+   "kind": "LAYOUT",
+   "language": "en",
+   "layout": "",
+   "name": "Letter (ours)",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "<!doctype html>\n<html lang=\"{{ lang }}\" dir=\"{{ dir }}\">\n<head>\n<meta charset=\"utf-8\">\n<title>{{ subject }}</title>\n</head>\n<body style=\"margin:0;padding:24px 12px;background:{{ brand.light.canvas }}\">\n<div style=\"max-width:640px;margin:0 auto;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}\">{% block content %}{% endblock %}</div>\n</body>\n</html>",
+   "subject": "",
+   "text_source": "{% block content %}{% endblock %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "One plain column, for mail that reads as a letter.",
+   "display_name": "Letter",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_layout_letter_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "letter",
+   "kind": "LAYOUT",
+   "language": "en",
+   "layout": "",
+   "name": "Letter",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "<!doctype html>\n<html lang=\"{{ lang }}\" dir=\"{{ dir }}\">\n<head>\n<meta charset=\"utf-8\">\n<title>{{ subject }}</title>\n</head>\n<body style=\"margin:0;padding:24px 12px;background:{{ brand.light.canvas }}\">\n<div style=\"max-width:600px;margin:0 auto;font:16px/24px {{ brand.font.body }};color:{{ brand.light.text }}\">{% block content %}{% endblock %}</div>\n</body>\n</html>",
+   "subject": "",
+   "text_source": "{% block content %}{% endblock %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 0",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain0_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain0",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 0",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain1\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 1",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain1_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain1",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 1",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain2\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 2",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain2_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain2",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 2",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain3\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Chain 3",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_chain3_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "chain3",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Chain 3",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "The end of the chain.",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "How an email opens; it falls back when the first name is unknown.",
+   "display_name": "Greeting",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_greeting_en_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "greeting",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Greeting",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    }
+   },
+   "source": "Hi {{ person.first_name|default:\"there\" }},",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "person.first_name": "The recipient's first name; may be empty."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "How an email opens; it leaves the name out when the first name is unknown.",
+   "display_name": "Greeting",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_greeting_es_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "greeting",
+   "kind": "PART",
+   "language": "es",
+   "layout": "",
+   "name": "Greeting",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    }
+   },
+   "source": "Hola{% if person.first_name %} {{ person.first_name }}{% endif %},",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "person.first_name": "The recipient's first name; may be empty."
+   }
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The line that closes mail a person may not have asked for.",
+   "display_name": "Ignore notice",
+   "format": "MARKDOWN",
+   "has_updated_default": true,
+   "id": "mtl_part_ignore_notice_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "ignore_notice",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Ignore notice",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "If you did not expect this email, you can ignore it.",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The line that closes mail a person may not have asked for.",
+   "display_name": "Ignore notice",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_ignore_notice_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "ignore_notice",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Ignore notice",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "If you did not expect this email, you can safely ignore it.",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "The line that closes mail a person may not have asked for.",
+   "display_name": "Ignore notice",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_ignore_notice_es_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "ignore_notice",
+   "kind": "PART",
+   "language": "es",
+   "layout": "",
+   "name": "Ignore notice",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "Si no esperabas este correo, puedes ignorarlo.",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Nested",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_nested_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "nested",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Nested",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "{% include \"parts/chain0\" only %}",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "How an email signs off, in the brand's name.",
+   "display_name": "Signature",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_signature_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "signature",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Signature",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "Warm regards,\nthe {{ brand.name }} team",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": false,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "How an email signs off, in the brand's name.",
+   "display_name": "Signature",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_part_signature_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "signature",
+   "kind": "PART",
+   "language": "en",
+   "layout": "",
+   "name": "Signature",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {},
+   "source": "The {{ brand.name }} team",
+   "subject": "",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {}
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent with each invoice.",
+   "display_name": "Invoice sent",
+   "format": "MARKDOWN",
+   "has_updated_default": true,
+   "id": "mtl_template_example_invoice_sent_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "example.invoice_sent",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Invoice sent",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "Due {{ invoice.due|date:\"DATE_FORMAT\" }}.",
+   "redacted_fields": [],
+   "sample": {
+    "invoice": {
+     "number": "INV-0042"
+    },
+    "person": {
+     "first_name": "Ana"
+    }
+   },
+   "source": "{% include \"parts/greeting\" with person=person only %}\n\nInvoice {{ invoice.number }} for {{ invoice.total|floatformat:2 }} is ready.\n\n{% include \"blocks/button\" with label=\"View the invoice\" url=invoice.url only %}\n\n{% include \"parts/signature\" only %}",
+   "subject": "Invoice {{ invoice.number }} from {{ brand.name }}",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "invoice.due": "When it is due.",
+    "invoice.number": "The invoice number.",
+    "invoice.total": "The amount due.",
+    "invoice.url": "Where the invoice is read.",
+    "person.first_name": "The recipient's first name; may be empty."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent with each invoice.",
+   "display_name": "Invoice sent",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_template_example_invoice_sent_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "example.invoice_sent",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Invoice sent",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "Due {{ invoice.due|date:\"DATE_FORMAT\" }}; pay by card or transfer.",
+   "redacted_fields": [],
+   "sample": {
+    "invoice": {
+     "due": "2026-12-01",
+     "number": "INV-0042",
+     "total": "120.00",
+     "url": "https://app.example.test/invoices/inv_42"
+    },
+    "person": {
+     "first_name": "Ana"
+    }
+   },
+   "source": "{% include \"parts/greeting\" with person=person only %}\n\nInvoice {{ invoice.number }} for {{ invoice.total|floatformat:2 }} is ready.\n\n{% include \"blocks/button\" with label=\"View the invoice\" url=invoice.url only %}\n\n{% include \"parts/signature\" only %}",
+   "subject": "Invoice {{ invoice.number }} from {{ brand.name }}",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "invoice.due": "When it is due.",
+    "invoice.number": "The invoice number.",
+    "invoice.total": "The amount due.",
+    "invoice.url": "Where the invoice is read.",
+    "person.first_name": "The recipient's first name; may be empty."
+   }
+  },
+  {
+   "can_keep_override": true,
+   "can_override": false,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent when a person asks to choose a new password.",
+   "display_name": "Password reset",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_template_example_password_reset_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "example.password_reset",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Password reset",
+   "overrides_default": true,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    },
+    "reset_url": "https://app.example.test/reset/abc",
+    "support_url": "https://app.example.test/help"
+   },
+   "source": "{% include \"parts/greeting\" with person=person only %}\n\nSomeone asked to reset the password of your {{ brand.name }} account.\n\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\n\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\n\n{% include \"parts/signature\" only %}",
+   "subject": "Reset your {{ brand.name }} password",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "person.first_name": "The recipient's first name; may be empty.",
+    "reset_url": "Where the person chooses a new password.",
+    "support_url": "Where to ask for help."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent when a person asks to choose a new password.",
+   "display_name": "Password reset",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_template_example_password_reset_en_shipped",
+   "is_baseline": true,
+   "is_effective": false,
+   "is_overridden": true,
+   "key": "example.password_reset",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Password reset",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "The link works for one hour.",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    },
+    "reset_url": "https://app.example.test/reset/abc"
+   },
+   "source": "{% include \"parts/greeting\" with person=person only %}\n\nSomeone asked to reset the password of your {{ brand.name }} account.\n\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\n\n{% include \"parts/ignore_notice\" only %}\n\n{% include \"parts/signature\" only %}",
+   "subject": "Choose a new {{ brand.name }} password",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "person.first_name": "The recipient's first name; may be empty.",
+    "reset_url": "Where the person chooses a new password."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent the day before a booking; its button only where there is a page to open.",
+   "display_name": "Reminder",
+   "format": "HTML",
+   "has_updated_default": false,
+   "id": "mtl_template_example_reminder_en",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "example.reminder",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Reminder",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "Your booking is tomorrow.",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    }
+   },
+   "source": "<p>Hi {{ person.first_name }},</p>\n<p>Your booking is tomorrow.</p>\n{% if booking_url %}{% include \"blocks/button\" with label=\"See the booking\" url=booking_url only %}{% endif %}",
+   "subject": "A reminder from {{ brand.name }}",
+   "text_source": "Hi {{ person.first_name }},\n\nYour booking is tomorrow.\n\n{% if booking_url %}{% include \"blocks/button\" with label=\"See the booking\" url=booking_url only %}{% endif %}",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "booking_url": "Where the booking is read; may be empty, and then the mail has no button.",
+    "person.first_name": "The recipient's first name; may be empty."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": false,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "",
+   "display_name": "Welcome (Arabic)",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_template_example_welcome_ar",
+   "is_baseline": false,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "example.welcome",
+   "kind": "TEMPLATE",
+   "language": "ar",
+   "layout": "base",
+   "name": "Welcome (Arabic)",
+   "overrides_default": false,
+   "permissions": [
+    "delete",
+    "preview",
+    "write"
+   ],
+   "preheader": "حسابك جاهز.",
+   "redacted_fields": [],
+   "sample": {
+    "sign_in_url": "https://app.example.test/sign-in"
+   },
+   "source": "حسابك في {{ brand.name }} جاهز. سجّل الدخول لإكمال إعداده.\n\n{% include \"blocks/button\" with label=\"تسجيل الدخول\" url=sign_in_url only %}",
+   "subject": "مرحبا بك في {{ brand.name }}",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "sign_in_url": "Where the person signs in."
+   }
+  },
+  {
+   "can_keep_override": false,
+   "can_override": true,
+   "carries_message_fields": true,
+   "created_at": "2026-11-24T09:00:00+00:00",
+   "description": "Sent when a person's account is ready.",
+   "display_name": "Welcome",
+   "format": "MARKDOWN",
+   "has_updated_default": false,
+   "id": "mtl_template_example_welcome_en_shipped",
+   "is_baseline": true,
+   "is_effective": true,
+   "is_overridden": false,
+   "key": "example.welcome",
+   "kind": "TEMPLATE",
+   "language": "en",
+   "layout": "base",
+   "name": "Welcome",
+   "overrides_default": false,
+   "permissions": [
+    "preview"
+   ],
+   "preheader": "Your account is ready to use.",
+   "redacted_fields": [],
+   "sample": {
+    "person": {
+     "first_name": "Ana"
+    },
+    "sign_in_url": "https://app.example.test/sign-in"
+   },
+   "source": "{% include \"parts/greeting\" with person=person only %}\n\nYour {{ brand.name }} account is ready. Sign in to finish setting it up.\n\n{% include \"blocks/button\" with label=\"Sign in\" url=sign_in_url only %}\n\n{% include \"parts/ignore_notice\" only %}\n\n{% include \"parts/signature\" only %}",
+   "subject": "Welcome to {{ brand.name }}",
+   "text_source": "",
+   "updated_at": "2026-11-24T09:00:00+00:00",
+   "variables": {
+    "person.first_name": "The recipient's first name; may be empty.",
+    "sign_in_url": "Where the person signs in."
+   }
+  }
+ ],
+ "save": {
+  "layout": {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [
+      "An HTML message template has a plain-text form; a Markdown one has none."
+     ],
+     "validationErrors": {
+      "layout": [
+       "Name the layout this template sits in: a mail renders inside its layout, which gives it its document, its brand and its stop link."
+      ]
+     }
+    },
+    "message": "Name the layout this template sits in: a mail renders inside its layout, which gives it its document, its brand and its stop link. An HTML message template has a plain-text form; a Markdown one has none.",
+    "path": [
+     "update_message_templates_by_pk"
+    ]
+   },
+   "id": "mtl_template_example_password_reset_en",
+   "set": {
+    "format": "html",
+    "layout": ""
+   }
+  },
+  "variableDescription": {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [],
+     "validationErrors": {
+      "variables": [
+       "Describe author in at most 1000 characters."
+      ]
+     }
+    },
+    "message": "Describe author in at most 1000 characters.",
+    "path": [
+     "update_message_templates_by_pk"
+    ]
+   },
+   "id": "mtl_block_quote_en",
+   "set": {
+    "variables": {
+     "author": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+     "body": "What they said, as plain text."
+    }
+   }
+  },
+  "variablePath": {
+   "error": {
+    "extensions": {
+     "code": "VALIDATION",
+     "formErrors": [],
+     "validationErrors": {
+      "variables": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa… is over 200 characters: name the value in fewer."
+      ]
+     }
+    },
+    "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa… is over 200 characters: name the value in fewer.",
+    "path": [
+     "update_message_templates_by_pk"
+    ]
+   },
+   "id": "mtl_block_quote_en",
+   "set": {
+    "variables": {
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "A value nothing reads.",
+     "author": "Who said it.",
+     "body": "What they said, as plain text."
+    }
+   }
+  }
+ },
+ "saved": [
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "reread": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": true,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Sent when a person asks to choose a new password.",
+    "display_name": "Password reset",
+    "format": "MARKDOWN",
+    "has_updated_default": false,
+    "id": "mtl_template_example_password_reset_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en",
+    "layout": "base",
+    "name": "Password reset",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "person": {
+      "first_name": "Ana"
+     },
+     "reset_url": "https://app.example.test/reset/abc",
+     "support_url": "https://app.example.test/help"
+    },
+    "source": "{% include \"parts/greeting\" with person=person only %}\n\nSomeone asked to reset the password of your {{ brand.name }} account.\n\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\n\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\n\n{% include \"parts/signature\" only %}",
+    "subject": "Reset your {{ brand.name }} password",
+    "text_source": "",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "person.first_name": "The recipient's first name; may be empty.",
+     "reset_url": "Where the person chooses a new password.",
+     "support_url": "Where to ask for help."
+    }
+   },
+   "row": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": true,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Sent when a person asks to choose a new password.",
+    "display_name": "Password reset",
+    "format": "MARKDOWN",
+    "has_updated_default": false,
+    "id": "mtl_template_example_password_reset_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "example.password_reset",
+    "kind": "TEMPLATE",
+    "language": "en",
+    "layout": "base",
+    "name": "Password reset",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "person": {
+      "first_name": "Ana"
+     },
+     "reset_url": "https://app.example.test/reset/abc",
+     "support_url": "https://app.example.test/help"
+    },
+    "source": "{% include \"parts/greeting\" with person=person only %}\n\nSomeone asked to reset the password of your {{ brand.name }} account.\n\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\n\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\n\n{% include \"parts/signature\" only %}",
+    "subject": "Reset your {{ brand.name }} password",
+    "text_source": "",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "person.first_name": "The recipient's first name; may be empty.",
+     "reset_url": "Where the person chooses a new password.",
+     "support_url": "Where to ask for help."
+    }
+   },
+   "set": {
+    "source": "{% include \"parts/greeting\" with person=person only %}\r\n\r\nSomeone asked to reset the password of your {{ brand.name }} account.\r\n\r\n{% include \"blocks/notice\" with text=\"The link works for one hour.\" only %}\r\n\r\n{% include \"blocks/button\" with label=\"Choose a new password\" url=reset_url only %}\r\n\r\n{% include \"parts/signature\" only %}"
+   }
+  },
+  {
+   "id": "mtl_block_record_card_en",
+   "reread": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": false,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Kept as it is until the new card is read.",
+    "display_name": "Record card",
+    "format": "HTML",
+    "has_updated_default": true,
+    "id": "mtl_block_record_card_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "record_card",
+    "kind": "BLOCK",
+    "language": "en",
+    "layout": "",
+    "name": "Record card",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "kind": "Task",
+     "status": "In progress",
+     "title": "Book the piano tuner"
+    },
+    "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:14px 16px;border:1px solid {{ brand.light.border }}\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}\">{{ kind }}</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}\">{{ title }}</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ status }}</p></td></tr></table>",
+    "subject": "",
+    "text_source": "{{ kind }}: {{ title }} ({{ status }})",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "kind": "What the record is, such as Task, Invoice or Event.",
+     "status": "Its current state.",
+     "title": "Its title."
+    }
+   },
+   "row": {
+    "can_keep_override": true,
+    "can_override": false,
+    "carries_message_fields": false,
+    "created_at": "2026-11-24T09:00:00+00:00",
+    "description": "Kept as it is until the new card is read.",
+    "display_name": "Record card",
+    "format": "HTML",
+    "has_updated_default": true,
+    "id": "mtl_block_record_card_en",
+    "is_baseline": false,
+    "is_effective": true,
+    "is_overridden": false,
+    "key": "record_card",
+    "kind": "BLOCK",
+    "language": "en",
+    "layout": "",
+    "name": "Record card",
+    "overrides_default": true,
+    "permissions": [
+     "delete",
+     "preview",
+     "write"
+    ],
+    "preheader": "",
+    "redacted_fields": [],
+    "sample": {
+     "kind": "Task",
+     "status": "In progress",
+     "title": "Book the piano tuner"
+    },
+    "source": "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\" style=\"margin:0 0 16px\"><tr><td class=\"brand-border brand-radius\" style=\"padding:14px 16px;border:1px solid {{ brand.light.border }}\"><p class=\"brand-muted\" style=\"margin:0 0 2px;font:600 14px/20px {{ brand.font.body }};letter-spacing:0.06em;text-transform:uppercase;color:{{ brand.light.muted }}\">{{ kind }}</p><p class=\"brand-text\" style=\"margin:0 0 4px;font:600 17px/24px {{ brand.font.heading }};color:{{ brand.light.text }}\">{{ title }}</p><p class=\"brand-muted\" style=\"margin:0;font:14px/20px {{ brand.font.body }};color:{{ brand.light.muted }}\">{{ status }}</p></td></tr></table>",
+    "subject": "",
+    "text_source": "{{ kind }}: {{ title }} ({{ status }})",
+    "updated_at": "2026-11-24T09:00:00+00:00",
+    "variables": {
+     "kind": "What the record is, such as Task, Invoice or Event.",
+     "status": "Its current state.",
+     "title": "Its title."
+    }
+   },
+   "set": {
+    "description": "Kept as it is until the new card is read."
+   }
+  }
+ ],
+ "unsavedPreviews": [
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "subject": "Your new {{ brand.name }} password"
+   },
+   "result": {
+    "rendered": {
+     "direction": "LTR",
+     "html": "<!doctype html>\n<html lang=\"en\" dir=\"ltr\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"format-detection\" content=\"telephone=no,date=no,address=no,email=no,url=no\">\n<meta name=\"color-scheme\" content=\"light dark\">\n<meta name=\"supported-color-schemes\" content=\"light dark\">\n<title>Your new Angee password</title>\n<!--[if mso]><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]-->\n<!--[if mso]><style>table,td,p,a,span{font-family:Arial,sans-serif !important}</style><![endif]-->\n<style>\n:root{color-scheme:light dark;supported-color-schemes:light dark}\nbody{margin:0;padding:0;-webkit-text-size-adjust:100%}\ntable{border-collapse:collapse}\n.brand-radius{border-radius:8px}\n@media (prefers-color-scheme:dark){\n.brand-canvas{background:#0f0f0f !important}\n.brand-surface{background:#1f1f1f !important}\n.brand-primary{background:#ebbd30 !important}\n.brand-text{color:#e8e8ea !important}\n.brand-muted{color:#b2b2b7 !important}\n.brand-on-primary{color:#11141a !important}\n.brand-link{color:#ebbd30 !important}\n.brand-border{border-color:#2d2d31 !important}\n}\n[data-ogsb] .brand-canvas{background:#0f0f0f !important}\n[data-ogsb] .brand-surface{background:#1f1f1f !important}\n[data-ogsb] .brand-primary{background:#ebbd30 !important}\n[data-ogsc] .brand-text{color:#e8e8ea !important}\n[data-ogsc] .brand-muted{color:#b2b2b7 !important}\n[data-ogsc] .brand-on-primary{color:#11141a !important}\n[data-ogsc] .brand-link{color:#ebbd30 !important}\n[data-ogsc] .brand-border{border-color:#2d2d31 !important}\n@media print{.brand-canvas,.brand-surface{background:#ffffff !important}.brand-text,.brand-muted,.brand-link{color:#000000 !important}}\n</style>\n</head>\n<body xml:lang=\"en\" class=\"brand-canvas\" style=\"margin:0;padding:0;background:#fafaf9\">\n<div lang=\"en\" dir=\"ltr\" style=\"display:none;max-height:0;overflow:hidden;mso-hide:all\">&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;</div>\n<div lang=\"en\" dir=\"ltr\" role=\"article\" aria-roledescription=\"email\" aria-label=\"Your new Angee password\" class=\"brand-canvas\" style=\"padding:24px 12px;background:#fafaf9\">\n<!--[if mso]><table role=\"presentation\" width=\"600\" align=\"center\" cellpadding=\"0\" cellspacing=\"0\"><tr><td><![endif]-->\n<table role=\"presentation\" dir=\"ltr\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" class=\"brand-surface brand-border brand-radius\" style=\"width:100%;max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e0e0e2\">\n<tr><td style=\"padding:28px 32px 4px;text-align:left\"><p class=\"brand-text\" style=\"margin:0;font:700 20px/28px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b\"><span class=\"brand-primary\" style=\"display:inline-block;width:10px;height:10px;border-radius:2px;background:#e7b008;margin:0 8px\"></span>Angee</p></td></tr>\n<tr><td class=\"brand-text\" style=\"padding:16px 32px 8px;font:16px/24px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#19191b;text-align:left\"><p style=\"margin:0 0 16px\">Hi Ana,</p>\n\n<p style=\"margin:0 0 16px\">Someone asked to reset the password of your Angee account.</p>\n<p class=\"brand-text\" style=\"margin:0 0 16px;padding:12px 16px;border:1px solid #e0e0e2;color:#19191b\">The link works for one hour.</p><table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 20px\"><tr><td class=\"brand-primary brand-radius\" style=\"background:#e7b008\"><a class=\"brand-on-primary\" href=\"https://app.example.test/reset/abc\" style=\"display:inline-block;padding:12px 22px;font:600 16px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#11141a;text-decoration:none\">Choose a new password</a></td></tr></table><p style=\"margin:0 0 16px\">Warm regards,\nthe Angee team</p>\n</td></tr>\n<tr><td class=\"brand-muted brand-border\" style=\"padding:16px 32px 28px;border-top:1px solid #e0e0e2;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55;text-align:left\"><p class=\"brand-muted\" style=\"margin:0 0 6px;font:14px/20px Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;color:#4f4f55\">Angee</p>\n</td></tr>\n</table>\n<!--[if mso]></td></tr></table><![endif]-->\n</div>\n</body>\n</html>",
+     "language": "en",
+     "plain_text": "Angee\n\nHi Ana,\n\nSomeone asked to reset the password of your Angee account.\n\nThe link works for one hour.\nChoose a new password: https://app.example.test/reset/abc\nWarm regards,\nthe Angee team\n\nAngee\n",
+     "preheader": "",
+     "subject": "Your new Angee password"
+    },
+    "warnings": [
+     {
+      "code": "PREHEADER",
+      "detail": "The preheader is missing: an inbox shows the start of the body after the subject instead.",
+      "field": null
+     },
+     {
+      "code": "UNUSED_VARIABLE",
+      "detail": "Nothing reads support_url.",
+      "field": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "sample": {
+     "person": {
+      "first_name": "Ana"
+     }
+    }
+   },
+   "result": {
+    "rendered": null,
+    "warnings": [
+     {
+      "code": "RENDER_ERROR",
+      "detail": "reset_url is required and missing or null.",
+      "field": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "format": "html",
+    "layout": ""
+   },
+   "result": {
+    "rendered": null,
+    "warnings": [
+     {
+      "code": "SAVE_REFUSED",
+      "detail": "Name the layout this template sits in: a mail renders inside its layout, which gives it its document, its brand and its stop link.",
+      "field": "layout"
+     },
+     {
+      "code": "SAVE_REFUSED",
+      "detail": "An HTML message template has a plain-text form; a Markdown one has none.",
+      "field": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "sample": [],
+    "variables": []
+   },
+   "result": {
+    "rendered": null,
+    "warnings": [
+     {
+      "code": "SAVE_REFUSED",
+      "detail": "Give an object.",
+      "field": "variables"
+     },
+     {
+      "code": "SAVE_REFUSED",
+      "detail": "Give an object.",
+      "field": "sample"
+     }
+    ]
+   }
+  }
+ ],
+ "unsavedPreviewsLayoutGated": [
+  {
+   "error": {
+    "extensions": {
+     "code": "PERMISSION_DENIED"
+    },
+    "message": "Denied: auth/user:admin cannot write__layout messaging_templates/message_template:mtl_template_example_password_reset_en (field 'layout' requires write__layout)",
+    "path": [
+     "message_template_preview"
+    ]
+   },
+   "id": "mtl_template_example_password_reset_en",
+   "patch": {
+    "format": "html",
+    "layout": ""
+   }
+  }
+ ]
+}

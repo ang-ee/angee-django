@@ -49,11 +49,14 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py` |
-| PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
+| Changed-path selection: the test files a change reaches, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py` |
+| PostgreSQL selection: the lane's entries the changed paths reach, as a pull request's CI picks them | `git diff --name-only --no-renames <base> \| uv run --locked python scripts/changed_path_selection.py \| uv run --locked python scripts/postgres_selection.py` |
 | PostgreSQL timing map refresh: merge a green main push run's measured durations (needs `gh` signed in) | `uv run --locked python scripts/postgres_durations.py <run-id>` |
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
+| Message template CPU-time bounds, skipped otherwise since they depend on the machine and its load: run whenever `src/angee/messaging_templates/` changes and at integration, serially, and report the times with the load | `ANGEE_TIMED_TESTS=1 env -u DATABASE_URL uv run --locked python -m pytest -q -s -n 0 tests/test_messaging_templates_render.py tests/test_messaging_templates_console.py` |
+| Message template mutations: drop or widen each rule that keeps a value text, and see that the value properties fail on generated examples alone where the mutation is a real break; run when those rules or their generator change, in a slot whose addon holds no uncommitted change (it restores the files) | `env -u DATABASE_URL uv run --locked python scripts/messaging_templates_mutations.py` |
+| Message templates console story fixture (`src/angee/messaging_templates/web/src/fixtures.recorded.json`), recorded from the test host: the test fails when the server's rows, words or schema drift from it; re-record it with the variable whenever they change, and review its diff. The recording and its check are SQLite's: a PostgreSQL host offers the `similar` and `notSimilar` filters on string fields, so the test skips there | `ANGEE_RECORD_FIXTURES=1 env -u DATABASE_URL uv run --locked python -m pytest -q tests/test_messaging_templates_console_fixture.py` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
@@ -120,6 +123,7 @@ races](../tests/test_composed_messaging.py), and the
 also runs every remaining PostgreSQL-only contract: row locks, hierarchy, IAM,
 [OIDC disconnect admission under the user lock](../tests/test_oidc.py),
 knowledge, [pgvector test-database readiness](../tests/test_postgresql_extensions.py),
+the test settings' [JIT-off sessions](../tests/test_postgresql_jit.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
 parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks and
 [handle-key repair](../tests/test_parties_handle_keys_concurrency.py) and
@@ -183,10 +187,13 @@ CPython 3.14.9 bundles SQLite 3.53.1 and 3.14.10 bundles 3.54.1, so the reposito
 SQLite release lifts it. uv reads it for every `uv run` and `uv sync` in the checkout,
 locally and in CI, and recreates a virtual environment built on another patch release; the
 [reusable checks](../.github/workflows/reusable-checks.yml) pass it to the composed-stack
-lane, which runs uv from the stack root above the checkout. A distribution's system Python
-links the distribution's library (Ubuntu 26.04 and Debian trixie ship 3.46.1); CI sets
-`UV_PYTHON_PREFERENCE: only-managed` for that reason, and locally `--managed-python` does
-the same.
+lane, which runs uv from the stack root above the checkout. The framework images' `uv sync`
+reads it too and never downloads an interpreter, so the [Dockerfile](../Dockerfile)'s
+`PYTHON_VERSION` default names the same release, and a pin change edits both; the
+[runtime image tests](../tests/test_runtime_image.py) refuse a default that differs. A
+distribution's system Python links the distribution's library (Ubuntu 26.04 and Debian
+trixie ship 3.46.1); CI sets `UV_PYTHON_PREFERENCE: only-managed` for that reason, and
+locally `--managed-python` does the same.
 
 ### Local PostgreSQL Prerequisites
 
@@ -547,22 +554,32 @@ pushes to `main`. A pull request's merge gate is the static tier, the SQLite tes
 its changed paths reach, the PostgreSQL contracts they reach with the examples
 profile's planner gate, the packages and the composed stack with its smoke. A
 pull request's run tests its merge commit, the tree `main` gets, so a push to
-`main` runs only the static tier and the whole PostgreSQL lane; merge while `main`
-has not moved since the pull request's run started, or run it again. Both events
+`main` runs the static tier and what a pull request runs in part: the whole SQLite
+suite, which also catches what a pull request's selection missed, and the whole
+PostgreSQL lane. The packages and the composed stack hold while `main` has not moved
+since the pull request's run started; merge only then, or run it again. Both events
 also run CI's `guards` job: gitleaks over the whole history, and no tracked
-`.work/` path. A new push to a pull request cancels the run it supersedes; every
-push to `main` runs to completion. Every job runs where the reusable workflow's
+`.work/` path. A new push to a pull request cancels the run it supersedes, and a new
+push to `main` cancels `main`'s run still in progress, whose tree the new one
+contains; pull requests and `main` never cancel each other's runs. Every job runs
+where the reusable workflow's
 `runs-on` input says: CI passes the `CI_RUNS_ON` repository or organization
 variable, a JSON `runs-on` value such as `["self-hosted", "angee-local"]`, and
 GitHub-hosted `ubuntu-latest` while it is unset; a pull request from a fork always
-runs on GitHub-hosted runners.
+runs on GitHub-hosted runners. This repository leaves it unset: GitHub-hosted
+runners cost a public repository nothing, and self-hosted runners shared between
+repositories queue a pull request's jobs behind each other's. The organization's free
+plan runs at most 20 GitHub-hosted jobs at once, and a pull request's run is currently
+19 jobs, so a second run started meanwhile waits for runners. A private consumer, whose
+GitHub-hosted minutes are billed, sets it to its self-hosted runners.
 The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
   addons, `lint-imports` over the declared import contracts, and the tests that
-  read source and docs without Django: the [patch guard](../tests/test_patch_targets.py)
-  and the [documentation and methodology tests](#agent-methodology-and-documentation),
-  using the locked framework environment.
+  read source and docs without Django: the [patch guard](../tests/test_patch_targets.py),
+  the [documentation and methodology tests](#agent-methodology-and-documentation)
+  and the [runtime image contract](../tests/test_runtime_image.py), using the locked
+  framework environment.
 - **SQLite:** six shards that pytest-split cuts into contiguous chunks of equal
   stored time from the committed [durations](../.test_durations), so each test
   file stays in one or two shards. Each shard runs `-n auto --dist loadfile` with
@@ -576,9 +593,15 @@ The current tiers are:
   files that import a changed module through the import graph `lint-imports`
   checks; a change under `templates/` selects the template contract tests that
   render or read them. A change to an input every test reads without importing it
-  (dependencies, conftests and the shared test plugins, settings and autoconfig,
-  `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
-  suite; docs and web code select no Python test, and the shards do not start.
+  (dependencies, the Python pin, conftests and the shared test plugins, settings and
+  autoconfig, `*.zed` schemas, resource YAML, the workflows, `scripts/`) selects the whole
+  suite. So does a Python change to a shared owner every addon composes onto
+  (`angee.base`, `angee.server`, `angee.graphql`), to a module every test loads
+  (what the repository's conftest imports, the shared test graph in
+  `tests/conftest.py` among it, and the framework plugins it names), and to a
+  Python file outside the import graph, such as a removed module; the compose
+  migration templates are in the graph. Docs and web code select no Python test,
+  and the shards do not start.
   The `select` job computes the selection once for both lanes. What the app
   registry, signals or composition connect without an import surfaces only in a
   run that selects the whole suite.
@@ -644,7 +667,8 @@ env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile 
 ```
 
 Refresh the PostgreSQL map from a green push run on `main`, never from a local
-run, whose host load would become the map's. The
+run, whose host load would become the map's; a run a newer push cancelled lacks
+some groups' artifacts, so take the newest green one. The
 [refresh](../scripts/postgres_durations.py) fetches the run's six
 `postgres-durations-<group>` artifacts with `gh run download`, or reads a
 directory of them, and merges their measured entries into the map: a measured

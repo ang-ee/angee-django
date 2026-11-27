@@ -96,38 +96,49 @@ interface ListedPage {
   sets: readonly DuplicateSetInput[];
   /** What the next page continues after: the last certain pair, or the last listed group's key. */
   after: string | null;
-  /** Nothing can follow this page, full or not: a group page ending on a key no `_gt` cursor can step past. */
+  /** Nothing can follow this page, full or not: a group page ending on a key no cursor can step past. */
   ended: boolean;
   /** Records in a group of one, and in a group without a value: never a set. */
   unpaired: number;
   blank: number;
 }
 
+/** How the dialog pages a list's groups by key: the field the list orders them by, and the step past a listed key. */
+export interface GroupCursor {
+  field: string;
+  /** The groups past the last listed key: greater than it in an ascending order, less than it in a descending one. */
+  step: "_gt" | "_lt";
+}
+
 /**
- * The field the list's groups are paged by: its own order's one field, the one rule of which orders a batch can
- * page by key. The list orders a level's groups by the group's own key or keys, ascending, nulls last
- * (`GroupAxis.groupBy()`); a one-field order is a plain column's, the dimensions a batch merges by. Any other order
- * has no cursor: more than one field, a descending one, or nulls first, which would put a key no `_gt` can step past
- * ahead of the others. The reader refuses those (`allMatchingField`).
+ * How the list's groups are paged (`GroupCursor`): by its own order's one field, the one rule of which orders a
+ * batch can page by key. The list orders a level's groups by the group's own key or keys, nulls last, in the
+ * direction the list's order gives its axis (`ResourceQuery.toGroupRead`); a one-field order, ascending or
+ * descending, is a plain column's, the dimensions a batch merges by, and a page continues past the last listed key
+ * with `_gt` ascending and `_lt` descending. Any other order has no cursor: more than one field, or nulls not
+ * placed last, explicitly: first would put a key no step can pass ahead of the others, and with no placement the
+ * groups read leaves it to the database (first on SQLite ascending, on PostgreSQL descending). The reader refuses
+ * those (`allMatchingField`).
  */
-export function cursorField(read: AllMatchingGroups["read"]): string | null {
+export function groupCursor(read: AllMatchingGroups["read"]): GroupCursor | null {
   const [order, ...others] = read.orderBy ?? [];
-  if (!order || others.length > 0 || order.direction === "DESC") return null;
-  return (order.nulls ?? "LAST") === "LAST" ? order.field : null;
+  if (!order || others.length > 0 || order.nulls !== "LAST") return null;
+  return { field: order.field, step: order.direction === "DESC" ? "_lt" : "_gt" };
 }
 
 /**
  * The wire variables of one page of the list's groups: the list's read as it is, its order included, narrowed to
- * the groups past the last listed key, with each group's rows. Paging by key, not by offset, a group added or removed
- * while the list is read neither repeats nor skips another. The narrowing names the key's own field, as a plain
- * column's key does in the resource's filter. It never steps over a null key: the order puts nulls last, and under
- * "Select all" the read has a `having` and a repeated level's `where` keeps no group without a value.
+ * the groups past the last listed key in that order (`groupCursor`), with each group's rows. Paging by key, not by
+ * offset, a group added or removed while the list is read neither repeats nor skips another. The narrowing names
+ * the key's own field, as a plain column's key does in the resource's filter. It never steps over a null key: the
+ * order puts nulls last, and under "Select all" the read has a `having` and a repeated level's `where` keeps no
+ * group without a value.
  */
 function groupSetsVariables(groups: GroupListing, after: string | null): GroupByVariables & { rows_limit: number } {
-  const field = cursorField(groups.read);
-  const where = after === null || field === null
+  const cursor = groupCursor(groups.read);
+  const where = after === null || cursor === null
     ? groups.read.where
-    : { _and: [...(groups.read.where ? [groups.read.where] : []), { [field]: { _gt: after } }] };
+    : { _and: [...(groups.read.where ? [groups.read.where] : []), { [cursor.field]: { [cursor.step]: after } }] };
   return { ...groupByVariables({ ...groups.read, where, pageSize: SETS_PAGE }), rows_limit: GROUP_ROWS };
 }
 
@@ -159,9 +170,9 @@ function listedPage(
     else if (group.aggregate.count < 2) unpaired += group.aggregate.count;
     else sets.push({ members: group.rows.map((row) => row.id), heading: key, grouping: [{ field: field!, key }] });
   }
-  const cursor = groups ? cursorField(groups.read) : null;
-  const last = cursor ? (data.groups.at(-1)?.key as Record<string, unknown> | undefined)?.[cursor] : undefined;
-  // Fail closed: a page whose last key is null (nulls sort last, so nothing follows it) or not text (no `_gt` cursor
+  const cursor = groups ? groupCursor(groups.read) : null;
+  const last = cursor ? (data.groups.at(-1)?.key as Record<string, unknown> | undefined)?.[cursor.field] : undefined;
+  // Fail closed: a page whose last key is null (nulls sort last, so nothing follows it) or not text (no cursor
   // here) ends the listing, as a page without a cursor does; it never restarts from the first page.
   const after = typeof last === "string" ? last : null;
   return { request, items: data.groups.length, after, ended: after === null, unpaired, blank, sets };

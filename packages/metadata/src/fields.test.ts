@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   defaultWidgetForModelField,
+  fieldChangeable,
   fieldUpdatable,
   filterFieldType,
   isScalarIdRelation,
@@ -128,6 +129,20 @@ describe("field metadata helpers", () => {
       resource: { roots: { update: null }, updateFields: ["name"] },
       fields: { name: resourceField({ name: "name", kind: "scalar", updatable: true }) },
     }), "name")).toBe(false);
+  });
+
+  test("a create-only selector rides the update input but is not changeable on a stored record", () => {
+    const metadata = modelMetadata({
+      resource: { roots: { update: "updateBackend" }, updateFields: ["backend_class", "label"] },
+      fields: {
+        backend_class: resourceField({ name: "backend_class", kind: "enum", updatable: true, createOnly: true }),
+        label: resourceField({ name: "label", kind: "scalar", updatable: true }),
+      },
+    });
+
+    expect(fieldUpdatable(metadata, "backend_class")).toBe(true);
+    expect(fieldChangeable(metadata, "backend_class")).toBe(false);
+    expect(fieldChangeable(metadata, "label")).toBe(true);
   });
 });
 

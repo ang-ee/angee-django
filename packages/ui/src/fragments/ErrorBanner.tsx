@@ -9,7 +9,10 @@ export type ErrorBannerProps = Omit<
 > & {
   /** The error body. `null` renders nothing — the "no error" state. Shares the
    *  `{title, description, actions}` vocabulary of the other state surfaces. */
-  description: React.ReactNode | null;
+  description?: React.ReactNode | null;
+  /** The error body as separate messages, in place of `description`: one reads as the body, several
+   *  as a list, each its own item to the eye and to a screen reader; none renders nothing. */
+  messages?: readonly string[];
   title?: React.ReactNode;
 };
 
@@ -22,6 +25,7 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
       actions,
       className,
       description,
+      messages,
       dismissLabel = "Dismiss",
       onDismiss,
       role,
@@ -30,7 +34,10 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
     },
     ref,
   ) {
-    if (!description) return null;
+    const body = messages === undefined ? description
+      : messages.length > 1 ? <ul className="grid list-disc gap-1 ps-4">{messages.map((message, index) => <li key={index}>{message}</li>)}</ul>
+      : messages[0];
+    if (!body) return null;
     const styles = alertVariants({ format: "banner" });
     const dismissAction = onDismiss ? (
       <button
@@ -61,7 +68,7 @@ export const ErrorBanner = React.forwardRef<HTMLDivElement, ErrorBannerProps>(
         title={title}
         {...props}
       >
-        <span className="block whitespace-pre-wrap [overflow-wrap:anywhere]">{description}</span>
+        <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{body}</div>
       </Alert>
     );
   },

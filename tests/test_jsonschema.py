@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 
 from angee.base.schemas.forms import materialize_schema, relation_positions
 from angee.base.schemas.references import LocalSchemaReferences, schemas_match
+from angee.base.serialization import MAX_JSON_DEPTH, MAX_JSON_MEMBERS
 from angee.base.validators import check_schema, validate, validation_issues, validator
 from angee.workflows.schemas import embed_schema, schema_at, union_schema, unmatched_properties
 
@@ -438,6 +439,44 @@ def test_field_validation_uses_native_additional_property_rules():
     schema = {"patternProperties": {"^allowed_": {"type": "string"}}, "additionalProperties": False}
     issues = validation_issues(schema, {"allowed_name": "value", "extra": 1})
     assert set(issues) == {"extra"}
+
+
+def test_field_validation_refuses_a_value_past_the_json_bounds_before_a_keyword_walks_it():
+    """``uniqueItems`` compares items by recursing into them; a deep value is refused before it runs."""
+
+    def nested(levels: int) -> Any:
+        value: Any = "answer"
+        for _ in range(levels):
+            value = [value]
+        return value
+
+    schema = {"type": "array", "uniqueItems": True}
+
+    at_bound = validation_issues(schema, [nested(MAX_JSON_DEPTH - 1)] * 2)
+    assert list(at_bound) == ["__all__"]
+    assert "non-unique" in at_bound["__all__"][0]
+    assert validation_issues(schema, [nested(MAX_JSON_DEPTH)] * 2) == {
+        "__all__": [f"The value nests deeper than {MAX_JSON_DEPTH} levels."],
+    }
+    assert validation_issues(schema, [[0] * MAX_JSON_MEMBERS, 1]) == {
+        "__all__": [f"The value holds more than {MAX_JSON_MEMBERS} members."],
+    }
+
+
+def test_validation_refuses_a_value_past_the_json_bounds_before_a_keyword_walks_it():
+    deep: Any = "answer"
+    for _ in range(MAX_JSON_DEPTH):
+        deep = [deep]
+    schema = {"type": "array", "uniqueItems": True}
+
+    with pytest.raises(ValidationError, match="non-unique"):
+        validate(schema, [deep[0], deep[0]])
+    with pytest.raises(ValidationError) as refused:
+        validate(schema, [deep, deep])
+    assert refused.value.messages == [f"The value nests deeper than {MAX_JSON_DEPTH} levels."]
+    with pytest.raises(ValidationError) as refused:
+        validate(schema, [0] * (MAX_JSON_MEMBERS + 1))
+    assert refused.value.messages == [f"The value holds more than {MAX_JSON_MEMBERS} members."]
 
 
 def test_union_preserves_distinct_local_reference_roots_without_mutation():

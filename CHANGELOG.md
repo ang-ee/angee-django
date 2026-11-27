@@ -104,6 +104,1145 @@ live in code docstrings.
     with the rest of Django's mail.
   - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
     reads `MAILERS["transport"]` itself.
+- `@angee/ui`, projects, workflows, messaging: **Changed contract.** An inline
+  action form says a refused field's reason at that field and brings the person
+  to the refusal. The option of `applyFormErrors` that lists the fields a
+  surface shows is renamed `shownFieldNames` (on a descriptor form, the names of
+  what `shownFields` returns); `useActionForm` takes it under the same name and
+  requires it, so a form that shows no field a reason can sit under says `[]`
+  and one that says nothing does not compile. `useDottedPathFieldErrors` names
+  its parameter the same way, and `useController` is exported beside
+  `useWatch`. The tasks pane passed no list: a refused schedule or log showed
+  every reason on its banner as `key: reason` (`title: …`, `dueDate: …`),
+  marked no field, left focus on its submit button and said a kind's reason
+  twice, and its own checks of the day and the kind shared one banner line that
+  showed only the first. Now it claims the fields it draws: the text, the note
+  and the day, and the kind when the catalog lists one to choose. With none, a
+  reason under the kind shows on the banner as `activityType: …`, and a schedule
+  or a log goes out without a kind for the server to decide, a kind chosen
+  before the catalog emptied included. `useActionForm` reads its list, and the
+  line naming the refused fields, when the answer lands, so a kind drawn or
+  gone while the submit was out is claimed, or left to the banner, as the pane
+  shows it then. One table per mode names a field the verb does not take under
+  the field's own name: the schedule takes the text
+  as `title` and the day as `dueDate`, the log the text as `note`, with the
+  form's note after it, so the log's one `note` reason lands on the text. The
+  submit step sends the fields under those names and a refusal's reasons under
+  them come back to the fields. The log takes the day as `occurredOn` but
+  refuses it under `dueDate`, so the log's line holds the refusal's key and its
+  submit step sends `occurredOn` itself until the verb names its own argument.
+  Each field it draws says its reason once, under its control, which is marked
+  and drawn invalid and described by it, and the pane's own `required` checks
+  show the same way, two at once included; each hands the form its control
+  (`register`'s ref, or `useController`'s `field.ref` for the kind's select and
+  the day's popover trigger), so a refusal of fields only focuses the first
+  refused one in the form's order and one with a reason no field shows focuses
+  the banner. The assignee, which the pane shows no control for, stays on the
+  banner as `assignee: …`. The kind and the day share their row's width:
+  beside the kind's select, which took the whole row, the day's button was a
+  sliver under the submit button and took no click, and a reason under it
+  wrapped a word a line. The workflow studio (`shownFieldNames: []`) and a
+  record thread's foot composer (its body argument) spread the hook's `banner`
+  on their banner, so a refused post, and a save the studio refuses for anything
+  but a stale revision, brings focus there; a stale revision shows the studio's
+  conflict alert in place of that banner. `applyFormErrors` keeps its list
+  optional: without one, every reason stays at its path and no field's reason
+  reaches the banner, for a caller that knows no drawn fields (`createJsonSchemaResolver`'s
+  errors, the studio's projection of its issues); the record form's lines
+  conflict now passes `[linesField]`, which binds it as before.
+  Upgrade: rename `fieldNames` to `shownFieldNames` on `applyFormErrors` and
+  `useActionForm`; a `useActionForm` caller that passed none passes the fields
+  its form shows, or `[]`. Not in this change: a line naming the refused fields
+  on an inline form's banner (`fieldSummary`); the studio's own issue banner;
+  the composer's body reason, which stays on its banner; and a log refused under
+  `title`, a key no field of the log names, which shows on the banner as
+  `title: …`.
+
+- `@angee/ui`, `@angee/metadata`: **Changed contract.** A grouped list orders its
+  groups by what it groups by. A list grouped by status lists blocked, closed,
+  open, pending however its records are sorted; a list grouped by month lists
+  its months in date order, newest first when it is sorted by the date
+  descending; the group with no value comes last either way, and on two levels
+  the inner groups under it are ordered as under any other. The grouping
+  column's sort button and its arrow show which way the groups go, and pressing
+  it turns them, on a server-grouped list too, where it changed nothing a
+  person could see, and leaves the records inside them in their order;
+  pressing another column sorts the records inside the groups and leaves the
+  groups where they are. `aria-sort` stays on one header,
+  the key the records follow, as before (`headerAriaSort`, beside `headerSort`
+  in `list-body/cell-utils.tsx`): the grouping column's says "none". Before, a
+  list grouped in the browser sorted its groups by its whole sort order (by the
+  sum of a number column, by a group's first record, never by a month), so its
+  groups followed their own key only when the order led with it, and a server
+  list always asked for them ascending. Now one rule on the owner,
+  `GroupAxis.direction` (the direction the list's order holds for a key the
+  axis shares or for the field it buckets, else ascending), feeds both readers:
+  the table state hands TanStack each axis's key ascending, ahead of the list's
+  own keys, and the axis's column carries the direction in its comparator
+  (`GroupAxis.compareGroups` over each row's `GroupAxis.groupKey`, read once
+  per sort, its identity the table's cached grouping value;
+  `BuildColumnsOptions.directions`), label then identity, a missing
+  one last both ways and two of them tied, which TanStack's `sortUndefined`
+  cannot do (`"last"` never ties two missing values, so an inner level under
+  "No value" kept its first appearance, and a descending key turned a missing
+  label first); the server's groups read takes the direction
+  (`ResourceQuery.toGroupRead(group, filter, order)`; `GroupProjection.orderBy`
+  widens to `"ASC" | "DESC"`; `groupBy()` stays ascending unless asked). Both
+  ask the same order of keys; text compares in the list's natural order in the
+  browser and by the database's collation on the server. The list's order is
+  stored, linked and saved unchanged; the headers, the press and the Order
+  select read it from the table's `meta.sorting`, beside `meta.groupAxes`.
+  `pressedSorting` loses the level-join and keeps the held axis keys behind the
+  pressed key instead of ahead of it (`title:asc,status:asc`); a grouping
+  column's press is two-state and never removed, leads with its key and keeps
+  every other key the order holds behind it, in their order, the records' and
+  another level's (`status:desc,rank:asc`), dropping only the other keys its
+  axis shares, and its button keeps the
+  focus while the columns are built again for the turned groups (a header is a
+  stable component). A date's months, quarters and weeks follow the date they
+  bucket, while the date's own header keeps its sort and its three-state press,
+  since a bucket's records do not share it. For the same reason a press on
+  another column still drops that date with the records' other keys, so on a
+  list grouped by month it turns the months back to ascending; keeping the date
+  there is a later change. A list grouped by a field no read
+  can sort by still orders its groups in the table: `buildColumns` sorts every
+  axis's column there and keeps its header's press as `meta.pressable`, which
+  only the sort button reads (`headerPresses`). Parties: a list's "Select all"
+  Merge accepts a list whose groups were turned descending; the dialog's cursor
+  (`groupCursor`, which replaces `cursorField`) pages a one-field order in
+  either direction whose nulls are placed last explicitly, past the last
+  listed key with `_gt` ascending and `_lt` descending, and its sets come in
+  the list's order. Not in this change: an absent `groupStack` or
+  `pageSize` in a saved view; the nexus inbox's own Order select; a client
+  list in an inherited scope ignoring its `order`; the empty group's two labels
+  ("No owner" from the server, "No value" in the browser).
+
+- `@angee/ui`: a refused save on a record form now brings the person to its
+  first refused field even where the form did not show it. A field in a pane
+  group other than the selected pane (with another pane group, a saved-record
+  tab, kept mounted or not, or the trailing lines selected, on a saved record
+  or a create form) had no mounted control, or only the one of a pane opened
+  earlier, so the banner took focus and the field stayed out of sight. The
+  surface's `revealField` now selects the pane that holds the field and names
+  it to the sheet's sections, in the same batch as the refusal's own focus
+  (`useRefusalFocus`, unchanged), which then lands on the field; a record verb
+  whose patch the form's own `submit` refuses (`applyPatch`) does the same.
+  The form's own check does it too: a required field left empty in a pane that
+  is not selected, where Save focused nothing, selected no pane and showed
+  nothing, now has its pane selected and takes focus. With a reason no field
+  shows as well, the banner takes focus and the pane stays. `focusField`
+  composes `revealField`, the one owner of which pane holds a field and the
+  only thing that selects a pane for a refused save. **Changed behaviour:**
+  the trailing lines selected their own pane after any failed save that
+  touched them, beside it; they no longer do. A line refused beside a reason
+  no field shows, and a save refused because the lines changed elsewhere,
+  leave the selected pane and say it on the banner; a pane group's field
+  refused together with a line ends on that field, in its pane, the form's
+  fields coming before its lines; and a pane the person picks after a refusal
+  stays selected: when the pane strip goes and returns, and on a record whose
+  caller holds its pane (a resource list's record panel), where every pane
+  picked after a refused line was sent back to the lines. A form whose only
+  pane is the lines, shown without a strip, writes no pane for its caller on a
+  refusal (it wrote the lines' id to a routed page's address). The form's own
+  check failing in a pane group's field and under a line at once selects that
+  field's pane, where it selected the lines; the form library's own focus aims
+  at the line's cell either way, which that pane now hides. The form's own
+  check failing under a line alone selects the lines, as before. Left as they
+  are: only the first refused field is revealed and no pane's tab marks that
+  it holds one; the lines refused as a whole show
+  their reason nowhere, the banner names them by their path and takes focus;
+  `useFormViewSave` returns a new `form` every render; a refused member of a
+  rows, object or list field; and the dialogs.
+- `angee.base`: **Changed behaviour.** A row whose stored implementation key
+  its `ImplClassField` no longer names (a key a later release retired, or one
+  only another release's registry holds during a rolling deploy) loads, lists
+  and filters: the key loads as its text, where a key the field names still
+  loads as its member, and a filter on it finds the rows that store it. Loading
+  one raised `ValidationError` ("Value '…' is not a valid choice."), so no
+  query that read such a row could finish. Nothing writes such a key that the row
+  does not already hold: every value the field prepares refuses one (a plain
+  value in an insert, `QuerySet.update`, `bulk_update`, or a `Value`'s
+  literal), except by a history copy or a migration's state model, which
+  write the key their row stored; any other expression (`F`, `Subquery`,
+  `Cast`, `Case`, or a `Value` inside one) is not checked. An update does not
+  validate such a key it is not changing (`ImplClassField.holds` reads it from
+  the stored row): a model `save()`, `full_clean`, a model form and the
+  GraphQL update save the row's other fields and keep the key, so a person, a
+  sync job or the other release of a rolling deploy goes on with it, and its
+  config is written only as stored; choosing another key is validated as
+  before. A write stores a key only as the registry spells it: the member's
+  name (`"LOCAL"`) or a padded key (`" local "`) is refused, as before, by
+  every field, except where a model or the GraphQL input normalises the key
+  first (an `ImplDefaultsMixin` insert, a GraphQL input), though a lookup
+  reads both as the key. A deserialized fixture, so a dump of such a row,
+  history tables included, refuses it as before. Resolving its
+  implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
+  `ImproperlyConfigured` naming the field, the key and the registry's setting.
+  `angee.graphql`: **Changed read contract.** Every field of a type that
+  projects an implementation key is nullable on read, in every Angee schema
+  (the column stays non-null in the database, and inputs, filters and
+  ordering, already strings, are unchanged: `_eq: "retired"` still finds the
+  row). Null there means the stored key is one the registry no longer names; a
+  registered key reads its enum member as before. A list or a record holding
+  such a row loads with no error, where the read failed with "Value '…' is not
+  a valid choice." `AngeeSchema.get_fields` reads each such field through
+  `angee.graphql.field_types.ImplementationKeyRead`, so no declaration changes
+  (`auto` stays `auto`). The console labels such a value "Not registered" in a
+  list cell and marks the field so on its record. A group's key is not such a field:
+  `strawberry-django-aggregates` refuses a group key outside the column's
+  choices (`ChoicesValueNotInEnumError`), so a list grouped, a board laned or a
+  facet counted by the column still cannot be read for such a row. Every Angee
+  schema answers that as a public refusal (`BAD_USER_INPUT`, which the console
+  does not retry) naming the column, for every choices column that holds a
+  value its choices no longer name: "A record holds an implementation that is
+  not registered, so this list cannot be grouped by backend class until that
+  is resolved.", or for any other choices column "A record holds a category
+  that is no longer offered, so this list cannot be grouped by it until that
+  is resolved." (a masked internal error before); the refusal is not logged: the
+  library's message, which names the stored value, reaches neither the client
+  nor a log record (`check --database`, `angee.E052`, names such rows). The console shows the words once on the grouped list and
+  the board; a refused facet now says why, above the options its last read
+  still holds, in the search panel and its shortcut, with no notice (each
+  facet was already its own read, so the others kept counting before too). **Known gap:** no "Not registered" group, lane or
+  facet bucket. Such a row's other fields save,
+  through the generic update too (it runs `full_clean()` and saves the whole
+  row), and it keeps its key; choosing an unregistered key is refused under the
+  key's field with its own message. A `create_only` selector (`Channel`,
+  `Feed`, `Directory`, `CalendarSource`, `Mount`, `VcsBridge`,
+  `InferenceProvider`, `NotionConnection`) holding such a key may move, once,
+  to a registered key, by a code-level save (`ImplDefaultsMixin.save`) or,
+  through the API, by an update the create flow's admission admits (below): the config its implementations own is carried
+  over by `ImplBase.carried_config`, valid by construction, since choosing a
+  class chooses its config's shape: **kept**, a stored value the new class reads
+  and accepts; **reset to the class's default**, a value it refuses, and every
+  value (the defaults alone) where a rule across keys refuses them together, so a
+  feed stored with `quota_limit: 5` repairs to `quota_limit: 10000` and a
+  wrong-typed `local_root` to the bridge class's default; **dropped**, a key it
+  does not read, extras included. Nothing reports what changed beyond the result:
+  the repair read shows the carried config before the save; a config sent with
+  the selector is validated and saved as sent; the new key is written only
+  while the row still holds the old one, so of two repairs at once one wins and
+  the other is refused as create-only; afterwards the selector is create-only
+  again ("Implementation selection is create-only."). `check --database`
+  (`angee.E052`) names such rows with the remedy an addon states in
+  `ANGEE_IMPL_KEY_REMEDIES`. An update that is not changing such a key writes
+  the column as itself, so a stale save never restores a retired key over one
+  committed since. A repair saved with `update_fields` must name the config
+  too, and a stale row that would write another config is refused as stale
+  (code `stale`). A save of a row that holds such a key reads the stored key and
+  config under the row's lock (`row_lock_queryset`) in its own transaction, so a
+  stale save racing a repair waits for it and is refused as stale; any other save
+  opens no transaction. `angee.graphql`: every update input carries its model's
+  create-only selectors (`create_only_selectors`, derived once in
+  `hasura_model_resource`), so `channels_set_input`,
+  `notion_connections_set_input`, `feeds_set_input` (both selectors) and any
+  consumer resource over such a model gain the column, and
+  `inference_providers_set_input` and `vcs_bridges_set_input` list it last; a
+  resource field's metadata gains `createOnly` (the model refuses a change once a
+  registered value is stored), published only where the resource writes the
+  field (`creatable` or `updatable`), so a read-only exposure says `false`; it
+  implies no create path, which `creatable` alone states. A resource whose update
+  root meets a create-only selector generates its repair read,
+  `<res>_repair_choices(id: ID!, field: String!): [ImplChoice!]!` (the console's
+  `inference_providers`, `vcs_bridges`, `notion_connections`, `channels`, `feeds`;
+  the resource metadata names it `roots.repairChoices`), whose `defaults` per choice
+  are what choosing it sets on that record, the config it carries over
+  (`ImplDefaultsMixin.repair_impl_defaults`). Its gate, in order: the create flow's
+  admission for the choices (`impl_choices_admitted`: the
+  `ANGEE_IMPL_CHOICES_ADMISSION` hook, which IAM points at `is_platform_admin`, or
+  the model's `can_read_impl_choices`; closed when no hook is set), so a repair
+  offers only what its reader could choose when creating such a record and grants
+  no new power; the resource's own `write_permission_classes`; the update's own
+  decision on the record (`authorize_update`); then the model ("Implementation
+  selection is create-only.", or "<label>.<field> has no repair." for a name that
+  is not a create-only selector). An update that names a create-only selector
+  asks the same admission (`AngeeHasuraWriteBackend.require_selectors_admitted`),
+  after the root's `write_permission_classes` and before `authorize_update` and
+  the model, so under IAM a non-administrator owner of a channel, a Notion
+  connection or a feed is refused the selector on update as on the read; an
+  update naming none asks nothing more and costs what it did. The admission's
+  one refusal, for a read and a write alike, is now "This actor may not choose an
+  implementation." (it was "Implementation choices are not readable by this
+  actor.", the `impl_choices` root's included). A schema that would expose the read without the
+  update root fails composition. `impl_choices(model, field)` is the create flow's
+  read only, as before. `hasura_model_resource` takes `write_permission_classes`,
+  asked on its insert, update and save roots, and a write backend's
+  `authorize_update(info, pk)` is the update's own decision before it writes. `@angee/ui`: the record form
+  offers a create-only selector (one the model's metadata makes create-only,
+  never a page's own flag) once more while the record its draft was made
+  against stores a key that is not registered, sets the config the chosen
+  implementation carries over, and saves the selector with that config, never
+  the config alone; afterwards the selector is locked again. A resource with no update root
+  (calendar sources, directories, mounts) or a selector a connect flow chose is
+  repaired by installing the implementation's addon again or by connecting the
+  record again.
+  **Upgrade:** a consumer with generated types takes
+  `| null` on these fields (one in the framework's own documents:
+  `ChannelBackendImpl` in messaging's overview); code that reads a selector's
+  value as a member (`.label`, `.value`) takes `field.key_for(value)` instead;
+  none in the framework does.
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
+  - A request body or WebSocket message nested too deeply for Python's JSON
+    decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
+    `decode_json` in `angee.base.serialization`: the GraphQL view answers
+    Strawberry's own 400, a refused view-as preview still answers its 403, the
+    GraphQL WebSocket closes with Strawberry's 4400, anonymous ingress
+    refuses it as `invalid_request`, and an agent's ACP WebSocket skips the
+    record as invalid JSON. Each raised an uncaught `RecursionError` before.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
+- `angee.appearance_integrate`: **Changed behaviour.** Website appearance
+  analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
+  signed-in contract states. It refused only a request with no actor at all, so
+  the anonymous actor REBAC gives an unauthenticated request was admitted: it
+  could make the server fetch outside URLs, and every anonymous caller spent
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
+
+- `@angee/ui`, parties, IAM: a refused field now takes and keeps the focus its
+  refusal brings, on the record form and in every dialog, except a refused
+  member, a record form's rows field refused as a whole, and the controls left
+  as they are below. The `ownerCell` and
+  `progressBar` widgets, the parties fragment's registered party picker, the
+  IAM subject control and the group member field now hand the form their
+  control (`controlRef`); a refusal of any of them focused nothing and the
+  banner took focus. The group member field also marks its picker invalid. The
+  party picker widget is now the form field's control only: it no longer wraps
+  itself in a second field with its own label, which also left its trigger
+  unmarked when the field was refused, and it passes on the field's control
+  props; it is named as the framework's relation widgets are, by a group's
+  label, else the field's text label, else "Party" (so a label that is not
+  text and labels no group is not its name yet, for this widget as for
+  `many2one`). `PartyPicker` itself, for
+  a page outside a form, keeps its field and label. `useRefusalFocus` counts
+  focus anywhere inside a field shown invalid, so a composite field refused as
+  a whole (its first member focused) and an absent value (its "Set value"
+  button) keep it. Left as they are: the platform source dialog's repository
+  field (`RepositoryPicker` takes no ref for its search input) and the storage
+  mount dialog's source browser (no single control to focus), each needing
+  more than a forwarded ref; integrate's account picker
+  (`ConnectWithAccountAction`) and the `statusbar` and `visibility` widgets,
+  which hand the form no focus target either; and a refused member of a rows,
+  object or list field.
+- `@angee/metadata`, `@angee/refine`, `@angee/ui`, storage, knowledge:
+  **Changed contract.** A list's order reaches the server as an ordered list,
+  so a list ordered by two keys or more reads in the priority it shows. A
+  GraphQL server rebuilds an input object in its type's own field order, so a
+  read's `order_by: { due: "desc", title: "asc" }` sorted by whichever of the
+  two the resource declares sortable first; only a list of single-key objects
+  keeps the priority asked. And the read's key, the list batch hash and a
+  grouped list's scope comparison serialize an object with its keys sorted, so
+  `due desc, title asc` and `title asc, due desc` were one request: a pure
+  priority swap from a saved view, a link or back and forward read nothing
+  again, flat or grouped. `ResourceQuery.toOrderBy` returns one single-key
+  object per key, in priority order (`[{ due: "desc" }, { title: "asc" }]`),
+  and an empty list for no order; `@angee/refine` names the shape
+  `ListOrderBy` and takes it where a list's order goes (`listQueryMeta`,
+  `GroupRowsRequest.orderBy` and so `rows_order_by`,
+  `AngeeListBatchScope.orderBy`), where an object no longer type-checks.
+  `@refinedev/hasura` 7.0.1 merges a read's `sorters` into one object; the
+  install policy now patches it
+  (`packages/scripts/patches/refinedev-hasura-7.0.1.patch`), so its
+  `generateSorting` returns one object per sorter in the order given, a dotted
+  field nested as before, with or without a document of the read's own, and
+  the proposals comparison reads its topics by position, then key, and its
+  proposals by state, then age, with no caller of `sorters` changing. The
+  record pager's captured scope and the navigation scope a list publishes
+  compare their order in its priority (`navigationScopeKey`), as a gantt's bar
+  order now does, so they follow a swap too. Storage's folder and knowledge's
+  page sources pass `toOrderBy`'s list on as it is. Upgrade: pass
+  `toOrderBy`'s result on as it is; a caller that wrapped it in a list unwraps
+  it, since the server refuses a list inside a list. A project that installs
+  through Angee's pnpm policy gets the library patch; one that does not keeps
+  the stock merge, so its reads of several `sorters` are ordered by the
+  server's field order. The server's
+  side is pinned by a contract test (`tests/test_hasura_order_contract.py`): a
+  list read and a group's page of rows order by their keys in the priority
+  their list gives, whichever order the resource declares its sortable
+  columns in. Not in this change: the server refusing an order object of
+  several keys; a declared `order={{…}}` stays an object, read in its written
+  key order.
+- `@angee/ui`: **Changed contract.** A refusal's focus reaches the refused
+  field whatever control draws it. In a `MutationDialog` and an
+  `ActionFormDialog`, typed or schema-driven, a refused select, combobox, date,
+  time, tag input, relation picker or calendar picker took no focus and the
+  banner took it, because the form library was asked to focus the field from
+  inside the submit, while the dialog's fields are locked (a disabled trigger,
+  a read view in place of the editor, or the disabled fieldset that holds every
+  field of a schema-driven or definition `ActionFormDialog`, which a browser
+  does not focus into). Now
+  `useRefusalFocus` alone decides field or banner and waits: it takes the form
+  and a `ready` flag (`useRefusalFocus(messages, { form, ready })`), waits until
+  the surface reports its controls ready, then asks the form's own deferred
+  `setFocus` for the field, and gives the banner focus only when the field took
+  none; not asked, the banner takes focus once for a list, never again for the
+  same list still showing. `applyFormErrors` hands it the field
+  (`focus(field)`) instead of passing `shouldFocus`, and `formErrorsFromForm`
+  reads one error object as one list. The dialogs still lock their fields
+  while they submit; the record form, which never locks them, focuses where it
+  did. `recordFocusCalls` (`@angee/ui/testing`) records each `focus()` call with
+  whether its target could take focus by what the test DOM shows (disabled, in
+  a disabled fieldset outside its first legend, inside `[hidden]`, `[inert]` or
+  a closed `details`, computed `display: none`, `visibility: hidden` or
+  `collapse`, not
+  focusable at all; a host hidden by an app stylesheet is a browser's to
+  judge), and the tests skill now says a focus assertion on a
+  control inside a disabled fieldset, a non-editable editor or a hidden host is
+  not proven by the test DOM (the measured table is in the skill's web
+  pitfalls). Not in this change: a refused member of a rows, object or list
+  field, a markdown editor holding text (its source is hidden while it
+  previews), and the controls that hand the form no focus target, five of
+  which the entry above gives one.
+
+- `angee.graphql`: **Changed behaviour.** An unexpected GraphQL error is one log
+  record, `AngeeSchema`'s own (class, response path and frames), and no record the
+  schema writes quotes the request. Strawberry's logger also wrote each such error
+  to `strawberry.execution`, and printing a `GraphQLError` quotes the document at
+  its location, so a secret written inline (`redeemSignInLink(token: "…")` instead
+  of a `$token` variable) reached the application log with any mutation that
+  failed. `AngeeSchema.process_errors` replaces Strawberry's logging instead of
+  extending it; refusals, document validation and request coercion errors stay
+  unlogged, and variables are never logged. A resolver that raises a
+  `GraphQLError` already carrying a `path` now meets the same sanitizer as one
+  without: it is logged once, and the client gets `INTERNAL` and the generic
+  message unless its code is an expected one, where its message and exception
+  value used to reach the client and only Strawberry's record logged it.
+  graphql-core's own field errors, such as a non-null field resolved to `None`, are
+  not that case: graphql-core wraps the `TypeError` it raises, so the client got
+  `INTERNAL` and the generic message before and still does, and only their second
+  record, which quoted the request, is gone. `GraphQLConfig`'s own
+  `ignore_logger("strawberry.execution")` is deleted: the schema writes nothing
+  there, and Sentry's Strawberry integration module, which GraphQL's autoconfig
+  imports to disable it, ignores that logger on import.
+  **Upgrade:** nothing, unless a log pipeline read `strawberry.execution` for
+  GraphQL failures; it reads `angee.graphql.schema`.
+
+- `angee.workflows`: **Changed behaviour.** A trigger row a resource load re-applies
+  without a change to the trigger's rule keeps its state: enabled or disabled, its
+  reason, the workflow principal's grant, its schedule cursor and its pending
+  occurrences. It was disabled, with an empty reason, its grant released and its
+  pending occurrences skipped. A rule change still disables it, with "Trigger
+  configuration changed; enable it again."; a new row still installs disabled. The
+  rule's fields are named once, `Trigger.rule_fields`, and `Trigger.changes_rule_of`
+  compares them, for `Trigger.clean` and the adapter. The adapter reads the activation
+  it keeps through `TriggerManager.lock_stored`, the trigger's committed row under its
+  workflow's lock, then its own: the one place that order is written, which
+  `Trigger.save`, `enable`, `disable` and `revoke_grant` now call too. An operator's
+  enable or disable and the load serialize; a row the load leaves unchanged is never
+  locked. The workflows
+  README names the open gap: a changed workflow row installs
+  its declared `draft` over a draft staff saved, whatever `publish` says.
+  **Upgrade:** at the next load a re-applied trigger an operator enabled stays
+  enabled; nothing migrates.
+- `angee.provenance`: **Changed behaviour.** A record's Activity history no longer
+  offers a revert the verb refuses for a later change to a row the changeset wrote, or
+  for an earlier state no longer recorded: `ModelHistory.revert_blockers` is the one
+  rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert`) for a whole page
+  in one statement per touched table, two where a merge can originate, and
+  by the verb under its row locks. Both read a row's earlier versions through the
+  historical queryset's `versions_of` and `dated_versions_of` (an MTI descendant's,
+  dated), the builders the verb fetches the restored state with and the history page's
+  deltas read, and a merge's unchanged survivor through `ModelHistory.merge_survivors`.
+  `revert_changeset` first refuses a changeset whose complete write boundary is not
+  the record's, with its message as before, then answers with the verb's refusal in
+  band, now worded for a person and naming no model label or primary
+  key: "A later change to this record prevents this revert." (code `later_change`) or
+  "The state before this change is no longer recorded, so it cannot be reverted."
+  (code `earlier_state_unavailable`); the label and changeset go to the
+  `angee.provenance.contrib.angee.history` logger. The list still offers a revert the
+  verb refuses for its other reasons: a row the reader may not revert, a statement's
+  own write check, a missing retained row or MTI parent, restoration order.
+  **Deliberate cost, for the capability that the list offers only reverts the verb
+  performs:** a history page costs more per touched table, one statement, two for a
+  table whose lineage holds a mergeable model, the same at any page size. A party's page
+  (party and statement tables) goes from 29 statements to 32 at 1 and at 25 entries
+  (`test_history_page_query_count_does_not_grow_per_entry`); a project's page whose
+  changesets each edit the project and a line goes from 18 to 20
+  (`test_a_document_history_page_costs_the_same_at_any_size_for_the_tables_it_touches`).
+  **Removed:** `Changeset.revertable(record, actor=...)`, which only forwarded to the
+  record. **Upgrade:** call `changeset.pk in record.revertable_changesets((changeset,),
+  actor=...)`; code matching the old messages ("a later write prevents revert", "the
+  pre-boundary state is unavailable") matches the codes instead.
+- `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
+  resource adapter names, in `AngeeResource.never_create_only`, the columns whose
+  omission its owner verb does not treat as keeping what is stored (it publishes the
+  stored value or applies a default instead), each with why; a subclass adds to its
+  parents'. The load refuses an entry listing one under `create_only`, by field or
+  column name, before any row of that entry, and rolls back, as for any entry
+  configuration error. Web forms' refusal of
+  `publish` moved there with its message. A workflow entry may no longer list `draft`
+  or `publish`: under `create_only: [draft]` a changed row (a rename, or the entry
+  newly gaining it) published the draft staff held, with no publisher, so a run as
+  the workflow principal was admitted on staff's content, and a stored draft that
+  could not be published failed every load; under `create_only: [publish]` a changed
+  row published although the entry declared `publish: false`. **Upgrade:** remove
+  `draft` and `publish` from a workflow entry's `create_only`; no shipped entry lists
+  either.
+- `@angee/ui`: **Changed API.** A list resolves its group axes once:
+  `buildColumns` takes them as `BuildColumnsOptions.axes` from the table state
+  (`useResourceViewTableState`), which also gives them to the table's grouping
+  and its headers, instead of resolving `groupStack` a second time from the
+  same inputs. Nothing a list renders or reads changes.
+
+- `@angee/ui`: **Changed API.** A pane list's Order select shows what the
+  headers show and chooses through the header's press rule. It read the first
+  key of the list's state, so a grouped list's select checked the grouping key
+  and an inherited order checked nothing, and a choice set its column alone.
+  `listOrderChoice` (beside `pressedSorting` in `list-body/cell-utils.tsx`,
+  exported with `ListOrderChoice` from `@angee/ui/views/resource-view-list-body`)
+  gives it the first key the rows follow, chooses through `pressedSorting` with
+  the chosen direction on the column the header presses, offers only columns
+  their header can sort whose key no group shares, and changes nothing when the
+  choice is what it shows. `ResourceToolbarProps.sorting` and `onSortingChange`
+  are replaced by `order` (`order={listOrderChoice(table)}`), which the list
+  view's and the collection tree's panes feed from their table.
+
+- `@angee/ui`: one rule for every press on a list header: it never drops the
+  keys a group of the list shares that the order holds. A press on a
+  tie-breaker, on the shown key
+  when it is not the order's last, or on a column the order does not hold set
+  that column alone, so a list grouped in the browser lost its grouping key and
+  reordered its groups. Now `pressedSorting` (the `headerSort` owner in
+  `list-body/cell-utils.tsx`) keeps those keys behind the pressed column
+  (`title:asc,status:asc`) and, for the pressed column, is the table's single-sort
+  toggle over the keys the rows follow, a tie-breaker still sorting in its first
+  direction; the groups keep their order, in the browser and on the server,
+  since they follow their own axis whatever a press sets (the entry at the top
+  of this section), a grouping chosen in the toolbar included. The URL and a
+  reload keep the order. A grouping
+  column's press turns its groups, ascending and descending in turn, never
+  removing its key, and keeps the keys the rows follow and other grouping
+  levels' keys. `breaksTies` is no longer
+  exported from the module.
+
+- `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
+  order the list declares, and only an explicit `sort: null` clears it.
+  Applying such a view cleared the order, opening the same shipped view as a
+  route default kept it, and the view showed active under any order. Now
+  applying it sets the order the collection declares under the view's preset
+  (`inheritedResourceViewSorting`: the shipped view's own `sort`, else the
+  list's declared order), opening its preset gives the same, and it shows
+  active only while the list holds that order (`inheritedSorting` on the view
+  context, read by the search model's active items), so a view of the
+  inherited order and an unordered one are never active together. A view saved
+  while the list's view holds no order of its own stores no `sort` and keeps
+  inheriting; a list mounted by `ListView` or `ResourceList` seeds its declared
+  order, so a view saved there stores it; one saved over a cleared order stores
+  `null`. Upgrade, no code needed: a shipped
+  view without a `sort`, picked in the switcher, keeps the list's declared
+  order; a view saved from a cleared order stores `sort: null`; a view without
+  a `sort` is active only on the inherited order; and a view saved before this
+  change from a cleared list now restores the declared order (clear the order
+  and save it again to keep it unordered).
+
+- `@angee/ui`: **Changed contract.** A list keeps its whole sort order in the
+  URL and in a saved view. Both kept only the first key, so on a list grouped
+  by status and ordered by status then rank, a press on Rank turned it
+  descending and the URL cut the order back to status alone: Rank showed "not
+  sorted" and the order was lost on reload, on a shared link and in a saved
+  view. The URL's `sort` now holds every key as a comma list (an order of
+  status, then rank descending, is `sort=status:asc,rank:desc`); on that
+  grouped list a press on Rank now writes the pressed key first and the group
+  key behind it (`sort=rank:desc,status:asc`), and a reload reads both back. A
+  one-key link reads as before, and a link
+  whose order cannot be read (an empty or three-part key, a field the resource
+  cannot sort by, or one named twice) reads nothing and offers the reset. A
+  saved view's `sort`, a shipped view's and `ResourceViewInitialState.sort` are
+  one `{ field, dir }` or a list of them; a list is written only for several
+  keys, so a one-key view is stored byte for byte as before, and a view saved
+  over several keys shows active right after saving and restores them all. The
+  grouping keys stay in the stored order where the list's order holds them, and
+  their direction orders the groups, in the browser and on the server. The favorites document
+  (`resource-view.favorites`) is version 2: a version 1 document reads and is
+  written as version 2 at its next change, and a tab on an earlier bundle reads
+  a version 2 document as unknown once it receives it (a live update or a
+  reload), so it then shows no saved views and writes none rather than dropping
+  a view whose order it cannot read.
+
+- `@angee/ui`: **Changed contract.** An action or mutation dialog the server
+  refuses says each reason once, where the reason is (a `content` editor's
+  reason excepted). The server joins every reason into the outcome's message (a
+  refused target's message is the verb's summary), and the dialog showed that
+  message on its banner beside the reasons it joins. Now, in a `MutationDialog`
+  fed an action
+  outcome and in an `ActionFormDialog`, typed or schema-driven:
+  a refusal of one field shows its sentence under the field only and the banner
+  names the field ("Please fix the highlighted fields: To.") without repeating
+  it. Focus goes to that field (with several, the first in the dialog's order;
+  the entry "A refusal's focus reaches the refused field" says how it gets
+  there). A refusal of a field and a reason
+  about the whole action shows that
+  reason on the banner, without the `__all__:` prefix it carried, beside the
+  line naming the field, and the banner takes focus; a reason about the whole
+  action alone shows once; a refused
+  target shows its reason ("You are not allowed to modify this task.") instead
+  of the verb's summary ("Send failed."); a refusal that carries only a
+  message, a domain refusal in band included, still shows that message. A
+  reason under a field the dialog does not render (a hidden field, a field its
+  `showWhen` hides for the values, a field of another schema branch than the
+  one chosen) shows on the banner once, as `key: reason`; before, an
+  `ActionFormDialog` bound it to the field nobody saw, so only the server's
+  joined message told it, and a `MutationDialog` said it twice. A reason under
+  a name only an `ActionFormDialog`'s `content` editor holds shows under that
+  editor and on the banner. A row's direct submit (`useDescriptorRowActions`
+  with `valuesFromRow`) refused for its fields only toasts under the verb's
+  label, not its id (the id still stands in when the label is not text). The
+  adapter, `actionOutcomeSubmitResult`, keeps field
+  reasons under their keys,
+  moves the `__all__` reasons to the form level as they are, and uses the
+  message only when the outcome carries no reason, the rule `runActionResult`
+  applies; `ActionFormDialog` tells the binder the fields it renders when the
+  answer lands. `ActionFormDefinition.fieldNames` is removed and
+  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.shownFieldNames`
+  also takes a function of the form's values. Unchanged: a record form's save
+  refusal, which the server already splits into field and form reasons and
+  which never passes through the adapter, and the record bar's toast for a
+  refused verb, titled by the verb's label, whose body is the outcome's
+  reasons, or its message when it carries none.
+  Not in this change: focus reaching a field that is disabled or replaced while
+  the submit runs, which is the entry "A refusal's focus reaches the refused
+  field"; where a field's control still
+  takes no focus (a member of a rows, object or list field, say) the banner
+  takes it, and it names the field but no longer repeats its reason.
+  Nor a raised domain error reading "Request failed." or its code; inline
+  action forms are the entry at the top of this section.
+- `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
+  Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
+  the one composed `box-shadow` holds the ring beside the element's own
+  `shadow-*` elevation: a focused pill tab, pressed segmented toggle, drawer
+  rail tab, toast, block-card link, interactive card or collection card frame
+  keeps its elevation and shows the ring. In forced-colours mode, where the
+  browser drops every `box-shadow` and in the last release no control that
+  draws the ring showed focus (controls with their own outline or border, such
+  as the calendar's buttons, did), every control that draws the ring shows a
+  2px outline in the system's colour; the outline is declared for that mode
+  only. An open tab panel shows the ring on keyboard focus. The ring's colour,
+  width and offset are the theme's `--ring` and `--ring-danger`, unchanged.
+  An elevation token is a shadow, never `none`: a layer that is not a shadow
+  voids the composed `box-shadow`, ring included, so "no elevation" is
+  `0 0 #0000` (Ledger and the flat elevation choice). The theme contract
+  (`theme/runtime.mjs`) holds elevations, `--ring` and `--ring-danger` to fixed
+  shadow forms with one exported judge, `isShadowList`, which the theme matrix
+  test also uses, and the composer refuses a theme stylesheet whose text
+  declares an `--elevation-*` property, names one in `@property`, or holds a backslash.
+  `shadow-none` clears an element's own shadow, never the ring: a ring is
+  removed with `ring-0` and `outline-none` under a selector that outranks the
+  ring's state variant, as the form's editable fields do for an input,
+  textarea or button directly inside them and the data-attribute read-only
+  path does. The public token-name list (`@angee/ui/tokens`) leaves out
+  Tailwind's own `--tw-*` variables, so it is unchanged.
+- `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
+  answers for `user`. It checked the ambient REBAC actor instead, so asking about
+  someone else returned the current actor's answer, and asking outside any actor
+  (a worker, a mail bridge) returned `False` even for an administrator. It now
+  checks `user`'s own effective membership of the platform-admin role
+  (`REBAC_UNIVERSAL_ADMIN_ROLE`), under any actor and inside a system context; an
+  anonymous user or `None` is still never an administrator. The framework's
+  callers (the platform-admin GraphQL gate, IAM's role and grant catalogues,
+  integrate's implementation choices and the profiling hook) pass the request's
+  own user, so their answers are unchanged. New
+  `angee.iam.roles.platform_admin_holders()` lists the user ids holding the role
+  in the shape of `protected_account_holders()`: every path REBAC's subject lookup
+  follows, `None` when every user holds it, empty when no role is configured.
+  **Upgrade:** a caller that passed one user while relying on the answer for the
+  ambient actor now gets that user's answer; pass the actor it means
+  (`get_current_user(info)` in a resolver), or ask
+  `angee.iam.permissions.current_actor_has_role(role)` about the ambient actor.
+  Code that spelled `platform_admin_role()` with `subject_has_role` or a subject
+  lookup to read someone else's membership or the role's holders can call
+  `is_platform_admin` or `platform_admin_holders()`.
+
+- Framework images: `django-angee-base` and `django-angee` build on the CPython
+  release `.python-version` pins, `python:3.14.9-slim`. The Dockerfile's
+  `PYTHON_VERSION` default stayed `3.14`, a tag that now carries 3.14.10, while the
+  dependency stage's `uv sync` reads the pin and never downloads an interpreter, so
+  every image build since the pin failed with `No interpreter found for Python
+  3.14.9` and no framework image was published. The default names the pin, and the
+  static tier's runtime image tests refuse a Dockerfile whose default differs from
+  `.python-version`: a pin change edits both. Docker rebuilds only the current
+  patch release's tags, so the base stage first upgrades the Debian packages of
+  `python:3.14.9-slim`'s last build (2026-10-21) when it builds.
+
+- CI: a pull request that changes `.python-version` runs the whole SQLite suite on
+  the interpreter it pins. The changed-path selection did not count the pin among
+  the inputs every test reads, so a pin change alone started no SQLite shard,
+  although the pin exists for the SQLite library that suite needs.
+
+- **Message templates render, on Django's template engine.**
+  - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
+    `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
+    Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
+    whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
+    `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
+    anything else fails to compile. A template names its layout in its `layout`
+    column and never writes `extends` or `block`; blocks and parts are included
+    by name with `{% include "…" with … only %}`. A Markdown row goes through
+    markdown-it first, with raw HTML off, its template code kept whole. Each pass
+    runs in the row's language, with `dir` from Django's
+    `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
+    include renders, 200,000 characters of loop output, 500,000 characters of
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
+  - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
+    walks a row and every row it reaches and refuses what may not render safely:
+    oversized sources and lines, literals holding `<`, `>` or `"`, costly or
+    unsafe filter use, template code the Markdown pass would not keep whole, HTML
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    every save, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, counts each level from its rows'
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
+    on a save resolves a level's include targets in one query. A Markdown row's
+    link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
+  - **Preview.** `MessageTemplate.preview(*, kit=None, patch=None)` renders a
+    row's `sample` (a layout around a fixed body, a block or part alone) and
+    returns a `TemplatePreview` with `TemplateWarning`s: the subject or preheader
+    length, unused variables, a missing stop link, an empty plain-text body, the
+    size, or a render error, one for each refusal, naming its column
+    (`TemplateWarning.field`). With a `patch` of edited columns it previews the row
+    as that patch would save: `write` is asked as well as `preview`, and what the
+    save's gates ask of the columns it edits (`write__<field>` included), before
+    anything is copied or walked; the copy is validated as the save validates it,
+    refused for what the save refuses (`save_refused`, apart from the render's
+    `render_error`), and never saved. The console's
+    `message_template_preview(template, brand_kit, patch)` read returns it to
+    callers holding the new `preview` permission (platform admins;
+    `messaging_templates/message_template` revision 2); `patch` is the resource's
+    `message_templates_set_input`, decoded as the update decodes it
+    (`MessageTemplateWriteBackend.patch_values`), and a warning's `field` is the
+    column the update reports a refusal under.
+  - **Shipped rows.** The addon's install tier ships the `base` layout, the
+    `header`, `footer`, `button`, `quote` and `record_card` blocks and the
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
+  - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
+    install tier (`resources load`), and regenerate the console schema and its
+    codegen. No migration: no column changed. Existing rows are walked when they
+    render, and when their source, forms, variables or layout are next edited.
+- `@angee/ui`, `@angee/metadata`: **Changed API.** A list header shows a sort
+  only for the key its rows visibly follow, the first of the order's keys that
+  its groups do not share. A declared or default order's later keys only break
+  ties, and each of them that has a column showed as sorted: a list grouped by
+  kind and ordered by kind, key and language showed "Language, ascending" over
+  rows not in language order, and the first press on that header sorted it
+  descending. That header now shows "not sorted", and its first press sorts it
+  in its first direction as the only key the rows then follow, decided from the
+  list's live order when pressed. A key a group's records share shows its groups' direction
+  instead (the entry at the top of this section):
+  the field grouped by its whole value (a `Date` by day included) and a
+  grouped relation's members, which the new `GroupAxis.shares` in
+  `@angee/metadata` answers; each list's table carries its group axes as
+  `meta.groupAxes`. A grouping column's press turns its groups, in the browser
+  and on the server, and keeps the order their records follow.
+  The list's order still holds every key: every read asks for each key and a
+  list sorted in the browser keeps its tie-breakers. A tie-breaker press keeps
+  the grouping key behind the pressed one and drops the rest, and the groups
+  keep their order (the entry "one rule for every press").
+  `ariaSortForColumn` is removed from
+  `@angee/ui/views/resource-view-list-body`; a custom header renders its cells
+  with `ListHeaderCell` from the same entry, which sets `aria-sort` on the one
+  header of the key the rows follow, "none" on a grouping column, whose sort
+  button shows its groups' direction (on a table of your own, set
+  `meta.groupAxes` for it). `@angee/ui` augments TanStack's
+  `TableMeta` with the optional `groupAxes`: a program that passes `meta` to a
+  table of its own declares its keys by augmenting `TableMeta` too.
+- `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
+  as its value, are honoured by every relation control a descriptor field
+  renders through. The dialogs' own relation control passed the picker
+  neither the opt-out nor a known option, so a dialog still offered Edit and
+  read a record it had been given. An action's relation argument
+  (`ActionRelationArg`) can declare the opt-out; it still holds a bare id, so
+  its record is read for its label. A registered widget's `field` now carries
+  `relationEdit` (declared on `FieldPresentation`) from a form, a dialog and a
+  line's cell, and the party picker and the calendar picker pass it on.
+  `relationSelectedOption` returns `undefined` when the row's label path reads
+  `undefined`, so a relation value such as `{ id }` is read for its label
+  instead of showing its raw id; a member held as `null` or blank still labels
+  the option by its id. A form spec cannot declare the opt-out.
+- `@angee/ui`, `@angee/refine`, `@angee/app`: **Changed API.** A write from a
+  dialog or a composer is safe to retry. `useIdempotencyKeys()` (beside
+  `createClientKey`) keeps one idempotency key per draft, named by its scope,
+  for the app runtime: minted at the draft's first attempt and kept, whatever
+  an error says, until a confirmed answer ends it; the server replays the same
+  content, and answers `CREATION_KEY_CONFLICT` for other content under the
+  spent key, after which the draft's next send starts a new draft and the
+  caller only says what happened. A draft with an attempt lost or on its way is
+  never given up. Forgotten on a change of signed-in person, never persisted
+  (a retry writes once from this page only). The record form's create (its ref
+  is gone), chatter's post, knowledge's note and vault clone, the project from
+  a template, the dashboards' create and duplicate (which minted a new key per
+  attempt, so a retried lost answer made two) and the workflow start sit on it;
+  `MutationDialog` and actions take `idempotencyScope`, and a keyed dialog's
+  submission takes its key as a required `string`. One draft scope belongs to
+  one surface at a time (`useIdempotencyDraftOwner`, failing in development
+  when two hold one), and a create form names its draft under the form or
+  relation dialog hosting it (`useDraftScope`), so a create opened from another
+  form never shares its key.
+  `errorFromAuthoredEnvelope` throws an `AuthoredEnvelopeError` with the
+  envelope's `code`, and a bounded transport error keeps `response.errors` only
+  when the server answered with a GraphQL errors list. `DialogForm` takes `pending` (no dismissal while a submission runs) and
+  `dirty` (a dismissal asks first, with the shared unsaved-changes question),
+  and it asks before a route move while it holds either (saying it is still
+  sending while it is), with `holdsWork` saying no once an accepted submit
+  moves on; Close and Cancel stay focusable and say why while it sends.
+  `ActionFormDialog` drops its own guard for it, and every `MutationDialog` and
+  typed-args action dialog behaves so. An answer that lands after a dialog went
+  away is still reported (`useLateAnswerReport`, reading refine's
+  `failedWriteOutcome`, exported for any surface whose answer can land after
+  it is gone). `MessageActions` shows on a coarse pointer. The
+  unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`;
+  every surface the unsaved-changes guard protects (a `DialogForm` given
+  `dirty` as it opens, so both form dialogs; `FormView`; a page guarding its
+  own edits) renders under the app's router and `ModalsHost`, and without the
+  router throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
+  test or a story provides both through the shared providers below;
+  `createUiTestProviders` and `ShellPageTestProviders` render
+  one app shell (`AppShellTestProviders`, from the runner-free
+  `@angee/ui/testing/shell`), which provides `ModalsHost`;
+  `ShellPageTestProviders` renders under a memory router unless one is already
+  above, and `createUiTestProviders` takes `router`; a keyed dialog's
+  submission drops any assertion of its key.
+- `angee.workflows`: **Changed behaviour.** A start that reuses a request key
+  for a different request (a manual start, or a step's child or continuation
+  start) raises `CreationKeyConflict`, as the other keyed creates do, rather
+  than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
+  so a client holding the spent key starts a new request. A trigger admission
+  still records the refusal on its event. **Upgrade:** code that catches
+  `ValidationError` around a workflow start, to settle a concurrent first start
+  under one request key, catches `CreationKeyConflict`
+  (`angee.provenance.contrib.angee.exceptions`) instead.
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
+  - A request body, WebSocket message or ACP record nested deeper than
+    `MAX_JSON_DOCUMENT_DEPTH` (128) is malformed JSON on every machine,
+    through `decode_json` in `angee.base.serialization`: the GraphQL view
+    answers Strawberry's own 400, a refused view-as preview still answers its
+    403, the GraphQL WebSocket closes with Strawberry's 4400, anonymous
+    ingress refuses it as `invalid_request`, and an agent's ACP WebSocket
+    skips the record as invalid JSON. Before, only the decoder's own limit
+    stood in the way, and on Python 3.14 it follows the thread's C stack (some
+    60,000 levels on a macOS main thread, 100,000 and more on GitHub's Linux
+    runners): past it, the decoder raised an uncaught `RecursionError`; within
+    it, the document reached the recursive walks behind the decoder. A
+    document too deep for a small thread's stack is malformed JSON too.
+  - The document bound admits every value the value bound admits. The deepest
+    envelope, a graphql-transport-ws message carrying a nested insert's line
+    field, encloses a value in 7 arrays and objects, so 71 is the least such
+    bound; a GraphQL HTTP body encloses one in 6, an ACP record its view
+    context in 4, and an ingress body its fields in 1. The rest of 128 leaves
+    an envelope room to grow and keeps graphql-core's input coercion and
+    strawberry-django-hasura's input reduction far inside Python's recursion
+    limit. `json_bound_violation` measures it, without the member bound.
+  - `angee.integrate` decodes a pasted key file and a vendor's error body
+    through `decode_json` as well: a key file nested past the document bound
+    is refused as "Paste the provider's JSON key file.", and a refusal keeps
+    no body nested past it.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
+- `angee.appearance_integrate`: **Changed behaviour.** Website appearance
+  analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
+  signed-in contract states. It refused only a request with no actor at all, so
+  the anonymous actor REBAC gives an unauthenticated request was admitted: it
+  could make the server fetch outside URLs, and every anonymous caller spent
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
+- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
+  single-use sign-in link leaves base IAM for its own addon, with everything
+  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
+  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
+  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
+  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
+  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
+  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
+  the document, now `IamMessagingRedeemSignInLink`. The permission
+  `auth/user#issue_sign_in_link` is the addon's own declaration
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
+  Platform administrators send links, and for now no other role can be given the
+  action: the permission merge lets other fragments add arms only to the
+  permissions a resource type's owner declares, so a consumer's
+  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
+  addon joins the template's `full` profile; a host without it, the `base`
+  profile included, offers and redeems no sign-in link. A link's session records
+  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
+  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
+  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
+  (`iam_messaging_signinlink`) and was in no release, so no migration template
+  ships.
+  - Every host that tracks main deletes the old rows, whether or not it keeps
+    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
+    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
+    before it runs `migrate` with what that writes, it deletes them on every
+    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
+    (`--database <alias>` for each other alias), the same statement on SQLite
+    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
+    and, with the addon, its initial migration. After migrating, the host
+    provisions, which syncs the permissions: IAM's schema at revision 32 and,
+    with the addon, its fragment at revision 2.
+  - Until the rows are gone, both commands refuse, on django-compose
+    0.1.0.dev14, which the framework requires since the composer upgrade below:
+    - `makemigrations`, on the databases of the environment that authors the
+      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
+      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
+      migration before native makemigrations." (0.1.0.dev13 said the same, its
+      last sentence "Declare a reviewed cutover migration before native
+      makemigrations.")
+    - `migrate`, and so `provision`, on a database that still holds links when a
+      migration authored where none were drops their table: "unsafe migration
+      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
+      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
+      To proceed, keep the storage, or move its data and declare the drop in
+      that migration of the project's history with
+      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
+      Nothing was applied, the addon's initial migration included. Delete the
+      rows on that database and run `migrate` (or `provision`) again; the links
+      cannot move, so declaring the drop loses them the same way. On a stack, a
+      refused `provision` holds Django stopped until the rows are deleted. Under
+      0.1.0.dev13 that `migrate` dropped the table without a word.
+  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
+    under this heading, so the framework release that brings either brings both.
+  - Such a host loses the links already sent (they stop working; send them
+    again), the record of who was sent a link, and every session a link opened
+    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
+    people sign in again).
+  - The stale `iam.signinlink` content type can be removed with
+    `manage.py remove_stale_contenttypes`, which also deletes that model's
+    `auth.Permission` rows; it lists what it deletes and asks first.
+  - Projects that author `AUTHENTICATION_BACKENDS` replace
+    `angee.iam.auth.SignInLinkBackend` with
+    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
+    raises, a password's included, as does every request that carries a
+    session a link opened before the upgrade; start-up reports
+    `angee.iam.E006`, which names the entry.
+  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
+  seal's own remedy, which a refused fragment's error carries; it no longer gives every
+  seal one hint that names a record's own read. Messaging's `messaging.E003` and
+  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
+  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
+  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
+  open set another addon extends: `User.account_actions()` names the actions
+  `account_actions` offers, in offer order, and it and
+  `User.account_action_blockers` (now a classmethod) are extended through
+  `super()`; a contributed action runs under `User.lock_for_account_action`, the
+  private `_lock_for_account_action` made public, and meets IAM's person-kind
+  and protected-account blockers before its own, whatever its hook returns:
+  `angee.iam.models.account_action_refusals` puts them first, and no override
+  drops them. `account_actions` is
+  typed by one enum of the composed actions, built when the schema is by the
+  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
+  `_permission_enum` made public beside `permissions_field`)
+  and named after its members (`Permissions_10_set_active_…`): its values are the
+  actions' Zed permission names (`issue_password`), where the fixed
+  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
+  leaves the console and public schemas, and the web's TypeScript type
+  `UserAccountAction` goes. `offersAccountAction` compares
+  names exactly, and `@angee/iam` exports `AccountActionBar` and
+  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
+  `useIssueSignInLinkAction` is no longer exported. The disclosures
+  `auth/user#active_account` and `#nonstaff_account` derive from the union points
+  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
+  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
+  a composed account action offered twice or not declared on `auth/user`
+  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
+  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
+  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
+  (`sign_in_account`) and marks a genuine but spent credential with
+  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
+  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
+  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
+  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
+  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
+  that compares `account_actions` values with the old enum's upper-case names
+  compares the permission names, and one typed by `UserAccountAction` reads the
+  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
+- `angee.base`: **Changed behaviour.** A `DATABASE_URL` whose libpq `options`
+  carry other server settings now connects with JIT off too:
+  `angee.base.conf.disable_jit` puts `-c jit=off` before those options, where
+  the URL's options used to replace it and leave JIT at the server's default.
+  For example, `-c lock_timeout=1234` becomes `-c jit=off -c lock_timeout=1234`.
+  PostgreSQL applies the last setting, so a `jit` the URL sets itself still
+  wins, and a URL with no options still connects with `-c jit=off`. PostGIS URLs
+  (`postgis://`, `prometheus_postgis://`) now get the JIT setting and
+  `ANGEE_DB_POOL` too: one set of the PostgreSQL engines django-environ selects
+  replaces two `"postgresql" in ENGINE` checks. The test settings compose the
+  same rule, so the PostgreSQL CI lane's sessions now run with JIT off, as
+  deployed ones do. A hand-written `DATABASES` entry opts in by calling
+  `disable_jit`, which recognises only those four engines; a custom backend
+  path gets no setting. `PGOPTIONS` stays ignored on the connections built from
+  `DATABASE_URL`, because they always pass `options`; a hand-written `DATABASES`
+  entry without `options` still uses it. A direct client such as psql or
+  `dbshell` still gets the server's default; a diagnostic runs `SET jit = off`
+  first, or `PGOPTIONS='-c jit=off' manage.py dbshell`. **Upgrade:** nothing,
+  unless a deployment relied on URL options to leave JIT on; it now adds
+  `-c jit=on` to them. A PostGIS deployment with `ANGEE_DB_POOL` set now gets
+  the pool.
 - `angee.base`: an implementation key, the value an `ImplClassField` holds,
   pickles. Its choices enum is built at run time, so no module holds it by name
   and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
@@ -638,119 +1777,387 @@ live in code docstrings.
     administrators (schema revision 29); every framework and consumer writer of
     both runs as system work.
   - **Upgrade:** `rebac sync` (provision runs it). No migration.
-- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
-  single-use sign-in link leaves base IAM for its own addon, with everything
-  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
-  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
-  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
-  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
-  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
-  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
-  the document, now `IamMessagingRedeemSignInLink`. The permission
-  `auth/user#issue_sign_in_link` is the addon's own declaration
-  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
-  Platform administrators send links, and for now no other role can be given the
-  action: the permission merge lets other fragments add arms only to the
-  permissions a resource type's owner declares, so a consumer's
-  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
-  addon joins the template's `full` profile; a host without it, the `base`
-  profile included, offers and redeems no sign-in link. A link's session records
-  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
-  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
-  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
-  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
-  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
-  (`iam_messaging_signinlink`) and was in no release, so no migration template
-  ships.
-  - Every host that tracks main deletes the old rows, whether or not it keeps
-    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
-    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
-    before it runs `migrate` with what that writes, it deletes them on every
-    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
-    (`--database <alias>` for each other alias), the same statement on SQLite
-    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
-    and, with the addon, its initial migration. After migrating, the host
-    provisions, which syncs the permissions: IAM's schema at revision 32 and,
-    with the addon, its fragment at revision 2.
-  - Until the rows are gone, both commands refuse, on django-compose
-    0.1.0.dev14, which the framework requires since the composer upgrade below:
-    - `makemigrations`, on the databases of the environment that authors the
-      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
-      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
-      migration before native makemigrations." (0.1.0.dev13 said the same, its
-      last sentence "Declare a reviewed cutover migration before native
-      makemigrations.")
-    - `migrate`, and so `provision`, on a database that still holds links when a
-      migration authored where none were drops their table: "unsafe migration
-      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
-      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
-      To proceed, keep the storage, or move its data and declare the drop in
-      that migration of the project's history with
-      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
-      Nothing was applied, the addon's initial migration included. Delete the
-      rows on that database and run `migrate` (or `provision`) again; the links
-      cannot move, so declaring the drop loses them the same way. On a stack, a
-      refused `provision` holds Django stopped until the rows are deleted. Under
-      0.1.0.dev13 that `migrate` dropped the table without a word.
-  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
-    under this heading, so the framework release that brings either brings both.
-  - Such a host loses the links already sent (they stop working; send them
-    again), the record of who was sent a link, and every session a link opened
-    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
-    people sign in again).
-  - The stale `iam.signinlink` content type can be removed with
-    `manage.py remove_stale_contenttypes`, which also deletes that model's
-    `auth.Permission` rows; it lists what it deletes and asks first.
-  - Projects that author `AUTHENTICATION_BACKENDS` replace
-    `angee.iam.auth.SignInLinkBackend` with
-    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
-    raises, a password's included, as does every request that carries a
-    session a link opened before the upgrade; start-up reports
-    `angee.iam.E006`, which names the entry.
-  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
-- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
-  seal's own remedy, which a refused fragment's error carries; it no longer gives every
-  seal one hint that names a record's own read. Messaging's `messaging.E003` and
-  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
-  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
-  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
-- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
-  open set another addon extends: `User.account_actions()` names the actions
-  `account_actions` offers, in offer order, and it and
-  `User.account_action_blockers` (now a classmethod) are extended through
-  `super()`; a contributed action runs under `User.lock_for_account_action`, the
-  private `_lock_for_account_action` made public, and meets IAM's person-kind
-  and protected-account blockers before its own, whatever its hook returns:
-  `angee.iam.models.account_action_refusals` puts them first, and no override
-  drops them. `account_actions` is
-  typed by one enum of the composed actions, built when the schema is by the
-  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
-  `_permission_enum` made public beside `permissions_field`)
-  and named after its members (`Permissions_10_set_active_…`): its values are the
-  actions' Zed permission names (`issue_password`), where the fixed
-  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
-  leaves the console and public schemas, and the web's TypeScript type
-  `UserAccountAction` goes. `offersAccountAction` compares
-  names exactly, and `@angee/iam` exports `AccountActionBar` and
-  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
-  `useIssueSignInLinkAction` is no longer exported. The disclosures
-  `auth/user#active_account` and `#nonstaff_account` derive from the union points
-  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
-  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
-  a composed account action offered twice or not declared on `auth/user`
-  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
-  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
-  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
-  (`sign_in_account`) and marks a genuine but spent credential with
-  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
-  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
-  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
-  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
-  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
-  that compares `account_actions` values with the old enum's upper-case names
-  compares the permission names, and one typed by `UserAccountAction` reads the
-  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
-  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
+- `@angee/ui`: A relation field can decline inline edit of its selected
+  record with `relationEdit: null` (a form's field, a dialog's field, an
+  authored line field; `edit={null}` on `RelationFieldWidget`, beside
+  `create={null}`); it is otherwise offered whenever the related resource has
+  editable fields. `SURFACE_RENDERS_FAILURE`, the call options of a surface
+  that shows a submission's failure itself, is exported.
+- `@angee/app`: The app's rule for retrying a failed read is exported as
+  `retryAppQuery` (three retries, for a failure a retry can fix; a refusal is
+  not retried). The workshop's shared runtime fixture passes it to its query
+  client, so a story about a refused read shows its error at once, where the
+  data library's default retried the refusal three times. The fixture's
+  other query defaults are still the data library's.
+- `@angee/ui`: **Changed API.** A record pane can name a field as the form
+  does. `RecordPanelContext` gains `fieldLabel(name)` beside `focusField`, the
+  label the form's save banner names a refused field by. `RecordIssues` gains
+  an optional `fieldLabel` prop: an issue that names a field is titled by the
+  label and the control that focuses the field is described by it, so two
+  reports with the same words under two fields read apart on screen and to a
+  screen reader. It also gains an optional `polite` prop, for issues about
+  edits not yet submitted: one polite live region that stays in the page with
+  no issues too, in place of an alert per danger issue. In the save banner's
+  field line, a field whose label is not text is named by its name, where the
+  line printed `[object Object]`. Code that builds a `RecordPanelContext` by
+  hand adds `fieldLabel`.
+- `@angee/ui`: **Changed API.** A keyboard user sees when a mail in
+  `MessageHtmlFrame` has focus. Focus inside the sandboxed frame matches
+  neither the frame's `:focus-visible` nor its wrapper's `:focus-within`, so
+  the page cannot draw a ring, and nothing on screen showed that a mail had
+  keyboard focus. The framed document draws it. Its body is a tab stop of its
+  own, whether or not the mail scrolls, so a mail with links gains one stop:
+  the mail itself, before its first link. While the body or anything in the
+  mail has keyboard focus, a ring fixed to the frame's edges stays as the
+  arrow, page, space and end keys scroll the mail, and stays beside a link's
+  own ring, also in a mail that removes its links' outline. The ring has three
+  tones, 2px each: the theme's `--border-focus` outside, then a black line,
+  then a white one, so one of them holds contrast on any mail, whatever it
+  paints and whatever the theme's color is (at least 4.6:1 on any grey). A
+  click on
+  the mail's text or on a link shows no ring until the next key press; a
+  click into a field of the mail shows it, as the field shows its own. The
+  ring is the root's own
+  `::after`, in an unnamed cascade layer, starting from `all: initial`, every
+  declaration important: a mail's CSS on `body`, `body::after` or `*::after`,
+  a transform, filter or containment on the body, and an important rule on
+  `html::after` at any specificity leave it in place. A mail that makes the
+  root itself a containing block for fixed boxes (on `html`: a transform or
+  one of its single properties, `perspective`, `will-change: transform`,
+  layout or paint containment, `content-visibility`; from a style sheet or
+  the mail's own `<html style>`) still detaches it: the ring then follows
+  the document, and its bottom edge scrolls out of view; a `clip-path` on
+  the root clips it, and a mail's own popover or modal dialog covers it. A
+  mail's own `html::after` is not shown while the frame has focus. The theme's
+  color is used only if the browser parses it as a color and its functions
+  are closed; otherwise the framed document's own accent. The framed document
+  carries the frame's title, which the accessibility tree gives it as its
+  name. The ring's color is read from the page when the document is
+  assembled: a theme, brand or light/dark switch reloads an open mail, which
+  returns to its top and shows no ring until the next Tab; an ordinary render
+  keeps it. A browser without `:has()` (before Chrome 105, Safari 15.4,
+  Firefox 121) draws no ring, as before this change; the ring needs nothing
+  newer.
+  `@angee/ui/lib/use-motion-tokens` is removed and
+  `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
+  beside `useRootTokens`, the one reader of the root's resolved tokens, which
+  keeps its record while no value changes. **Upgrade:** import
+  `useMotionTokens` from `@angee/ui/lib/use-root-tokens`.
+- `@angee/ui`: The toast region is named in the app's language. `ToastProvider`
+  passed no label to the toast library's viewport, so the region was always
+  the library's English default, "Notifications"; it now reads the `ui`
+  namespace's new `toast.region` key.
+- `@angee/ui`: A failed request of a verb bound with `useRecordActionMutation`,
+  or settled through `useActionResultMutation` or
+  `useRecordChromeActionMutation`, is told once. These hooks toast a failed
+  request themselves, and the data layer raised its own "Something went wrong"
+  beside it. They now turn the data layer's own error notice off for their
+  verb. `useActionOutcomeMutation`, which leaves the outcome to its caller, is
+  unchanged: a caller of it that shows the failure itself and does not turn
+  the notice off still tells a failed request twice.
+- `@angee/ui`: A number shown as a percentage or a progress bar holds `null`
+  when it holds nothing, where it held the empty text. `percent` and
+  `progressBar` join the number widgets (`NUMBER_WIDGETS`) in the one rule for
+  a form field's empty value (`emptyValueForField`) and in every reader of
+  that set, so they behave as `integer` and `float` do. Declared by one of
+  them alone, an untouched field reaches an action's `submit` and a
+  `MutationDialog`'s `parseValues` as `null` where it was `""`; a record
+  form's create leaves it out, and its edit sends a stored empty text, or a
+  member the record lacks, as `null`; the presence control treats it as a
+  number, with its own control and no "Set value". No control of theirs writes
+  the empty text. The number and date widget rows are read before the kinds,
+  so under these two widgets a `boolean`, `switch`, `object` or `array` kind
+  now holds `null`, as it already did under `integer` and `float`; a `string`
+  kind keeps `""` but its empty text is left out of a create and sent as
+  `null` on an edit. No declared descriptor has such a pair, and no declared
+  form changes on screen or in what it sends. Not changed: a progress bar
+  shows `0` while it holds `null`; the `boolean`, `booleanToggle` and
+  `booleanBadge` widgets with no kind hold `""` until a field's type reaches
+  its descriptor, and the `money` widget, which the money addon's fragment
+  registers, holds `""` until a widget can declare the kind of value it holds.
+  **Upgrade:** code that tested a field declared by `percent` or `progressBar`
+  alone for the empty text tests for `null`.
+- `@angee/ui`: A form no longer refuses its own seed. An optional field with a
+  bound whose empty value is `null` and whose declared type does not refuse
+  that `null` (a field declared by a number, date or time widget alone, or of
+  kind `any`) was seeded with it and then refused as "This field is
+  required.": on a record form's create and on its edit of a record that lacks
+  the field, in a `MutationDialog`, and for such a member of an object field.
+  The rule that judges a held value (`structuredFieldErrors`, at the field's
+  own path and each member's) now composes the seed rule: the `null` a form
+  gives a field that holds nothing is not held against it for holding the key.
+  A required field and a presence-required one answer for a `null` as before
+  (refused, unless the field may be null); a value outside its bound is
+  refused; a typed number that is not nullable is not seeded with `null` and
+  is unchanged; a list item that holds nothing is still refused. At a field's
+  own path no declared form has the shape; an untyped member of an object
+  field, which the server's form projection emits for a JSON field, has it
+  without a bound. Known limit: an edit of a
+  record that lacks such a field as a member of a JSON value sends the member
+  as `null`, as it already does without a bound, which a server member typed
+  as a plain number with a default refuses.
+- `@angee/refine`: A caller's write cancels a refetch that no enabled observer
+  watches. `invalidateAuthoredQueries` cancelled only reads with no data and
+  refetched only active reads, so a read that had data and was still
+  refetching after its last observer had left, or whose observers are all
+  disabled, committed its pre-write answer after the write and cleared the
+  invalid mark; returning within the stale time showed that answer with no
+  refetch. The refetch is now cancelled: the read keeps the data it had, stays
+  invalid and refetches when an enabled observer mounts. A refresh asked of an
+  on-demand read just before the write is dropped with it.
+- `@angee/ui`: A form section that holds only hidden fields shows nothing. A
+  `hidden` field keeps its value and renders no control, but a group whose
+  fields were all hidden still counted as having something to show: the sheet
+  drew its heading over an empty grid, and a pane group listed an empty pane.
+  It is now empty, as a section with no field is; its values are saved as
+  before.
+- `@angee/ui`: **Changed API.** A refused save that carries a reason no field
+  shows brings the person to the banner. A refusal naming a shown field and
+  also carrying a form-level reason focused the field and left the banner,
+  with the form-level reason, out of view. With a reason no field shows (a
+  form-level one, or one of a field the form does not display) the banner now
+  takes focus and also carries the line naming the refused fields, which it
+  showed only without a form-level reason; with field reasons only, the first
+  shown field takes focus. `applyFormErrors` decides which, for a
+  surface that passes it `focus` and a `fieldSummary` (the record form,
+  `MutationDialog` and the typed-args action dialog). Its `focus` option,
+  added in this release as `true`, is now a function, the surface's way of
+  bringing the person to the first refused field or to its banner: the `focus`
+  of the new `useRefusalFocus(messages, { form, ready })`, exported with
+  `formErrorsFromForm`; the record form exposes the banner's props as
+  `saveBanner`. **Upgrade:** replace
+  `focus: true` with that hook's `focus`, given the surface's form (and
+  `ready: false` while its controls are locked), and spread its `banner` on the
+  surface's `ErrorBanner`.
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`, `angee.theme_fyltr`,
+  `angee.theme_ledger`: **Changed behaviour.**
+  The default brand kit's colours dress the app at run time, on every page inside
+  it, signed in or not, unless its theme declines them.
+  - `@angee/app` gains the install-one manifest key `hostAppearance`, a
+    `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
+    per render of its session frame; two providers fail composition, as two dashboard
+    stores do. `@angee/ui`'s `HostAppearanceDefaults` gains `pending`, which keeps each
+    person's first paint, and the boot cache, where they wear the host's options, until
+    the source's first read answers, fails or pauses; a person's own saved theme or
+    customisation is painted at once, and after the first paint every choice applies
+    at once, a draft's included. Only the session frame sets it, and
+    `CreateAppInput.appearance` takes none.
+    Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
+    precedence".
+  - A customisable theme declines the source with
+    `createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`,
+    `@angee/ui`'s new optional `ThemeOptionsDefinition.acceptsHostAppearanceSource`
+    (default true; `defineTheme` refuses a non-boolean). `createApp` then asks the source
+    about no theme and no build options and wears none of its answer, as it wears none
+    for a theme without options, so the build's options for its own theme apply whole,
+    unheld. The flag is not in the options envelope: no options version changes. Fyltr
+    and Ledger decline; Default and Angee accept.
+  - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
+    colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
+  - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
+    of any kit, through the new public root `default_brand_kit_colors`
+    (`BrandKitColors`), under `read_colors`, a deliberate disclosure on the kit's own
+    `is_default` column (`brandkit/brand_kit` at schema revision 2; no tuple). Console
+    reads stay signed-in.
+  - The Appearance page's customisation editor starts from the options the person
+    wears, so customising while following the app default keeps its other choices.
+  - **Upgrade:** the console root `default_brand_kit` is removed; read
+    `default_brand_kit_colors` on the public schema, or `BrandKit.objects.default()` in
+    Python. Provision applies the permission revision through `rebac sync`; until it
+    has, the public root answers `null` with no error and the app wears the build's
+    colours. Once the addon is provisioned a default kit always exists, so on a host with
+    `angee.brandkit`: a project on the stock theme (the full profile's default) wears
+    the shipped Angee kit's colours; a project on another customisable theme that
+    accepts the source, as one that says nothing does, wears the kit's palette in place
+    of its own; on such a theme, colours a build states in `appearance_options` show
+    only on a device's first visit, before the read answers; and every app of a
+    deployment with per-app themes wears the kit's palette on its own theme when that
+    theme accepts the source, locked apps too. Unchanged: the Angee theme under the
+    shipped kit, fixed themes, hosts without the addon, a theme that ships its own
+    default kit stating its own colours, and the Fyltr and Ledger themes, which decline
+    the source: a project or app on either sends no read and wears its own palette, or,
+    on the build's own theme, the build's `appearance_options` whole. To keep other
+    colours, edit the default kit in Settings > Brand kits.
+  - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
+    (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
+    because the workshop's toolbar is the host's appearance there; a story about the
+    source passes `hostAppearanceSource`.
+
+- `@angee/ui`: **Changed behaviour.** A customised theme's link, and each tone's text
+  (`--brand-soft-text`, `--accent-soft-text` and the four status texts), read at 4.5:1
+  on their own fills and on every surface of their scheme (canvas, sheets, popover and
+  inset), in light and dark, wherever any colour can; where the surfaces pull opposite
+  ways and none can, the text is the colour that comes nearest. The link was worked out
+  against plain white and the dark ink and fell under that on a kit's sheets, most in
+  dark. Texts move toward the ink in hundredths, as the mail palette's do. A surface left
+  at its default counts as the theme's definition states it, else as its defaults derive
+  it, with a 1% margin; `ThemeOptionsDefinition.resolve(value, base?)` receives the
+  definition's own token layers from `resolveThemeOptions`. A text is worked out only
+  when its own input changes, so changing only surfaces keeps the theme's own link and
+  tone texts. A customisation may therefore show a darker link and tone text in light
+  and a lighter one in dark; a theme's own colours are unchanged. The theme runtime
+  feeds the theme catalogue's fingerprint, so each device drops its first-paint cache
+  once, on its first visit after the upgrade.
+
+- `@angee/ui`: The Links pane says it is empty when it is. A related group
+  with neither rows nor a verb is left out, and the pane showed its empty
+  state only when no group was eligible; a record whose eligible groups were
+  all left out showed "Links 0" over a blank panel. Each group now tells the
+  pane whether it has rows or a verb, and the pane shows the empty state when
+  none does. A group still counting is taken to show something, so the empty
+  state does not flash while counts load.
+- `@angee/ui`: **Changed API.** A record action bound with
+  `useRecordActionMutation` is toasted by one owner, the action bar. The
+  hook's second path (taken with `settle` or `linkTo`), which handed the
+  outcome to the shared settle owner and toasted it under the server's
+  message, is removed with the `settle` option. For the verbs that took it: a
+  refusal is titled by the verb's label with the server's reasons as the body,
+  as every record action projected through `runActionResult` already was; a
+  transport failure is titled by the label with the error's message as the
+  body; an answer with no outcome reads the shared no-result text under the
+  label (a `noResultTitle` given through `settle` is no longer read); the
+  success toast follows the navigation to the created record, the refresh and
+  `afterSuccess`. For every verb bound with the hook, an answer with no
+  outcome is now a danger toast and neither refreshes nor runs `afterSuccess`
+  (it was silent and did both; with `defaultMessage` it was told as a
+  success), and `useRecordAction` applies `defaultMessage` to an empty success
+  message too, for every runner.
+  `linkTo` still follows the created record, through one implementation shared
+  with `useActionResultRun`. Not changed: a record action whose own `run`
+  calls `useActionResultRun`, `useActionResultMutation` or
+  `useRecordChromeActionMutation` is still toasted there, under the server's
+  message (the proposal ceremony, project lifecycle, task promotion, trash and
+  restore, account access, message delivery, triage, contributed conditional
+  verbs and others); a transport failure still also raises the data layer's
+  own notification. **Upgrade:** remove `settle` from
+  `useRecordActionMutation` options; an inline one is a type error, one passed
+  through a variable still compiles and is ignored.
+- `@angee/refine`, `@angee/ui`: A record action the server refuses tells the
+  person why. For a target refused before the verb runs (not found, not
+  allowed) the server's message is only the verb's summary and the reason
+  arrives in-band; `runActionResult` threw only the message, so the action
+  bar's toast read "Confirm / Confirm failed." and the reason was lost. It now
+  throws the reasons, and the message when there are none. Every record
+  action projected through `runActionResult` shows the reason without an edit;
+  no toast title changes. Other refusals (a transition not allowed, a missing
+  object) still read the verb's summary: the server sends no reason for them.
+  `@angee/refine` exports `actionOutcomeReasons` (a
+  refusal's in-band reasons, each once, as one line), which
+  `useActionResultRun` composes instead of its own copy, as does a refused row
+  of a bulk trash or restore (it showed only the first). **Upgrade:** code
+  that matched the thrown error's text against the outcome's `message` finds
+  the reasons there when the refusal carries any.
+- `@angee/ui`: `SplitPane`'s recipe drops `overflow-hidden`, a class that never
+  applied: the panel library (react-resizable-panels) sets `overflow: auto`
+  inline on the element that takes a pane's class, and an inline style wins
+  over any class that is not `!important`, so a pane scrolls its content.
+  Nothing computed changes. A record in the document presentation that a list
+  opens in its split placement scrolls in the content pane of the list's own
+  workbench, as one opened inline scrolls in the list's record sheet; a record
+  in the workspace presentation, or with a full-bleed pane active, scrolls
+  inside the form in either placement. The pane's docstring says so; the
+  frontend guide's `Workbench` rule names what composes it (the console body
+  and a list's split placement), and its explorer-page rule covers the pages
+  that publish their navigator with `PrimaryPanePublisher`. A test holds, for
+  both placements, which element is the open record's nearest overflow rule
+  and the classes that size it and the list's root; it computes no layout, so
+  `Views/ResourceList`, the first story of a split list, shows a tall record
+  split and inline for a browser to measure the rest. Known, not changed:
+  `Workbench`'s `scrollMode` does nothing (both values compute the same
+  layout, since the library's inline styles override the class it adds); its
+  docstring says so, the console layout no longer passes its default, and
+  removing the prop waits on callers outside the framework.
+- `@angee/refine`: A write's refresh no longer leaves an unanswered first read
+  idle before replacing it. `invalidateAuthoredQueries` cancels such a read, so
+  that a request sent before the write cannot commit after it, and awaited the
+  cancellation before the resend; in between the read was neither answered nor
+  on its way (`isFetching` and `isLoading` false with no data), and a reader
+  that waits for a first answer takes that for one that will not come. A record
+  form's confirmation, which used to come after this refresh, renders in that
+  gap. The cancellation and the resend now happen in one synchronous call: the
+  request is rejected synchronously, so the resend is a new request, and the
+  read is reverted synchronously, so nothing overwrites the resend's state.
+  `useSetAuthoredQueryData` is changed the same way, and cancels nothing when
+  its updater accepts nothing (it left such a read idle with no data). Two
+  writes whose refreshes start within a few microtasks of each other during one
+  unanswered first read now each restart it.
+- `@angee/ui`: A refused save brings the person to its reason. With the
+  record's sheet scrolled down to the field being edited, the banner at its
+  top was out of view, and focus fell to the page because Save was disabled
+  while it ran. The answer now moves focus to the first shown field it names,
+  in the form's order (`applyFormErrors` takes `focus`; the record form's
+  save passes it); a refusal that
+  names no shown field focuses the banner; and Save stays focusable while a
+  save runs (`aria-disabled`). The form's own required check already behaved
+  so. Not changed: an owner that projects issues while the person edits
+  elsewhere moves no focus. **Upgrade:** a test that expected
+  a pending Save to carry `disabled` finds `aria-disabled="true"`.
+- `@angee/ui`: **Changed API.** A refusal's form-level messages stay several.
+  `applyFormErrors` (`validation-errors.ts`) joined the form-level messages
+  and each message no rendered field claims with a space into the one
+  `root.server` text, so a save refused for three reasons read as one run-on
+  sentence on the record form's banner and in both dialogs, to the eye and to
+  a screen reader. The form-level error now holds a list (`formErrorsFromForm`
+  reads it), and `ErrorBanner` takes `messages`: one is the banner's body,
+  several are a list, one item each. `FormViewSaveSurface.saveErrors` replaces
+  `saveError`, and an action form's `formErrors` replaces `formError`; the
+  three addons that read it follow (the tasks pane, the thread composer, the
+  workflow studio's action banner). Known, not changed: the workflow studio's
+  own issue summary still sets its lines in one text, and
+  `useDottedPathFieldErrors.formSummary`, which nothing reads, still joins.
+  **Upgrade:** read `saveErrors` or `formErrors` and pass them to
+  `<ErrorBanner messages={…} />`; a test that matched a refusal's reasons as
+  one sentence finds one list item per reason.
+- `@angee/ui`: A record form confirms a save as soon as the write answers.
+  The save awaited the refresh of every dependent resource and of every
+  authored read registered on the saved model, among them the reads a record's
+  own chrome mounts on every saved form; a slow one delayed "Changes saved", a
+  failing one held it through the query's retries (about seven seconds under
+  the app's defaults), and one that never answered held it for ever while Save
+  sent no further write. The save (`use-form-view-save.ts`) now starts those
+  refreshes and does not wait for them: the form shows its own record, which
+  the write's answer carries, and a failing read reports through its own
+  query. A list of a dependent model, or an authored read of the saved model,
+  may therefore show the saved state a moment after the confirmation where it
+  showed it just before; the saved model's own lists already did. A save that
+  writes lines still waits for its own model's lists, and a record action or
+  a dialog still waits for its refreshes (`useAuthoredMutation`).
+- `@angee/ui`: A record form tells what its Save would write before a save.
+  The save surface a pane (`RecordPanelContext.form`) and a toolbar
+  (`RecordToolbarContext.form`) receive has `nextSave(): FormNextSave`,
+  `{ data, lines }`: the record's input and the lines diff that Save hands the
+  native create or update, the resource save or the form's own submit owner.
+  Save and `nextSave` build it with one function (`use-form-view-save.ts`),
+  from the values, the baseline and the changed fields the form holds when it
+  is called, so a reader that keeps `nextSave` across edits, saves and
+  discards reads what Save then sends, and a pane that previews unsaved edits
+  does not rebuild the save's mapping. Each reads its own copy of the values
+  (Save the form library's submit copy, `nextSave` a `structuredClone`), which
+  hold the same for a record form's plain values, and each call returns a new
+  object, to compare by value. Reading it validates, writes and requests
+  nothing, and promises no more than what the save would build: a form that
+  takes no edit, a save in flight, the rule check, a registered validation,
+  lines another save changed, a running "view as" preview, a revision that is
+  not available or the server may still stop that save. Save itself now reads
+  the changed fields when it runs, where it read those of the render that made
+  its handler, so within one record a `submitForm` kept across edits, saves
+  and discards builds from the current ones. Everything else it reads (the
+  mode, the fields it saves, whether the form takes an edit, the record) is
+  still that render's. The form's own Save, Enter and submit never kept one.
+- `@angee/ui`: A record form's save no longer writes into the values it
+  reads: `mutationData` (`form-view-model.ts`) copies what it takes from them,
+  as its hidden-reset branch already did. Before, a structured field saved
+  together with a dotted member it sends as another value (a cleared number as
+  `null`, a picked record as its id) had that wire value written into the
+  values the save had read, so the form stayed marked as changed after a
+  successful save, with Save and Discard still showing, and a form's own
+  submit owner received the wire value in `context.values`. Now the form is
+  clean after such a save and the owner receives what the form held. What a
+  form sends is unchanged for a record form's values, which are plain data:
+  the copy is `structuredClone`'s, as the form's undo history already makes on
+  every change. A class instance would now be sent as a plain copy without its
+  methods, and a value holding a function would throw. No widget or form holds
+  such a value, and no declared form saves such a pair today.
 - Every addon, `angee.messaging`, `angee.parties`, `angee.projects`: **Changed
   behaviour.** The framework requires django-compose 0.1.0.dev14. Its drop guard,
   which judged only what `makemigrations` autodetects, now also judges the plan
@@ -956,7 +2363,8 @@ live in code docstrings.
   record form's own rule is deleted. A lines editor's new cell keeps its own
   rule (`emptyCellValue`). First match wins, after a declared `format` (the
   entry above): an explicit `string` kind holds
-  `""` whatever its widget; the `integer` and `float` widgets and the date and
+  `""` whatever its widget; the number widgets (`integer`, `float`, and
+  since then `percent` and `progressBar`) and the date and
   time widgets hold `null`; the list widgets and a relation list `[]`; the
   `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
   for an `array` kind, `null` for an untyped value and `{}` otherwise; then
@@ -985,9 +2393,9 @@ live in code docstrings.
   `string` kind with only its widget to tell it from text) seeds `""`, so a
   record form's edit that changed a sibling member sends `""` for it where it
   sent `null`; one that declares its format holds `null` (the entry above),
-  and no form declares such a member today. Not changed, and known: the other boolean widgets
-  (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
-  `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
+  and no form declares such a member today. Not changed, and known: the
+  `boolean`, `booleanToggle`, `booleanBadge` and `money` widgets with no kind
+  still hold `""` (`percent` and `progressBar` have changed since). **Upgrade:** a
   `submit` or a `parseValues` that tested an untouched date, time or number
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and
@@ -1005,19 +2413,21 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
-    `sample` holds preview values. The addon renders nothing and ships no rows.
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
+    `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -1029,11 +2439,43 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
+  - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
+    adds **Message templates** to Settings for whoever holds
+    `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
+    library grouped by kind, each row opening in its registered form, the
+    presets `messaging_templates.default-updated` and
+    `messaging_templates.effective`, New over the four insertable fields,
+    Override and Keep override where the record's `can_override` and
+    `can_keep_override` admit the reader, Delete, a notice saying what the row
+    is, a Preview pane in the framework's sandboxed message frame with a brand
+    kit select, showing the saved row or, while the form holds unsaved edits,
+    those edits as Save would write them (what Save would refuse, titled so),
+    and a Backlinks group in the record's Links tab for whoever may preview
+    message templates.
+    `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
+    stack's JS dependencies, which links the new fragment, then regenerate the
+    web codegen.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
@@ -1170,22 +2612,43 @@ live in code docstrings.
     drafts. Every signed-in actor reads kits; platform admins create, edit and
     delete them (`brandkit/brand_kit`).
   - **Font stacks** are a field, `FontStackField`, that checks every write
-    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
-    family names of letters, digits, spaces and hyphens, bare or single-quoted,
-    closed by an unquoted generic family. A bare family with a word that starts
-    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
-    refused. Double quotes are stored as single quotes.
+    reaching the database: a value written by `save`, `bulk_create` or
+    `update()`, of any type, is checked, and an expression (`F()`, `Value()`, a
+    function, and `bulk_update`, which writes through `Case`) is refused with a
+    `FieldError`, since the database computes its result past the check. It
+    admits family names of letters, digits, spaces and hyphens, bare or
+    single-quoted, closed by an unquoted generic family. A bare family with a
+    word that starts with a digit, a lone hyphen or a hyphen and a digit, or a
+    CSS-wide keyword is refused. Double quotes are stored as single quotes.
   - **Logos** are images storage's `FileManager.ingest_image` put on its image
     drive; `BrandKit.clean` refuses any other file when a logo changes. The
     console reads the logos and writes neither.
   - **Exactly one default kit.** Once any kit exists, writes through `save()` and
     `clean()` keep one: the first kit saved becomes the default, saving another
     kit as the default takes the flag from the previous one, and the default can
-    be neither unticked nor deleted, on any delete path. A conditional unique
-    constraint refuses a second default written past the save.
-    `BrandKit.objects.default()` and the console's `default_brand_kit` query
-    return it, or `None` before any kit exists, after a write past `save()` and
-    `clean()`, and for an actor who reads no kit.
+    be neither unticked nor deleted, on any delete path. Changes of default made
+    at once take turns: every kit is locked, in key order
+    (`BrandKitManager.lock_default`), before any kit row by a save that can move
+    the default, every console write and changeset revert of a kit, every delete,
+    and a resource load that writes kits (once, before its first row), so the
+    second change waits and then takes the default from the first. A save that
+    marks a stored kit not the default rereads its flag under the kit's row lock,
+    so an edit cleaned before its kit became the default is refused, as `clean()`
+    refuses it, instead of leaving no default. A changeset revert restores the
+    kit that was the default before the changeset ahead of every other kit, so
+    reverting a change of default does not meet that refusal, unless the previous
+    default points at a row the same changeset deleted (a purged file it showed as
+    a logo or dark logo): the revert restores that row first, and another kit can
+    then go ahead of the previous default and be refused. Two writers take kit
+    rows without the lock: a file purge that clears the logo or dark logo of two
+    or more kits, which can deadlock with a change of default (one of the two
+    fails with a database error); and the
+    second of two first kits created at once into an empty table, which fails on
+    the conditional unique constraint with a database error (provisioning loads
+    the first kit, so a person does not reach it). The same constraint refuses a
+    second default written past the save.
+    `BrandKit.objects.default()` returns it, or `None` before any kit exists,
+    after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
     layout paints with (`canvas`, `surface`, `text`, `muted`, `border`,
     `primary`, `on_primary`, `link`) for a light and a dark scheme from the kit's
@@ -1927,16 +3390,16 @@ live in code docstrings.
   revisions and loads the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
-  list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
-  group's own key, ascending, nulls last), and each next page is that read with
+  list sent it, order included (`AllMatchingGroups.read.orderBy`, the group's
+  own key, nulls last, in the list's direction), and each next page is that read with
   its `where` narrowed to the groups past the last listed key, so a group added
   or removed while the list is read neither repeats nor skips another. The
   listing ends on a short page, not on the list's count, and says so when the
   number of groups it listed differs from that count. The reader takes the named
   `AllMatching` types from `@angee/ui` and refuses an order of more than the
-  grouped field, which has no one-field cursor, and an order with nulls first or
-  descending (one rule, `cursorField`, shared by the reader and the dialog). A
-  page that ends on a key no `_gt` can step past (null, or not text) ends the
+  grouped field, which has no one-field cursor, and an order with nulls first
+  (one rule, `groupCursor`, shared by the reader and the dialog). A
+  page that ends on a key no cursor can step past (null, or not text) ends the
   listing rather than starting it again from the first page. A paged dialog says
   how far it has read ("Loaded N of M …", with the loading indicator) from its
   first render until every page is listed and previewed, and every dialog uses a

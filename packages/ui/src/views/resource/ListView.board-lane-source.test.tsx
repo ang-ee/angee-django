@@ -47,7 +47,7 @@ vi.mock("../../feedback", async (importOriginal) => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQueryBatch: () => new Map(),
-  useAngeeFacets: () => ({ facets: {} }),
+  useAngeeFacets: () => ({ facets: {}, errors: {} }),
   useOperationDocuments: () => ({}),
 }));
 
@@ -350,6 +350,13 @@ describe("ListView board laneSource", () => {
     await waitFor(() => expect(harness.boardProps).not.toBeNull());
     expect(harness.boardProps?.dragEnabled).toBe(false);
     expect(harness.boardProps?.onCardMove).toBeUndefined();
+
+    // On the update input, but create-only on the model: a stored card's lane is not a person's to change.
+    cleanup();
+    renderLeadBoard({ metadata: leadMetadata({ stageCreateOnly: true }) });
+    await waitFor(() => expect(harness.boardProps).not.toBeNull());
+    expect(harness.boardProps?.dragEnabled).toBe(false);
+    expect(harness.boardProps?.onCardMove).toBeUndefined();
   });
 
   test("requires the declared neighbor input to be writable before enabling drag", async () => {
@@ -553,11 +560,13 @@ function leadMetadata(
   {
     stageNullable = true,
     stageWritable = true,
+    stageCreateOnly = false,
     orderWritable = true,
     rowModel = "server",
   }: {
     stageNullable?: boolean;
     stageWritable?: boolean;
+    stageCreateOnly?: boolean;
     orderWritable?: boolean;
     rowModel?: "client" | "server";
   } = {},
@@ -592,6 +601,7 @@ function leadMetadata(
           relationObject: true,
           nullable: stageNullable,
           updatable: stageWritable,
+          ...(stageCreateOnly ? { createOnly: true } : {}),
         }),
         field("customer", {
           kind: "relation",
@@ -649,6 +659,7 @@ function field(
     relationObject: boolean;
     nullable: boolean;
     updatable: boolean;
+    createOnly: boolean;
   }> = {},
 ) {
   const kind = overrides.kind ?? "scalar";
@@ -667,6 +678,7 @@ function field(
     nullable: overrides.nullable ?? false,
     creatable: true,
     updatable: overrides.updatable ?? true,
+    ...(overrides.createOnly ? { createOnly: true } : {}),
     requiredOnCreate: false,
   };
 }

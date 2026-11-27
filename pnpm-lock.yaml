@@ -17,6 +17,7 @@ pnpmfileChecksum: sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 
 patchedDependencies:
   '@refinedev/core@5.0.12': 4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289
+  '@refinedev/hasura@7.0.1': 731ec7844e0a25eeed38e9e279200860fcf69da43c7554719a1cf1e7abb9f8f5
   nuqs@2.10.1: 9a2f0e220ba879552e528a3c15528143e3af37d325894c61d8996b794d72a2e1
 
 importers:
@@ -233,7 +234,7 @@ importers:
         version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@refinedev/hasura':
         specifier: ^7.0.1
-        version: 7.0.1(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))
+        version: 7.0.1(patch_hash=731ec7844e0a25eeed38e9e279200860fcf69da43c7554719a1cf1e7abb9f8f5)(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))
       graphql:
         specifier: ^16.14.0
         version: 16.15.0
@@ -338,6 +339,9 @@ importers:
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@types/node':
         specifier: ^26.0.1
         version: 26.6.6
@@ -347,6 +351,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.3.0(@types/react@19.3.0)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.14.6
       storybook:
         specifier: ^10.4.6
         version: 10.6.6(@types/react@19.3.0)(prettier@3.9.10)(react@19.3.1)
@@ -359,6 +366,9 @@ importers:
       vite:
         specifier: ^8.1.0
         version: 8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1)
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
   packages/ui:
     dependencies:
@@ -693,6 +703,9 @@ importers:
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../packages/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../packages/ui
@@ -703,6 +716,21 @@ importers:
       '@angee/storybook':
         specifier: workspace:*
         version: link:../../../../packages/storybook
+      '@angee/theme-angee':
+        specifier: workspace:*
+        version: link:../../theme_angee/web
+      '@angee/theme-fyltr':
+        specifier: workspace:*
+        version: link:../../theme_fyltr/web
+      '@angee/theme-ledger':
+        specifier: workspace:*
+        version: link:../../theme_ledger/web
+      '@angee/theme-stock':
+        specifier: workspace:*
+        version: link:../../theme_stock/web
+      '@tanstack/react-query':
+        specifier: ^5.102.0
+        version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1543,6 +1571,58 @@ importers:
         specifier: ^4.1.9
         version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
 
+  src/angee/messaging_templates/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
+      use-debounce:
+        specifier: ^10.1.1
+        version: 10.1.1(react@19.3.1)
+    devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.3(@testing-library/dom@10.4.2)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.3.0(@types/react@19.3.0)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.14.6
+      react:
+        specifier: ^19.2.7
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.3.1(react@19.3.1)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.12(@types/node@26.6.6)(happy-dom@20.14.6)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.1))
+
   src/angee/money/web:
     dependencies:
       '@angee/app':
@@ -2137,6 +2217,9 @@ importers:
         specifier: ^1.21.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
     devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -10245,7 +10328,7 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@refinedev/hasura@7.0.1(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))':
+  '@refinedev/hasura@7.0.1(patch_hash=731ec7844e0a25eeed38e9e279200860fcf69da43c7554719a1cf1e7abb9f8f5)(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))':
     dependencies:
       '@refinedev/core': 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       camelcase: 6.3.0

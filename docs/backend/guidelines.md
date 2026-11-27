@@ -187,6 +187,16 @@ Use these owners instead of maintaining another contract in an addon:
   `check --database default`) verifies the co-location. Permission reads never
   run on a replica: a lagging replica serves grants already revoked on the
   primary.
+- **PostgreSQL JIT:** the Django connections Angee builds from `DATABASE_URL`
+  run with JIT off ([`disable_jit`](../../src/angee/base/conf/__init__.py)),
+  unless the URL's libpq `options` set `jit` themselves. An authored `DATABASES`
+  stays authoritative; `disable_jit` is public so a hand-written entry can opt
+  in. It recognises only the four PostgreSQL engines django-environ selects, and
+  a custom backend path gets no setting. Because Angee always passes `options`,
+  libpq ignores `PGOPTIONS` on these connections: put session settings in the
+  URL's `options`. A direct client (psql, `dbshell`, a measurement script) gets
+  the server's default, so a diagnostic runs `SET jit = off` first, or starts as
+  `PGOPTIONS='-c jit=off' manage.py dbshell`.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -469,7 +479,81 @@ Use these owners instead of maintaining another contract in an addon:
   model, field, key and count under `check --database` and at the start of
   `migrate`, where a column the pending migrations have yet to add is passed
   over, and the addon that stopped providing a key states the remedy in
-  `ANGEE_IMPL_KEY_REMEDIES`.
+  `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
+  read as text; nothing writes such a key the row does not already hold (a
+  history copy and a migration's state model write the key their row stored),
+  and no value the field prepares writes a key spelled other than the
+  registry's (except where a model or the GraphQL input normalises it first: an
+  `ImplDefaultsMixin` insert, a GraphQL input), while any other expression
+  (`F`, `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not checked; a
+  lookup forgives what a person or a URL may spell. An update does not
+  validate a key it is not changing
+  ([`ImplClassField.holds`](../../src/angee/base/fields/implementation.py)
+  answers from the key the row was loaded with, else reads the stored row):
+  the row saves its other fields, the generic GraphQL
+  update and a model form that leaves the column out included, and keeps the
+  key and its config. Resolving
+  the key raises naming the field, the key and the setting. Every Angee GraphQL
+  schema reads such a key as null on a type's field
+  ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
+  the console labels "Not registered"; a group's key is not such a field, so a
+  list grouped, a board laned or a facet counted by the column cannot be read
+  (`strawberry-django-aggregates` refuses a group key outside the column's
+  choices: `ChoicesValueNotInEnumError`), which every Angee schema answers as a
+  public refusal naming the column
+  ([`AngeeSchema`](../../src/angee/graphql/schema.py)); the same holds for any
+  choices column holding a value its choices no longer name. No "Not
+  registered" group exists yet. A
+  `create_only` selector holding such a key may move, once, to a registered
+  key: the config its implementations own is carried over
+  ([`ImplBase.carried_config`](../../src/angee/base/implementations.py), since
+  choosing a class chooses its config's shape: kept, a stored value the new
+  class reads and accepts; reset to its default, a value it refuses, and every
+  value where a rule across keys refuses them together; dropped, a key it does
+  not read, extras included; nothing reports the change beyond the result, which
+  the repair read shows before the save),
+  a config sent with the selector is validated as sent, the new key is written
+  only while the row still holds the old one, and afterwards the selector is
+  create-only again.
+  A repair saved with `update_fields` names the config too, or is refused; a
+  stale row (loaded before its stored key moved) that would write another
+  config is refused as stale (code `stale`). The resource layer derives the
+  update surface once: every update input carries its model's create-only
+  selectors ([`create_only_selectors`](../../src/angee/base/fields/implementation.py),
+  read by `hasura_model_resource`) and the resource metadata publishes them
+  (`createOnly`), so no resource or page restates one; the model's save
+  decides. Create-only therefore means: chosen on create, and once more only
+  while its stored key is not registered: through the API, by a person the
+  create flow admits to choose it whose update of the record is allowed (the
+  repair read and the update ask the same gate, below); in code, by any save,
+  since a worker or a sync job has no request and no actor to admit and the
+  model's rules stand. The console's record form offers that choice exactly then and
+  sends the config it shows: the resource's generated repair read,
+  `<res>_repair_choices(id, field)` (`hasura_model_resource` generates it where
+  an update root meets a create-only selector; the metadata names it
+  `roots.repairChoices`), answers for each choice what choosing it sets on
+  that record (the config `carried_config` carries over). Its gate is the
+  resource's by construction, in order: the create flow's admission for the
+  choices (`impl_choices_admitted`, one owner: the `ANGEE_IMPL_CHOICES_ADMISSION`
+  hook or the model's `can_read_impl_choices`, closed without the hook), so a
+  repair offers only what its reader could choose when creating such a record;
+  the update root's `write_permission_classes`; the update's own decision
+  (`authorize_update`); then the model
+  ([`repair_impl_choices`](../../src/angee/graphql/impl.py),
+  `ImplDefaultsMixin.repair_impl_defaults`). An update that names a
+  create-only selector asks the same admission
+  (`AngeeHasuraWriteBackend.require_selectors_admitted`), after the
+  `write_permission_classes` its root asks before the resolver and before
+  `authorize_update` and the model, so the read and the write cannot drift; an
+  update naming none asks nothing more. The admission's one refusal, for a read
+  and a write alike, is "This actor may not choose an implementation.".
+  Composition refuses a schema that would expose the read without the update
+  root. A record without an update root (calendar sources, directories,
+  mounts) or a selector a connect flow chose is not repaired in the console:
+  its mark says "It cannot be changed here.", and the remedy is installing
+  again the addon that provides the implementation, or removing the record
+  and connecting it again. `angee.E052` and `ANGEE_IMPL_KEY_REMEDIES` name
+  such rows and the remedy.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs
@@ -1311,8 +1395,10 @@ concrete-table inventory.
 document membership, including MTI, pairs and generated statements. Projections
 consume these scopes instead of rediscovering documents from history rows.
 `HistoryMixin.admitted_reverts(changesets)` owns complete-boundary admission;
-`Changeset.revertable(record, actor=...)` then checks the record's declared
-`history_revert_permission`. An entry may revert from that record only when its
+`HistoryMixin.revertable_changesets(changesets, actor=...)` then checks the record's declared
+`history_revert_permission`, less what `ModelHistory.revert_blockers` refuses for a
+later change or an unavailable earlier state, the one rule the revert verb asks too.
+An entry may revert from that record only when its
 complete write boundary belongs to the document, or it is the record's
 operational merge.
 Changes spanning independent documents require their wider owner. Native FK
@@ -1743,8 +1829,12 @@ retains its native routing contract.
   an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../src/angee/resources/loader.py)
   composes it with native identity loading, validation, row results and the single
   ledger hook. Domain adapters may defer persistence to a manager without
-  inventing another importer or ledger API. A batch preflight may acquire only
-  the complete ordered domain lock set; it must not consume groups or write rows.
+  inventing another importer or ledger API. A batch preflight (`AngeeResource.lock_imports`)
+  may acquire only one owner-level lock taken once in a fixed order; it must not
+  consume groups or write rows. It must not lock every row the batch may touch: held
+  to commit while the import locks re-applied rows in file order, such locks let the
+  load hold a later row and wait for an earlier one a writer taking both in order
+  already holds, a deadlock. A row's lock is taken where the row is saved, by its owner.
   `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
   through the same native instance loader; preflights compose this public owner.
   A row removed from an addon's files keeps its ledger row and its record; its xref
@@ -1784,7 +1874,12 @@ retains its native routing contract.
   when the load found none to adopt. Put such rows in their own entry, so other rows keep their policy: adding
   `create_only` to a shipped entry changes its rows' hashes, so each existing row is
   re-applied once (without the create-only fields). An adoption field cannot be
-  create-only, and grant entries take none.
+  create-only, and grant entries take none. A column whose omission an adapter's owner
+  verb does not treat as keeping what is stored is never create-only: under `create_only`
+  a changed row omits it, and such a verb publishes the stored value or applies a default
+  instead. The adapter names it in `AngeeResource.never_create_only`, which adds to its
+  parents', and the load refuses an entry listing it, by field or column name, before any
+  row of that entry, and rolls back.
 - **Demo resource tiers are additive across installed addons.** A deployment that
   needs demo rows but not one permissive seed must exclude that exact entry with
   `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
@@ -1850,6 +1945,25 @@ open fresh evaluator scopes for authorization and change-feed reads.
   write backends and their declared arguments; provenance owns creation claims,
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
+- **A `JSON` input keeps Angee's JSON bounds.** Every schema
+  [`GraphQLSchemas`](../../src/angee/graphql/schema.py) builds maps Strawberry's
+  `JSON` scalar to `JSON_SCALAR`, which holds a `JSON` argument or input field,
+  variable or literal, to `MAX_JSON_DEPTH` and `MAX_JSON_MEMBERS`
+  ([`json_bound_violation`](../../src/angee/base/serialization.py)): how many
+  arrays and objects may enclose a member, and how many members it holds as an
+  expanding walk counts them, a repeated reference counted each time. A value
+  past either is refused as `BAD_USER_INPUT` while the request is coerced, so
+  no resolver, permission check or query runs for it. A `JSON` literal cannot
+  embed a variable; a client passes the whole value as one variable, which
+  graphql-core coerces once per operation. `validation_issues` and `validate`
+  apply the same bounds before a JSON Schema keyword walks a value. A body or
+  WebSocket message nested past `MAX_JSON_DOCUMENT_DEPTH` is malformed JSON
+  (`decode_json`), answered as Strawberry answers any other. That document
+  bound admits a value at `MAX_JSON_DEPTH` inside the deepest envelope its
+  docstring measures; an input path that nests a `JSON` field deeper
+  re-derives it. A domain bound stays with its owner:
+  `GraphQLSchemas.resource_filter` bounds a stored resource condition's depth
+  with the same walk.
 - **Delete previews are generated with the resource's delete surface.**
   [`hasura_model_resource`](../../src/angee/graphql/data/hasura.py) generates
   `<resource>_delete(id, confirm)` and its metadata when `delete=True`.
@@ -1965,11 +2079,21 @@ open fresh evaluator scopes for authorization and change-feed reads.
   [`DomainError`](../../src/angee/base/exceptions.py) with a stable `code`; the
   [GraphQL sanitizer](../../src/angee/graphql/schema.py) maps non-validation
   refusals by type to that code without detail. Never add a domain code to the sanitizer's
-  expected-code allow-list.
+  expected-code allow-list. Refusals are not logged; any other resolver error is
+  logged once, by the sanitizer, as its class, response path and frames. Never log a
+  `GraphQLError` itself: printing one quotes the request where a client may have
+  written a secret inline, and no record carries the request's text, its variables or
+  an exception's value.
 - **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
   alias that needs an annotation is declared on `hasura_model_resource`. Lazy
   preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
   boundary; extend that owner rather than re-walking selections in Angee.
+- **A read's order is a list.** `order_by` takes a list of single-key objects
+  and applies them in the list's order, on a list read and on a group's page of
+  rows ([contract test](../../tests/test_hasura_order_contract.py)). One object
+  of several keys carries no priority: GraphQL keeps no key order of an input
+  object, and the server reads its fields in the order type's own field order,
+  the resource's `sortable` order, so a client never sends one.
 - **Public-id lookups preserve their authorization boundary.** Use
   `require_instance_for_id` for required reads with the original queryset.
   `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are

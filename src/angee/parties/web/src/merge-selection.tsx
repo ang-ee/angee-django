@@ -3,7 +3,7 @@ import { ActionFormDialog, SelectionBarAction, useRouteHref, type AllMatching, t
 import { useNavigate } from "@tanstack/react-router";
 
 import { OrganizationGroupSets, PeopleGroupSets, type GroupSetsDocument } from "./documents";
-import { DuplicatesDialog, cursorField, type DuplicateSetInput } from "./DuplicatesDialog";
+import { DuplicatesDialog, groupCursor, type DuplicateSetInput } from "./DuplicatesDialog";
 import { usePartiesT } from "./i18n";
 import { useMergeIntoAction } from "./merge-into";
 
@@ -38,8 +38,9 @@ export const ORGANIZATION_MERGE_GROUPS: MergeGroupsRead = { document: Organizati
  * bucket, no relation, no other field), since each set is the records that share
  * a value the dialog can show and mark, read with "Repeated values only" (the
  * read's `having`), so it lists no group of one, and ordered by that field alone,
- * the one-field order the dialog pages by key (`GroupListing`). A flat list is
- * refused with what to do, and so is a grouping without repeated values only.
+ * ascending or descending with nulls placed last, the one-field order the dialog
+ * pages by key (`GroupListing`). A flat list is refused with what to do, and so is a
+ * grouping without repeated values only.
  */
 const ALL_MATCHING_REFUSALS = {
   records: "merge.selection.allRecords",
@@ -58,8 +59,8 @@ export function allMatchingField(
   if (!field || others.length > 0 || dimension?.granularity || !groups.fields.includes(field)) {
     return { refused: "grouping" };
   }
-  // The dialog pages by the list's own order on that field alone (`cursorField`, the one rule of what it can page).
-  if (cursorField(allMatching.read) !== field) return { refused: "grouping" };
+  // The dialog pages by the list's own order on that field alone, in either direction (`groupCursor`, its one rule).
+  if (groupCursor(allMatching.read)?.field !== field) return { refused: "grouping" };
   return { field };
 }
 

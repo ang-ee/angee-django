@@ -31,6 +31,7 @@ import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import { DATE_TIME_WIDGETS } from "./field-values";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import { isUnregisteredImplementationField } from "../resource/implementation-fields";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
@@ -54,19 +55,25 @@ import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
-import { RecordFieldMarkControl } from "./record-field-marks";
+import {
+  RecordFieldMarkControl, UnregisteredImplementationExplanation, UnregisteredImplementationField, explainsBeside,
+  useUnregisteredImplementationExplanation,
+} from "./record-field-marks";
 import { createLabelForResource } from "../resource/utils/labels";
 
+// The wrapper draws the field's focus ring (`focus-within:focus-ring`). A focused input, textarea or
+// button directly inside it drops its own ring (`ring-0`) and forced-colours outline; a control that
+// draws a focus-within ring on an element of its own (number, search, JSON, markdown, tags) keeps it.
 const EDITABLE_FIELD_CONTROL_CLASS = cn(
   "-mx-2 min-h-8 rounded-6 border border-transparent bg-transparent px-2",
   "transition-colors hover:border-border-subtle hover:bg-inset",
   "focus-within:border-border-focus focus-within:bg-sheet focus-within:focus-ring",
   "[&>button]:h-8 [&>button]:border-0 [&>button]:bg-transparent [&>button]:px-0 [&>button]:shadow-none",
-  "[&>button:hover]:bg-transparent [&>button:focus-visible]:shadow-none",
+  "[&>button:hover]:bg-transparent [&>button:focus-visible]:ring-0 [&>button:focus-visible]:outline-none",
   "[&>input]:h-8 [&>input]:border-0 [&>input]:bg-transparent [&>input]:px-0 [&>input]:shadow-none",
-  "[&>input:focus]:border-transparent [&>input:focus]:shadow-none [&>input:focus-visible]:border-transparent [&>input:focus-visible]:shadow-none",
+  "[&>input:focus]:border-transparent [&>input:focus]:ring-0 [&>input:focus]:outline-none [&>input:focus-visible]:border-transparent",
   "[&>textarea]:min-h-[120px] [&>textarea]:border-0 [&>textarea]:bg-transparent [&>textarea]:px-0 [&>textarea]:py-1.5 [&>textarea]:shadow-none",
-  "[&>textarea:focus]:border-transparent [&>textarea:focus]:shadow-none",
+  "[&>textarea:focus]:border-transparent [&>textarea:focus]:ring-0 [&>textarea:focus]:outline-none",
   "[&>div]:border-0 [&>div]:bg-transparent [&>div]:shadow-none",
 );
 const READONLY_FIELD_CONTROL_CLASS = "min-h-8 text-13 text-fg";
@@ -274,6 +281,8 @@ export function FormViewRecordHeader({
               relation={titleRelation}
               filters={currentTitleField.filters}
               selectedOption={titleSelectedOption}
+              fieldName={currentTitleField.name}
+              edit={currentTitleField.relationEdit}
               placeholder={currentTitleField.placeholder ?? t("relation.placeholder")}
               aria-label={fieldAriaLabel(currentTitleField)}
             />
@@ -356,8 +365,12 @@ export interface FormViewLineProps {
   lineFooter?: EditableLinesProps["footer"];
 }
 
-/** The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane. */
-function FormViewLines({
+/**
+ * The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane.
+ * The pane stays mounted beside other panes, so its draft rows and their errors outlive a pane change;
+ * which pane a refused save selects is the surface's `revealField`, never the lines' own.
+ */
+export function FormViewLines({
   surface,
   linePrimaryFields,
   lineFields,
@@ -387,20 +400,6 @@ function FormViewLines({
       history={{ perform: history.perform, start: startFieldInteraction, commit: commitFieldInteraction }}
     />
   );
-}
-
-/**
- * The trailing lines' pane. It stays mounted beside other panes, so a save whose lines
- * fail, in the browser or on the server, selects it and the viewer sees the rows to fix.
- */
-export function FormViewLinesPane(props: FormViewLineProps & { surface: FormViewSurface }): React.ReactElement | null {
-  const { form: { control }, linesField, setActiveRecordTab, tabbed } = props.surface;
-  const { errors, submitCount } = useFormState({ control, name: linesField ?? undefined, disabled: !linesField });
-  const linesFailed = tabbed && linesField !== null && submitCount > 0 && get(errors, linesField) !== undefined;
-  React.useEffect(() => {
-    if (linesFailed) setActiveRecordTab(EDITABLE_LINES_SECTION);
-  }, [linesFailed, setActiveRecordTab, submitCount]);
-  return <FormViewLines {...props} />;
 }
 
 /** The record's sheet: its body field and every section, always shown above any panes. */
@@ -522,6 +521,9 @@ function BoundFormField({
   const values = useWatch({ control: surface.form.control });
   const value = get(values, field.name);
   const readOnly = surface.fieldReadOnly(field);
+  const repair = surface.repairState(field);
+  const unregistered = isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, field.name, value);
+  // A pending repair's control shows `loading`; a refused one's explanation gives the server's words.
   const relation = surface.relationByField.get(field.name);
   const relationList = surface.relationListByField.get(field.name);
   const currentRelationId = relationValueId(value);
@@ -539,9 +541,11 @@ function BoundFormField({
       control={surface.form.control}
       name={field.name}
       render={({ field: controller, fieldState }) => (
-        <BoundFieldRow
+        <UnregisteredImplementationField field={field.name} marked={unregistered} readOnly={readOnly}
+          once={repair.repairing} refusal={repair.refusal}><BoundFieldRow
           controlRef={controller.ref}
           field={field}
+          loading={repair.loading}
           rail={rail}
           relation={relation}
           relationList={relationList}
@@ -562,7 +566,7 @@ function BoundFormField({
             controller.onChange(next);
             surface.afterFieldChange(field, next);
           }}
-        />
+        /></UnregisteredImplementationField>
       )}
     />
   );
@@ -736,6 +740,7 @@ function BoundFieldRow({
   row,
   readOnly,
   restricted = false,
+  loading = false,
   errors,
   serverMessages,
   onChange,
@@ -743,6 +748,8 @@ function BoundFieldRow({
   controlRef,
 }: {
   field: FieldDescriptor;
+  /** The control's own pending state (a repair's answer, or its save, is pending). */
+  loading?: boolean;
   rail?: boolean;
   relation?: RelationFieldInfo;
   relationList?: RelationFieldInfo;
@@ -767,12 +774,15 @@ function BoundFieldRow({
     : messages;
   const descriptionId = field.description ? `${controlId}-description` : undefined;
   const errorId = displayedMessages.length ? `${controlId}-error` : undefined;
+  const explanation = useUnregisteredImplementationExplanation(field.name);
   const controlProps = {
     id: controlId,
-    "aria-describedby": [descriptionId, errorId].filter(Boolean).join(" ") || undefined,
+    "aria-describedby": [descriptionId, explanation && explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
+      .filter(Boolean).join(" ") || undefined,
     "aria-invalid": displayedMessages.length > 0 || undefined,
     "aria-required": field.required && !effectiveReadOnly || undefined,
     ...(composite ? { "aria-labelledby": `${controlId}-label` } : {}),
+    ...(loading ? { loading: true } : {}),
   };
   return (
     <FieldRoot
@@ -805,6 +815,8 @@ function BoundFieldRow({
             relation={relation}
             filters={field.filters}
             selectedOption={selectedOption}
+            fieldName={field.name}
+            edit={field.relationEdit}
             aria-label={fieldAriaLabel(field)}
           />
         ) : relationList ? (
@@ -817,6 +829,7 @@ function BoundFieldRow({
             readOnly={effectiveReadOnly}
             relation={relationList}
             filters={field.filters}
+            fieldName={field.name}
             aria-label={fieldAriaLabel(field)}
           />
         ) : (
@@ -834,6 +847,7 @@ function BoundFieldRow({
         )}
         </DescriptorPresenceControl>
       </div> : null}
+      <UnregisteredImplementationExplanation explanation={explanation} messages={displayedMessages} />
       <FieldFooter description={field.description} errors={displayedMessages} descriptionId={descriptionId} errorId={errorId} />
     </FieldRoot>
   );

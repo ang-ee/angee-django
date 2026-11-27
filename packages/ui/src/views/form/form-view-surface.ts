@@ -43,6 +43,8 @@ import {
   relationListFieldInfo,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
+import { repairChoosable } from "../resource/implementation-fields";
+import { useRepairChoicesOperation } from "../resource/resource-operations";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { useArchiveActions } from "../resource/archive";
 import { useTrashActions } from "../resource/trash";
@@ -56,6 +58,7 @@ import {
   fieldErrorMessages,
   flattenedFormFields,
   formDisplaysGroup,
+  formFieldLabel,
   formSections,
   formViewFieldLayout,
   isEmptySection,
@@ -82,6 +85,7 @@ import {
 } from "./use-form-view-save";
 
 export type {
+  FormNextSave,
   FormSubmit,
   FormSubmitAcknowledgement,
   FormSubmitContext,
@@ -92,7 +96,7 @@ export { acknowledgeFormSubmit } from "./use-form-view-save";
 export type RecordPresentation = "document" | "workspace";
 
 export interface RecordFieldFocusOptions {
-  /** The pane holding the field; a sheet field, or one in the trailing lines, needs none. */
+  /** The pane holding the field; a sheet field, one in the trailing lines or one a pane group declares needs none. */
   recordTabId?: string;
 }
 
@@ -108,8 +112,18 @@ export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
   form: FormViewSaveSurface;
-  /** Focus one registered RHF field: in the sheet, or in the pane `recordTabId` names once it mounts. */
+  /**
+   * Bring one registered RHF field into sight and focus it: select the pane holding it (see
+   * `RecordFieldFocusOptions`), open a collapsed section holding it, and focus its control once
+   * that pane is the selected one.
+   */
   focusField: (path: string, options?: RecordFieldFocusOptions) => void;
+  /**
+   * The text of the label the form shows for its field `name`, so a pane that reports on a field
+   * names it as the form does: undefined for a field the form does not hold, one it shows without
+   * a label, or one whose label is not text.
+   */
+  fieldLabel: (name: string) => string | undefined;
 }
 
 export interface RecordToolbarContext {
@@ -197,6 +211,7 @@ export interface FormViewSurface
   t: UiTranslate;
   /** The selected pane; undefined when the record has none. */
   activeRecordTab: string | undefined;
+  /** The field a reveal names to the sheet's sections until that reveal is done, so a collapsed one holding it opens; null otherwise. */
   requestedFocusPath: string | null;
   setActiveRecordTab: (tab: string) => void;
   isCreate: boolean;
@@ -466,25 +481,35 @@ export function useFormViewSurface({
     [baseGroups, contributedGroupSequences],
   );
   const pageActions = actions ?? childActions;
-  const resolvedFields = React.useMemo(
-    () =>
-      withModeLockedFields(
-        fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
-        isCreate,
-      ),
-    [declaredFields, isCreate, modelMetadata, schemaMetadata],
+  const declaredResolvedFields = React.useMemo(
+    () => fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
+    [declaredFields, modelMetadata, schemaMetadata],
   );
-  const resolvedGroups = React.useMemo(
-    () =>
-      declaredGroups.map((group) => ({
-        ...group,
-        fields: withModeLockedFields(
-          fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
-          isCreate,
-        ),
+  const declaredResolvedGroups = React.useMemo(
+    () => declaredGroups.map((group) => ({
+      ...group,
+      fields: fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
+    })),
+    [declaredGroups, modelMetadata, schemaMetadata],
+  );
+  // The resource's repair read (its generated document, on the resource's own schema), which the lock and
+  // the save both ask: without it no repair is offered.
+  const repairOperation = useRepairChoicesOperation(dataResource);
+  const repairAvailable = repairOperation.target !== null;
+  // The mode lock for one record: a create-only selector stays choosable on an edit while the key
+  // the record stores is not registered (`repairChoosable`, the one owner of that question). It reads
+  // the stored row only, so a pick does not re-lock it.
+  const lockedFor = React.useCallback((record: Row | null) => {
+    const choosable = (field: FieldDescriptor) => repairChoosable(modelMetadata, record, field.name, repairAvailable);
+    return {
+      fields: withModeLockedFields(declaredResolvedFields, isCreate, choosable),
+      groups: declaredResolvedGroups.map((group) => ({
+        ...group, fields: withModeLockedFields(group.fields, isCreate, choosable),
       })),
-    [declaredGroups, isCreate, modelMetadata, schemaMetadata],
-  );
+    };
+  }, [declaredResolvedFields, declaredResolvedGroups, isCreate, modelMetadata, repairAvailable]);
+  // Every candidate, with no record: each create-only field locked on an edit.
+  const { fields: resolvedFields, groups: resolvedGroups } = React.useMemo(() => lockedFor(null), [lockedFor]);
   const railGroups = React.useMemo(() => isCreate ? [] : recordRailGroups(railEntries).map((group) => ({
     ...group,
     fields: (group.fields ?? []).map((row) => ({
@@ -524,14 +549,17 @@ export function useFormViewSurface({
   ), [modelMetadata, schemaMetadata]);
   // `formFields` registers every candidate so any record's values load; one record's form is its own
   // fields and those of the groups it displays and of its rail rows. Its layout and its save read these.
+  // `basis` is the record the lock reads: the save passes its edit's basis, the record the draft was made against.
   const regularFormFieldsFor = React.useCallback(
-    (record: Row | null) =>
-      displayedFormFields(resolvedFields, resolvedGroups, (group) => displaysGroup(group, record), pageGroupCount),
-    [displaysGroup, pageGroupCount, resolvedFields, resolvedGroups],
+    (record: Row | null, basis: Row | null = record) => {
+      const locked = lockedFor(basis);
+      return displayedFormFields(locked.fields, locked.groups, (group) => displaysGroup(group, record), pageGroupCount);
+    },
+    [displaysGroup, lockedFor, pageGroupCount],
   );
   // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
-    (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record),
+    (record: Row | null, basis: Row | null = record) => flattenedFormFields(regularFormFieldsFor(record, basis),
       (record ? displayedRailGroups(railGroups, record, railAdmits, modelMetadata) : [])
         .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
     [modelMetadata, railAdmits, railGroups, regularFormFieldsFor],
@@ -667,11 +695,16 @@ export function useFormViewSurface({
     [selection],
   );
 
+  // The save hook runs before this surface knows its panes, so it reaches `revealField` through this ref.
+  const revealRef = React.useRef<(path: string) => void>(() => undefined);
+  const revealForSave = React.useCallback((path: string) => revealRef.current(path), []);
   const save = useFormViewSave({
+    revealField: revealForSave,
     resource,
     id,
     isCreate,
     dataResource,
+    repairOperation,
     modelMetadata,
     formFields,
     formFieldsFor,
@@ -737,13 +770,17 @@ export function useFormViewSurface({
   }
   // The sheet's own declarations for this record, never a group it does not show.
   const sheetFields = React.useMemo(
-    () => regularFormFieldsFor(save.displayRecord),
-    [regularFormFieldsFor, save.displayRecord],
+    () => regularFormFieldsFor(save.displayRecord, save.editBasis),
+    [regularFormFieldsFor, save.displayRecord, save.editBasis],
   );
   const fieldLayout = React.useMemo(
     // Title, status and body come from the sheet's own fields.
-    () => formViewFieldLayout(sheetFields, resolvedFields, resolvedGroups, modelMetadata, isCreate),
-    [isCreate, modelMetadata, resolvedFields, resolvedGroups, sheetFields],
+    () => {
+      // The sheet takes the lock from the record the save's draft was made against, as the save does.
+      const locked = lockedFor(save.editBasis);
+      return formViewFieldLayout(sheetFields, locked.fields, locked.groups, modelMetadata, isCreate);
+    },
+    [isCreate, lockedFor, modelMetadata, save.editBasis, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [
@@ -892,31 +929,47 @@ export function useFormViewSurface({
   });
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
-  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+  /**
+   * Bring the field at `path` into sight, and move no focus: select the pane that holds it (the
+   * visible pane `options.recordTabId` names, else the trailing lines for a path under the lines
+   * field, else the pane group declaring it; none for a field the sheet shows), and name it to the
+   * sheet's sections (`requestedFocusPath`) so a collapsed one holding it opens. The one owner of
+   * which pane holds a field, and the only thing that selects a pane for a refused save; returns the
+   * pane it selected, undefined when it selected none.
+   */
+  const revealField = React.useCallback((path: string, options?: RecordFieldFocusOptions): string | undefined => {
     const { paneIds, linesPane, fieldPanes } = focusPanesRef.current;
     const linePath = save.linesField !== null
       && (path === save.linesField || path.startsWith(`${save.linesField}.`));
-    // The sheet always shows; only a field in a pane selects that pane before it takes focus.
+    // The sheet always shows; only a field in a pane selects that pane.
     const target = options?.recordTabId && paneIds.includes(options.recordTabId) ? options.recordTabId
       : linesPane && linePath ? EDITABLE_LINES_SECTION : fieldPanes.get(path);
-    pendingFocusRef.current = { path, recordTabId: target };
     setRequestedFocusPath(path);
-    if (target !== undefined) setActiveRecordTab(target);
-    setFocusRequest((request) => request + 1);
+    // A lone pane is the one shown, with no strip: selecting it would only write its id for the caller.
+    if (target !== undefined && paneIds.length > 1) setActiveRecordTab(target);
+    return target;
   }, [focusPanesRef, save.linesField, setActiveRecordTab]);
+  revealRef.current = revealField;
+  /** Reveal the field (`revealField`), then focus it through the form library once the pane it selected is the selected one. */
+  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+    pendingFocusRef.current = { path, recordTabId: revealField(path, options) };
+    setFocusRequest((request) => request + 1);
+  }, [revealField]);
   React.useEffect(() => {
     const pending = pendingFocusRef.current;
-    if (!pending || (pending.recordTabId && pending.recordTabId !== activeRecordTab)) return;
+    if (pending?.recordTabId && pending.recordTabId !== activeRecordTab) return;
     pendingFocusRef.current = null;
-    save.form.setFocus(pending.path);
-    setRequestedFocusPath(null);
-  }, [activeRecordTab, focusRequest, save.form]);
+    if (pending) save.form.setFocus(pending.path);
+    // A reveal that asked no focus here (a refusal's, whose own owner focuses) is done too: its section saw it.
+    if (requestedFocusPath !== null) setRequestedFocusPath(null);
+  }, [activeRecordTab, focusRequest, requestedFocusPath, save.form]);
+  const fieldLabel = React.useCallback((name: string) => formFieldLabel(fieldByName, name), [fieldByName]);
   const recordPanelContext = React.useMemo<RecordPanelContext | null>(
     () =>
       !isCreate && id != null
-        ? { recordId: id, reload: save.reload, form: save, focusField }
+        ? { recordId: id, reload: save.reload, form: save, focusField, fieldLabel }
         : null,
-    [focusField, id, isCreate, save],
+    [fieldLabel, focusField, id, isCreate, save],
   );
 
   return {

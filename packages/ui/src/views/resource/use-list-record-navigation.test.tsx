@@ -10,6 +10,7 @@ import type { ResourceListSnapshot, ListViewNavigationScope } from "./resource-v
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
 import { useListRecordNavigation } from "./use-list-record-navigation";
 import { useResourceListQuery } from "./surface/resource-list-query";
+import { useResourceRowsSnapshot } from "./surface/table-state";
 
 const resource = testDataResource("notes.Note", {
   roots: { aggregate: "notes_aggregate" },
@@ -60,7 +61,7 @@ test("native Refine pages the clicked leaf without changing its filter/order or 
   const pendingPage = new Promise<{ id: string }[]>((resolve) => { release = resolve; });
   const f = fixture({ getPage: async (page) => page === 2 ? pendingPage : [{ id: "a" }, { id: "b" }] });
   await waitFor(() => expect(f.result.current.navigation?.current).toBe(2));
-  expect(f.getList.mock.calls[0]?.[0]).toMatchObject({ resource: "notes", pagination: { currentPage: 1, pageSize: 2 }, sorters: [], filters: [], meta: { fields: ["id"], gqlVariables: { where: { _and: [{ title: { _ilike: "%needle%" } }, { status: { _eq: "active" } }] }, order_by: { updated_at: "desc" } } } });
+  expect(f.getList.mock.calls[0]?.[0]).toMatchObject({ resource: "notes", pagination: { currentPage: 1, pageSize: 2 }, sorters: [], filters: [], meta: { fields: ["id"], gqlVariables: { where: { _and: [{ title: { _ilike: "%needle%" } }, { status: { _eq: "active" } }] }, order_by: [{ updated_at: "desc" }] } } });
   act(() => f.result.current.navigation?.onNext?.());
   await waitFor(() => expect(f.getList).toHaveBeenCalledTimes(2));
   expect(f.result.current.id).toBe("b");
@@ -312,6 +313,55 @@ test.each(["filter", "pageSize", "error"] as const)("local pending page intent i
   expect(onSelect).not.toHaveBeenCalled();
   act(() => local.result.current.onListStateChange(snapshot));
   expect(local.result.current.navigation?.onPrev).toBeTypeOf("function");
+});
+
+/** The same two keys and directions in two priorities. */
+const updatedFirst = { updated_at: "DESC", "author.display_name": "ASC" } as const;
+const authorFirst = { "author.display_name": "ASC", updated_at: "DESC" } as const;
+
+test("a list's published navigation scope follows a pure priority swap of its order", () => {
+  const published: (ListViewNavigationScope | undefined)[] = [];
+  const page = { rows: [{ id: "a" }, { id: "b" }], total: 4, page: 1, pageSize: 2, pageCount: 2, hasNext: true, hasPrev: false, fetching: false, error: null };
+  const list = renderHook(({ order }: { order: ListViewNavigationScope["order"] }) => useResourceRowsSnapshot(page, {
+    navigation: { filter: scope.filter, order }, onListStateChange: (state) => published.push(state.navigationScope),
+  }), { initialProps: { order: updatedFirst as ListViewNavigationScope["order"] } });
+  list.rerender({ order: authorFirst });
+  // The same rows under another priority are another snapshot: the pager is handed the order now shown.
+  expect(published.map((navigation) => Object.keys(navigation?.order ?? {}))).toEqual([
+    ["updated_at", "author.display_name"], ["author.display_name", "updated_at"],
+  ]);
+});
+
+test("the pager's captured scope follows a pure priority swap, and its read asks for the order now shown", async () => {
+  const f = fixture({ initialScope: null });
+  const local = renderHook(({ id }: { id: string | null }) => useListRecordNavigation<{ id: string }>({ resource: "notes.Note", recordId: id, onSelect: vi.fn() }),
+    { wrapper: f.wrapper, initialProps: { id: null as string | null } });
+  const snapshot = (order: ListViewNavigationScope["order"]): ResourceListSnapshot<{ id: string }> => ({
+    rows: [{ id: "a" }, { id: "b" }], total: 4, page: 1, pageSize: 2, pageCount: 2, hasNext: true, hasPrev: false, fetching: false,
+    navigationScope: { ...scope, order },
+  });
+  act(() => local.result.current.onListStateChange(snapshot(updatedFirst)));
+  act(() => local.result.current.onListStateChange(snapshot(authorFirst)));
+  local.rerender({ id: "b" });
+  await waitFor(() => expect(local.result.current.navigation?.current).toBe(2));
+  expect(Object.keys(local.result.current.navigationScope?.order ?? {})).toEqual(["author.display_name", "updated_at"]);
+  expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual([{ "author.display_name": "asc" }, { updated_at: "desc" }]);
+});
+
+test("the pager's captured scope follows a turn of one key's direction, and its read asks for the direction now shown", async () => {
+  const f = fixture({ initialScope: null });
+  const local = renderHook(({ id }: { id: string | null }) => useListRecordNavigation<{ id: string }>({ resource: "notes.Note", recordId: id, onSelect: vi.fn() }),
+    { wrapper: f.wrapper, initialProps: { id: null as string | null } });
+  const snapshot = (order: ListViewNavigationScope["order"]): ResourceListSnapshot<{ id: string }> => ({
+    rows: [{ id: "a" }, { id: "b" }], total: 4, page: 1, pageSize: 2, pageCount: 2, hasNext: true, hasPrev: false, fetching: false,
+    navigationScope: { ...scope, order },
+  });
+  act(() => local.result.current.onListStateChange(snapshot({ updated_at: "DESC" })));
+  act(() => local.result.current.onListStateChange(snapshot({ updated_at: "ASC" })));
+  local.rerender({ id: "b" });
+  await waitFor(() => expect(local.result.current.navigation?.current).toBe(2));
+  expect(local.result.current.navigationScope?.order).toEqual({ updated_at: "ASC" });
+  expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual([{ updated_at: "asc" }]);
 });
 
 test("captured query facts cannot cross model bindings", async () => {

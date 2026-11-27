@@ -228,6 +228,15 @@
   },
   {
     "package": "@angee/app",
+    "name": "retryAppQuery",
+    "source": "packages/app/src/create-app.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/app",
     "name": "safeRedirectPath",
     "source": "packages/app/src/auth/safe-redirect.ts",
     "kind": null,
@@ -2061,6 +2070,15 @@
     "source": "packages/ui/src/chrome/DocumentTitle.tsx",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "DraftScopeProvider",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Provider infrastructure: the enclosing draft scope.",
     "status": "stable",
     "storyId": null
   },
@@ -3977,7 +3995,7 @@
     "source": "packages/ui/src/views/resource/resource-list/public.tsx",
     "kind": "surface",
     "status": "stable",
-    "storyId": null
+    "storyId": "views-resourcelist--inline"
   },
   {
     "package": "@angee/ui",
@@ -4091,6 +4109,15 @@
     "name": "STATUS_TONES",
     "source": "packages/ui/src/widgets/status-tones.ts",
     "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "SURFACE_RENDERS_FAILURE",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Transport infrastructure: the one quiet-call value form surfaces hand their callers.",
     "status": "stable",
     "storyId": null
   },
@@ -4770,6 +4797,14 @@
     "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
     "reason": "Schema infrastructure: validates serialized runtime contracts.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "THEME_ELEVATION_PRESETS",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": "token",
     "status": "stable",
     "storyId": null
   },
@@ -6203,6 +6238,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "formErrorsFromForm",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "formLayoutVariants",
     "source": "packages/ui/src/ui/form-layout.tsx",
     "kind": "token",
@@ -6230,6 +6274,15 @@
   {
     "package": "@angee/ui",
     "name": "formSubmitError",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "formSubmitOutcome",
     "source": "packages/ui/src/views/form/validation-errors.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
@@ -6542,6 +6595,15 @@
     "source": "packages/ui/src/views/resource/model/capabilities.ts",
     "kind": null,
     "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "isShadowList",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Schema infrastructure: validates serialized runtime contracts.",
     "status": "stable",
     "storyId": null
   },
@@ -7085,6 +7147,15 @@
     "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
     "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "pathnameChanges",
+    "source": "packages/ui/src/views/form/use-unsaved-changes-navigation-guard.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },
@@ -8079,6 +8150,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useController",
+    "source": "packages/ui/src/views/index.ts",
+    "kind": null,
+    "reason": "upstream re-export",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useDashboardRegistry",
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": "surface",
@@ -8181,6 +8261,15 @@
     "package": "@angee/ui",
     "name": "useDottedPathFieldErrors",
     "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useDraftScope",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
@@ -8307,6 +8396,33 @@
   },
   {
     "package": "@angee/ui",
+    "name": "useIdempotencyDraftOwner",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeyState",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useIdempotencyKeys",
+    "source": "packages/ui/src/lib/idempotency-key.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "useImplCategory",
     "source": "packages/ui/src/views/relation/enum-options.ts",
     "kind": "contribution",
@@ -8354,6 +8470,15 @@
     "package": "@angee/ui",
     "name": "useInAppNavigator",
     "source": "packages/ui/src/lib/in-app-link.tsx",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useLateAnswerReport",
+    "source": "packages/ui/src/views/form/late-answer.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
@@ -8599,6 +8724,15 @@
     "source": "packages/ui/src/feedback/refine-notification.ts",
     "kind": null,
     "reason": "Provider infrastructure: adapts Toast to Refine notifications.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRefusalFocus",
+    "source": "packages/ui/src/views/form/validation-errors.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
     "storyId": null
   },

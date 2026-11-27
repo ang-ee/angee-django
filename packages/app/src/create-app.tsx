@@ -82,7 +82,7 @@ import {
 } from "@angee/ui/runtime";
 import { isBuiltInResourceViewKind, validateResourceViewPreset } from "@angee/ui/views/resource-view-model";
 import { validateResourceCard, validateSearchShortcut } from "@angee/ui/views/resource-view-types";
-import { composeAddons, type ShellSettings } from "./define-addon";
+import { composeAddons, type HostAppearanceRead, type ShellSettings } from "./define-addon";
 import {
   ModalsHost,
   ToastProvider,
@@ -192,8 +192,12 @@ export interface CreateAppInput {
   location?: { search?: string; hostname?: string };
   /** Native router history; workshops and embedded hosts can isolate navigation. */
   history?: AnyRouter["history"];
-  /** Build-owned defaults used until an authenticated user overrides them. */
-  appearance?: HostAppearanceDefaults;
+  /**
+   * The build's appearance: its theme, color scheme and options. It takes no `pending`:
+   * the session frame alone sets that, from an installed `hostAppearance` source. How it
+   * ranks is docs/frontend/appearance.md, "Host and user precedence".
+   */
+  appearance?: Omit<HostAppearanceDefaults, "pending">;
 }
 
 export type AngeeAppSchemaConfig =
@@ -220,6 +224,18 @@ export interface AngeeApp {
 }
 
 /**
+ * Whether the app retries a failed read: TanStack's three retries, for a failure a retry can
+ * fix (`retryableQueryError`): a public GraphQL answer (a refusal, a permission, a conflict) is
+ * not retried, since a retry repeats it. A surface that builds its own query client, as the
+ * workshop's fixture does, passes this so its reads fail as the app's do.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function retryAppQuery(failureCount: number, error: unknown): boolean {
+  return failureCount < 3 && retryableQueryError(error);
+}
+
+/**
  * The app-owned react-query client config. createApp builds ONE `QueryClient`
  * from this and shares it with both `<Refine reactQuery.clientConfig>` and the
  * route gate's `beforeLoad`, so the auth gate and the in-app identity read hit
@@ -240,8 +256,7 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      // TanStack's three retries, for failures a retry can fix.
-      retry: (failureCount, error) => failureCount < 3 && retryableQueryError(error),
+      retry: retryAppQuery,
       placeholderData: keepPreviousData,
       staleTime: 30_000,
       gcTime: 600_000,
@@ -339,15 +354,16 @@ export function createApp(input: CreateAppInput): AngeeApp {
         : [])),
   });
   const unavailable = projection.unavailable;
+  const themeDefinitions = new Map(composed.themes.map((theme) => {
+    const definition = "definition" in theme ? theme.definition : theme;
+    return [definition.id, definition] as const;
+  }));
   validateSelections(shell, menuTree.roots, {
     routes: routesByName,
     rootFor: (route) => projection.rootFor(route),
     unavailable,
     icons: composed.icons,
-    themes: new Set(composed.themes.map((theme) => {
-      const definition = "definition" in theme ? theme.definition : theme;
-      return definition.id;
-    })),
+    themes: themeDefinitions,
   });
   // The selected app's theme is the default until the person picks their own; the build's
   // theme options belong to the build's theme. Only the selection can lock it.
@@ -355,6 +371,14 @@ export function createApp(input: CreateAppInput): AngeeApp {
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
   const themeLocked = selection.themeLocked === true;
+  // The host theme the host appearance source is asked about, none when its options decline the source
+  // (docs/frontend/appearance.md, "Host and user precedence").
+  const hostTheme = appearance?.themeId ? themeDefinitions.get(appearance.themeId) ?? null : null;
+  const sourceTheme = hostTheme?.options?.acceptsHostAppearanceSource === false ? null : hostTheme;
+  // Asked about no theme, the source gets no build options, and the session frame wears none of its answer.
+  const sourceBuild = sourceTheme ? appearance?.options : undefined;
+  // Fixed per app, so the session frame calls the same hooks on every render.
+  const useHostAppearance = composed.hostAppearance?.useOptions ?? useBuildAppearance;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
   const runtimeRouteHref = unavailable.size
     ? createRouteHref(routeDescriptors, { unavailable: new Set(unavailable.keys()) })
@@ -653,16 +677,26 @@ export function createApp(input: CreateAppInput): AngeeApp {
           disableTelemetry: true,
         }}
       >
-        <AppFrame
-          viewAs={viewAs}
-          authSchema={authSchema}
-          loginPath={loginPath}
-          appearance={appearance}
-          themeLocked={themeLocked}
-        >
+        <HostAppearanceFrame>
           <Outlet />
-        </AppFrame>
+        </HostAppearanceFrame>
       </Refine>
+    );
+  }
+
+  /** The session frame: the only writer of the host appearance source's answer into the provider's host. */
+  function HostAppearanceFrame({ children }: { children: ReactNode }): ReactNode {
+    const answer = useHostAppearance(sourceTheme, sourceBuild);
+    // No theme asked about, or one that takes no options: no answer can change what it wears, so the
+    // build's appearance stands whole and nothing is held, whatever the source answers.
+    const read = sourceTheme?.options ? answer : BUILD_APPEARANCE;
+    const host = useMemo(() => read.options || read.pending
+      ? { ...appearance, ...(read.options ? { options: read.options } : {}), ...(read.pending ? { pending: true } : {}) }
+      : appearance, [read.options, read.pending]);
+    return (
+      <AppFrame viewAs={viewAs} authSchema={authSchema} loginPath={loginPath} appearance={host} themeLocked={themeLocked}>
+        {children}
+      </AppFrame>
     );
   }
 
@@ -997,6 +1031,13 @@ function RuntimeSessionProvider({
   );
 }
 
+const BUILD_APPEARANCE: HostAppearanceRead = { pending: false };
+
+/** No installed host appearance source: the build's appearance stands. */
+function useBuildAppearance(): HostAppearanceRead {
+  return BUILD_APPEARANCE;
+}
+
 /** Public and other layouts retain an exit path when leaving console chrome. */
 function ViewAsLayoutNotice({ children }: { children: ReactNode }): ReactNode {
   return <><ViewAsBanner />{children}</>;
@@ -1057,7 +1098,7 @@ function validateSelections(
     rootFor: (route: BaseAddonRoute) => string | undefined;
     unavailable: ReadonlyMap<string, string>;
     icons: Readonly<Record<string, unknown>>;
-    themes: ReadonlySet<string>;
+    themes: ReadonlyMap<string, unknown>;
   },
 ): void {
   const checkFacts = (where: string, declared: { brand?: RuntimeBrand; theme?: string; themeLocked?: boolean }): void => {

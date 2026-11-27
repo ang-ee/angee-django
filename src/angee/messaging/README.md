@@ -147,6 +147,10 @@ channel [`ChannelQuerySet.outbound_email_rule`](managers.py) admits, whose
 sender is checked only when a message is sent; and `message_recipient_limit`
 states the recipient bound.
 
+A channel's backend is chosen by connecting it, and its form shows the backend
+read-only: a channel whose backend is no longer registered (its addon removed) is
+not repaired there; connecting the channel again is the remedy.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and

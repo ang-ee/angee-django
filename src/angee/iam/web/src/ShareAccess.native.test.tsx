@@ -22,13 +22,13 @@ function renderShare(content: ReactNode, { resource = note(), access = [] as rea
   routed?: boolean;
 } = {}): GraphQLWireRequest[] {
   const requests: GraphQLWireRequest[] = [];
-  const schemas = { console: { ...storySchema({
+  const schemas = storySchema({
     record_readers: () => [{ subject: "auth/user:ada", label: "Ada", you: true }],
     record_access: () => access,
     record_access_options: () => [{ relation: "reader", permission: "share" }],
     users: () => [],
     users_aggregate: () => ({ aggregate: { count: 0 } }),
-  }, (request) => requests.push(request)).public!, metadata: { angee: { resources: [resource, user] } } } };
+  }, { schema: "console", resources: [resource, user], onRequest: (request) => requests.push(request) });
   const runtime = containers ? { containers } : {};
   render(routed
     ? <RoutedRuntimeFixture activeSchema="console" schemas={schemas} runtime={runtime} collectionPath="/notes">{content}</RoutedRuntimeFixture>

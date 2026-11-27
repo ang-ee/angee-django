@@ -26,7 +26,7 @@ afterEach(() => { cleanup(); providers.clearClients(); });
 test("native subject chips resolve display names, narrow kinds, retain item messages and become read-only during submit", async () => {
   let finish: (() => void) | undefined;
   function Form() {
-    const action = useActionForm({ defaultValues: { reviewers: ["auth/user:13", "auth/group:7#member", "auth/user:14", "auth/user:999"] }, submit: () => new Promise<{ status: "ok"; data: true }>((resolve) => {
+    const action = useActionForm({ defaultValues: { reviewers: ["auth/user:13", "auth/group:7#member", "auth/user:14", "auth/user:999"] }, shownFieldNames: ["reviewers"], submit: () => new Promise<{ status: "ok"; data: true }>((resolve) => {
       finish = () => resolve({ status: "ok", data: true });
     }) });
     const fields = useFormSpecFields({ type: "object", properties: { reviewers: {
@@ -60,7 +60,7 @@ test("native subject chips resolve display names, narrow kinds, retain item mess
 
 test("the all-subject offering includes groups through the existing widget registry", async () => {
   function Form() {
-    const action = useActionForm({ defaultValues: { subjects: [] }, submit: async () => ({ status: "ok", data: true }) });
+    const action = useActionForm({ defaultValues: { subjects: [] }, shownFieldNames: ["subjects"], submit: async () => ({ status: "ok", data: true }) });
     const fields = useFormSpecFields({ type: "object", properties: { subjects: {
       type: "array", widget: "assignmentSubjects", title: "Subjects", items: { type: "string" },
     } } });
