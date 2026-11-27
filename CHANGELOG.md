@@ -1343,8 +1343,10 @@ live in code docstrings.
 - `angee.parties`: **Changed behaviour.** An email handle is one address whatever
   its letter case or domain spelling. A handle has a spelling key,
   `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
-  address trimmed and lower-cased, not case-folded, its domain in the one
-  spelling the email backend sends it in, so a punycode label and its Unicode,
+  address trimmed of ASCII whitespace, its local part lower-cased but for a
+  non-ASCII character whose lower case would be ASCII or of another length,
+  which is kept (`Handle.normalize_local_part`), not case-folded, its domain in one Unicode
+  spelling of those the email backend sends as one, so a punycode label and its Unicode,
   NFD and NFC, full-width letters and their ASCII, and `ß` and `ss` are one
   domain (`Handle.normalize_email_domain` takes each label through the
   standard library's IDNA 2003 codec and keeps one it cannot read, such as
@@ -1376,7 +1378,10 @@ live in code docstrings.
   repair has not reached compares as it will, and two phone handles whose
   numbers the rule reads only as their digits (`Handle.is_fallback_key`:
   `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
-  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2. A consumer rule
+  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2: this rule,
+  with two amendments made before any release carries it, a domain whose spelling would
+  be longer than a domain name can be kept as typed, and an email local part lower-cased
+  but for a non-ASCII character whose lower case would be ASCII or of another length. A consumer rule
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
@@ -1441,6 +1446,118 @@ live in code docstrings.
     folds them. Leaving for good removes the column and the constraint with a
     reviewed migration.
   - No `rebac sync` and no SDL change.
+- `angee.parties`, `angee.provenance`: **New field and reads; changed behaviour.**
+  - **An organization's domain key.** `Organization.domain_key` is its domain in
+    the one spelling the domain-spelling rule gives (`Handle.normalize_email_domain`,
+    the rule a handle's keys read), written by the organization's save whenever
+    the domain is (a save naming the key without the domain keys the domain the
+    row stores), `""` for no domain, indexed once (`Meta.indexes`, none on
+    history), and versioned in history beside the domain. The bulk paths write no
+    key: a queryset `update` of the domain and a `bulk_update` naming it leave it
+    until the provision repair. `Organization.domain_filter(domain)` is a `Q` for the
+    organizations whose domain is `domain` in any spelling the rule joins;
+    several may share one. The organization-domain suggestion
+    (`PartyManager.suggest_for`) reads it, so an organization typed
+    `straße.example` is suggested for `ada@strasse.example`, and one typed in
+    NFD, in full-width letters or as `BÜCHER.example` for the plain spelling, on
+    both databases; its pre-filter by the rule's spelling, its punycode and the
+    address's own spelling is removed. A consumer that compared
+    `Organization.domain` (`domain__iexact`) asks `Organization.domain_filter`.
+    Matching by domain goes through the key; the `organizations` resource's
+    filter, sort and group axes stay on the typed `Organization.domain`.
+  - **Organizations sharing a domain are each suggested for review.** When an
+    address's domain matches several organizations, `PartyManager.suggest_for`
+    suggests each at `0.3`, the twins' weight for a competing party (below
+    `Party.REVIEW_CONFIDENCE`), in primary-key order, where it suggested one at
+    `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
+    One matching organization is suggested at `0.4` as before. Each further
+    organization costs one suggestion's statements.
+  - **The handle rule's two amendments.** The domain-spelling rule keeps as typed
+    a name whose spelling would be longer than a domain name can be
+    (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
+    `URLValidator` bounds a host name). A name of ligatures that each read as many
+    letters (U+FDFA reads as 18) could otherwise key past the 512-character
+    columns: an organization's save raised `DataError` on PostgreSQL, and a handle
+    of such an address could not be stored. An email address's local part is
+    lower-cased character by character (`Handle.normalize_local_part`), but a
+    non-ASCII character whose lower case would be ASCII or of another length is
+    kept as typed, so no non-ASCII character turns into another mailbox's ASCII
+    letter: the Kelvin sign (U+212A) is no `k`, so its address is never `kate@`'s
+    handle, and `İ` stays `İ`, while `JOSÉ@` and `josé@`, `MÜLLER@` and
+    `müller@` stay one handle each and the Angstrom and Ohm signs still fold onto
+    `å` and `ω`. The kept characters are computed from `str.lower`, and a test
+    pins today's two. An address is trimmed of ASCII whitespace only
+    (`Handle.ADDRESS_WHITESPACE`): a value beginning with a no-break or another
+    non-ASCII space is no address (`Handle.is_email_address`), and its spelling key
+    keeps the space, so it is never another address's handle. The spelling key,
+    and through it the person-matching key and `Handle.is_spelling_of`, read a
+    local part only through `normalize_local_part`.
+  - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,
+    value)` is an email address's domain in the rule's spelling (`""` off email
+    or with no `@`); `HandleQuerySet.at_domain(domain)` is the email handles at a
+    domain in any spelling. A consumer that split a stored key at its `@` asks them.
+  - **Who is confirmed on an address.** `StatementQuerySet.confirmed()` is the
+    applied statements whose stance is a confirmation (`Statement.CONFIRMED_STANCE`:
+    a person's or a seed's preferred statement with a value). The mapping is the
+    one statement of the stance: `confirm_statement` writes it and
+    `Statement.is_confirmed` checks it of a row, which checks no status, so a
+    confirmation that is not applied (a withdrawn one, say) is one as a row and
+    is not in the scope.
+    `Statement.DISMISSED_STANCE` does the same for a dismissal
+    (`dismiss_statement`, `Statement.is_dismissed`, and parties' same-person read).
+    `PartyQuerySet.confirmed_on(handles)` is the canonical parties confirmed on
+    any of the handles: every confirmation, not only the party a handle
+    resolves to, plus each handle's own confirmed party, in one query. It reads
+    the confirmations structurally; the caller passes handles it may read and
+    calls it on parties scoped as it needs.
+  - **One walk for the key repairs.** `repair_keys` takes a key repair's rows in
+    batches of `REPAIR_BATCH` (500), one transaction each, re-reads each under its
+    row lock (`FOR NO KEY UPDATE`: neither repair writes a column a foreign key
+    references, so a writer adding an address to a locked party no longer waits
+    on the batch) and writes it in a savepoint of its own: a row whose write
+    raises is rolled back, logged and counted in `failed`, and the rest are
+    written. A repair is no edit: each writes its key columns alone, by a
+    queryset update that records one version of the row in the run's changeset,
+    and `updated_at`, which orders lists, no longer moves. The handle repair
+    writes what the handle derives (`Handle.derived_keys`, what its save writes)
+    and asks `Handle.value_owner` before it writes. A run that finds nothing
+    stale writes nothing, not even its system elevation's audit row.
+    `renormalize_handles` walks through it; `HandleManager.REPAIR_LIMIT`
+    is now only the holder repair's default cap. The new provision repair
+    `renormalize_organization_domains` (`OrganizationManager.renormalize_domains` on
+    `Organization.objects`, a `PartyManager` of its own, so a host model
+    inheriting `Organization` that declares its own manager derives it from
+    `OrganizationManager`, where one from `PartyManager` fails the type check;
+    also a command) walks through it too, reading every organization's domain and
+    key and writing the key of each one whose key is not its domain's, on its
+    most derived row; it returns a `KeyRepair`. It reads the whole table at every
+    provision, which is what catches a queryset `update` of the domain: about
+    2.5 seconds for 50,000 keyed organizations on PostgreSQL 17.
+  - **Upgrade:** run `makemigrations` and commit it before the first
+    provision: a host that provisions first fails on the missing column. It
+    authors an `AddField` of `domain_key` on `organization` and on
+    `historicalorganization` (and on the history model of any host model
+    inheriting `Organization` with history), each with a database default of
+    `""`, one `AddIndex` on the organization table (history tables get no
+    index), and an `AlterModelManagers` on `organization` that runs no SQL
+    (`Organization.objects` is an `OrganizationManager`). On PostgreSQL the column is added without a table rewrite, and the
+    index is a plain `CREATE INDEX` in the migration's transaction, after the
+    column's `ALTER TABLE`, so organizations are locked against writes (and,
+    under that `ALTER TABLE`'s lock, reads) while it builds. Between the
+    migration and the next provision every existing organization's key is `""`,
+    so neither the suggestion nor a consumer's `domain_filter` finds an
+    organization by domain; provision keys them all, writing one history version
+    per organization and no `updated_at`, at about 14 statements a row (5,000
+    rows took 446 seconds on a machine under load 44 to 51). The handle rule stays
+    at version 2, amended before any release: a host already keyed at 2 by the
+    unamended rule (one tracking main) keeps those keys, and only an email handle
+    whose domain reads to 254 to 512 characters, or whose local part holds a
+    Kelvin sign, an `İ` or a leading non-ASCII space, keys otherwise under the
+    amended rule. No `rebac sync` and no SDL change: the key is in no GraphQL
+    type.
+    **Rollback:** older code runs beside the column (its database default fills
+    an insert); a host leaving this code for good removes the column and its
+    indexes with a reviewed migration.
 - `angee.messaging`: **The console reads where one may send a new message, which
   messages were written here, and the recipient bound.**
   - **New.** The channels filter `sendable`
@@ -3681,16 +3798,16 @@ live in code docstrings.
   the handle and to its history table, commits it, and provisions. Existing
   rows are then at version 0, so the provision repair `renormalize_handles`
   (`HandleManager.renormalize_handles`), which every provision runs, selects
-  them by the column's index and saves each again through the handle's own
-  save. It takes the whole backlog in that provision, because a row left with
+  them by the column's index and writes each one's keys again as the handle
+  derives them (`Handle.derived_keys`). It takes the whole backlog in that provision, because a row left with
   a stale key is one the lookups that read keys miss, and a writer that
   misses it makes a second row. So the first provision after the migration
-  saves every existing handle once (`updated_at` stamped, one history version
-  each); its time grows with the table: about 65 rows per second on
+  keys every existing handle once (its key columns alone, one history version
+  each, `updated_at` unmoved); its time grows with the table: about 65 rows per second on
   PostgreSQL 17 in a local container, measured twice with 10,000 handles
   (155 and 149 seconds) on an 18-core development machine that other work
   kept under heavy load (load average 75 to 87). The repair saves in batches
-  of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
+  of `REPAIR_BATCH` (500) rows (`repair_keys`), each in its own transaction, so
   an interrupted provision keeps what it saved and the next one resumes. The
   provision log prints "Saved the keys of N handle(s) again." A row
   whose save raises is rolled back alone, logged with its error, counted in
