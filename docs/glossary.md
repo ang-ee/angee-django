@@ -410,7 +410,8 @@ channel they send from. See
 
 **System mailer** — Django's default mailer wherever messaging is installed,
 `SystemMailer`: it records each email Django sends as **System mail** and sends
-nothing itself. See [messaging's contracts](../src/angee/messaging/README.md).
+nothing itself. A consumer's own mail sent straight through the **Transport
+mailer** by name is a deliberate exception, outside messaging. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **System channel** — messaging's install row `messaging.system_channel` (backend
 `system`), where **System mail** is written. Administrators alone read it, no

@@ -784,7 +784,9 @@ live in code docstrings.
     and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
     error report hides every local of the system write's frames, and of the
     shared writer's, the delivery path's and the operator's retry and
-    acknowledge frames for any mail; an exception's own text is not filtered. `ChannelBackend.system_only` (read
+    acknowledge frames for any mail. A transport's error never leaves the delivery task: when recording its
+    failure fails too, that failure is raised on its own and the transport's error is logged by its types;
+    a database error's own text is not filtered. `ChannelBackend.system_only` (read
     through `Channel.system_only`) declares a backend that serves the system
     channel alone, which people never choose to send from or to watch. `messaging.E004`
     (`check --deploy`) reports a development-only transport mailer. Messaging

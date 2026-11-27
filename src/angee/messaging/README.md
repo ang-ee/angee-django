@@ -132,7 +132,12 @@ permanently. Lock contention defers work without consuming an attempt.
 locks the row, decides eligibility and sets a bounded delivery lease; the dispatch
 publishes the reserved identifiers through the jobs owner's on-commit hook. The periodic
 `release_held_messages` task releases due drafts/retries and recovers expired
-unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. Retry
+unclaimed dispatch leases, with SQL eligibility, skip-locked claims and a savepoint per row. A
+message recorded while the broker is unreachable is not lost: the failed hand-off is logged at
+`ERROR` (`django.db.backends.base`) without failing the caller, the row stays queued, and the
+release (every 60 seconds, from the jobs beat scheduler) hands it off again once its dispatch
+lease has passed, `DELIVERY_TASK_EXPIRES` (300 seconds) after it was reserved, spending no
+delivery attempt. Retry
 settlement retains the enqueue-owned lease through the next scheduled attempt;
 terminal settlement clears it. Queued rows without a lease are never released
 automatically, even if they carry a due schedule.
@@ -265,7 +270,11 @@ Django's default mailer, `MAILERS["default"]`, is messaging's
 [`SystemMailer`](email.py), contributed by [`autoconfig.py`](autoconfig.py): it
 records each email Django sends (a password reset, `sendtestemail`, a link an
 addon mails) on the system channel, and messaging delivers it through the
-transport. A deployment states only the transport:
+transport. A consumer that sends its organisation's own mail may instead send it
+straight through the `transport` mailer by name (`TRANSPORT_MAILER_ALIAS`): that
+mail is outside messaging, which neither records, delivers nor retries it. This
+is a deliberate exception, and it ends when named system work can compose on an
+ordinary channel. A deployment states only the transport:
 
 ```yaml
 MAILERS:
@@ -402,9 +411,11 @@ form is its preview: `Message.deliver` down, the worker's
 `run_message_delivery` down to the transport library's own frames, the release
 task's `release_held_messages` down, and the operator's `retry_delivery` and
 `acknowledge_delivery` down. Django's filter applies only with `DEBUG` off, so a
-debug page shows them all, and it never filters an exception's own message: a
-transport's or a database's error text can carry what the server echoed (an
-address, a line of the mail). An ordinary `compose`'s report
+debug page shows them all, and it never filters an exception's own message. A
+transport's error never leaves the delivery task: when recording its failure fails
+too, that failure is raised on its own and the transport's error is logged by its
+types alone. What is still not filtered is a database error's own text, and a
+caller's own frames above the system mailer. An ordinary `compose`'s report
 therefore shows hidden frames below the writer, while `compose`'s own frame is
 not marked. Frames above the system mailer are the caller's: Django's
 `send_mail` holds the message it was given, so a caller that mails a credential

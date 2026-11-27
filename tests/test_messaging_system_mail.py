@@ -30,12 +30,18 @@ from django.test import override_settings
 from django.utils import timezone
 from django.utils.log import AdminEmailHandler, configure_logging
 from django.views.debug import ExceptionReporter
+from kombu.exceptions import OperationalError
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
-from angee.messaging.constants import DELIVER_MESSAGE_TASK, SYSTEM_CHANNEL_BACKEND, SYSTEM_MAILER_BACKEND
+from angee.messaging.constants import (
+    DELIVER_MESSAGE_TASK,
+    DELIVERY_TASK_EXPIRES,
+    SYSTEM_CHANNEL_BACKEND,
+    SYSTEM_MAILER_BACKEND,
+)
 from angee.messaging.email import SystemChannelBackend, SystemMailer
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
@@ -464,6 +470,49 @@ def test_mail_sent_in_a_transaction_that_rolls_back_is_never_sent(
     assert sent == [DELIVER_MESSAGE_TASK]
 
 
+
+def test_a_system_mail_whose_hand_off_fails_waits_queued_and_the_release_sends_it_once(
+    system_mailer: Any, monkeypatch: pytest.MonkeyPatch, django_capture_on_commit_callbacks: Any, caplog: Any,
+) -> None:
+    """The broker is down when the mail is recorded: the caller's send returns, the row waits queued with its lease.
+
+    The release (``messaging.release_held_messages``, every minute) takes it once its dispatch lease has passed
+    (``DELIVERY_TASK_EXPIRES`` seconds after recording), hands it off again, and it is delivered once, no delivery
+    attempt spent on the failed hand-off.
+    """
+
+    def refused(name: str, **options: Any) -> None:
+        raise OperationalError("[Errno 61] Connection refused")
+
+    monkeypatch.setattr(celery_app, "send_task", refused)
+    caplog.set_level(logging.ERROR, logger="django.db.backends.base")
+    with django_capture_on_commit_callbacks(execute=True):
+        assert send_mail("While the broker is down", "Body.", None, ["reader@example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    assert (message.status, message.delivery_claim, message.delivery_attempts) == ("queued", None, 0)
+    assert message.delivery_lease_until is not None
+    assert [record.levelname for record in caplog.records if "on_commit()" in record.getMessage()] == ["ERROR"]
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: sent.append(options["kwargs"]))
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 0
+    assert sent == []
+    with system_context(reason="tests.messaging.system_mail.lease_passed"):
+        Message._base_manager.filter(pk=message.pk).update(
+            delivery_lease_until=message.delivery_lease_until - timedelta(seconds=DELIVERY_TASK_EXPIRES),
+        )
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 1
+    assert len(sent) == 1
+    assert deliver_message(**sent[0])["delivered"]
+    assert [sent_mail.subject for sent_mail in mail.outbox] == ["While the broker is down"]
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 0
+    with system_context(reason="tests.messaging.system_mail.lease_passed"):
+        delivered = Message._base_manager.get(pk=message.pk)
+    assert (delivered.status, delivered.delivery_attempts, len(sent), len(mail.outbox)) == ("sent", 1, 1, 1)
+
+
 def test_with_no_transport_django_mail_is_refused_and_nothing_is_recorded(system_mailer: Any, settings: Any) -> None:
     settings.MAILERS = {"default": SYSTEM}
     rows = _rows()
@@ -784,73 +833,87 @@ def _lost(message: Any) -> None:
         Message._base_manager.filter(pk=message.pk).update(delivery_lease_until=timezone.now() - timedelta(hours=1))
 
 
+def _delivery_logged(caplog: Any) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name == "angee.messaging.delivery"]
+
+
+def _chained(error: BaseException | None) -> list[BaseException]:
+    """``error`` and every exception chained to it, suppressed context included."""
+
+    chain: list[BaseException] = []
+    while error is not None:
+        chain.append(error)
+        error = error.__cause__ or error.__context__
+    return chain
+
+
 def test_an_error_report_of_a_failing_transport_shows_none_of_the_system_mail(
-    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, caplog: Any,
 ) -> None:
     """The worker's path from the claim to the transport: the transport fails, then recording it fails too.
 
-    The report chains both: the recording's frames, the worker's, the backend's and the transport's. None
-    of them shows the mail, and this transport's own exception carries none of it, so neither does its
-    message; an exception that does carry some shows it (the known-limit test below).
+    The recording's failure leaves the task on its own, with no context: the transport's error is not chained
+    and is logged by its types alone. No frame of the report shows the mail.
     """
 
     settings.DEBUG = False
-    failure = ConnectionError("The transport is down.")
     settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport",
-                                      "OPTIONS": {"failure": failure}}}
+                                      "OPTIONS": {"failure": ConnectionError("The transport is down.")}}}
     label, pk, token = (lambda message: (message._meta.label_lower, message.pk, message.external_id))(
         _queued_system_mail(monkeypatch),
     )
-    table = Message._meta.db_table
+    caplog.set_level(logging.ERROR, logger="angee.messaging.delivery")
 
     def recording(sql: str, params: Any) -> bool:
-        return failure.__traceback__ is not None and sql.startswith(f'UPDATE "{table}" ')
+        raised = settings.MAILERS["transport"]["OPTIONS"]["failure"].__traceback__ is not None
+        return raised and sql.startswith(f'UPDATE "{Message._meta.db_table}" ')
 
     with _failing(recording), pytest.raises(DatabaseError) as failed:
         deliver_message(label, pk, token)
-    chained, error = [], failed.value
-    while error is not None:
-        chained.append(error)
-        error = error.__cause__ or error.__context__
-    assert failure in chained
     assert _reported_secret(failed.value) == []
-    assert [str(error) for error in chained if "SECRET-7f3a" in str(error)] == []
+    assert [type(error) for error in _chained(failed.value)] == [DatabaseError]
+    assert _delivery_logged(caplog) == [
+        "Recording a failed delivery failed (DatabaseError); the delivery had failed with "
+        "DeliveryUncertain (ConnectionError).",
+    ]
 
 
-
-def test_a_known_limit_an_error_report_shows_what_a_transport_exception_itself_carries(
-    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch,
+def test_a_transport_error_never_leaves_the_task_when_recording_its_failure_fails(
+    system_channel: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, caplog: Any,
 ) -> None:
-    """Not a guarantee: Django filters frames, never an exception's own text.
+    """A server's refusal that quotes the recipient and a link in the mail stays inside the delivery task.
 
-    An SMTP refusal carries the recipient it refused (a server can echo a line of the mail as well), and a
-    report of a failed recording chains it: its text shows there, while no frame shows it.
+    Recording that failure fails too: the recording's failure is raised on its own, and neither the recipient
+    nor the link is in any chained exception's message, any frame of the report or the log, which names the
+    errors' types alone.
     """
 
     settings.DEBUG = False
     settings.MAILERS = {"transport": {"BACKEND": f"{FailingTransport.__module__}.FailingTransport", "OPTIONS": {
-        "failure": smtplib.SMTPRecipientsRefused({"reader@example.test": (550, b"5.1.1 No such user")}),
+        "failure": smtplib.SMTPDataError(554, f"Refused for <reader@example.test>: {SECRET}".encode()),
     }}}
     label, pk, token = (lambda message: (message._meta.label_lower, message.pk, message.external_id))(
         _queued_system_mail(monkeypatch),
     )
-    table = Message._meta.db_table
+    caplog.set_level(logging.ERROR, logger="angee.messaging.delivery")
 
     def recording(sql: str, params: Any) -> bool:
         raised = settings.MAILERS["transport"]["OPTIONS"]["failure"].__traceback__ is not None
-        return raised and sql.startswith(f'UPDATE "{table}" ')
+        return raised and sql.startswith(f'UPDATE "{Message._meta.db_table}" ')
 
     with _failing(recording), pytest.raises(DatabaseError) as failed:
         deliver_message(label, pk, token)
-    in_frames = _reported_secret(failed.value, needle="reader@example.test")
+    in_frames = [*_reported_secret(failed.value, needle="reader@example.test"), *_reported_secret(failed.value)]
     assert in_frames == []
-    chained, error = [], failed.value
-    while error is not None:
-        chained.append(error)
-        error = error.__cause__ or error.__context__
-    assert [type(error) for error in chained if "reader@example.test" in str(error)] == [
-        smtplib.SMTPRecipientsRefused,
+    chained = _chained(failed.value)
+    assert [type(error) for error in chained] == [DatabaseError]
+    logged = _delivery_logged(caplog)
+    assert logged == [
+        "Recording a failed delivery failed (DatabaseError); the delivery had failed with "
+        "IntegrationError (SMTPDataError).",
     ]
+    quoted = [text for text in (*map(str, chained), *logged) if "reader@example.test" in text or "SECRET-7f3a" in text]
+    assert quoted == []
 
 
 def test_an_error_report_of_a_failing_reservation_hides_every_frame_from_deliver_down(

@@ -1003,6 +1003,12 @@ data through REBAC, never a queryset bypass.
   which consults no send right and records the causing actor in the changeset
   ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
   Its direct callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
+  Mail sent through Django's mail API is system mail. A consumer that sends its
+  organisation's own mail may instead send it straight through the `transport`
+  mailer by name (`MAILERS["transport"]`, messaging's `TRANSPORT_MAILER_ALIAS`):
+  that mail is outside messaging, which neither records, delivers nor retries it.
+  This is a deliberate exception, and it ends when named system work can compose
+  on an ordinary channel.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
