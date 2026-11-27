@@ -42,7 +42,10 @@ seconds (three days by default). Like Django's password-reset tokens, it is
 bound to the account's email, password and last sign-in: a new address, a
 password set or changed, or any sign-in retires it. Saving the account inactive
 (`set_active` or an administrative update) retires it for good, so reactivation
-revives none. It never signs in a protected account. Rotating `SECRET_KEY` voids
+revives none. It never signs in a protected account. A link outlives its
+issuer's role: revoking the administrator who issued it leaves it working, so an
+administrator who distrusts an issued link issues a new one, which spends the
+earlier, or deactivates the account. Rotating `SECRET_KEY` voids
 every outstanding link, because `salted_hmac` ignores `SECRET_KEY_FALLBACKS`.
 Whoever may change an account's email (`write__email`, administrators by
 default) can then send its links to the new address. Nothing notifies the

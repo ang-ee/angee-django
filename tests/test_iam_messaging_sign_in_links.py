@@ -36,6 +36,7 @@ from django.test.utils import override_settings
 from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.errors import MissingActorError
+from rebac.roles import revoke as revoke_role
 from rebac.schema import parse_zed
 
 import angee.iam_messaging
@@ -592,6 +593,24 @@ def test_deactivation_retires_links_for_good(deliverable, iam_admin, sent):
     assert _redeem(token) is None
     link = SignInLink._base_manager.get(user=target)
     assert link.used_at is None and link.expires_at <= timezone.now()
+
+
+def test_a_link_outlives_its_issuers_role_and_a_newer_link_is_the_remedy(deliverable, sent):
+    """Decided, not a gap: revoking the administrator who issued a link leaves it working. An administrator who
+    distrusts an issued link issues a new one, which retires it (or deactivates the account)."""
+
+    first, second, other = (
+        create_platform_admin(name, password=None) for name in ("guest-issuer-a", "guest-issuer-b", "guest-issuer-c")
+    )
+    target, distrusted_target = _person("guest-outlives"), _person("guest-distrusted")
+    kept, distrusted = sent(target, first), sent(distrusted_target, second)
+    with system_context(reason="tests.iam_messaging.sign_in_link.revoke"):
+        revoke_role(actor=first, role="angee/role:admin")
+        revoke_role(actor=second, role="angee/role:admin")
+    assert _redeem(kept) == target
+    fresh = sent(distrusted_target, other)
+    assert _redeem(distrusted) is None
+    assert _redeem(fresh) == distrusted_target
 
 
 @pytest.mark.parametrize("change", ["password", "sign_in"])
