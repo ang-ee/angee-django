@@ -26,6 +26,7 @@ import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import datetime
+from functools import cache
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -103,6 +104,18 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
 _HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
+
+
+@cache
+def _local_part_character(character: str) -> str:
+    """One character of an email address's local part as :meth:`Handle.normalize_local_part` compares it.
+
+    Its lower case, unless it is a non-ASCII character whose lower case is ASCII or of another length: that one
+    is kept as it is. Computed from ``str.lower`` per character, so the set it keeps moves with Unicode.
+    """
+
+    lowered = character.lower()
+    return lowered if character.isascii() or (len(lowered) == 1 and not lowered.isascii()) else character
 """Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
 
 
@@ -1086,7 +1099,7 @@ class Handle(
     ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
     """Platforms whose value is itself an account's address: an email address, a phone number."""
 
-    NORMALIZATION_VERSION: ClassVar[int] = 3
+    NORMALIZATION_VERSION: ClassVar[int] = 2
     """The version of the normalization rule; bump it whenever the rule returns something else.
 
     The rule is :meth:`spelling_key_of`, :meth:`normalize_value` and
@@ -1142,24 +1155,49 @@ class Handle(
             return parsed.confidence >= 1.0
         return cls.identifies_account(parsed.platform, parsed.external_id)
 
+    ADDRESS_WHITESPACE: ClassVar[str] = "".join(character for character in map(chr, range(128)) if character.isspace())
+    """What an email address is trimmed of at either end: the ASCII characters ``str.isspace`` holds, and no other.
+
+    A non-ASCII space (a no-break space, an ideographic space) is kept: an address that begins with one is no
+    address (:meth:`is_email_address`), and its spelling key keeps it, so it is never another address's handle.
+    """
+
     @classmethod
     def spelling_key_of(cls, platform: str, value: str) -> str:
-        """Return what makes two spellings one email handle: the address trimmed and lower-cased, its domain read by
+        """Return what makes two spellings one email handle: the address trimmed of ASCII whitespace
+        (:attr:`ADDRESS_WHITESPACE`), its local part in one case (:meth:`normalize_local_part`) and its domain read by
         :meth:`normalize_email_domain`; ``""`` on every other platform, where ``value`` itself is the address, and for
         a value with no ``@``, which is no address and so has no other spelling.
 
-        ``lower()``, not ``casefold()``: ``Straße@`` and ``STRASSE@`` stay two
-        addresses. A provider's alias (a Gmail dot or plus-tag) is an address of
-        its own, which only the person-matching key (:meth:`normalize_value`)
-        groups. A live email handle is unique by it (``uq_handle_spelling_key``).
-        The key is stored: changing what this returns means bumping
+        A provider's alias (a Gmail dot or plus-tag) is an address of its own,
+        which only the person-matching key (:meth:`normalize_value`) groups. A
+        live email handle is unique by it (``uq_handle_spelling_key``). The key is
+        stored: changing what this returns means bumping
         :attr:`NORMALIZATION_VERSION`.
         """
 
         if platform != cls.Platform.EMAIL:
             return ""
-        local, at, domain = (value or "").strip().lower().rpartition("@")
-        return f"{local}@{cls.normalize_email_domain(domain)}" if at else ""
+        local, at, domain = (value or "").strip(cls.ADDRESS_WHITESPACE).rpartition("@")
+        return f"{cls.normalize_local_part(local)}@{cls.normalize_email_domain(domain)}" if at else ""
+
+    @staticmethod
+    def normalize_local_part(local: str) -> str:
+        """Return an email address's local part in the one case it compares by: no non-ASCII character may turn into
+        a different mailbox's ASCII letter.
+
+        Every character is lower-cased (``JOSÉ@`` and ``josé@``, ``MÜLLER@`` and ``müller@`` are one mailbox each)
+        but a non-ASCII character whose lower case would be ASCII or of another length, which is kept as typed: the
+        Kelvin sign (U+212A) would become ``k``, so the Kelvin sign followed by ``ate@`` would be ``kate@``'s handle,
+        and ``İ`` (U+0130) would become ``i`` and a combining dot. The kept characters are computed from ``str.lower``
+        per character, never listed, so a later Unicode version moves them with it; a test pins today's two. A sign
+        that lower-cases onto another letter outside ASCII still folds (the Angstrom sign onto ``å``, the Ohm sign onto
+        ``ω``). ``lower()``, not ``casefold()``: ``Straße@`` and ``STRASSE@`` stay two addresses. The spelling key
+        (:meth:`spelling_key_of`) and through it the person-matching key (:meth:`normalize_value`) and
+        :meth:`is_spelling_of` read a local part only through it.
+        """
+
+        return "".join(map(_local_part_character, local))
 
     @classmethod
     def domain_of(cls, platform: str, value: str) -> str:
@@ -1176,9 +1214,9 @@ class Handle(
     def normalize_value(cls, platform: str, value: str) -> str:
         """Return the person-matching key for one platform/value pair: what groups the handles of probably one person.
 
-        Every platform strips surrounding whitespace and lowercases. An email
-        address starts from its spelling key (:meth:`spelling_key_of`, its domain
-        in one spelling) and additionally collapses dots and plus-tags in Gmail
+        Every other platform strips surrounding whitespace and lowercases. An email
+        address is its spelling key (:meth:`spelling_key_of`: its local part in one
+        case, its domain in one spelling) and additionally collapses dots and plus-tags in Gmail
         local parts for both ``gmail.com`` and ``googlemail.com`` domains, so a
         provider's aliases match one person while each stays a handle of its own.
         Phone and
@@ -1201,7 +1239,8 @@ class Handle(
 
         normalized = (value or "").strip().lower()
         if platform in (cls.Platform.EMAIL, cls.Platform.IMESSAGE) and "@" in normalized:
-            local, _, domain = cls.spelling_key_of(cls.Platform.EMAIL, normalized).rpartition("@")
+            # An address's case and trimming are the spelling key's, from the value as given.
+            local, _, domain = cls.spelling_key_of(cls.Platform.EMAIL, value).rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
             return f"{local}@{domain}"
@@ -1286,8 +1325,8 @@ class Handle(
         """Whether ``value`` can be an email address at all, read as :meth:`normalize_value` reads it.
 
         What cannot be an address is no address; anything else is one, however
-        unusual. Surrounding whitespace aside, the value has exactly one ``@``,
-        a non-empty name part in any script (``jörg@``, ``peña@``) with no
+        unusual. Surrounding ASCII whitespace aside (:attr:`ADDRESS_WHITESPACE`), the value
+        has exactly one ``@``, a non-empty name part in any script (``jörg@``, ``peña@``) with no
         whitespace, control or format character (Unicode categories ``Cc`` and
         ``Cf``: a zero-width space, a direction mark), and a domain that passes
         the domain rule of Django's ``EmailValidator``, which reads an
@@ -1299,7 +1338,7 @@ class Handle(
 
         column = cls._meta.get_field("value")
         assert isinstance(column, models.Field) and column.max_length is not None
-        address = (value or "").strip()
+        address = (value or "").strip(cls.ADDRESS_WHITESPACE)
         if not address or len(address) > min(cls.EMAIL_ADDRESS_LIMIT, column.max_length) or address.count("@") != 1:
             return False
         name, domain = address.split("@")

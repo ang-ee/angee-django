@@ -22,6 +22,8 @@ from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
 from django_compose.provision import ProvisionContext
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from rebac import actor_context, system_context
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
@@ -468,17 +470,32 @@ _LONGER_THAN_A_DOMAIN: dict[str, str] = {
     _LIGATURES: _LIGATURES,
 }
 
+# The local part's case: every character lower-cased but a non-ASCII one whose lower case would be ASCII or of another
+# length, kept so that no non-ASCII character turns into another mailbox's ASCII letter; only ASCII whitespace trims.
+_LOCAL_PARTS: dict[str, str] = {
+    "JOSÉ@example.test": "josé@example.test",
+    "MÜLLER@example.test": "müller@example.test",
+    "\u212aate@example.test": "\u212aate@example.test",  # the Kelvin sign: kept, never kate@'s
+    "\u0130stanbul@example.test": "\u0130stanbul@example.test",  # İ: kept, never i and a combining dot
+    "\u212bngstr\u00f6m@example.test": "\u00e5ngstr\u00f6m@example.test",  # the Angstrom sign folds onto å
+    "\u2126hm@example.test": "\u03c9hm@example.test",  # the Ohm sign folds onto ω
+    "\u00a0kate@example.test": "\u00a0kate@example.test",  # a no-break space is no ASCII whitespace: kept
+}
+
 NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
     1: (_VERSION_1_VALUES, _DOMAINS),
     2: (
         # The person-matching key: version 1's outputs, but for a domain with surrounding whitespace, which is now
-        # read through the domain-spelling rule before the Gmail check, and the spellings IDNA 2003 sends as one domain.
+        # read through the domain-spelling rule before the Gmail check, the spellings IDNA 2003 sends as one domain,
+        # a name too long to be a domain, and the local part's case rule.
         {
             **_VERSION_1_VALUES,
             ("email", "a.b@ gmail.com"): "ab@gmail.com",
             **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
+            **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
+            **{("email", value): key for value, key in _LOCAL_PARTS.items()},
         },
-        {**_DOMAINS, **_IDNA_2003},
+        {**_DOMAINS, **_IDNA_2003, **_LONGER_THAN_A_DOMAIN},
         # The spelling key: letter case and domain spelling on email; none for what is no address, or off email.
         {
             ("email", "ada@example.test"): "ada@example.test",
@@ -494,6 +511,8 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
             ("email", '"ADA EXAMPLE"@example.test'): '"ada example"@example.test',
             ("email", "a.b@ gmail.com"): "a.b@gmail.com",
             **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
+            **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
+            **{("email", value): key for value, key in _LOCAL_PARTS.items()},
             ("email", "n/a"): "",
             ("imessage", "Ada@Example.test"): "",
             ("phone", "+1 787 555 0100"): "",
@@ -505,30 +524,28 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
         },
     ),
 }
-# Version 3: version 2's outputs, but a name that would read longer than a domain name can be stays as typed.
-NORMALIZATION_SAMPLE[3] = (
-    {
-        **NORMALIZATION_SAMPLE[2][0],
-        **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
-    },
-    {**NORMALIZATION_SAMPLE[2][1], **_LONGER_THAN_A_DOMAIN},
-    {
-        **NORMALIZATION_SAMPLE[2][2],
-        **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
-    },
-)
 """What the normalization rule returns for a fixed sample, by ``Handle.NORMALIZATION_VERSION``.
 
 The first mapping is ``Handle.normalize_value`` by ``(platform, value)``, with every
 platform in it; the second is ``Handle.normalize_email_domain`` by domain; from version 2,
 the third is ``Handle.spelling_key_of`` by ``(platform, value)``, with every platform in it.
-A change of the rule adds an entry under the new version number; the entries of earlier
-versions stay as the record of what they returned.
+
+A released version's outputs never change: a host stores keys under its number, and only a
+new number makes provisioning write them again. A release is a tag (``v0.2.0`` the latest)
+and the changelog's dated section; no release carries the version yet, so versions 1 and 2
+are both unreleased. Version 1 is pinned as it was first stored; version 2, amended while
+unreleased (a name too long to be a domain kept as typed, the local part's case rule), is
+pinned as it will ship. Once a version is released, a change of the rule adds an entry under
+a new number and leaves the released ones as the record of what they returned.
 """
 
 
-def test_changing_what_the_normalization_rule_returns_means_bumping_its_version() -> None:
-    """Stored keys are saved again only when the version moves, so an output may not change under one number."""
+def test_the_rule_returns_what_its_version_pins_and_a_released_versions_outputs_never_change() -> None:
+    """Stored keys are written again only when the version moves, so a released number's outputs never change.
+
+    The rule as it is must return what the sample pins under ``Handle.NORMALIZATION_VERSION``: a version still
+    unreleased is amended in its entry, a released one is left as it shipped and the rule moves to a new number.
+    """
 
     version = Handle.NORMALIZATION_VERSION
     assert version in NORMALIZATION_SAMPLE, (
@@ -545,9 +562,73 @@ def test_changing_what_the_normalization_rule_returns_means_bumping_its_version(
         {sample: Handle.spelling_key_of(*sample) for sample in spellings},
     )
     assert returned == (values, domains, spellings), (
-        f"The normalization rule no longer returns what version {version} pinned. Bump Handle.NORMALIZATION_VERSION "
-        "and check in the new outputs under the new number: provisioning saves stored keys again only when it moves."
+        f"The normalization rule no longer returns what version {version} pinned. A released version's outputs never "
+        "change: if a release carries it, bump Handle.NORMALIZATION_VERSION and check in the new outputs under the new "
+        "number, since provisioning writes stored keys again only when it moves; if none does, amend its entry."
     )
+
+
+def test_the_local_part_keeps_exactly_the_characters_whose_lower_case_would_be_ascii_or_of_another_length() -> None:
+    """The kept set is computed from ``str.lower``, never listed: today it is the Kelvin sign and ``İ``.
+
+    A later Unicode version that widens or narrows the set fails here, where the change is seen.
+    """
+
+    kept = {
+        character for character in map(chr, range(0x80, 0x110000))
+        if character.lower() != character and Handle.normalize_local_part(character) == character
+    }
+    assert kept == {"\u212a", "\u0130"}
+    assert Handle.normalize_local_part("\u212aATE") == "\u212aate"
+    assert Handle.normalize_local_part("\u212bNGSTR\u00d6M") == "\u00e5ngstr\u00f6m"
+
+
+_OLD_ASCII_RULE_DOMAINS = ("example.test", "Example.TEST", "xn--bcher-kva.example", "gmail.com", " Bücher.Example ")
+
+
+@settings(deadline=None, max_examples=200)
+@given(
+    local=st.text(alphabet=st.characters(min_codepoint=0, max_codepoint=127, exclude_characters="@"), max_size=24),
+    domain=st.sampled_from(_OLD_ASCII_RULE_DOMAINS),
+    pad=st.sampled_from(("", " ", "\t", " \n ")),
+)
+def test_an_ascii_local_part_keys_as_the_rule_before_the_local_part_rule_keyed_it(
+    local: str, domain: str, pad: str,
+) -> None:
+    """For a local part of ASCII characters the keys are what the whole-value ``lower()`` rule gave."""
+
+    value = f"{pad}{local}@{domain}{pad}"
+    before = value.strip().lower()
+    before_local, _, before_domain = before.rpartition("@")
+    old_spelling = f"{before_local}@{Handle.normalize_email_domain(before_domain)}"
+
+    assert Handle.spelling_key_of("email", value) == old_spelling
+    assert Handle.normalize_value("email", value) == Handle.normalize_value("email", before)
+
+
+def test_an_address_in_another_case_of_a_non_ascii_letter_is_one_handle_and_a_sign_that_reads_ascii_is_its_own(
+    owner: Any,
+) -> None:
+    """``JOSÉ@`` and ``josé@``, ``MÜLLER@`` and
+    ``müller@`` land on one handle each; the Kelvin sign is no ``k``, so its address is a handle of
+    its own, never ``kate@``'s; a leading no-break space is no ASCII whitespace, so that value is no address and keys as
+    typed, never ``kate@``'s either."""
+
+    def land(value: str) -> Any:
+        with system_context(reason="tests.parties.handle_keys.local_part"):
+            return Handle.objects.upsert(platform="email", value=value, created_by_id=owner.pk).pk
+
+    assert land("JOSÉ@example.test") == land("josé@example.test")
+    assert land("MÜLLER@example.test") == land("müller@example.test")
+    kate = land("Kate@example.test")
+    kelvin = land("\u212aate@example.test")
+    assert kelvin != kate
+    assert Handle._base_manager.get(pk=kelvin).spelling_key == "\u212aate@example.test"
+    assert not Handle._base_manager.get(pk=kate).is_spelling_of("\u212aate@example.test")
+    assert Handle._base_manager.get(pk=kate).is_spelling_of("KATE@example.test")
+    assert Handle.is_email_address("\u00a0kate@example.test") is False
+    assert Handle.spelling_key_of("email", "\u00a0kate@example.test") == "\u00a0kate@example.test"
+    assert Handle.is_email_address(" kate@example.test ") is True
 
 
 def _spelled(owner: Any, *values: str) -> list[Any]:
