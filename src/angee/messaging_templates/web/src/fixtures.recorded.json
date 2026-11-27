@@ -2524,6 +2524,7 @@
      "aggregatable": false,
      "archivable": false,
      "creatable": false,
+     "createOnly": false,
      "currencyField": null,
      "kind": "scalar",
      "name": "has_open_decisions",
