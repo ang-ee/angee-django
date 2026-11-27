@@ -13,22 +13,38 @@ import { afterEach, expect, test, vi } from "vitest";
 import { feedForm } from "./FeedForm";
 import posts from "./index";
 
-const names = ["id", "display_name", "feed_backend_class", "external_id", "handle", "lifecycle", "runtime_status",
+const names = ["id", "display_name", "backend_class", "feed_backend_class", "external_id", "handle", "lifecycle", "runtime_status",
   "reply_hold", "config", "sync_stage", "last_sync_completed_at", "last_sync_items", "sync_progress", "sync_error",
   ...CONNECT_RECORD_FIELDS];
+// The feed's two implementation selectors as the server's metadata states them: create-only, and on the
+// update input, so the model's save decides (a repair only while a stored key is not registered).
+const selectors = [
+  { name: "backend_class", kind: "enum" as const, widget: "select", readable: true, creatable: false, updatable: true,
+    createOnly: true, aggregatable: false, requiredOnCreate: false, values: [
+      { value: "EMAIL", description: "Email" }, { value: "FEED", description: "Feed" }, { value: "IMAP", description: "IMAP" },
+      { value: "MANUAL", description: "Manual" }, { value: "SLACK", description: "Slack" },
+      { value: "WEBFORM", description: "Public Webform" },
+    ] },
+  { name: "feed_backend_class", kind: "enum" as const, widget: "select", readable: true, creatable: true, updatable: true,
+    createOnly: true, aggregatable: false, requiredOnCreate: false, values: [{ value: "MANUAL", description: "Manual" }] },
+];
 const resource = testDataResource("posts.Feed", {
-  fields: [...new Set(names)].map((name) => ({ name, kind: "scalar", scalar: name === "reply_hold" ? "Float"
-    : name === "config" || name === "sync_progress" ? "JSON" : "String",
-    readable: true, creatable: name === "display_name" || name === "feed_backend_class",
-    updatable: name === "reply_hold", nullable: name === "reply_hold", aggregatable: false, requiredOnCreate: false })),
+  implFields: ["backend_class", "feed_backend_class"],
+  fields: [...selectors, ...[...new Set(names)].filter((name) => !name.endsWith("backend_class")).map((name) => ({
+    name, kind: "scalar" as const, scalar: name === "reply_hold" ? "Float"
+      : name === "config" || name === "sync_progress" ? "JSON" : "String",
+    readable: true, creatable: name === "display_name",
+    updatable: name === "reply_hold", nullable: name === "reply_hold", aggregatable: false, requiredOnCreate: false }))],
 });
 const { Provider, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://feeds",
   queryClientConfig: { defaultOptions: { queries: { retry: false } } } });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ replyHold = null, connectable = false }: { replyHold?: number | null; connectable?: boolean } = {}) {
+function fixture({ replyHold = null, connectable = false, create = false }: {
+  replyHold?: number | null; connectable?: boolean; create?: boolean;
+} = {}) {
   const row = {
-    id: "feed", display_name: "Public discussion", feed_backend_class: "manual", reply_hold: replyHold,
+    id: "feed", display_name: "Public discussion", backend_class: "FEED", feed_backend_class: "MANUAL", reply_hold: replyHold,
     external_id: "account", config: {}, sync_progress: {}, credential_status: "valid",
     can_connect: connectable, is_reconnect_required: false, discovery_ready: true, discovery_pending: false,
     permissions: ["read", "write"],
@@ -49,7 +65,7 @@ function fixture({ replyHold = null, connectable = false }: { replyHold?: number
       containers: containersFromChildren(FORM_CONTAINERS, Object.fromEntries(Object.keys(posts.containers ?? {})
         .map((address) => [address, Object.fromEntries(containerChildren(posts, address))]))),
     }}><ModalsHost><ToastProvider>
-      <feedForm.Component resource="posts.Feed" id="feed" />
+      <feedForm.Component resource="posts.Feed" {...(create ? {} : { id: "feed" })} />
     </ToastProvider></ModalsHost></AppRuntimeProvider>
   </RouterContextProvider></Provider>);
   return { getOne, custom, update };
@@ -77,6 +93,20 @@ test.each([null, 0])("reply_hold=%s retains its distinct editable value", async 
   expect(f.update.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
     resource: "feeds", id: "feed", variables: { reply_hold: replyHold === null ? 0 : null },
   }));
+});
+
+test("the feed's backend is offered on create and locked on a stored feed whose keys are registered", async () => {
+  fixture({ create: true });
+  expect(await screen.findByRole("combobox", { name: "Backend" })).toBeTruthy();
+  cleanup();
+  clearClients();
+
+  const stored = fixture();
+  await screen.findByRole("heading", { name: "Public discussion" });
+  expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  // Registered keys offer no repair, so neither selector's record read is ever made.
+  const asked = stored.custom.mock.calls.map(([request]) => (request?.meta?.gqlVariables ?? {}) as Record<string, unknown>);
+  expect(asked.filter((variables) => variables.record != null)).toEqual([]);
 });
 
 test("a dirty feed keeps Connect visible but disabled", async () => {
