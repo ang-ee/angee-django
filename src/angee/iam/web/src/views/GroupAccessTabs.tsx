@@ -21,10 +21,12 @@ export function GroupMembersTab({ recordId }: RecordPanelContext): ReactElement 
     name: "subject",
     label: t("group.member"),
     required: true,
-    control: ({ id, value, readOnly, describedBy, labelledBy, onChange }) => <SubjectPicker
+    control: ({ id, value, readOnly, invalid, describedBy, labelledBy, controlRef, onChange }) => <SubjectPicker
       id={id}
+      controlRef={controlRef}
       aria-labelledby={labelledBy}
       aria-describedby={describedBy}
+      aria-invalid={invalid || undefined}
       resource="iam.User"
       value={typeof value === "string" ? value : ""}
       readOnly={readOnly}

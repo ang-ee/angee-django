@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import { render } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode, Ref } from "react";
 import type { RecordPanelContext } from "@angee/ui";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -29,9 +29,16 @@ vi.mock("@angee/ui", async (importOriginal) => ({
     mocks.listProps.push(props);
     return <>{props.toolbarActions as ReactNode}</>;
   },
-  SubjectPicker: () => null,
+  // The shared picker stands in as its trigger, which takes the form's focus through `controlRef`
+  // and, as the real picker's trigger is, is disabled while read-only (a dialog's fields lock as it submits).
+  SubjectPicker: ({ controlRef, readOnly, "aria-invalid": invalid }: {
+    controlRef?: Ref<HTMLButtonElement>; readOnly?: boolean; "aria-invalid"?: boolean;
+  }) => <button type="button" ref={controlRef} disabled={readOnly} aria-label="Member picker" aria-invalid={invalid}>Member picker</button>,
   useAuthoredResourceMutation: () => [mocks.add],
 }));
+
+import { invalidFormSubmit, type DescriptorField } from "@angee/ui";
+import { createUiTestProviders, recordFocusCalls } from "@angee/ui/testing";
 
 import { GroupMembersTab } from "./GroupAccessTabs";
 
@@ -93,5 +100,37 @@ describe("group access tabs", () => {
       caveat_name: "",
     }, { errorNotification: false });
     expect(mocks.mutationProps?.errorFallback).toBe("Could not add member.");
+  });
+
+  test("a refused member brings focus to the member field's picker, not the banner", async () => {
+    render(<GroupMembersTab {...recordPanelContext("igr_1")} />);
+    const fields = mocks.mutationProps?.fields as readonly DescriptorField[];
+    cleanup();
+    const ui = await vi.importActual<typeof import("@angee/ui")>("@angee/ui");
+    const { Provider, clearClients } = createUiTestProviders({ router: true });
+    const refused = async () => invalidFormSubmit({ fieldErrors: { subject: ["Already a member."] }, formErrors: [] });
+    render(<Provider><ui.ModalsHost><ui.ToastProvider><ui.AppRuntimeProvider runtime={{ widgets: ui.defaultWidgets }}>
+      <ui.MutationDialog open onOpenChange={() => undefined} title="Add member" submitLabel="Add" parseValues={(values) => values}
+        fields={fields} initialValues={{ subject: "auth/user:9" }} onSubmit={refused} />
+    </ui.AppRuntimeProvider></ui.ToastProvider></ui.ModalsHost></Provider>);
+    const add = await screen.findByRole("button", { name: "Add" }) as HTMLButtonElement;
+    await waitFor(() => expect(add.disabled).toBe(false));
+    add.focus();
+    const recorder = recordFocusCalls();
+    try {
+      fireEvent.click(add);
+      await screen.findByText("Already a member.");
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Member picker" })));
+      // The member field marks its picker invalid.
+      expect(document.activeElement?.getAttribute("aria-invalid")).toBe("true");
+      // Every focus call reached the picker once it took focus again, and none the banner.
+      expect(recorder.calls.length).toBeGreaterThan(0);
+      expect(recorder.calls.map((call) => [call.target.getAttribute("aria-label"), call.takesFocus]))
+        .toEqual(recorder.calls.map(() => ["Member picker", true]));
+    } finally {
+      recorder.restore();
+      cleanup();
+      clearClients();
+    }
   });
 });
