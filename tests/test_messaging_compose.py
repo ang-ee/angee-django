@@ -1354,7 +1354,7 @@ def _merge_as_contact_administrator(kept: Any, merged: Any) -> Any:
     return administrator
 
 
-def _rows(message: Any) -> list[tuple[Any, str]]:
+def _rows_and_addresses(message: Any) -> list[tuple[Any, str]]:
     with system_context(reason="tests.messaging.compose.merge"):
         return list(Recipient._base_manager.filter(message=message).values_list("handle_id", "address"))
 
@@ -1382,7 +1382,7 @@ def test_mail_to_a_merged_handles_address_lands_on_the_kept_handle_and_is_delive
     message = Message.objects.compose(channel=desk, to=[merged_address], text="Hi.", actor=desk.owner, queued=True)
     with system_context(reason="tests.messaging.compose.merge"):
         assert Handle._base_manager.get(pk=merged.pk).merged_into_id == kept.pk
-    assert _rows(message) == [(kept.pk, merged_address)]
+    assert _rows_and_addresses(message) == [(kept.pk, merged_address)]
     assert _delivered(message)["To"] == merged_address
 
 
@@ -1408,7 +1408,7 @@ def test_an_address_two_merges_deep_is_one_read_of_the_kept_handles_merges_and_i
     message = Message.objects.compose(
         channel=desk, to=["FIRST@example.test"], text="Hi.", actor=desk.owner, queued=True,
     )
-    assert _rows(message) == [(kept.pk, "FIRST@example.test")]
+    assert _rows_and_addresses(message) == [(kept.pk, "FIRST@example.test")]
     assert _delivered(message)["To"] == "FIRST@example.test"
 
 
@@ -1444,7 +1444,7 @@ def test_a_message_written_while_two_addresses_were_merged_is_mailed_at_the_kept
     _merge_as_contact_administrator(kept, merged)
     message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner,
                                       queued=True)
-    assert _rows(message) == [(kept.pk, "client@example.test")]
+    assert _rows_and_addresses(message) == [(kept.pk, "client@example.test")]
     reverter = create_platform_admin("compose-merge-reverter")
     with system_context(reason="tests.messaging.compose.merge"):
         boundary = Handle.history.filter(id=merged.pk).order_by("-history_id").first().changeset
@@ -1470,7 +1470,7 @@ def test_a_spelling_the_transport_cannot_carry_is_not_recorded_and_the_mail_goes
         handle = Handle.objects.upsert(platform="email", value="kate@example.test")
     message = Message.objects.compose(channel=desk, to=["\u212aate@example.test"], text="Hi.", actor=desk.owner,
                                       queued=True)
-    assert _rows(message) == [(handle.pk, "")]
+    assert _rows_and_addresses(message) == [(handle.pk, "")]
     assert _delivered(message)["To"] == "kate@example.test"
 
 
