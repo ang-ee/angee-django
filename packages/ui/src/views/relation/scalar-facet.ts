@@ -1,5 +1,6 @@
 import * as React from "react";
 import type { SearchFacet } from "../resource/search/types";
+import { facetError } from "../resource/search/facet-error";
 import {
   useAngeeFacets,
 } from "@angee/refine";
@@ -62,9 +63,8 @@ export function useScalarFacets<TRow extends object>(
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => {
     const axis = ResourceQuery.from(metadata!).axis(facet.field);
-    const error = facetQuery.errors[facet.id]?.message;
     return {
-      field: facet.field, label: facet.label, source: "scalar", ...(error ? { error } : {}),
+      field: facet.field, label: facet.label, source: "scalar", ...facetError(facetQuery.errors[facet.id]),
       options: (facetQuery.facets[facet.id]?.options ?? []).flatMap((option) => {
         const filter = axis.drill({ key: option.key });
         if (!filter) return [];
