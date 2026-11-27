@@ -374,8 +374,12 @@ organizations may share one. `Organization.domain_filter(domain)` finds the
 organizations whose domain is `domain` in any spelling the rule joins, by that
 key's index: from `bücher.example` it finds one typed `xn--bcher-kva.example`,
 `BÜCHER.example` or in NFD, and from `strasse.example` one typed
-`straße.example`. The organization-domain suggestion (`PartyManager.suggest_for`)
-and every reader asks it; nobody compares `Organization.domain` itself. History
+`straße.example`. Matching by domain goes through the key: the organization-domain
+suggestion (`PartyManager.suggest_for`) asks `domain_filter`, and suggests one
+matching organization at 0.4 and each of several at 0.3, all below review, so none
+decides and every one goes to review, in primary-key order. The `organizations`
+resource's filter, sort and group axes are on the typed text, `Organization.domain`,
+so a list filtered by domain compares it as typed. History
 versions the key beside the domain, as a handle's keys, and a revert restoring a
 domain keys it again. A queryset `update` writes no key: the
 `renormalize_organization_domains` repair

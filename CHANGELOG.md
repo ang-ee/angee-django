@@ -158,6 +158,15 @@ live in code docstrings.
     both databases; its pre-filter by the rule's spelling, its punycode and the
     address's own spelling is removed. A consumer that compared
     `Organization.domain` (`domain__iexact`) asks `Organization.domain_filter`.
+    Matching by domain goes through the key; the `organizations` resource's
+    filter, sort and group axes stay on the typed `Organization.domain`.
+  - **Organizations sharing a domain are each suggested for review.** When an
+    address's domain matches several organizations, `PartyManager.suggest_for`
+    suggests each at `0.3`, the twins' weight for a competing party (below
+    `Party.REVIEW_CONFIDENCE`), in primary-key order, where it suggested one at
+    `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
+    One matching organization is suggested at `0.4` as before. Each further
+    organization costs one suggestion's statements.
   - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,
     value)` is an email address's domain in the rule's spelling (`""` off email
     or with no `@`); `HandleQuerySet.at_domain(domain)` is the email handles at a
