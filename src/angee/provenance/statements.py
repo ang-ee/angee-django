@@ -158,6 +158,14 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
             status=self.model.StatementStatus.ASSERTED, applied=True, snak=self.model.StatementSnak.VALUE
         )
 
+    def confirmed(self) -> Self:
+        """The applied statements a person confirmed: the stance ``Statement.is_confirmed`` reads, as one filter.
+
+        Both read ``Statement.CONFIRMED_STANCE``, so a row and a query cannot disagree on what a confirmation is.
+        """
+
+        return self.applied().filter(**self.model.CONFIRMED_STANCE)
+
     def provenance(self, field: str) -> Self:
         """Return the applied assertions, including a preferred dismissal."""
 
@@ -1252,6 +1260,12 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         QUARANTINED = "quarantined"
         DEPRECATED = "deprecated"
 
+    CONFIRMED_STANCE: ClassVar[Mapping[str, str]] = {"rank": StatementRank.PREFERRED, "snak": StatementSnak.VALUE}
+    """A person's confirmation, column by column: what :attr:`is_confirmed` asks of a row.
+
+    ``confirmed()`` filters a query by the same mapping, so the property and the scope cannot drift apart.
+    """
+
     history = StatementHistory(inherit=True)
     objects = StatementManager()
     _angee_base = _StatementUnscopedManager()
@@ -1452,7 +1466,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
 
     @property
     def is_confirmed(self) -> bool:
-        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.VALUE
+        return all(getattr(self, name) == value for name, value in self.CONFIRMED_STANCE.items())
 
     @property
     def is_dismissed(self) -> bool:

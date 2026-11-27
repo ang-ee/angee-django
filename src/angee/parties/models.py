@@ -617,12 +617,11 @@ class Party(
             if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
                 return True
         link_id = proposed["handle"]["statement_id"]
-        statement_model = self.statements.model
-        confirmed = (statement_model.StatementRank.PREFERRED, statement_model.StatementSnak.VALUE)
+        confirmed = self.statements.model.CONFIRMED_STANCE
         return bool(
             link_id
             and any(
-                row["id"] == link_id and (row["rank"], row["snak"]) != confirmed
+                row["id"] == link_id and any(row[name] != value for name, value in confirmed.items())
                 for row in current["handles"]
             )
         )
@@ -856,7 +855,7 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
     domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", db_index=True, editable=False)
-    """``domain`` in the one spelling the domain rule gives (``Handle.normalize_email_domain``); ``""`` for no domain.
+    """``domain`` in the domain-spelling rule's one spelling (``Handle.normalize_email_domain``); ``""`` if none.
 
     What :meth:`domain_filter` compares. Written by :meth:`save` from ``domain``, so history versions it beside the
     domain, as a handle's keys; the provision repair (``PartyManager.renormalize_organization_domains``) saves again a
@@ -872,8 +871,8 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
 
     @classmethod
     def domain_filter(cls, domain: str) -> models.Q:
-        """The organizations whose domain is ``domain`` in any spelling the domain rule joins: its letter case, a
-        punycode or Unicode label, and the spellings IDNA 2003 sends as one (``Handle.normalize_email_domain``).
+        """The organizations whose domain is ``domain`` in any spelling the domain-spelling rule joins: its letter
+        case, a punycode or Unicode label, and the spellings IDNA 2003 sends as one (``Handle.normalize_email_domain``).
 
         One indexed comparison of :attr:`domain_key`; an empty ``domain`` names no organization. Several
         organizations may share a domain.
@@ -1150,6 +1149,17 @@ class Handle(
         return f"{local}@{cls.normalize_email_domain(domain)}" if at else ""
 
     @classmethod
+    def domain_of(cls, platform: str, value: str) -> str:
+        """Return an email address's domain in the one spelling the domain-spelling rule gives: its spelling key's.
+
+        ``""`` where :meth:`spelling_key_of` gives none: off email, and for a value
+        with no ``@``. What a caller compares an address's domain by, never a split of
+        a stored key of its own.
+        """
+
+        return cls.spelling_key_of(platform, value).rpartition("@")[2]
+
+    @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:
         """Return the person-matching key for one platform/value pair: what groups the handles of probably one person.
 
@@ -1213,7 +1223,8 @@ class Handle(
     def normalize_email_domain(domain: str) -> str:
         """Return the one spelling an email domain compares by: lower-cased, each label as the IDNA codec reads it.
 
-        The one rule for a domain, whoever compares one: a handle's spelling key
+        The domain-spelling rule, wherever parties matches an identity by a domain (accounts
+        and sign-in allowlists compare domains for other intents): a handle's spelling key
         (:meth:`spelling_key_of`) and person-matching key (:meth:`normalize_value`)
         and an organization's domain key (``Organization.domain_key``, which
         ``Organization.domain_filter`` compares), each stored from it, while the

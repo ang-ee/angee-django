@@ -1064,44 +1064,19 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
     assert link.source_kind == "rule"
 
 
-@pytest.mark.parametrize(
-    ("address", "stored"),
-    [
-        pytest.param("bob@bücher.example", "bücher.example", id="handle-unicode-organization-unicode"),
-        pytest.param("bob@bücher.example", "xn--bcher-kva.example", id="handle-unicode-organization-punycode"),
-        pytest.param("bob@xn--bcher-kva.example", "Bücher.example", id="handle-punycode-organization-unicode"),
-        pytest.param("bob@xn--bcher-kva.example", "XN--BCHER-KVA.example", id="handle-punycode-organization-punycode"),
-        # IDNA 2003 sends straße as strasse: the rule's spelling is ASCII, so an organization typed as the address
-        # spells its domain is found by that spelling.
-        pytest.param("bob@straße.example", "straße.example", id="handle-sharp-s-organization-sharp-s"),
-        pytest.param("bob@straße.example", "Strasse.example", id="handle-sharp-s-organization-ss"),
-        pytest.param("bob@bu\u0308cher.example", "bu\u0308cher.example", id="handle-nfd-organization-nfd"),
-        pytest.param("bob@bu\u0308cher.example", "bücher.example", id="handle-nfd-organization-nfc"),
-        pytest.param("bob@\uff45xample.test", "\uff45xample.test", id="handle-full-width-organization-full-width"),
-        pytest.param("bob@\uff45xample.test", "example.test", id="handle-full-width-organization-ascii"),
-        # Spellings neither the rule's, its punycode nor the address's own: the organization's domain key finds them.
-        pytest.param("bob@strasse.example", "straße.example", id="handle-ss-organization-sharp-s"),
-        pytest.param("bob@bücher.example", "bu\N{COMBINING DIAERESIS}cher.example", id="handle-nfc-organization-nfd"),
-        pytest.param("bob@example.test", "\N{FULLWIDTH LATIN SMALL LETTER E}xample.test",
-                     id="handle-ascii-organization-full-width"),
-        pytest.param("bob@bücher.example", "BÜCHER.example", id="handle-unicode-organization-upper-unicode"),
-    ],
-)
-def test_suggest_for_org_domain_reads_both_spellings_of_an_internationalised_domain(
-    db: None, address: str, stored: str,
-) -> None:
-    """One domain rule on both sides: the handle's key and the organization's domain key; its domain stays as typed."""
+def test_suggest_for_org_domain_finds_an_organization_by_its_domain_key(db: None) -> None:
+    """The suggestion asks ``Organization.domain_filter``: another spelling of the domain finds it, kept as typed."""
 
     del db
     with system_context(reason="test suggest domain spellings"):
         owner = _user("ines")
-        publisher = Organization._base_manager.create(display_name="Bücher", domain=stored, created_by=owner)
-        handle = Handle._base_manager.create(platform="email", value=address, created_by=owner)
+        publisher = Organization._base_manager.create(display_name="Straße", domain="straße.example", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="bob@strasse.example", created_by=owner)
         link = Party.objects.suggest_for(handle)
 
     assert link is not None
     assert (link.subject_id, link.confidence, link.source_kind) == (publisher.pk, 0.4, "rule")
-    assert Organization._base_manager.get(pk=publisher.pk).domain == stored
+    assert Organization._base_manager.get(pk=publisher.pk).domain == "straße.example"
 
 
 def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(db: None) -> None:

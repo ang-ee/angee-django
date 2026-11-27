@@ -33,13 +33,14 @@ class PartiesConfig(AppConfig):
         that spells the address of another is folded into the older of the two
         and kept as a redirect, each fold in a transaction of its own; a fold the
         merge refuses is logged and left for the next provision. It saves in
-        batches of ``HandleManager.REPAIR_LIMIT`` rows, each its own transaction,
-        so an interrupted provision keeps what it saved and the next one resumes.
-        With no row behind, it costs one indexed query.
+        batches of ``REPAIR_BATCH`` rows (``repair_keys``), each its own
+        transaction, so an interrupted provision keeps what it saved and the next
+        one resumes. With no row behind, it costs one indexed query.
         ``renormalize_organization_domains`` writes again each organization's
-        domain key that is not its domain under the same domain rule
-        (``PartyManager.renormalize_organization_domains``), reading every row in
-        batches and writing only a key that differs.
+        domain key that is not its domain under the domain-spelling rule
+        (``PartyManager.renormalize_organization_domains``), through the same
+        walk: it reads every organization's domain in batches and saves only a row
+        whose key differs.
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
         trashed, confirmed or contested one as it is and re-resolves stale ones,
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the

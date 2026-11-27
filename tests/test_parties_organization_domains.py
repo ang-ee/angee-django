@@ -1,4 +1,4 @@
-"""An organization's domain key: its domain in the one spelling the domain rule gives, kept beside the domain as typed.
+"""An organization's domain key: its domain in the domain-spelling rule's one spelling, beside the domain as typed.
 
 ``Organization.domain_key`` is ``Handle.normalize_email_domain(domain)``, the rule a handle's keys read: every save
 of the domain writes it, ``Organization.domain_filter`` finds an organization by any spelling of its domain the rule
@@ -8,6 +8,7 @@ joins, history versions it beside the domain, and the provision repair
 
 from __future__ import annotations
 
+import logging
 import unicodedata
 from io import StringIO
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from django.apps import apps
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
 from django.db import connection
+from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from django_compose.provision import ProvisionContext
 from rebac import actor_context, system_context
@@ -27,6 +29,7 @@ from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Directory, Organization, Party
 from angee.parties.backends import ParsedOrganization
+from angee.parties.managers import KeyRepair
 from angee.provenance.context import changeset
 from tests.conftest import create_platform_admin, create_user, current_stream, make_integration
 
@@ -35,20 +38,11 @@ pytestmark = pytest.mark.django_db
 NFD = unicodedata.normalize("NFD", "bücher.example")
 FULL_WIDTH = "\N{FULLWIDTH LATIN SMALL LETTER E}xample.test"
 
-# Each pair is one domain under the rule: what an organization stores, as typed, and what it is asked by.
+# The lookup reads the domain-spelling rule on both sides; the rule's own spellings are pinned with the handle's keys.
 ONE_DOMAIN = [
     pytest.param("straße.example", "strasse.example", id="sharp-s-asked-ss"),
-    pytest.param("Strasse.example", "straße.example", id="ss-asked-sharp-s"),
-    pytest.param("straße.example", "straße.example", id="sharp-s-asked-sharp-s"),
-    pytest.param(NFD, NFD, id="nfd-asked-nfd"),
-    pytest.param(NFD, "bücher.example", id="nfd-asked-nfc"),
-    pytest.param("bücher.example", NFD, id="nfc-asked-nfd"),
-    pytest.param("xn--bcher-kva.example", "bücher.example", id="punycode-asked-unicode"),
-    pytest.param("bücher.example", "XN--BCHER-KVA.example", id="unicode-asked-punycode"),
-    pytest.param("BÜCHER.example", "bücher.example", id="upper-unicode-asked-lower"),
-    pytest.param(FULL_WIDTH, "example.test", id="full-width-asked-ascii"),
-    pytest.param("example.test", FULL_WIDTH, id="ascii-asked-full-width"),
-    pytest.param(" Example.TEST ", "example.test", id="padded-upper-asked-ascii"),
+    pytest.param("xn--bcher-kva.example", NFD, id="punycode-asked-nfd"),
+    pytest.param(" Example.TEST ", FULL_WIDTH, id="padded-upper-asked-full-width"),
 ]
 
 
@@ -151,7 +145,7 @@ def test_a_domain_a_directory_states_is_keyed_as_it_lands(source: SimpleNamespac
     assert _found("strasse.example") == {organization.pk}
 
 
-def _repair() -> int:
+def _repair() -> KeyRepair:
     with system_context(reason="tests.parties.organization_domains.repair"):
         return Party.objects.renormalize_organization_domains()
 
@@ -170,7 +164,7 @@ def test_the_repair_keys_organizations_stored_before_the_key_and_a_second_run_wr
         versions = _versions(stored)
     assert _found("strasse.example") == set()
 
-    assert _repair() == 5
+    assert _repair() == KeyRepair(saved=5)
 
     assert _found("strasse.example") == {stored[0].pk}
     assert _found("bücher.example") == {stored[1].pk, stored[2].pk}
@@ -179,7 +173,7 @@ def test_the_repair_keys_organizations_stored_before_the_key_and_a_second_run_wr
     assert _versions(stored) == versions + 5, "each row the repair keys is saved once, with a version"
     table = connection.ops.quote_name(Organization._meta.db_table)
     with CaptureQueriesContext(connection) as queries:
-        assert _repair() == 0
+        assert _repair() == KeyRepair(saved=0)
     assert [query["sql"] for query in queries if table in query["sql"] and not query["sql"].startswith("SELECT")] == []
     assert _versions(stored) == versions + 5
 
@@ -187,13 +181,39 @@ def test_the_repair_keys_organizations_stored_before_the_key_and_a_second_run_wr
 def test_the_repair_works_in_batches_and_takes_every_batch(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each batch is its own transaction; a run without a cap takes every batch, so nothing is left behind."""
 
-    monkeypatch.setattr(apps.get_model("parties", "Handle").objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stored = [_organization(owner, f"ab{index}.straße.example", name=f"Org {index}") for index in range(5)]
     with system_context(reason="tests.parties.organization_domains"):
         Organization._base_manager.filter(pk__in=[row.pk for row in stored]).update(domain_key="")
 
-    assert _repair() == 5
+    assert _repair() == KeyRepair(saved=5)
     assert [_stored(row)[1] for row in stored] == [f"ab{index}.strasse.example" for index in range(5)]
+
+
+def test_an_organization_whose_save_raises_is_counted_and_every_other_one_is_keyed(
+    owner: Any, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One row never stops the backlog: it is rolled back, logged and counted, and the next run takes it."""
+
+    stored = [_organization(owner, f"row{index}.straße.example", name=f"Org {index}") for index in range(3)]
+    with system_context(reason="tests.parties.organization_domains"):
+        Organization._base_manager.filter(pk__in=[row.pk for row in stored]).update(domain_key="")
+
+    def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
+        del sender, kwargs
+        if instance.pk == stored[1].pk:
+            raise RuntimeError("This row cannot be saved.")
+
+    pre_save.connect(refuse)
+    try:
+        with caplog.at_level(logging.ERROR, logger="angee.parties.managers"):
+            assert _repair() == KeyRepair(saved=2, failed=1, remaining=1)
+    finally:
+        pre_save.disconnect(refuse)
+    (failure,) = caplog.records
+    assert failure.getMessage() == f"The keys of organization {stored[1].pk} could not be saved again."
+    assert [_stored(row)[1] for row in stored] == ["row0.strasse.example", "", "row2.strasse.example"]
+    assert _repair() == KeyRepair(saved=1)
 
 
 def test_every_provision_keys_the_organizations_behind_and_the_command_says_how_many(owner: Any) -> None:

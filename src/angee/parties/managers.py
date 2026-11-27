@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
@@ -68,7 +68,7 @@ from rebac.resources import model_resource_type
 from angee.base.fields.identity import SqidField
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
-from angee.base.lineage import concrete_child
+from angee.base.lineage import concrete_child, most_derived_concrete
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.timestamps import auto_now_stamps
@@ -283,6 +283,21 @@ class HolderRepair(NamedTuple):
 class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQuerySet[HandleT]):
     """Handle read scopes over the Angee base."""
 
+    def at_domain(self, domain: str) -> Self:
+        """Return the email handles among these whose address is at ``domain``, in any spelling the rule joins.
+
+        The stored person-matching key ends with the address's domain in the
+        domain-spelling rule's one spelling (``Handle.normalize_email_domain``), so
+        ``domain`` is read through the same rule; a provider's aliases are at their
+        domain too. An empty ``domain`` names no handle. Existing filters and actor
+        scope are preserved.
+        """
+
+        key = self.model.normalize_email_domain(domain)
+        if not key:
+            return self.none()
+        return self.filter(platform=self.model.Platform.EMAIL, normalized_value__endswith="@" + key)
+
     def confirmed(self, platform: str, value: str) -> Self:
         """Return matching handles with a confirmed, nonempty party link.
 
@@ -389,7 +404,7 @@ class ValueOwned(ValidationError):
 
 
 class KeyRepair(NamedTuple):
-    """What a key repair did (:meth:`HandleManager.renormalize_handles`)."""
+    """What a key repair did (:func:`repair_keys`: ``renormalize_handles``, ``renormalize_organization_domains``)."""
 
     saved: int
     """Rows whose keys were saved again, with the rule's version beside them, the folded ones included."""
@@ -404,14 +419,94 @@ class KeyRepair(NamedTuple):
     left live and unkeyed, and still behind."""
 
 
+REPAIR_BATCH: int = 500
+"""The most rows a key repair (:func:`repair_keys`) locks and saves in one transaction; the next batch continues."""
+
+
+def repair_keys(
+    rows: models.QuerySet[Any],
+    resave: Callable[[Any], str],
+    *,
+    reason: str,
+    limit: int | None = None,
+    read: Sequence[str] = (),
+    stale: Callable[..., bool] | None = None,
+    deferred: Callable[[Any], str] | None = None,
+) -> KeyRepair:
+    """Save again, row by row, the rows whose save-derived keys are not their rule's; say what the run did.
+
+    The walk every key repair shares. ``rows`` are the candidates, ordered by
+    key; when ``stale`` is given, the columns ``read`` names are read with each
+    key and only a row ``stale(*values)`` holds for is taken. They are taken in
+    key batches of at most :data:`REPAIR_BATCH` (within the database's
+    parameter budget), each batch in one transaction, each row re-read under its
+    row lock (``row_lock_queryset``) and handed to ``resave`` in a savepoint of
+    its own, as the named system work ``reason``. A handler says what it did:
+    ``"saved"``, ``"folded"`` (saved too), ``"refused"`` (left behind),
+    ``"deferred"`` (handed by key to ``deferred`` once its batch commits, which
+    answers the same way), or ``""`` for a row another process keyed meanwhile.
+    A row whose handler raises is rolled back to its savepoint, logged with its
+    traceback and counted in ``failed``; the rest of the backlog is still saved.
+    ``limit`` caps the rows saved, for a walk whose ``rows`` are exactly the
+    rows behind: a capped run's ``remaining`` is what they still count. Without
+    it every batch is taken. No row is selected twice in one run: each batch
+    starts after the last key the run read. With nothing to read, the selection
+    is the one query the run issues.
+    """
+
+    size = min(query_batch_size(rows), REPAIR_BATCH)
+    name = rows.model._meta.model_name
+    saved = failed = folded = refused = 0
+    last: Any = None
+
+    def tally(outcome: str) -> None:
+        nonlocal saved, folded, refused
+        saved += outcome in ("saved", "folded")
+        folded += outcome == "folded"
+        refused += outcome == "refused"
+
+    with system_context(reason=reason):
+        while limit is None or saved < limit:
+            reach = size if limit is None else min(size, limit - saved)
+            batch = rows if last is None else rows.filter(pk__gt=last)
+            read_rows = list(batch.values_list("pk", *read)[:reach]) if read else [
+                (pk,) for pk in batch.values_list("pk", flat=True)[:reach]
+            ]
+            if not read_rows:
+                # Every candidate has been read once: the failed and refused rows are what is left behind.
+                return KeyRepair(saved, failed, failed + refused, folded=folded, refused=refused)
+            last = read_rows[-1][0]
+            keys = [row[0] for row in read_rows if stale is None or stale(*row[1:])]
+            later: list[Any] = []
+            with transaction.atomic():
+                for row in row_lock_queryset(rows.model).filter(pk__in=keys).order_by("pk") if keys else ():
+                    try:
+                        with transaction.atomic():
+                            outcome = resave(row)
+                    except Exception:  # noqa: BLE001 -- one row never stops the backlog; it is logged and counted.
+                        logger.exception("The keys of %s %s could not be saved again.", name, row.pk)
+                        failed += 1
+                        continue
+                    if outcome == "deferred":
+                        later.append(row.pk)
+                    else:
+                        tally(outcome)
+            for pk in later:
+                try:
+                    outcome = deferred(pk) if deferred is not None else ""
+                except Exception:  # noqa: BLE001 -- as above: logged, counted, left for the next run.
+                    logger.exception("The keys of %s %s could not be saved again.", name, pk)
+                    failed += 1
+                    continue
+                tally(outcome)
+        return KeyRepair(saved, failed, rows.count(), folded=folded, refused=refused)
+
+
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
 
     REPAIR_LIMIT: ClassVar[int] = 500
-    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues.
-
-    Also the most rows the key repair saves in one transaction (``renormalize_handles``), which has no cap of its own.
-    """
+    """The most holders one holder repair writes by default (``resolve_stale_owners``); the next run continues."""
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -986,17 +1081,19 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         still finds it, every save that would key it is refused, and the next run
         tries again.
 
-        Rows are taken in key batches of at most :attr:`REPAIR_LIMIT`, each batch
-        in its own transaction, so an interrupted run keeps what it saved and
-        the next one resumes. The run ends because every batch starts after the
-        last key the run selected, whatever became of that row: no row is
-        selected twice in one run. A row deleted before its lock is not there to
-        save, one another process saved meanwhile is read at the rule's version
-        and skipped, and a save or fold that raises otherwise is rolled back,
-        logged with its traceback and counted in ``failed``. That row stays
-        behind for the next run and the rest of the backlog is still saved. With
-        nothing behind, the selection is the one query the repair issues. Named
-        system work. Idempotent: a second run saves and folds nothing.
+        The walk is :func:`repair_keys`, which the organization domain-key repair
+        shares; this repair's own part is the selection, by the version's index,
+        since a handle's keyed columns are written once and only a change of the
+        rule leaves a row behind. Batches of at most :data:`REPAIR_BATCH` each
+        commit on their own, so an interrupted run keeps what it saved and the next
+        one resumes; no row is selected twice in one run. A row deleted before its
+        lock is not there to save, one another process saved meanwhile is read at
+        the rule's version and skipped, and a save or fold that raises otherwise
+        is rolled back, logged with its traceback and counted in ``failed``. That
+        row stays behind for the next run and the rest of the backlog is still
+        saved. With nothing behind, the selection is the one query the repair
+        issues. Named system work. Idempotent: a second run saves and folds
+        nothing.
         """
 
         version = self.model.NORMALIZATION_VERSION
@@ -1004,45 +1101,18 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         behind = self.model._base_manager.filter(
             Q(normalized_version__lt=version) | Q(normalized_version__gt=version)
         ).order_by("pk")
-        size = min(query_batch_size(behind), self.REPAIR_LIMIT)
-        saved = failed = folded = refused = 0
-        last: Any = None
-        with system_context(reason="parties.handle.renormalize"):
-            while limit is None or saved < limit:
-                reach = size if limit is None else min(size, limit - saved)
-                batch = behind if last is None else behind.filter(pk__gt=last)
-                keys = list(batch.values_list("pk", flat=True)[:reach])
-                if not keys:
-                    # Every row that was behind has been selected once: the failed and refused ones are what is left.
-                    return KeyRepair(saved, failed, failed + refused, folded=folded, refused=refused)
-                last = keys[-1]
-                deferred: list[Any] = []
-                with transaction.atomic():
-                    for handle in self.filter(pk__in=keys).order_by("pk").lock_if_supported():
-                        if handle.normalized_version == version:
-                            continue
-                        try:
-                            with transaction.atomic():
-                                # The handle's save writes every key column beside the version.
-                                handle.save(update_fields=["normalized_version"])
-                        except ValueOwned:
-                            deferred.append(handle.pk)
-                        except Exception:  # noqa: BLE001 -- one row never stops the backlog; it is logged and counted.
-                            logger.exception("The keys of handle %s could not be saved again.", handle.pk)
-                            failed += 1
-                        else:
-                            saved += 1
-                for pk in deferred:
-                    try:
-                        outcome = self._key_spelling(pk)
-                    except Exception:  # noqa: BLE001 -- as above: logged, counted, left for the next run.
-                        logger.exception("The keys of handle %s could not be saved again.", pk)
-                        failed += 1
-                        continue
-                    saved += outcome in ("saved", "folded")
-                    folded += outcome == "folded"
-                    refused += outcome == "refused"
-            return KeyRepair(saved, failed, behind.count(), folded=folded, refused=refused)
+
+        def key(handle: Any) -> str:
+            if handle.normalized_version == version:
+                return ""
+            try:
+                # The handle's save writes every key column beside the version.
+                handle.save(update_fields=["normalized_version"])
+            except ValueOwned:
+                return "deferred"
+            return "saved"
+
+        return repair_keys(behind, key, reason="parties.handle.renormalize", limit=limit, deferred=self._key_spelling)
 
     def _key_spelling(self, pk: Any) -> str:
         """Key a row its batch deferred, folding it with the live handle that owns its spelling key; say what it did.
@@ -1449,6 +1519,28 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
 
         avatars = apps.get_model("storage", "File").objects.with_actor(actor)
         return self.prefetch_related(*self.model._default_manager.display_avatar_prefetches(actor, avatars=avatars))
+
+    def confirmed_on(self, handles: models.QuerySet[Any]) -> Self:
+        """Return the canonical parties among these that a person confirmed on any of ``handles``, whoever was last.
+
+        A handle resolves to one party, the winner of its applied statements; each
+        party a person confirmed on it (``PartyStatementQuerySet.confirmed``) holds
+        a confirmed claim on its address all the same. A handle's own confirmed
+        party counts too, as a row stored before its statements carries it. One
+        query: the confirmations and ``handles`` are subqueries.
+
+        The confirmations are read structurally; the caller authorizes both
+        endpoints. It passes handles it may read: scoped for an embedded read
+        (``scoped_for_aggregate``), or the base-manager rows of handles it has
+        already read under its actor. Existing filters and actor scope on these
+        parties are preserved, so it calls this on parties scoped as it needs.
+        """
+
+        confirmed = apps.get_model("parties", "Party").objects.handle_statements().confirmed()
+        return self.canonical().filter(
+            Q(pk__in=confirmed.filter(handle__in=handles.values("pk")).values("subject_id"))
+            | Q(pk__in=handles.filter(party_link_confirmed=True).values("party_id"))
+        )
 
     def named(self, name: str) -> Self:
         """Return canonical candidates with an exact display or legal name.
@@ -2408,16 +2500,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 strongest = link
         if strongest is not None:
             return strongest
-        if key := handle_model.spelling_key_of(handle.platform, handle.value):
-            domain = key.rpartition("@")[2]
+        domain = handle_model.domain_of(handle.platform, handle.value)
+        if domain and domain not in GENERIC_EMAIL_DOMAINS:
             organization_model = apps.get_model("parties", "Organization")
-            org = (
-                organization_model.objects.filter(
-                    organization_model.domain_filter(domain), owner_id=handle.created_by_id
-                ).first()
-                if domain and domain not in GENERIC_EMAIL_DOMAINS
-                else None
-            )
+            org = organization_model.objects.filter(
+                organization_model.domain_filter(domain), owner_id=handle.created_by_id
+            ).first()
             if org is not None:
                 return self.assert_handle(
                     org,
@@ -4111,44 +4199,40 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             return None
         return at
 
-    def renormalize_organization_domains(self) -> int:
-        """Key again every organization whose stored domain key is not its domain's under the rule; return how many.
+    def renormalize_organization_domains(self) -> KeyRepair:
+        """Key again every organization whose stored domain key is not its domain's; return what the run did.
 
         ``Organization.save`` keys every save of the domain; this keys the rest,
         at every provision and as ``renormalize_organization_domains``: a row
         stored before the column existed (its migration leaves ``""``), a domain a
-        queryset ``update`` wrote, and every row the domain rule
-        (``Handle.normalize_email_domain``) now spells otherwise, so the rule
-        needs no version here. It reads each organization's domain and key in key
-        batches of at most ``HandleManager.REPAIR_LIMIT``, and saves again,
-        through the organization's own save and under its row lock, each row whose
-        key differs, read again under the lock: a domain saved meanwhile is keyed
-        by its own save and skipped. Each batch is its own transaction, and each
-        saved row a history version, as the handle repair's. Named system work.
-        Idempotent: a second run reads every batch and saves nothing.
+        queryset ``update`` wrote, and every row the domain-spelling rule
+        (``Handle.normalize_email_domain``) now spells otherwise. The walk is
+        :func:`repair_keys`, which the handle key repair shares; this repair's own
+        part is the selection, a full scan of every organization's domain and key,
+        since ``domain`` is written as often as any field and no version marks
+        a stale key. A row whose key differs is read again under its lock and
+        saved as its most derived concrete row (a ``Company`` as a company, so
+        its own history records the version), whose save writes the key from the
+        domain it holds now. A save that raises is rolled back, logged and counted
+        in ``failed``. Named system work. Idempotent: a second run reads every
+        batch and saves nothing.
         """
 
-        organization_model = apps.get_model("parties", "Organization")
         normalize = apps.get_model("parties", "Handle").normalize_email_domain
-        organizations = organization_model._base_manager.order_by("pk")
-        size = min(query_batch_size(organizations), apps.get_model("parties", "Handle").objects.REPAIR_LIMIT)
-        keyed, last = 0, None
-        with system_context(reason="parties.organization.renormalize_domains"):
-            while rows := list(
-                (organizations if last is None else organizations.filter(pk__gt=last))
-                .values_list("pk", "domain", "domain_key")[:size]
-            ):
-                last = rows[-1][0]
-                stale = [pk for pk, domain, key in rows if normalize(domain) != key]
-                if not stale:
-                    continue
-                with transaction.atomic():
-                    for organization in row_lock_queryset(organization_model).filter(pk__in=stale).order_by("pk"):
-                        if normalize(organization.domain) != organization.domain_key:
-                            # The organization's save writes the key from the domain it holds now.
-                            organization.save(update_fields=["domain_key"])
-                            keyed += 1
-        return keyed
+
+        def key(organization: Any) -> str:
+            if normalize(organization.domain) == organization.domain_key:
+                return ""
+            most_derived_concrete(organization).save(update_fields=["domain_key"])
+            return "saved"
+
+        return repair_keys(
+            apps.get_model("parties", "Organization")._base_manager.order_by("pk"),
+            key,
+            reason="parties.organization.renormalize_domains",
+            read=("domain", "domain_key"),
+            stale=lambda domain, stored: normalize(domain) != stored,
+        )
 
     def backdate_from_sources(self) -> tuple[int, int, int, datetime | None, datetime | None]:
         """Move each party's creation time back to the earliest its directory records state; return what it did.

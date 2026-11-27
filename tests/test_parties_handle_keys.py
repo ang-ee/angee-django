@@ -27,7 +27,7 @@ from rebac import actor_context, system_context
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.base.models.identity import public_id_of
 from angee.messaging.testing.models import Channel, Handle, Message, Party, Person, Reaction, Recipient, Thread
-from angee.parties.managers import EmailBasis, KeyRepair, ValueOwned
+from angee.parties.managers import REPAIR_BATCH, EmailBasis, KeyRepair, ValueOwned
 from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
 from tests.conftest import create_platform_admin, create_user, make_integration
@@ -255,7 +255,7 @@ def test_a_bumped_version_selects_every_row_keyed_before_it(owner: Any, monkeypa
 def test_a_run_without_a_cap_saves_batch_after_batch_until_no_row_is_behind(owner: Any) -> None:
     """The whole backlog in one run: a row left with a stale key is one the lookups that read keys would miss."""
 
-    count = Handle.objects.REPAIR_LIMIT + 1
+    count = REPAIR_BATCH + 1
     with system_context(reason="tests.parties.handle_keys"):
         Handle._base_manager.bulk_create(
             Handle(platform="other", value=f"name-{index}", normalized_value=f"name-{index}", created_by=owner)
@@ -273,7 +273,7 @@ def test_a_row_whose_save_raises_is_counted_and_left_behind_while_every_other_ro
 ) -> None:
     """One row never stops the backlog and is never selected again in the run; the next run takes it."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(5)]
     refused = stale[2]
     before = _row(refused)
@@ -299,7 +299,7 @@ def test_a_capped_run_passes_a_row_whose_save_raises_and_still_saves_its_share(
 ) -> None:
     """The cap counts saved rows, so a row that cannot be saved neither uses it up nor holds the run on itself."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(4)]
 
     with _unsaveable(stale[0]):
@@ -329,7 +329,7 @@ def test_an_operator_who_asks_for_a_share_sees_where_the_cap_stopped_the_run(own
 def test_without_a_cap_the_command_saves_every_batch_and_never_prints_the_cap_line(
     owner: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     for index in range(5):
         _stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind")
     output, errors = StringIO(), StringIO()
@@ -344,7 +344,7 @@ def test_without_a_cap_the_command_saves_every_batch_and_never_prints_the_cap_li
 def test_an_operator_sees_how_many_rows_could_not_be_saved(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Rows that failed are reported apart from rows a cap left: without a cap there is no cap line for them."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(3)]
     output, errors = StringIO(), StringIO()
 
@@ -361,7 +361,7 @@ def test_an_operator_sees_how_many_rows_could_not_be_saved(owner: Any, monkeypat
 def test_every_provision_saves_the_whole_backlog(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """A deployment never depends on someone running the command, and a provision with nothing behind says so."""
 
-    monkeypatch.setattr(Handle.objects, "REPAIR_LIMIT", 2)
+    monkeypatch.setattr("angee.parties.managers.REPAIR_BATCH", 2)
     stale = [_stored_with(owner, f"ada-{index}@xn--bcher-kva.example", "behind") for index in range(5)]
     parties: Any = apps.get_app_config("parties")
 
@@ -876,3 +876,24 @@ def test_the_repair_folds_only_spellings_of_an_email_address_never_a_shared_pers
     assert [_stored(row) for row in rows] == [
         (key, Handle.NORMALIZATION_VERSION, None) for key in ("", "", "a.b@gmail.com", "ab@gmail.com", "", "")
     ]
+
+
+def test_an_addresss_domain_is_its_spelling_keys_and_none_off_email() -> None:
+    """``Handle.domain_of`` is what a caller compares an address's domain by."""
+
+    assert Handle.domain_of("email", " Ada@XN--BCHER-KVA.Example ") == "bücher.example"
+    assert Handle.domain_of("email", "no address") == ""
+    assert Handle.domain_of("phone", "+1 555 0100") == ""
+
+
+def test_the_email_handles_at_a_domain_are_found_by_any_spelling_of_it(owner: Any) -> None:
+    """``HandleQuerySet.at_domain`` reads the stored key's domain through the rule; no domain names no handle."""
+
+    with system_context(reason="tests.parties.handle_keys"):
+        punycode, unicode, other = (
+            Handle.objects.upsert(platform="email", value=value, created_by_id=owner.pk)
+            for value in ("ada@xn--bcher-kva.example", "bob@bücher.example", "carl@other.example")
+        )
+        assert set(Handle.objects.at_domain("BÜCHER.example").values_list("pk", flat=True)) == {punycode.pk, unicode.pk}
+        assert not Handle.objects.at_domain("").exists()
+        assert set(Handle.objects.at_domain("other.example").values_list("pk", flat=True)) == {other.pk}
