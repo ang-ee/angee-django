@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Self
 
@@ -42,8 +42,23 @@ from angee.base.origins import configured_public_origin
 from angee.base.querysets import AngeeQuerySet
 from angee.decisions.contracts import DecisionProposal
 from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
-from angee.messaging_templates.engine import VALUE_NOT_LINKABLE
-from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
+from angee.messaging_templates.engine import (
+    INVALID_VALUES,
+    MESSAGE_TEMPLATE_REFUSED,
+    NO_BRAND_KIT,
+    NOT_A_TEMPLATE,
+    NOT_EFFECTIVE,
+    RENDER_BUDGET_EXCEEDED,
+    RENDER_FAILED,
+    RENDER_ITERATION_LIMIT,
+    SUBJECT_TOO_LONG,
+    VALUE_ITEMS_LIMIT,
+    VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED,
+    VALUE_STRING_LIMIT,
+    VALUES_JSON_LIMIT,
+    VALUES_TOO_LARGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +109,27 @@ REASON_TEXT_LIMIT = _text_limit(1, texts=1, share=4)
 DIGEST_REASON_TEXT_LIMIT = _text_limit(DIGEST_QUESTION_LIMIT, texts=1, share=4)
 """The cut of each question's reason in a daily digest."""
 
+
+def _choice_limit(questions: int) -> int:
+    """The most choices each of ``questions`` questions names in a mail listing them; it counts the rest.
+
+    Each choice named is one item of the mail's values (``VALUE_ITEMS_LIMIT``) and one
+    loop body of its render (``RENDER_ITERATION_LIMIT``); the choices of the
+    questions a mail lists take at most a quarter of the smaller, and the facts,
+    records and includes the rest. A question's alternatives are not bounded, so
+    without this one question of a few hundred choices, or a digest of a few dozen
+    each, passes the render's budget.
+    """
+
+    return min(VALUE_ITEMS_LIMIT, RENDER_ITERATION_LIMIT) // (4 * questions)
+
+
+QUESTION_CHOICE_LIMIT = _choice_limit(1)
+"""The most choices an asked or reminder mail names for its one question."""
+
+DIGEST_CHOICE_LIMIT = _choice_limit(DIGEST_QUESTION_LIMIT)
+"""The most choices a daily digest names for each question it lists."""
+
 DIGEST_WINDOW = timedelta(days=1)
 """A question an asked or reminder mail reached a person about this recently is listed last in their digest.
 
@@ -109,8 +145,31 @@ QUESTION_LINK = ("question.url",)
 DIGEST_LINKS = ("questions.*.url",)
 """What a digest must be able to print for every question it lists: each one's link."""
 
-TEMPLATE_REFUSALS = frozenset({"value_not_printed", VALUE_NOT_LINKABLE})
-"""A send's refusals that are the template's or the deployment's fault, the same for every recipient of a run."""
+RUN_REFUSALS: dict[str, str] = {
+    NOT_A_TEMPLATE: "the row read for {key} is not a template",
+    VALUE_NOT_PRINTED: "the deployment's own row of {key} does not show every question's link",
+    VALUE_NOT_LINKABLE: "the deployment's own row of {key} prints a value that is not a link as a link",
+    MESSAGE_TEMPLATE_REFUSED: "the deployment's own row of {key}, or a row it includes, no longer renders",
+    RENDER_FAILED: "{key} failed to render; the worker's log holds the template library's traceback",
+    NO_BRAND_KIT: "no brand kit is the default; set a default brand kit",
+}
+"""A send's refusals that are the deployment's or a template row's, the same for every recipient: what to fix.
+
+Each fails the run once (:class:`DecisionMailUnsendable`), never a person's skip.
+"""
+
+QUESTION_REFUSALS = frozenset({INVALID_VALUES, VALUES_TOO_LARGE, RENDER_BUDGET_EXCEEDED, SUBJECT_TOO_LONG})
+"""A send's refusals that may be the values one question carries for one reader, or a row's.
+
+The owner raises each for a row too (a path the row requires, a date in its own
+format, its own subject), so the row is judged first by its own sample
+(:meth:`_Run.refuse_row_faults`). Otherwise the question is skipped for that one
+reader, logged: a question's labels, facts and asker are read in each reader's scope,
+and a row may print any of them, so none of these codes is known not to depend on the
+reader, and no skip is shared. A run that skipped any question then fails once, at
+the end, naming the questions (:func:`_mail_each`). The fact and reason cuts and the
+choice cap keep the shipped rows inside the limits.
+"""
 
 
 class DecisionMailUnsendable(ImproperlyConfigured):
@@ -118,8 +177,37 @@ class DecisionMailUnsendable(ImproperlyConfigured):
 
     Raised once per run, worded for an administrator, and never a person's skip: by
     :meth:`_Run.start` before anyone is mailed, or once a run tried everyone, when a
-    template row refused what the mail must show (:data:`TEMPLATE_REFUSALS`). It
-    carries no link and no address.
+    send refused what only the deployment can fix (:data:`RUN_REFUSALS`), or skipped
+    questions. It carries no link and no address; ``codes`` holds the refusals' codes
+    and ``skipped`` each skipped question's public id with its codes, so a reader
+    classifies it by those, never by its words.
+    """
+
+    def __init__(
+        self, message: str, *, codes: Iterable[str] = (), skipped: dict[str, set[str]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.codes = frozenset(codes)
+        self.skipped = {public_id: frozenset(found) for public_id, found in (skipped or {}).items()}
+
+
+class QuestionUnsendable(Exception):
+    """One reader's mail of one question refuses that question's values (:data:`QUESTION_REFUSALS`).
+
+    Carries the codes alone, no link and no address. Whether the row or the question
+    is at fault is decided where it is caught (:meth:`_Run.refuse_row_faults`).
+    """
+
+    def __init__(self, codes: Iterable[str]) -> None:
+        self.codes = frozenset(codes)
+        super().__init__(", ".join(sorted(self.codes)))
+
+
+class TemplateRowChanged(ValidationError):
+    """The row read for a template stopped being the one that renders while the run sent (``NOT_EFFECTIVE``).
+
+    A deployment saved an override mid-run; the task's retry reads the rows again
+    (:data:`RETRIED_REFUSALS`).
     """
 
 
@@ -210,19 +298,66 @@ def mail_hints(questions: Any, reader: Any) -> tuple[models.Prefetch, ...]:
     return (*questions.reader_prefetches(reader), questions.requester_names_prefetch(reader))
 
 
-@sensitive_variables()
-def shared_values(decision: Any, *, origin: str) -> dict[str, Any]:
-    """What every person mailed about ``decision`` reads alike: its kind, due time, choices and link.
+def mail_values(user: Any, content: dict[str, Any]) -> dict[str, Any]:
+    """The values one mail to ``user`` is sent with: their first name, then ``content``."""
 
-    Each recipient may read the question, so these come from the question itself.
+    return {"person": {"first_name": user.first_name}, **content}
+
+
+@sensitive_variables()
+def digest_values(user: Any, listed: Sequence[Any], shown: Sequence[Any], shared: dict[Any, Any]) -> dict[str, Any]:
+    """The values of ``user``'s digest: how many questions wait, how many more than ``shown`` it lists, and each."""
+
+    return {
+        "count": len(listed),
+        "more": len(listed) - len(shown),
+        "questions": [
+            question_values(
+                row, user, shared[row.pk], text_limit=DIGEST_FACT_TEXT_LIMIT, reason_limit=DIGEST_REASON_TEXT_LIMIT,
+            )
+            for row in shown
+        ],
+    }
+
+
+@sensitive_variables()
+def unsendable_questions(
+    template: Any, user: Any, shown: Sequence[Any], shared: dict[Any, Any],
+) -> dict[Any, frozenset[str]]:
+    """Each question of ``shown`` whose values ``user``'s digest row refuses on its own, with its own codes.
+
+    Each is rendered alone in ``template`` (``MessageTemplate.render``, nothing sent), in
+    the row's language and the digest's named work; asked only once a digest's send
+    refused a question's values, to find which.
     """
 
-    proposal = DecisionProposal.model_validate(decision.proposal)
+    faulty: dict[Any, frozenset[str]] = {}
+    with system_context(reason=mail_reason(DIGEST_TEMPLATE_KEY)), translation.override(template.language):
+        for row in shown:
+            try:
+                template.render(mail_values(user, digest_values(user, [row], [row], shared)), must_print=DIGEST_LINKS)
+            except ValidationError as refusal:
+                if codes := refusal_codes(refusal) & QUESTION_REFUSALS:
+                    faulty[row.pk] = codes
+    return faulty
+
+
+@sensitive_variables()
+def shared_values(decision: Any, *, origin: str, choice_limit: int) -> dict[str, Any]:
+    """What every person mailed about ``decision`` reads alike: its kind, due time, choices and link.
+
+    Each recipient may read the question, so these come from the question itself. The
+    first ``choice_limit`` choices are named (:data:`QUESTION_CHOICE_LIMIT` or
+    :data:`DIGEST_CHOICE_LIMIT`), with a count of the rest.
+    """
+
+    choices = [alternative.label for alternative in DecisionProposal.model_validate(decision.proposal).alternatives]
     return {
         "title": decision.kind_label,
         "due_at": decision.due_at,
         "url": f"{origin}{decision.get_absolute_url()}",
-        "choices": [alternative.label for alternative in proposal.alternatives],
+        "choices": choices[:choice_limit],
+        "more_choices": max(len(choices) - choice_limit, 0),
     }
 
 
@@ -274,10 +409,15 @@ def question_values(
 
 @dataclass(frozen=True)
 class _Run:
-    """What one run reads once, before anyone is mailed: the link origin and each person's template rows."""
+    """What one run reads once, before anyone is mailed: the link origin and each person's template rows.
+
+    Frozen in what it read; ``samples`` is a cache it fills as the run goes, each row's
+    verdict on its own sample (:meth:`refuse_row_faults`).
+    """
 
     origin: str
     rows: dict[tuple[Any, str], Any]
+    samples: dict[Any, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     @sensitive_variables()
@@ -288,7 +428,7 @@ class _Run:
         (``configured_public_origin``, which raises ``PublicOriginUnavailable``), and
         system mail (``Channel.objects.system_mail_configured``, else
         :class:`DecisionMailUnsendable`). A link the send cannot carry is refused at the
-        send (``value_not_linkable``, one of :data:`TEMPLATE_REFUSALS`). Each row is the
+        send (``value_not_linkable``, one of :data:`RUN_REFUSALS`). Each row is the
         library's own answer for the person (``effective(person=)``), read once per
         list of languages the library tries for them (``language_candidates``), all in
         one elevated read here, so its audit stays whatever a person's own transaction
@@ -306,6 +446,11 @@ class _Run:
         templates = apps.get_model("messaging_templates", "MessageTemplate").objects
         rows: dict[tuple[Any, str], Any] = {}
         with system_context(reason="decisions_messaging.templates"):
+            if apps.get_model("brandkit", "BrandKit").objects.default() is None:
+                raise DecisionMailUnsendable(
+                    f"Decision mail cannot be sent ({NO_BRAND_KIT}): {RUN_REFUSALS[NO_BRAND_KIT]}.",
+                    codes=[NO_BRAND_KIT],
+                )
             # Blocked debt: the user's Person for ``effective(person=)`` is a parties read (one
             # that creates nothing, beside ``Person.objects.for_user``); this goes when it lands.
             person_model = apps.get_model("parties", "Person")
@@ -328,6 +473,32 @@ class _Run:
 
         return self.rows[user.pk, key]
 
+    def refuse_row_faults(self, user: Any, key: str, must_print: Iterable[str]) -> None:
+        """Raise :class:`DecisionMailUnsendable` when ``user``'s row of ``key`` refuses its own ``sample``.
+
+        Asked once a send refused a question's values (:class:`QuestionUnsendable`):
+        a row that cannot render its own sample (``MessageTemplate.render`` with the
+        mail's ``must_print``) is the row's fault for every question, not one
+        question's; a row whose sample renders is sound, and the question is at fault.
+        So a deployment's own row must keep a sample that renders: a stale one turns
+        each question's fault into the row's. Each row is judged once per run.
+        """
+
+        row = self.template(user, key)
+        if row.pk not in self.samples:
+            with system_context(reason=mail_reason(key)), translation.override(row.language):
+                try:
+                    row.render(row.sample, must_print=must_print)
+                    self.samples[row.pk] = frozenset()
+                except ValidationError as refusal:
+                    self.samples[row.pk] = refusal_codes(refusal)
+        if codes := self.samples[row.pk]:
+            raise DecisionMailUnsendable(
+                f"Decision mail cannot be sent ({', '.join(sorted(codes))}): the deployment's own row of {key} "
+                "refuses its own sample.",
+                codes=codes,
+            )
+
 
 PERMANENT_ERRORS: tuple[type[Exception], ...] = (ImproperlyConfigured, ObjectDoesNotExist, ValidationError, ValueError)
 """Failures no retry cures: no public origin, a missing template row, a refusal, a bad argument.
@@ -338,10 +509,13 @@ not configured. :data:`RETRIED_REFUSALS` are the exception. Every other failure,
 database or broker hiccup, is retried.
 """
 
-RETRIED_REFUSALS: tuple[type[ValidationError], ...] = (SystemChannelMissing, OutboundEmailChannelMissing)
-"""Messaging's channel refusals a retry may cure: the system channel's row is missing or not connected.
+RETRIED_REFUSALS: tuple[type[ValidationError], ...] = (
+    SystemChannelMissing, OutboundEmailChannelMissing, TemplateRowChanged,
+)
+"""The refusals a retry may cure: messaging's system channel missing or not connected, and a row changed mid-run.
 
-That is a deployment's state, which an operator can fix while the task waits.
+The first two are a deployment's state, which an operator can fix while the task
+waits; the last is cured by the retry's own read of the rows.
 """
 
 
@@ -379,8 +553,14 @@ def _mail_one(
     nothing is left to mail (``skipped``); it is read in the language of ``user``'s
     template row, so the text it gives reads in that language. The send names what
     the mail must show (``must_print``); a refusal of that, or of a link, is the
-    template row's or the deployment's (:data:`TEMPLATE_REFUSALS`) and raises
-    :class:`DecisionMailUnsendable`, never a person's skip, with no link or address in it. The notice is written
+    template row's or the deployment's (:data:`RUN_REFUSALS`) and raises
+    :class:`DecisionMailUnsendable`, never a person's skip, with no link or address in it;
+    a refusal of the question's own values (:data:`QUESTION_REFUSALS`) raises
+    :class:`QuestionUnsendable` for the run verb to skip that question. No refusal's
+    own message leaves this frame, since a render's (``render_failed``) quotes the
+    exception, which may quote a value such as the link: every one is raised again
+    as its codes and this addon's words, ``from None``, except messaging's channel
+    refusals (:data:`RETRIED_REFUSALS`), whose fixed sentences the task retries. The notice is written
     after the send (:meth:`MailNoticeManager.record`), replacing the failed message
     ``replacing`` when the person's notice holds one, so a send that raises writes
     none and the next run mails the person; a notice another run wrote or replaced
@@ -404,21 +584,33 @@ def _mail_one(
             if content is None:
                 return "skipped"
             message = templates.send_as_system(
-                row, reason=mail_reason(key), to=address, must_print=must_print,
-                values={"person": {"first_name": user.first_name}, **content},
+                row, reason=mail_reason(key), to=address, must_print=must_print, values=mail_values(user, content),
             )
             if not ledger.record(user=user, message=message, replacing=replacing, **identity):
                 transaction.set_rollback(True)
                 return "already"
     except ValidationError as refusal:
-        if broken := sorted(refusal_codes(refusal) & TEMPLATE_REFUSALS):
-            raise DecisionMailUnsendable(
-                f"Decision mail's template {key} cannot be sent ({', '.join(broken)}): it must show every "
-                "question's link, which the deployment's own row of it, or its public origin, prevents.",
+        codes = refusal_codes(refusal)
+        if NOT_EFFECTIVE in codes:
+            raise TemplateRowChanged(
+                f"The row of {key} stopped being the one that renders while the run sent; the task retries.",
+                code=NOT_EFFECTIVE,
             ) from None
-        if not (hasattr(refusal, "error_dict") and set(refusal.error_dict) == {"to"}):
-            raise
-        return _refused(user, key, refusal)
+        if broken := sorted(codes & RUN_REFUSALS.keys()):
+            raise DecisionMailUnsendable(
+                f"Decision mail cannot be sent ({', '.join(broken)}): "
+                f"{'; '.join(RUN_REFUSALS[code].format(key=key) for code in broken)}.",
+                codes=broken,
+            ) from None
+        if faults := codes & QUESTION_REFUSALS:
+            raise QuestionUnsendable(faults) from None
+        if hasattr(refusal, "error_dict") and set(refusal.error_dict) == {"to"}:
+            return _refused(user, key, refusal)
+        if isinstance(refusal, RETRIED_REFUSALS):
+            raise  # Messaging's own channel refusals: fixed sentences, which the task retries by their class.
+        raise ValidationError([
+            ValidationError(f"Decision mail's send was refused ({code}).", code=code) for code in sorted(codes)
+        ]) from None
     return "mailed"
 
 
@@ -428,17 +620,21 @@ def _failure(error: Exception) -> str:
     return ", ".join(sorted(refusal_codes(error))) if isinstance(error, ValidationError) else type(error).__name__
 
 
-def _mail_each(people: Iterable[Any], mail: Callable[[Any], Mailed], *, what: str) -> Counter[str]:
+def _mail_each(
+    people: Iterable[Any], mail: Callable[[Any], Mailed], *, what: str, skipped: dict[str, set[str]] | None = None,
+) -> Counter[str]:
     """Mail each of ``people`` through ``mail``, one at a time, so one person's failure never stops the others.
 
     A failure is logged by the person's primary key and its refusal code, and counted.
     Once everyone was tried, the run raises: the first failure a retry may cure
-    (``retry_may_cure``), else the run's own defect, else the first, so the task still
+    (``retry_may_cure``), else the run's own defect, else the questions ``mail`` had
+    to skip (``skipped``, public id to codes), else the first failure, so the task
     fails visibly. Celery's ``SoftTimeLimitExceeded`` is no person's failure: it is
     raised at once, so the task stops inside its time limit. Nor is
     :class:`DecisionMailUnsendable`: it is the deployment's row's, which is one
     language's, so the others are still mailed, and it is logged and raised once,
-    never per person.
+    never per person. A failure that is no refusal is raised again as its own class
+    with this addon's words (:func:`_reworded`).
     """
 
     outcomes: Counter[str] = Counter()
@@ -460,12 +656,44 @@ def _mail_each(people: Iterable[Any], mail: Callable[[Any], Mailed], *, what: st
     if defect is not None:
         logger.error("%s: %s", what, defect)
     if retryable := next((error for error in failures if retry_may_cure(error)), None):
-        raise retryable
+        raise _reworded(retryable, what) from None
     if defect is not None:
         raise defect
+    if skipped:
+        named = "; ".join(f"{public_id} ({', '.join(sorted(codes))})" for public_id, codes in sorted(skipped.items()))
+        raise DecisionMailUnsendable(f"{what} skipped questions whose values cannot be sent: {named}.", skipped=skipped)
     if failures:
-        raise failures[0]
+        raise _reworded(failures[0], what) from None
     return outcomes
+
+
+def _reworded(error: Exception, what: str) -> Exception:
+    """``error`` as the run raises it: a refusal as the send path left it, any other failure as its class, reworded.
+
+    The send path already raises each refusal as its codes and this addon's words
+    (:func:`_mail_one`). Any other failure is a database's, a broker's or a bug's,
+    and its own text may quote what was written: a unique violation's detail names
+    the key's values, and a recipient's handle is keyed by its address. So it is
+    raised again as a new instance of its own class, which the task's retry policy
+    still recognises, saying only where it happened. A class that cannot be made from
+    one message (``UnicodeDecodeError``) becomes the nearest of
+    :data:`PERMANENT_ERRORS` it belongs to, so a permanent failure is not retried,
+    else a ``RuntimeError``. The new error keeps the old one's traceback: its frames
+    name code lines, not values, so a bug stays debuggable, as the GraphQL schema's
+    error log keeps an error's class and frames but not its message
+    (``angee/graphql/schema.py``). Django's
+    ``@sensitive_variables()`` hides frame locals from Django's own error reports
+    only; a plain traceback never prints locals.
+    """
+
+    if isinstance(error, ValidationError):
+        return error
+    words = f"{what} failed ({type(error).__name__}); the worker's log names the person."
+    try:
+        reworded = type(error)(words)
+    except Exception:
+        reworded = next((kind for kind in PERMANENT_ERRORS if isinstance(error, kind)), RuntimeError)(words)
+    return reworded.with_traceback(error.__traceback__)
 
 
 class MailNoticeManager[NoticeT: MailNotice](AngeeManager[NoticeT]):
@@ -604,7 +832,7 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
         if not people:
             return 0
         run = _Run.start(people, [key])
-        shared = shared_values(decision, origin=run.origin)
+        shared = shared_values(decision, origin=run.origin, choice_limit=QUESTION_CHOICE_LIMIT)
 
         @sensitive_variables()
         def values_for(user: Any) -> dict[str, Any] | None:
@@ -615,14 +843,24 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
                 row, user, shared, text_limit=FACT_TEXT_LIMIT, reason_limit=REASON_TEXT_LIMIT,
             )}
 
-        outcomes = _mail_each(
-            people,
-            lambda user: _mail_one(
-                self, user, key=key, run=run, must_print=QUESTION_LINK, values=lambda: values_for(user),
-                replacing=failed.get(user.pk), decision=decision, occasion=occasion,
-            ),
-            what=f"Decision {decision.pk} {occasion.value} mail",
-        )
+        skipped: dict[str, set[str]] = {}
+
+        def mail(user: Any) -> Mailed:
+            try:
+                return _mail_one(
+                    self, user, key=key, run=run, must_print=QUESTION_LINK, values=lambda: values_for(user),
+                    replacing=failed.get(user.pk), decision=decision, occasion=occasion,
+                )
+            except QuestionUnsendable as fault:
+                run.refuse_row_faults(user, key, QUESTION_LINK)
+                logger.warning(
+                    "Decision %s %s mail to user %s skipped: its values cannot be sent (%s).",
+                    decision.public_id, occasion.value, user.pk, fault,
+                )
+                skipped.setdefault(decision.public_id, set()).update(fault.codes)
+                return "skipped"
+
+        outcomes = _mail_each(people, mail, what=f"Decision {decision.pk} {occasion.value} mail", skipped=skipped)
         return outcomes["mailed"]
 
 
@@ -678,6 +916,7 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
             return 0
         run = _Run.start(people, [DIGEST_TEMPLATE_KEY])
         shared: dict[Any, dict[str, Any]] = {}
+        skipped: dict[str, set[str]] = {}
 
         @sensitive_variables()
         def mail(user: Any) -> Mailed:
@@ -688,29 +927,44 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
                 questions.objects.with_actor(user).open().filter(put).order_by(F("due_at").asc(nulls_last=True), "pk")
             )
             listed = sorted(waiting, key=lambda row: (user.pk, row.pk) in recent)
-            if all((user.pk, row.pk) in recent for row in listed):
-                return "skipped"
-            shown = listed[:DIGEST_QUESTION_LIMIT]
-            prefetch_related_objects(shown, *mail_hints(questions, user))
-            for row in shown:
-                if row.pk not in shared:
-                    shared[row.pk] = shared_values(row, origin=run.origin)
-            return _mail_one(
-                self, user, key=DIGEST_TEMPLATE_KEY, run=run, must_print=DIGEST_LINKS, replacing=failed.get(user.pk),
-                day=day, values=lambda: {
-                    "count": len(listed),
-                    "more": len(listed) - len(shown),
-                    "questions": [
-                        question_values(
-                            row, user, shared[row.pk],
-                            text_limit=DIGEST_FACT_TEXT_LIMIT, reason_limit=DIGEST_REASON_TEXT_LIMIT,
+            left, limit = listed, DIGEST_QUESTION_LIMIT
+            while True:
+                if all((user.pk, row.pk) in recent for row in left):
+                    return "skipped"
+                shown = left[:limit]
+                prefetch_related_objects(shown, *mail_hints(questions, user))
+                for row in shown:
+                    if row.pk not in shared:
+                        shared[row.pk] = shared_values(row, origin=run.origin, choice_limit=DIGEST_CHOICE_LIMIT)
+                try:
+                    return _mail_one(
+                        self, user, key=DIGEST_TEMPLATE_KEY, run=run, must_print=DIGEST_LINKS,
+                        replacing=failed.get(user.pk), day=day,
+                        values=lambda: digest_values(user, listed, shown, shared),
+                    )
+                except QuestionUnsendable as fault:
+                    run.refuse_row_faults(user, DIGEST_TEMPLATE_KEY, DIGEST_LINKS)
+                    if len(shown) == 1:
+                        faulty = {shown[0].pk: fault.codes}
+                    else:
+                        faulty = unsendable_questions(run.template(user, DIGEST_TEMPLATE_KEY), user, shown, shared)
+                    culprits = [row for row in shown if row.pk in faulty]
+                    if not culprits:
+                        limit = len(shown) // 2
+                        logger.warning(
+                            "Decision digest %s to user %s lists %s questions: more do not fit together (%s).",
+                            day, user.pk, limit, fault,
                         )
-                        for row in shown
-                    ],
-                },
-            )
+                        continue
+                    for row in culprits:
+                        logger.warning(
+                            "Decision %s skipped in the digest of %s to user %s: its values cannot be sent (%s).",
+                            row.public_id, day, user.pk, ", ".join(sorted(faulty[row.pk])),
+                        )
+                        skipped.setdefault(row.public_id, set()).update(faulty[row.pk])
+                    left = [row for row in left if row not in culprits]
 
-        outcomes = _mail_each(people, mail, what=f"Decision digest {day}")
+        outcomes = _mail_each(people, mail, what=f"Decision digest {day}", skipped=skipped)
         return outcomes["mailed"]
 
 

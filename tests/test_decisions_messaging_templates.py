@@ -12,10 +12,17 @@ from django.apps import apps
 from rebac import system_context
 
 from angee.brandkit.testing.models import BrandKit
-from angee.decisions_messaging.models import DIGEST_TEMPLATE_KEY, DecisionNoticeOccasion
-from angee.decisions_messaging.testing.drivers import MAIL_ADDONS, load_mail_templates
+from angee.decisions_messaging.models import (
+    DIGEST_LINKS,
+    DIGEST_TEMPLATE_KEY,
+    QUESTION_LINK,
+    DecisionNoticeOccasion,
+    mail_reason,
+)
+from angee.decisions_messaging.testing.drivers import MAIL_ADDONS, install_decision_mail, load_mail_templates
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
+from tests.test_messaging_compose import MAILERS
 
 ROOT = Path(__file__).resolve().parents[1]
 SHIPPED = ROOT / "src/angee/decisions_messaging/resources/install/010_messaging_templates.messagetemplate.yaml"
@@ -58,3 +65,29 @@ def test_every_shipped_row_renders_its_sample_with_no_warning(library: Any) -> N
             sample = row.sample.get("question") or row.sample.get("questions", [{}])[0]
             for text in (sample["url"], *sample["choices"]):
                 assert text in preview.rendered.plain_text, (row.key, text)
+
+
+@pytest.mark.parametrize(
+    ("key", "must_print"),
+    [
+        pytest.param(DecisionNoticeOccasion.ASKED.template_key, QUESTION_LINK, id="asked"),
+        pytest.param(DecisionNoticeOccasion.REMINDER.template_key, QUESTION_LINK, id="reminder"),
+        pytest.param(DIGEST_TEMPLATE_KEY, DIGEST_LINKS, id="digest"),
+    ],
+)
+def test_each_shipped_occasion_sends_its_sample_through_the_system_send_in_the_default_kit(
+    library: Any, settings: Any, key: str, must_print: tuple[str, ...],
+) -> None:
+    """The rows the resource loader installed, sent as the bridge sends them: named work, ``must_print``, no kit."""
+
+    settings.MAILERS = MAILERS
+    settings.DEFAULT_FROM_EMAIL = "Angee <noreply@example.test>"
+    install_decision_mail()
+    assert library["kit"] is not None and library["kit"].is_default
+    templates = MessageTemplate.objects
+    with system_context(reason=mail_reason(key)):
+        row = templates.effective("template", key)
+    message = templates.send_as_system(
+        row, reason=mail_reason(key), to="reader@example.test", values=row.sample, must_print=must_print,
+    )
+    assert message.pk is not None

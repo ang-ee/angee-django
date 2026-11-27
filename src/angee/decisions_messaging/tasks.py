@@ -3,9 +3,11 @@
 Each retries what a retry may cure (``retry_may_cure``). A database or broker hiccup is
 retried on Celery's own short backoff. A system channel that is missing or not
 connected (``RETRIED_REFUSALS``) is retried 5, 15 and 45 minutes later, so an operator
-has time to restore it. ``PERMANENT_ERRORS`` are not retried, so a deployment without a
-public origin or a shipped row fails each run once, in its log. The ledgers make a
-retry mail nobody twice.
+has time to restore it; a template row saved mid-run (``TemplateRowChanged``) after
+:data:`ROW_CHANGE_RETRY_COUNTDOWN`, since the retry only reads the rows again.
+``PERMANENT_ERRORS`` are not retried, so a deployment without a public origin or a
+shipped row fails each run once, in its log. The ledgers make a retry mail nobody
+twice.
 """
 
 from __future__ import annotations
@@ -17,11 +19,14 @@ from celery import Task, shared_task
 from django.apps import apps
 
 from angee.decisions_messaging.constants import MAIL_DECISION_TASK, MAIL_DIGESTS_TASK
-from angee.decisions_messaging.models import PERMANENT_ERRORS, RETRIED_REFUSALS
+from angee.decisions_messaging.models import PERMANENT_ERRORS, RETRIED_REFUSALS, TemplateRowChanged
 from angee.jobs.scheduler import periodic_now
 
 CHANNEL_RETRY_COUNTDOWNS = (5 * 60, 15 * 60, 45 * 60)
 """Seconds before each retry of a channel refusal; their count is the tasks' ``max_retries``."""
+
+ROW_CHANGE_RETRY_COUNTDOWN = 30
+"""Seconds before a run whose template row was saved mid-run is retried; the retry reads the rows again."""
 
 _RETRYING: dict[str, Any] = {
     "bind": True, "autoretry_for": (Exception,), "dont_autoretry_for": PERMANENT_ERRORS,
@@ -31,12 +36,14 @@ _RETRYING: dict[str, Any] = {
 
 
 def _run(task: Task, call: Callable[[], int]) -> int:
-    """Run ``call``, retrying a channel refusal after the next of :data:`CHANNEL_RETRY_COUNTDOWNS`."""
+    """Run ``call``, retrying a refused run: a changed row soon, a channel after :data:`CHANNEL_RETRY_COUNTDOWNS`."""
 
     try:
         return call()
     except RETRIED_REFUSALS as refusal:
-        countdown = CHANNEL_RETRY_COUNTDOWNS[min(task.request.retries, len(CHANNEL_RETRY_COUNTDOWNS) - 1)]
+        countdown = ROW_CHANGE_RETRY_COUNTDOWN if isinstance(refusal, TemplateRowChanged) else (
+            CHANNEL_RETRY_COUNTDOWNS[min(task.request.retries, len(CHANNEL_RETRY_COUNTDOWNS) - 1)]
+        )
         raise task.retry(exc=refusal, countdown=countdown) from refusal
 
 

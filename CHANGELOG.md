@@ -647,8 +647,9 @@ live in code docstrings.
     length derived from the renderer's limits for the questions the mail lists
     (`FACT_TEXT_LIMIT` for one question, `DIGEST_FACT_TEXT_LIMIT` in the digest),
     with an authority mark, its reason cut the same way (`REASON_TEXT_LIMIT`,
-    `DIGEST_REASON_TEXT_LIMIT`), and links the question's page in the app, where
-    the person decides; no link decides anything.
+    `DIGEST_REASON_TEXT_LIMIT`), its first choices with a count of the rest
+    (`QUESTION_CHOICE_LIMIT`, `DIGEST_CHOICE_LIMIT`), and links the question's page
+    in the app, where the person decides; no link decides anything.
     `DecisionNotice` records each person mailed per question and occasion, and
     `DigestNotice` per person and UTC day, each in the durable transaction of that
     one send, so a retried task mails nobody twice; the mail verbs therefore run
@@ -658,10 +659,21 @@ live in code docstrings.
     sent. An uncertain mail may have been delivered, so the addon never sends it
     again and never surfaces it: surfacing an uncertain system mail once is
     messaging's open item, and the addon has no "send again" act. Each send names
-    the question's link as what the mail must show (`must_print`), and a template row
-    that cannot show it fails the run once (`DecisionMailUnsendable`), never a
-    person's skip. One person's failure is logged and counted and the others still
-    go, and the task then fails; Celery's soft time limit stops the run at once. A
+    the question's link as what the mail must show (`must_print`). A refusal only the
+    deployment can fix (a row that cannot show the link or no longer renders, no
+    default brand kit) fails the run once (`DecisionMailUnsendable`), never a
+    person's skip. One that may be a question's (`invalid_values`,
+    `values_too_large`, `render_budget`, `subject_too_long`) is the row's when the
+    row refuses its own sample, so a deployment's own row must keep a sample that
+    renders; otherwise it skips that question for that reader alone, logged, and
+    mails the rest, and a run that skipped any question then fails once, naming
+    them. A digest whose questions fail only together lists half
+    as many until it sends. A row saved mid-run (`not_effective`) is retried, and
+    each run checks for a default brand kit before any render. No refusal's own message
+    leaves the addon, since a failing render's quotes the link: each is logged and
+    raised as its codes and the addon's words. One person's failure is
+    logged and counted and the others still go, and the task then fails; Celery's
+    soft time limit stops the run at once. A
     permanent defect (no public origin, system mail not configured, a missing
     template row, a render or address refusal) is not retried; a system channel that
     is missing or not connected is, 5, 15 and 45 minutes later. A question a workflow
@@ -672,7 +684,8 @@ live in code docstrings.
     `DecisionNotice` and `DigestNotice`, then `manage.py provision`, which migrates,
     synchronizes permissions and loads the install tier with the mails. Set
     `ANGEE_PUBLIC_ORIGIN` and system mail (`MAILERS["transport"]`,
-    `DEFAULT_FROM_EMAIL`). Without the origin or system mail a task refuses before
+    `DEFAULT_FROM_EMAIL`), and keep a default brand kit: decision mail names none.
+    Without the origin or system mail a task refuses before
     anyone is mailed, once per run. Only questions
     asked after the upgrade get an asked mail; the digest lists the open questions
     waiting on each person, older ones included.

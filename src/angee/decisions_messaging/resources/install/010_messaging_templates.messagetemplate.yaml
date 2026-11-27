@@ -40,7 +40,7 @@
 
     {% endif %}
 
-    Choices: {% for choice in question.choices %}{{ choice }}{% if not forloop.last %}; {% endif %}{% endfor %}
+    Choices: {% for choice in question.choices %}{{ choice }}{% if not forloop.last %}; {% endif %}{% endfor %}{% if question.more_choices %} and {{ question.more_choices }} more{% endif %}
 
     {% if question.asked_by %}
 
@@ -67,7 +67,8 @@
     question.asked_by: Who asked it; empty when no person did.
     question.due_at: When an answer is due; empty when it is undated.
     question.url: Where the question opens in the app.
-    question.choices.*: The labels of the alternatives it offers.
+    question.choices.*: The labels of the alternatives it offers, the first few.
+    question.more_choices: How many more alternatives it offers than it names.
   sample:
     question:
       title: Supplier choice
@@ -92,6 +93,7 @@
       choices:
         - Use the proposed supplier
         - Choose another supplier
+      more_choices: 0
 - xref: template.decisions_messaging.decision_asked.en
   kind: template
   key: decisions_messaging.decision_asked
@@ -123,7 +125,8 @@
     question.asked_by: Who asked it; empty when no person did.
     question.due_at: When an answer is due; empty when it is undated.
     question.url: Where the question opens in the app.
-    question.choices.*: The labels of the alternatives it offers.
+    question.choices.*: The labels of the alternatives it offers, the first few.
+    question.more_choices: How many more alternatives it offers than it names.
   sample:
     person:
       first_name: Ana
@@ -150,6 +153,7 @@
       choices:
         - Use the proposed supplier
         - Choose another supplier
+      more_choices: 0
 - xref: template.decisions_messaging.decision_reminder.en
   kind: template
   key: decisions_messaging.decision_reminder
@@ -181,7 +185,8 @@
     question.asked_by: Who asked it; empty when no person did.
     question.due_at: When an answer is due; empty when it is undated.
     question.url: Where the question opens in the app.
-    question.choices.*: The labels of the alternatives it offers.
+    question.choices.*: The labels of the alternatives it offers, the first few.
+    question.more_choices: How many more alternatives it offers than it names.
   sample:
     person:
       first_name: Ana
@@ -208,6 +213,7 @@
       choices:
         - Use the proposed supplier
         - Choose another supplier
+      more_choices: 0
 - xref: template.decisions_messaging.decision_digest.en
   kind: template
   key: decisions_messaging.decision_digest
@@ -251,7 +257,8 @@
     questions.*.asked_by: Who asked it; empty when no person did.
     questions.*.due_at: When an answer is due; empty when it is undated.
     questions.*.url: Where the question opens in the app.
-    questions.*.choices.*: The labels of the alternatives it offers.
+    questions.*.choices.*: The labels of the alternatives it offers, the first few.
+    questions.*.more_choices: How many more alternatives it offers than it names.
   sample:
     person:
       first_name: Ana
@@ -274,6 +281,7 @@
         choices:
           - Use the proposed supplier
           - Choose another supplier
+        more_choices: 0
       - title: Access request
         reason: ''
         records: []
@@ -286,3 +294,4 @@
         choices:
           - Approve access
           - Deny access
+        more_choices: 0

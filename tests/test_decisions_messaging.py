@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import email.policy
+import logging
+import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -17,8 +19,8 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.checks import Tags, run_checks
-from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, transaction
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.db import IntegrityError, connection, transaction
 from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -38,27 +40,45 @@ from angee.decisions_messaging import models as decision_mail
 from angee.decisions_messaging.checks import check_audiences
 from angee.decisions_messaging.constants import MAIL_DECISION_TASK, MAIL_DIGESTS_TASK
 from angee.decisions_messaging.models import (
+    DIGEST_CHOICE_LIMIT,
     DIGEST_FACT_TEXT_LIMIT,
     DIGEST_QUESTION_LIMIT,
     DIGEST_REASON_TEXT_LIMIT,
     FACT_TEXT_LIMIT,
+    QUESTION_CHOICE_LIMIT,
     QUESTION_FACT_LIMIT,
+    QUESTION_REFUSALS,
     REASON_TEXT_LIMIT,
     RETRIED_REFUSALS,
+    RUN_REFUSALS,
     DecisionMailUnsendable,
     DecisionNoticeOccasion,
     MailAudience,
+    TemplateRowChanged,
     refusal_codes,
+    retry_may_cure,
 )
-from angee.decisions_messaging.tasks import mail_decision, mail_digests
+from angee.decisions_messaging.tasks import ROW_CHANGE_RETRY_COUNTDOWN, mail_decision, mail_digests
 from angee.decisions_messaging.testing.drivers import addressed_user, install_decision_mail
 from angee.decisions_messaging.testing.models import DecisionNotice, DigestNotice
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Message
+from angee.messaging_templates.engine import (
+    INVALID_VALUES,
+    NO_BRAND_KIT,
+    NOT_EFFECTIVE,
+    RENDER_FAILED,
+    SEND_CODES,
+    SUBJECT_TOO_LONG,
+    VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED,
+    VALUE_STRING_LIMIT,
+    VALUES_JSON_LIMIT,
+)
+from angee.messaging_templates.testing.faults import failing_filter
 from angee.messaging_templates.testing.models import MessageTemplate
-from angee.messaging_templates.walker import VALUE_STRING_LIMIT, VALUES_JSON_LIMIT
 from angee.projects.testing.models import Task
 from tests.conftest import create_platform_admin, vault_for
 from tests.test_messaging_compose import MAILERS, NO_TRANSPORT
@@ -451,13 +471,401 @@ def test_a_row_that_gives_a_non_link_as_a_link_refuses_the_run_once(world: Any) 
             variables={"question.url": "Where it opens.", "question.title": "What it asks."},
         ).save()
     question = ask(world, world.reviewer)
-    with pytest.raises(DecisionMailUnsendable, match="value_not_linkable") as refused:
+    with pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.codes == {VALUE_NOT_LINKABLE}
     words = str(refused.value)
-    assert "value_not_printed" not in words and ORIGIN not in words and "@" not in words
+    assert ORIGIN not in words and "@" not in words
     assert refused.value.__cause__ is None and refused.value.__suppress_context__
     with system_context(reason=READ):
         assert mailed() == [] and not Message._base_manager.exists()
+
+
+def ask_choosing(world: Any, label: str) -> Any:
+    """Ask one question about the world's order whose first choice reads ``label``."""
+
+    return Decision.objects.ask(DecisionRequest(
+        kind="order_review", records=(world.subject,), assignees=(world.reviewer,), requester=world.requester,
+        proposal=DecisionProposal(alternatives=[
+            {"key": "confirm", "label": label, "outcome": "confirmed"},
+            {"key": "decline", "label": CHOICES[1], "outcome": "declined"},
+        ]),
+    ), actor=world.requester)
+
+
+def test_every_code_a_system_send_names_has_one_kind() -> None:
+    """The codes ``send_as_system``'s callers handle: each fails the run, skips a question or retries the run."""
+
+    kinds = (set(RUN_REFUSALS), set(QUESTION_REFUSALS), {NOT_EFFECTIVE})
+    assert set().union(*kinds) == SEND_CODES and sum(len(kind) for kind in kinds) == len(SEND_CODES)
+    assert not any(retry_may_cure(ValidationError("refused", code=code)) for code in SEND_CODES - {NOT_EFFECTIVE})
+    assert retry_may_cure(TemplateRowChanged("changed", code=NOT_EFFECTIVE))
+
+
+def test_no_default_brand_kit_fails_the_run_once_and_a_default_one_sends(world: Any) -> None:
+    kits = apps.get_model("brandkit", "BrandKit")
+    with system_context(reason="tests.decisions_messaging.kit"):
+        kit = kits.objects.default()
+        kits.objects.filter(pk=kit.pk).update(is_default=False)
+    question = ask(world, world.reviewer)
+    with pytest.raises(DecisionMailUnsendable) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.codes == {NO_BRAND_KIT} and refused.value.__context__ is None, "refused before any render"
+    with system_context(reason=READ):
+        assert mailed() == [] and not Message._base_manager.exists()
+    with system_context(reason="tests.decisions_messaging.kit"):
+        kits.objects.filter(pk=kit.pk).update(is_default=True)
+    assert DecisionNotice.objects.mail_decision(question.pk, occasion="asked") == 2
+
+
+def skips_in(caplog: Any) -> list[str]:
+    return [
+        record.getMessage() for record in caplog.records
+        if record.name == decision_mail.__name__ and " skipped" in record.getMessage()
+    ]
+
+
+def test_a_question_whose_values_cannot_be_sent_is_skipped_per_reader_and_fails_the_run_once(
+    world: Any, caplog: Any,
+) -> None:
+    """A choice past ``VALUE_STRING_LIMIT``: its row renders its own sample, so the question is at fault."""
+
+    question = ask_choosing(world, "w" * (VALUE_STRING_LIMIT + 1))
+    with caplog.at_level(logging.WARNING, logger=decision_mail.__name__), pytest.raises(
+        DecisionMailUnsendable,
+    ) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.skipped == {question.public_id: {INVALID_VALUES}} and mailed() == []
+    assert skips_in(caplog) == [
+        f"Decision {question.public_id} asked mail to user {user.pk} skipped: its values cannot be sent "
+        f"({INVALID_VALUES})."
+        for user in (world.reviewer, world.admin)
+    ]
+
+
+def test_a_digest_leaves_out_a_question_it_cannot_send_sends_the_others_and_fails_the_run_once(
+    world: Any, caplog: Any,
+) -> None:
+    good, bad = ask(world, world.reviewer), ask_choosing(world, "w" * (VALUE_STRING_LIMIT + 1))
+    now = timezone.now() + timedelta(days=2)
+    with caplog.at_level(logging.WARNING, logger=decision_mail.__name__), pytest.raises(
+        DecisionMailUnsendable,
+    ) as refused:
+        DigestNotice.objects.mail_digests(now=now)
+    assert refused.value.skipped == {bad.public_id: {INVALID_VALUES}}
+    for user in (world.reviewer, world.admin):
+        ((_subject, text),) = mails(DigestNotice, user)
+        assert link(good) in text and link(bad) not in text
+        assert "2 questions are waiting for your decision." in text, "the count names every waiting question"
+    assert skips_in(caplog) == [
+        f"Decision {bad.public_id} skipped in the digest of {now.astimezone(UTC).date()} to user {user.pk}: "
+        f"its values cannot be sent ({INVALID_VALUES})."
+        for user in (world.reviewer, world.admin)
+    ]
+
+
+def shipped_sample(key: str) -> Any:
+    with system_context(reason=READ):
+        return MessageTemplate.objects.effective("template", key).sample
+
+
+def override(key: str, *, variables: dict[str, str], **fields: Any) -> None:
+    """Write a deployment's own ``en`` row of ``key``, with the shipped row's subject, declarations and sample."""
+
+    with system_context(reason="tests.decisions_messaging.override"):
+        shipped = MessageTemplate.objects.effective("template", key)
+        MessageTemplate(
+            kind="template", key=key, language="en", name="Override", format="markdown", layout="base",
+            variables={**shipped.variables, **variables},
+            **{"subject": shipped.subject, "preheader": shipped.preheader, "sample": shipped.sample, **fields},
+        ).save()
+
+
+def test_a_row_that_requires_a_value_the_bridge_never_sets_fails_the_run_visibly_and_mails_nothing(
+    world: Any,
+) -> None:
+    """Its own sample sets the value, so each reader's mail is skipped, and the run fails naming the question."""
+
+    sample = shipped_sample(DecisionNoticeOccasion.ASKED.template_key)
+    override(
+        DecisionNoticeOccasion.ASKED.template_key,
+        source="Open [the question]({{ question.url }}): {{ question.code }}",
+        variables={"question.url": "Where it opens.", "question.code": "A code the bridge never sets."},
+        sample={**sample, "question": {**sample["question"], "code": "Q-1"}},
+    )
+    question = ask(world, world.reviewer)
+    with pytest.raises(DecisionMailUnsendable) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.skipped == {question.public_id: {INVALID_VALUES}}
+    with system_context(reason=READ):
+        assert mailed() == [] and not Message._base_manager.exists()
+
+
+def test_a_digest_row_whose_sample_renders_skips_every_question_and_fails_the_run_visibly(world: Any) -> None:
+    """Its own sample sets the value, so the row is sound: each question is skipped, and the run names them."""
+
+    sample = shipped_sample(decision_mail.DIGEST_TEMPLATE_KEY)
+    override(
+        decision_mail.DIGEST_TEMPLATE_KEY,
+        source="{% for question in questions %}\n\n[{{ question.title }}]({{ question.url }}) {{ question.code }}"
+               "\n\n{% endfor %}",
+        variables={
+            "questions.*.title": "What it asks.", "questions.*.url": "Where it opens.",
+            "questions.*.code": "A code the bridge never sets.",
+        },
+        sample={**sample, "questions": [{**item, "code": "Q-1"} for item in sample["questions"]]},
+    )
+    questions = [ask(world, world.reviewer), ask(world, world.reviewer)]
+    with pytest.raises(DecisionMailUnsendable) as refused:
+        DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2))
+    assert refused.value.skipped == {question.public_id: {INVALID_VALUES} for question in questions}
+    with system_context(reason=READ):
+        assert not DigestNotice.objects.exists() and not Message._base_manager.exists()
+
+
+def test_a_digest_of_ten_bad_questions_and_five_good_sends_the_good_and_names_the_bad(world: Any) -> None:
+    """Every question listed first fails on its own and the row is sound: they are left out, the rest are sent."""
+
+    bad = [ask_choosing(world, "w" * (VALUE_STRING_LIMIT + 1)) for _ in range(DIGEST_QUESTION_LIMIT)]
+    good = [ask(world, world.reviewer) for _ in range(5)]
+    with pytest.raises(DecisionMailUnsendable) as refused:
+        DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2))
+    assert refused.value.skipped == {question.public_id: {INVALID_VALUES} for question in bad}
+    ((_subject, text),) = mails(DigestNotice, world.reviewer)
+    assert all(link(question) in text for question in good) and not any(link(question) in text for question in bad)
+    assert "15 questions are waiting for your decision." in text
+
+
+def test_a_row_whose_subject_grows_too_long_fails_the_run_visibly_and_mails_nothing(world: Any) -> None:
+    """The subject prints the reason twice: its sample's fits, a long reason's does not."""
+
+    override(
+        DecisionNoticeOccasion.ASKED.template_key,
+        subject="{{ question.reason }} {{ question.reason }}",
+        source="Open [the question]({{ question.url }}).",
+        variables={"question.url": "Where it opens.", "question.reason": "Why it is asked."},
+    )
+    question = ask(world, world.reviewer, context=DecisionContext(reason="r" * 600))
+    with pytest.raises(DecisionMailUnsendable) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.skipped == {question.public_id: {SUBJECT_TOO_LONG}} and mailed() == []
+
+
+def test_a_row_that_refuses_its_own_sample_is_the_rows_fault_not_the_questions(world: Any) -> None:
+    override(
+        DecisionNoticeOccasion.ASKED.template_key,
+        source="Open [the question]({{ question.url }}): {{ question.code }}",
+        variables={"question.url": "Where it opens.", "question.code": "A code nobody sets."},
+    )
+    question = ask(world, world.reviewer)
+    with pytest.raises(DecisionMailUnsendable) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.codes == {INVALID_VALUES} and refused.value.skipped == {} and mailed() == []
+
+
+def test_a_reader_whose_own_values_fail_is_skipped_and_the_next_reader_is_still_mailed(
+    world: Any, caplog: Any,
+) -> None:
+    """The row requires a field of each fact a reader is shown: a reader shown none is mailed."""
+
+    sample = shipped_sample(DecisionNoticeOccasion.ASKED.template_key)
+    override(
+        DecisionNoticeOccasion.ASKED.template_key,
+        source="Open [the question]({{ question.url }}).\n\n"
+               "{% for fact in question.facts %}\n\n{{ fact.note }}\n\n{% endfor %}",
+        variables={"question.url": "Where it opens.", "question.facts.*.note": "A note the bridge never sets."},
+        sample={**sample, "question": {**sample["question"], "facts": [{"note": "Checked"}]}},
+    )
+    blind = addressed_user("dm-blind")
+    write_relationships([RelationshipTuple(to_object_ref(world.subject), "viewer", to_subject_ref(blind))])
+    question = ask(world, world.reviewer, blind, context=full_facts(1, world.subject))
+    revoke(world.subject, blind)
+    with caplog.at_level(logging.WARNING, logger=decision_mail.__name__), pytest.raises(
+        DecisionMailUnsendable,
+    ) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.skipped == {question.public_id: {INVALID_VALUES}}
+    mailed_users = {user for user, _occasion in mailed(question)}
+    assert blind.pk in mailed_users and world.reviewer.pk not in mailed_users
+    assert any(f"to user {world.reviewer.pk} skipped" in line for line in skips_in(caplog))
+
+
+def test_a_digest_whose_questions_fail_only_together_lists_half_until_it_sends(world: Any, caplog: Any) -> None:
+    """Each question alone fits the render's budget, ten together do not: five are listed, all ten counted."""
+
+    sample = shipped_sample(decision_mail.DIGEST_TEMPLATE_KEY)
+    override(
+        decision_mail.DIGEST_TEMPLATE_KEY,
+        source="{% for question in questions %}\n\n[{{ question.title }}]({{ question.url }})\n\n"
+               + "{{ question.reason }}" * 20 + "\n\n{% endfor %}",
+        variables={
+            "questions.*.title": "What it asks.", "questions.*.url": "Where it opens.",
+            "questions.*.reason": "Why it is asked.",
+        },
+        sample=sample,
+    )
+    for _ in range(DIGEST_QUESTION_LIMIT):
+        ask(world, world.reviewer, context=DecisionContext(reason="r" * DIGEST_REASON_TEXT_LIMIT))
+    with caplog.at_level(logging.WARNING, logger=decision_mail.__name__):
+        assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
+    ((_subject, text),) = mails(DigestNotice, world.reviewer)
+    assert text.count("/decisions/") == DIGEST_QUESTION_LIMIT // 2
+    assert any("lists 5 questions: more do not fit together" in record.getMessage() for record in caplog.records)
+
+
+def test_a_row_saved_while_the_run_sends_is_read_again_by_the_tasks_retry(world: Any) -> None:
+    """The first person's notice saves an override: the second's send finds its row no longer effective."""
+
+    question = ask(world, world.reviewer)
+
+    def change(sender: Any, instance: Any, **kwargs: Any) -> None:
+        pre_save.disconnect(change, sender=DecisionNotice)
+        override(
+            DecisionNoticeOccasion.ASKED.template_key,
+            source="Changed: [the question]({{ question.url }}).", variables={"question.url": "Where it opens."},
+        )
+
+    pre_save.connect(change, sender=DecisionNotice, weak=False)
+    try:
+        with runs_of(mail_decision) as started:
+            mail_decision.apply(kwargs={"decision_id": question.pk, "occasion": "asked"})
+    finally:
+        pre_save.disconnect(change, sender=DecisionNotice)
+    assert len(started) == 2 and len(mailed(question)) == 2
+    ((_subject, text),) = mails(DecisionNotice, world.admin, decision=question)
+    assert text.startswith("Changed") or "Changed: " in text
+
+
+def test_a_row_saved_mid_run_is_retried_soon(world: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retry only reads the rows again, so it waits ``ROW_CHANGE_RETRY_COUNTDOWN``, not a channel's minutes."""
+
+    question = ask(world, world.reviewer)
+    asked: list[Any] = []
+
+    def retry(*, exc: Exception, countdown: int) -> Retry:
+        asked.append((type(exc), countdown))
+        return Retry(exc=exc, when=countdown)
+
+    def change(sender: Any, instance: Any, **kwargs: Any) -> None:
+        pre_save.disconnect(change, sender=DecisionNotice)
+        override(
+            DecisionNoticeOccasion.ASKED.template_key,
+            source="Changed: [the question]({{ question.url }}).", variables={"question.url": "Where it opens."},
+        )
+
+    monkeypatch.setattr(mail_decision, "retry", retry)
+    pre_save.connect(change, sender=DecisionNotice, weak=False)
+    mail_decision.push_request(id="row-change", retries=0)
+    try:
+        with pytest.raises(Retry):
+            mail_decision.run(question.pk, "asked")
+    finally:
+        mail_decision.pop_request()
+        pre_save.disconnect(change, sender=DecisionNotice)
+    assert asked == [(TemplateRowChanged, ROW_CHANGE_RETRY_COUNTDOWN)]
+
+
+def test_a_failure_that_is_no_refusal_keeps_its_class_and_none_of_its_words(world: Any, caplog: Any) -> None:
+    """A database error's own text may name what was written, an address among it; the run's error does not."""
+
+    question = ask(world, world.reviewer)
+
+    def collide(sender: Any, instance: Any, **kwargs: Any) -> None:
+        raise IntegrityError(f"duplicate key value: Key (value)=({world.reviewer.email}) already exists.")
+
+    pre_save.connect(collide, sender=Message, weak=False)
+    try:
+        with caplog.at_level(logging.DEBUG), pytest.raises(IntegrityError) as failed:
+            DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    finally:
+        pre_save.disconnect(collide, sender=Message)
+    assert "@" not in str(failed.value) and failed.value.__cause__ is None and failed.value.__suppress_context__
+    assert "collide" in [frame.name for frame in traceback.extract_tb(failed.value.__traceback__)], "frames kept"
+    formatter = logging.Formatter()
+    bridge = [record for record in caplog.records if record.name == decision_mail.__name__]
+    assert bridge and all("@" not in formatter.format(record) for record in bridge)
+
+
+def test_a_failure_whose_class_takes_no_one_message_becomes_its_permanent_kind(world: Any) -> None:
+    """A ``UnicodeDecodeError`` cannot be made from one message: it is raised as the ``ValueError`` it is."""
+
+    question = ask(world, world.reviewer)
+
+    def undecodable(sender: Any, instance: Any, **kwargs: Any) -> None:
+        raise UnicodeDecodeError("utf-8", world.reviewer.email.encode(), 0, 1, "invalid start byte")
+
+    pre_save.connect(undecodable, sender=Message, weak=False)
+    try:
+        with pytest.raises(ValueError) as failed:
+            DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    finally:
+        pre_save.disconnect(undecodable, sender=Message)
+    assert type(failed.value) is ValueError and not retry_may_cure(failed.value)
+    assert "@" not in str(failed.value)
+    assert "undecodable" in [frame.name for frame in traceback.extract_tb(failed.value.__traceback__)]
+
+
+def test_a_render_that_fails_quoting_the_link_never_lets_its_words_out(world: Any, caplog: Any) -> None:
+    """``render_failed`` quotes the exception, here the link: the run's error, logs and store hold none of it."""
+
+    with system_context(reason="tests.decisions_messaging.failing_row"):
+        MessageTemplate(
+            kind="template", key=DecisionNoticeOccasion.ASKED.template_key, language="en", name="Failing",
+            format="markdown", layout="base", subject="A question", preheader="A question",
+            source="Open [the question]({{ question.url }}).\n\n{{ question.url|upper }}",
+            variables={"question.url": "Where it opens."},
+        ).save()
+    question = ask(world, world.reviewer)
+    with failing_filter("upper", RuntimeError(f"cannot upper {link(question)}")), caplog.at_level(logging.DEBUG), \
+            pytest.raises(DecisionMailUnsendable) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.codes == {RENDER_FAILED}
+    assert link(question) not in str(refused.value) and ORIGIN not in str(refused.value)
+    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+    formatter = logging.Formatter()
+    assert any(record.name == decision_mail.__name__ for record in caplog.records)
+    assert all(ORIGIN not in formatter.format(record) for record in caplog.records), "every logger, traceback included"
+    with system_context(reason=READ):
+        assert mailed() == [] and not Message._base_manager.exists()
+
+
+def ask_with_choices(world: Any, count: int, **changes: Any) -> Any:
+    """Ask one question about the world's order offering ``count`` choices, ``Choice 1`` first."""
+
+    return Decision.objects.ask(DecisionRequest(
+        kind="order_review", records=(world.subject,), assignees=(world.reviewer,), requester=world.requester,
+        proposal=DecisionProposal(alternatives=[
+            {"key": f"c{index}", "label": f"Choice {index}", "outcome": "done"} for index in range(1, count + 1)
+        ]),
+        **changes,
+    ), actor=world.requester)
+
+
+def choices_line(text: str) -> str:
+    (line,) = [line for line in text.splitlines() if line.startswith("Choices: ")]
+    return line
+
+
+@pytest.mark.parametrize("over", [0, 1])
+def test_an_asked_mail_names_its_first_choices_and_counts_the_rest(world: Any, over: int) -> None:
+    question = ask_with_choices(world, QUESTION_CHOICE_LIMIT + over)
+    assert mail_decision(question.pk, "asked") == 2
+    ((_subject, text),) = mails(DecisionNotice, world.reviewer, decision=question)
+    named = "; ".join(f"Choice {index}" for index in range(1, QUESTION_CHOICE_LIMIT + 1))
+    assert choices_line(text) == f"Choices: {named}" + (" and 1 more" if over else "")
+
+
+def test_the_fullest_digest_of_many_choices_renders_naming_the_first_and_counting_the_rest(world: Any) -> None:
+    """Every listed question at its most facts and one choice past the digest's cut: the render's budget holds."""
+
+    facts = full_facts(QUESTION_FACT_LIMIT + 1, value="passed " + "x" * 400)
+    for _ in range(DIGEST_QUESTION_LIMIT):
+        ask_with_choices(world, DIGEST_CHOICE_LIMIT + 1, context=facts)
+    assert DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2)) == 2
+    ((_subject, text),) = mails(DigestNotice, world.reviewer)
+    named = "; ".join(f"Choice {index}" for index in range(1, DIGEST_CHOICE_LIMIT + 1))
+    lines = [line for line in text.splitlines() if line.startswith("Choices: ")]
+    assert lines == [f"Choices: {named} and 1 more"] * DIGEST_QUESTION_LIMIT
 
 
 def test_a_template_that_does_not_show_the_link_refuses_the_run_once(world: Any) -> None:
@@ -470,9 +878,9 @@ def test_a_template_that_does_not_show_the_link_refuses_the_run_once(world: Any)
             source="A question is waiting for you.", variables={},
         ).save()
     question = ask(world, world.reviewer)
-    with pytest.raises(DecisionMailUnsendable, match="decision_asked") as refused:
+    with pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert "value_not_printed" in str(refused.value) and ORIGIN not in str(refused.value)
+    assert refused.value.codes == {VALUE_NOT_PRINTED} and ORIGIN not in str(refused.value)
     assert refused.value.__cause__ is None and refused.value.__suppress_context__
     assert mailed() == []
 
