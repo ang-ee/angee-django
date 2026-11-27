@@ -10,27 +10,6 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
-- `angee.parties`: **New field and lookup; changed behaviour.** An organization
-  has a domain key, `Organization.domain_key`: its domain in the one spelling the
-  domain rule gives (`Handle.normalize_email_domain`, the rule a handle's keys
-  read), written by the organization's save whenever the domain is, `""` for no
-  domain, indexed, and versioned in history beside the domain. `Organization.domain_filter(domain)`
-  is a `Q` for the organizations whose domain is `domain` in any spelling the rule
-  joins; several may share one. The organization-domain suggestion
-  (`PartyManager.suggest_for`) reads it, so an organization typed `straße.example`
-  is suggested for `ada@strasse.example`, and one typed in NFD, in full-width
-  letters or as `BÜCHER.example` for the plain spelling, on both databases; its
-  pre-filter by the rule's spelling, its punycode and the address's own spelling
-  is removed. A new provision repair, `renormalize_organization_domains`
-  (`PartyManager.renormalize_organization_domains`, also a command), writes the
-  key of every organization whose stored key is not its domain's under the rule,
-  reading every row in batches and saving each such row again under its lock. A consumer that compared `Organization.domain`
-  (`domain__iexact`) asks `Organization.domain_filter` instead. **Upgrade:** run
-  `makemigrations` and commit it: an `AddField` of `domain_key` on
-  `organization` and on `historicalorganization`, and on the history model of
-  any host model inheriting `Organization`, each with a database default of `""`
-  and an index; no table rewrite on PostgreSQL. Provision then keys every
-  organization.
 - `angee.messaging`, `angee.messaging_integrate_imap`, `angee.calendar`,
   `angee.intake`: **Changed behaviour.** Compose and answers land an address as
   given; inbound mail keeps the parser's lower-cased form.
@@ -165,6 +144,27 @@ live in code docstrings.
     folds them. Leaving for good removes the column and the constraint with a
     reviewed migration.
   - No `rebac sync` and no SDL change.
+- `angee.parties`: **New field and lookup; changed behaviour.** An organization
+  has a domain key, `Organization.domain_key`: its domain in the one spelling the
+  domain rule gives (`Handle.normalize_email_domain`, the rule a handle's keys
+  read), written by the organization's save whenever the domain is, `""` for no
+  domain, indexed, and versioned in history beside the domain. `Organization.domain_filter(domain)`
+  is a `Q` for the organizations whose domain is `domain` in any spelling the rule
+  joins; several may share one. The organization-domain suggestion
+  (`PartyManager.suggest_for`) reads it, so an organization typed `straße.example`
+  is suggested for `ada@strasse.example`, and one typed in NFD, in full-width
+  letters or as `BÜCHER.example` for the plain spelling, on both databases; its
+  pre-filter by the rule's spelling, its punycode and the address's own spelling
+  is removed. A new provision repair, `renormalize_organization_domains`
+  (`PartyManager.renormalize_organization_domains`, also a command), writes the
+  key of every organization whose stored key is not its domain's under the rule,
+  reading every row in batches and saving each such row again under its lock. A consumer that compared `Organization.domain`
+  (`domain__iexact`) asks `Organization.domain_filter` instead. **Upgrade:** run
+  `makemigrations` and commit it: an `AddField` of `domain_key` on
+  `organization` and on `historicalorganization`, and on the history model of
+  any host model inheriting `Organization`, each with a database default of `""`
+  and an index; no table rewrite on PostgreSQL. Provision then keys every
+  organization.
 - `angee.messaging`: **The console reads where one may send a new message, which
   messages were written here, and the recipient bound.**
   - **New.** The channels filter `sendable`
