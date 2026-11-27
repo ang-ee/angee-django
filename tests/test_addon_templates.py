@@ -26,6 +26,7 @@ REPOSITORY_TEMPLATE = ROOT / "templates" / "addons" / "repository"
 WEB_DIR = "{% if include_web %}web{% endif %}"
 TESTING_DIR = '{% if test_host == "bare" %}testing{% endif %}'
 TESTS_DIR = '{% if test_host == "composed" %}tests{% endif %}'
+COMPOSED_PYTEST = '{% if test_host == "composed" %}pytest.ini{% endif %}'
 BARE_TEST = '{% if test_host == "bare" %}test_{{ addon_id }}.py{% endif %}'
 
 ADDON_FILES = {
@@ -36,14 +37,13 @@ ADDON_FILES = {
     "schema.py",
     "resources/demo/010_{{ addon_id }}.{{ model_name | lower }}.yaml",
 }
-# A consumer addon (`test_host=composed`) keeps its tests inside the addon: it
-# reads its runtime model through `apps.get_model`, registers nothing, and
-# consumer CI collects the package in place.
+# Composed tests use emitted models and addon-local pytest collection.
 COMPOSED_FILES = {
+    COMPOSED_PYTEST,
     f"{TESTS_DIR}/__init__.py",
     TESTS_DIR + "/test_{{ addon_id }}.py",
 }
-# A framework addon (`test_host=bare`) renders the concrete test model the bare
+# The legacy `test_host=bare` option renders the concrete test model the bare
 # host registers, and its test at the addon root: pytest `testpaths` collects
 # only the repository `tests`, so adoption moves the module there.
 TESTING_FILES = {
@@ -218,7 +218,11 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
             name.replace(TESTING_DIR, "testing").replace(BARE_TEST, "test_contacts.py") for name in TESTING_FILES
         }
     else:
-        expected |= {name.replace(TESTS_DIR, "tests").replace("{{ addon_id }}", "contacts") for name in COMPOSED_FILES}
+        expected.add("pytest.ini")
+        expected |= {
+            name.replace(TESTS_DIR, "tests").replace("{{ addon_id }}", "contacts")
+            for name in COMPOSED_FILES - {COMPOSED_PYTEST}
+        }
     if include_web:
         expected |= {name.replace(WEB_DIR, "web").replace("{{ model_name }}", "Contact") for name in WEB_FILES}
     assert rendered == expected
@@ -239,8 +243,7 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
     else:
         test_module = (target / "tests/test_contacts.py").read_text(encoding="utf-8")
         assert 'Contact = apps.get_model("contacts", "Contact")' in test_module
-        assert 'call_command("rebac", "sync", verbosity=0)' in test_module
-        assert "TransactionTestCase" in test_module
+        assert "class ContactVisibilityTests(TestCase)" in test_module
         assert "testing" not in test_module
 
     manifest = tomllib.loads((target / "pyproject.toml").read_text(encoding="utf-8"))

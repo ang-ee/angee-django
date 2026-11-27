@@ -1,6 +1,6 @@
 ---
 name: angee-addon
-description: "Creates and wires a new Angee addon's local declarations: level and folder, pyproject.toml, optional apps.py, autoconfig.py, app label, testing/models.py and the web fragment (defineBaseAddon, i18n namespace, pnpm workspace). Use for 'new addon', 'scaffold addon', 'add web fragment'."
+description: "Creates and wires a new Angee addon's local declarations: level and folder, pyproject.toml, optional apps.py, autoconfig.py, app label, local pytest suite and the web fragment (defineBaseAddon, i18n namespace, pnpm workspace). Use for 'new addon', 'scaffold addon', 'add web fragment'."
 ---
 
 # Angee Addon
@@ -11,7 +11,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 ## Use when
 
 - "Create a new addon `angee.<name>` / consumer addon `<ns>.<name>`."
-- "Scaffold `pyproject.toml`, `apps.py`, `autoconfig.py`, `testing/models.py`."
+- "Scaffold `pyproject.toml`, `apps.py`, `autoconfig.py`, and addon tests."
 - "Add a web fragment / register the fragment in the pnpm workspace."
 - Not for `settings.yaml`, `INSTALLED_APPS`, the host `web/package.json` or the stack profile: `angee-project`.
 
@@ -24,7 +24,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 | `angee.base.addons` | Packaged `[tool.angee.*]` tables and optional addon-module discovery | [Base adapter](../../../src/angee/base/addons.py) |
 | `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `MoneyConfig` in `src/angee/money/apps.py`, `BaseConfig.label` in `src/angee/base/apps.py` |
 | `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `SETTINGS` in `examples/src/example/notes/autoconfig.py`, `SETTINGS` and `settings` in `src/angee/base/autoconfig.py` |
-| `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `src/angee/tags/testing/models.py`, `INSTALLED_APPS` in `tests/settings.py`, `tests/conftest.py` |
+| Addon `pytest.ini` and `tests/` | Test collection and local fixtures for an isolated addon host | `src/angee/uom/pytest.ini`, `src/angee/uom/tests/` |
 | `web/package.json`, `web/src/{index.tsx,i18n.ts,index.test.ts}` | The rendered fragment and its namespace | `examples/src/example/notes/web/`, `templates/addons/web/template/` |
 | `src/angee/web/build.py` (`WebRuntime`), stack `pnpm-workspace.yaml` | Fragment discovery and `runtime/web/manifest.json`; which `web/` folders the JS install links | `WebRuntime`, `WebIntegration` in `src/angee/web/build.py`, `templates/stacks/dev/template/pnpm-workspace.yaml.jinja` |
 
@@ -43,7 +43,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts`), `expectValidBaseAddon` (`packages/app/src/testing.tsx`),
   `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts`) own fragment composition.
-- Start an addon from `templates/addons/web` (Copier: manifest, model, gate, schema, demo row, test model, test and, with `include_web`, the fragment under `web/`), not from an older addon ([web build pitfalls](../angee-framework/references/web-pitfalls.md)).
+- Start an addon from `templates/addons/web` (Copier: manifest, model, gate, schema, demo row, composed test and, with `include_web`, the fragment under `web/`), not from an older addon ([web build pitfalls](../angee-framework/references/web-pitfalls.md)).
 
 ## Steps
 
@@ -133,14 +133,12 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
 
 
-5. **Register test models.** Framework addons add `testing/__init__.py` and `testing/models.py`: one
-   concrete subclass per abstract source model (`abstract = False`, `app_label = "<label>"`, `db_table =
-   "test_<label>_<model>"`, same `rebac_resource_type`); list the addon in `tests/settings.py` `INSTALLED_APPS`
-   and import the module once in `tests/conftest.py` (`# noqa: F401`); tests go in
-   `tests/test_<name>*.py` (`angee-tests` owns their shapes). A consumer addon keeps `tests/` inside the addon (notes:
-   `examples/src/example/notes/tests/`; `[tool.pytest.ini_options]` in `pyproject.toml` puts `examples/src` on the test path).
-   **Owner rule:** [source-addon test models](../../../docs/checks.md#source-addon-test-models) own
-   adoption; never register a second concrete model for a resource type.
+5. **Declare the test suite.** Keep the rendered composed test and native
+   `pytest.ini` in the addon. For a new framework addon, run the
+   [isolated addon host](../../../docs/checks.md#isolated-addon-test-hosts).
+   A consumer addon runs through its collection's existing host.
+   When maintaining a legacy bare-host suite, reuse its existing
+   [test compositions](../../../docs/checks.md#source-addon-test-models).
 
 6. **Register the web fragment** (only when the addon renders). `templates/addons/web` rendered with `addon_id=<label>`
    and `include_web=true` emits it under `web/`; then adapt. `web/package.json`: name `@angee/<label>` (framework) or `@<ns>/<label>-web` (notes:

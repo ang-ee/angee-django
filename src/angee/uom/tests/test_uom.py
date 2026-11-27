@@ -7,34 +7,27 @@ nothing here is PostgreSQL-marked.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
-from rebac import actor_context, system_context, to_object_ref
+from rebac import SubjectRef, actor_context, system_context, to_object_ref
+from rebac.evaluator import evaluator_scope
 from rebac.models import active_relationship_model
+from rebac.resources import model_resource_type
 
+from angee.iam.testing import create_user
 from angee.uom.models import UomExpressions
-from angee.uom.testing.models import Uom, UomCategory
-from tests.conftest import create_user
 
-
-def _make_category(**fields: Any) -> Any:
-    """Create one UomCategory under system_context (admin-only surface)."""
-
-    with system_context(reason="uom tests setup"):
-        return UomCategory.objects.create(**fields)
-
-
-def _make_uom(**fields: Any) -> Any:
-    """Create one Uom under system_context (admin-only surface)."""
-
-    with system_context(reason="uom tests setup"):
-        return Uom.objects.create(**fields)
+# The host's composer emits these; the tests read them from the registry.
+Uom = apps.get_model("uom", "Uom")
+UomCategory = apps.get_model("uom", "UomCategory")
 
 
 def _shared_reader_exists(row: Any) -> bool:
@@ -47,14 +40,26 @@ def _shared_reader_exists(row: Any) -> bool:
     ).exists()
 
 
+
+def test_units_have_the_names_record_pickers_show() -> None:
+    """The irregular plurals come from the emitted models' Django metadata."""
+
+    assert (str(Uom._meta.verbose_name), str(Uom._meta.verbose_name_plural)) == (
+        "unit of measure",
+        "units of measure",
+    )
+    assert (str(UomCategory._meta.verbose_name), str(UomCategory._meta.verbose_name_plural)) == (
+        "unit of measure category",
+        "unit of measure categories",
+    )
+
 def test_native_categories_and_units_use_authenticated_reads(
-    db: None,
+    make_category: Callable[..., Any], make_uom: Callable[..., Any],
 ) -> None:
     """A signed-in user reads native catalogue rows without wildcard tuples."""
 
-    del db
-    category = _make_category(name="Native catalogue")
-    unit = _make_uom(
+    category = make_category(name="Native catalogue")
+    unit = make_uom(
         category=category,
         name="Each",
         ratio=Decimal(1),
@@ -72,51 +77,32 @@ def test_native_categories_and_units_use_authenticated_reads(
     assert not _shared_reader_exists(unit)
 
 
-@pytest.fixture()
-def units(db: None) -> SimpleNamespace:
-    """Seed a weight, a count, and a volume category with a few units."""
 
-    del db
-    weight = _make_category(name="Weight")
-    kilogram = _make_uom(
-        category=weight,
-        name="Kilogram",
-        ratio=Decimal(1),
-        rounding=Decimal("0.001"),
-        is_reference=True,
-    )
-    gram = _make_uom(
-        category=weight,
-        name="Gram",
-        ratio=Decimal("0.001"),
-        rounding=Decimal("0.001"),
-    )
+def test_reference_rows_follow_the_authenticated_reference_contract(
+    make_category: Callable[..., Any],
+    make_uom: Callable[..., Any],
+) -> None:
+    """Every authenticated principal reads units through scoped querysets; none may write; saves add no wildcard."""
 
-    count = _make_category(name="Unit")
-    each = _make_uom(
-        category=count,
-        name="Unit(s)",
-        ratio=Decimal(1),
-        rounding=Decimal("0.01"),
-        is_reference=True,
-    )
-    dozen = _make_uom(
-        category=count,
-        name="Dozen",
-        ratio=Decimal(12),
-        rounding=Decimal("0.01"),
-    )
-
-    volume = _make_category(name="Volume")
-    litre = _make_uom(
-        category=volume,
-        name="Litre",
-        ratio=Decimal(1),
-        rounding=Decimal("0.001"),
-        is_reference=True,
-    )
-    return SimpleNamespace(kilogram=kilogram, gram=gram, each=each, dozen=dozen, litre=litre)
-
+    category = make_category(name="Reference")
+    unit = make_uom(category=category, name="Each", ratio=Decimal(1), rounding=Decimal(1), is_reference=True)
+    reader = create_user("uom-reference-reader")
+    with actor_context(reader), evaluator_scope():
+        for row in (category, unit):
+            scoped = type(row).objects.with_actor(reader).scoped().filter(pk=row.pk)
+            assert list(scoped.values_list("pk", flat=True)) == [row.pk]
+            assert not row.with_actor(reader).has_access("write")
+    with actor_context(SubjectRef.of("service/principal", "uom-reference-reader")):
+        assert UomCategory.objects.filter(pk=category.pk).exists()
+        assert Uom.objects.filter(pk=unit.pk).exists()
+    # Fresh rows: with_actor() above bound the reader to those instances.
+    with system_context(reason="uom reference inspect"):
+        for row in (UomCategory.objects.get(pk=category.pk), Uom.objects.get(pk=unit.pk)):
+            row.save()
+            assert not active_relationship_model().objects.filter(
+                resource_type=model_resource_type(row), resource_id=str(row.pk),
+                subject_type="auth/user", subject_id="*",
+            ).exists()
 
 def test_dozen_to_unit_is_exactly_twelve(units: SimpleNamespace) -> None:
     """One dozen resolves to twelve single units, exactly."""
@@ -198,12 +184,14 @@ def test_expression_conversion_rejects_cross_category_rows(units: SimpleNamespac
     assert converted is None
 
 
-def test_one_reference_per_category_is_rejected(db: None) -> None:
+def test_one_reference_per_category_is_rejected(
+    make_category: Callable[..., Any],
+    make_uom: Callable[..., Any],
+) -> None:
     """A second is_reference unit in the same category violates the constraint."""
 
-    del db
-    weight = _make_category(name="Weight")
-    _make_uom(
+    weight = make_category(name="Weight")
+    make_uom(
         category=weight,
         name="Kilogram",
         ratio=Decimal(1),
@@ -211,7 +199,7 @@ def test_one_reference_per_category_is_rejected(db: None) -> None:
         is_reference=True,
     )
     with pytest.raises(IntegrityError), transaction.atomic():
-        _make_uom(
+        make_uom(
             category=weight,
             name="Second reference",
             ratio=Decimal(1000),
@@ -220,18 +208,17 @@ def test_one_reference_per_category_is_rejected(db: None) -> None:
         )
 
 
-def test_multiple_non_reference_units_coexist(db: None) -> None:
+def test_multiple_non_reference_units_coexist(make_category: Callable[..., Any], make_uom: Callable[..., Any]) -> None:
     """The partial constraint leaves non-reference units unconstrained."""
 
-    del db
-    weight = _make_category(name="Weight")
-    gram = _make_uom(
+    weight = make_category(name="Weight")
+    gram = make_uom(
         category=weight,
         name="Gram",
         ratio=Decimal("0.001"),
         rounding=Decimal("0.001"),
     )
-    tonne = _make_uom(
+    tonne = make_uom(
         category=weight,
         name="Tonne",
         ratio=Decimal(1000),
@@ -241,20 +228,22 @@ def test_multiple_non_reference_units_coexist(db: None) -> None:
     assert tonne.pk is not None
 
 
-def test_same_reference_flag_across_categories_is_allowed(db: None) -> None:
+def test_same_reference_flag_across_categories_is_allowed(
+    make_category: Callable[..., Any],
+    make_uom: Callable[..., Any],
+) -> None:
     """The constraint is per category — each category keeps its own reference."""
 
-    del db
-    weight = _make_category(name="Weight")
-    volume = _make_category(name="Volume")
-    kilogram = _make_uom(
+    weight = make_category(name="Weight")
+    volume = make_category(name="Volume")
+    kilogram = make_uom(
         category=weight,
         name="Kilogram",
         ratio=Decimal(1),
         rounding=Decimal("0.001"),
         is_reference=True,
     )
-    litre = _make_uom(
+    litre = make_uom(
         category=volume,
         name="Litre",
         ratio=Decimal(1),
@@ -263,36 +252,6 @@ def test_same_reference_flag_across_categories_is_allowed(db: None) -> None:
     )
     assert kilogram.pk is not None
     assert litre.pk is not None
-
-
-@pytest.fixture()
-def temperatures(db: None) -> SimpleNamespace:
-    """Kelvin-referenced temperature units exercising the affine offset."""
-
-    del db
-    temperature = _make_category(name="Temperature")
-    kelvin = _make_uom(
-        category=temperature,
-        name="Kelvin",
-        ratio=Decimal(1),
-        rounding=Decimal("0.01"),
-        is_reference=True,
-    )
-    celsius = _make_uom(
-        category=temperature,
-        name="Celsius",
-        ratio=Decimal(1),
-        offset=Decimal("273.15"),
-        rounding=Decimal("0.1"),
-    )
-    fahrenheit = _make_uom(
-        category=temperature,
-        name="Fahrenheit",
-        ratio=Decimal("0.5555555556"),
-        offset=Decimal("255.3722222222"),
-        rounding=Decimal("0.1"),
-    )
-    return SimpleNamespace(kelvin=kelvin, celsius=celsius, fahrenheit=fahrenheit)
 
 
 def test_celsius_to_kelvin_applies_offset(temperatures: SimpleNamespace) -> None:
@@ -317,12 +276,12 @@ def test_multiplicative_units_keep_zero_offset_math(units: SimpleNamespace) -> N
     assert units.gram.convert(Decimal(500), units.kilogram) == Decimal("0.5")
 
 
-def test_reference_with_offset_is_rejected(db: None) -> None:
+def test_reference_with_offset_is_rejected(make_category: Callable[..., Any], make_uom: Callable[..., Any]) -> None:
     """A reference unit must be the identity map: ratio 1, offset 0."""
 
-    temperature = _make_category(name="Temperature (constraint)")
+    temperature = make_category(name="Temperature (constraint)")
     with pytest.raises(IntegrityError), transaction.atomic():
-        _make_uom(
+        make_uom(
             category=temperature,
             name="Bad reference",
             ratio=Decimal(1),
@@ -336,8 +295,10 @@ def test_reference_with_offset_is_rejected(db: None) -> None:
 @pytest.mark.parametrize("field,value", [
     ("ratio", "0"), ("ratio", "-1"), ("rounding", "0"), ("rounding", "-0.1"), ("rounding", "0.5"),
 ])
-def test_invalid_conversion_units_fail_validation_and_database_admission(field: str, value: str) -> None:
-    category = _make_category(name="Validity")
+def test_invalid_conversion_units_fail_validation_and_database_admission(
+    field: str, value: str, make_category: Callable[..., Any],
+) -> None:
+    category = make_category(name="Validity")
     unit = Uom(name="Invalid", category=category, **{field: Decimal(value)})
     with system_context(reason="uom invalid validation"), pytest.raises(ValidationError):
         unit.full_clean()
