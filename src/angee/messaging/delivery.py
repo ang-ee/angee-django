@@ -55,7 +55,7 @@ def _record_failed_delivery(model: Any, pk: Any, *, token: str, claim: Any, erro
     A transport's exception can quote the mail (a server's reply echoing a recipient, a line or a
     link), so it never leaves the delivery task: when recording the settlement fails as well, that
     failure is raised on its own, with no context, and the transport's error is logged by its type
-    alone. Without that second failure nothing is logged here.
+    and its cause's type alone. Without that second failure nothing is logged here.
     """
 
     try:
