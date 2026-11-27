@@ -2,7 +2,7 @@
 
 ``MessageManager.compose_as_system`` writes system mail as named system work and
 consults no send right: the caller's own permission decided the send. So each
-module under ``src`` and ``examples`` that refers to it is a key of ``CALLERS``,
+production module under ``src`` and ``examples`` that refers to it is a key of ``CALLERS``,
 mapped to that permission; a new caller adds its module and says what decides it.
 The private writer both writers share, ``MessageManager._write_outgoing``, writes
 with no grant consulted when given no actor, so only its own file refers to it
@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Mapping
-from functools import cache
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parent.parent
+from tests.system_mail_references import caller_sources, reference_lines
+
 WRITER = "compose_as_system"
 CALLERS = {
     # The system mailer, Django's default mailer: each email Django sends is recorded.
@@ -44,35 +44,16 @@ OWN_FILE = {
 }
 
 
-def _references(tree: ast.Module, name: str) -> list[int]:
-    """Return the lines of every reference to ``name`` in ``tree``; its own ``def`` is none."""
-
-    return sorted(
-        node.lineno for node in ast.walk(tree)
-        if (isinstance(node, ast.Attribute) and node.attr == name)
-        or (isinstance(node, ast.Name) and node.id == name)
-        or (isinstance(node, ast.Constant) and node.value == name)
-        or (isinstance(node, ast.alias) and name in (node.name, node.asname))
-    )
-
-
-@cache
-def _sources() -> Mapping[Path, ast.Module]:
-    return {
-        path.relative_to(ROOT): ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for top in ("src", "examples") for path in sorted((ROOT / top).rglob("*.py"))
-    }
-
-
 def _unlisted(name: str, allowed: Mapping[Path, str], modules: Mapping[Path, ast.Module]) -> dict[str, list[int]]:
     """Return each module outside ``allowed`` that refers to ``name``, with the lines."""
 
     return {
         str(path): lines for path, tree in modules.items()
-        if path not in allowed and (lines := _references(tree, name))
+        if path not in allowed and (lines := reference_lines(tree, name))
     }
 
 
+@pytest.mark.shared_inputs
 @pytest.mark.parametrize(("writer", "allowed"), [(WRITER, CALLERS), (PRIVATE_WRITER, OWN_FILE)])
 def test_every_caller_of_a_system_mail_writer_is_named_with_its_permission(
     writer: str, allowed: Mapping[Path, str],
@@ -80,9 +61,9 @@ def test_every_caller_of_a_system_mail_writer_is_named_with_its_permission(
     unstated = [str(path) for path, permission in allowed.items()
                 if not (isinstance(permission, str) and permission.strip())]
     assert unstated == [], "State the permission that decides each listed caller's send."
-    modules = _sources()
+    modules = caller_sources()
     assert _unlisted(writer, allowed, modules) == {}, f"Name each caller of {writer}, with the permission deciding it."
-    stale = sorted(str(path) for path in allowed if not _references(modules[path], writer))
+    stale = sorted(str(path) for path in allowed if not reference_lines(modules[path], writer))
     assert stale == [], "A listed caller no longer refers to the writer."
 
 
@@ -103,9 +84,9 @@ def test_an_unlisted_module_that_calls_the_private_writer_fails_the_guard() -> N
     ],
 )
 def test_the_scan_sees_a_reference_however_it_is_spelled(source: str) -> None:
-    assert _references(ast.parse(source), WRITER) != []
+    assert reference_lines(ast.parse(source), WRITER) != []
 
 
 def test_a_mention_in_prose_or_the_owners_definition_is_no_reference() -> None:
     source = 'def compose_as_system(self):\n    """Write; see :meth:`compose_as_system`."""\n'
-    assert _references(ast.parse(source), WRITER) == []
+    assert reference_lines(ast.parse(source), WRITER) == []
