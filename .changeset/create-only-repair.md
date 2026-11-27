@@ -26,7 +26,8 @@ server's words under the field. While the answer is pending the selector is
 `loading`; a refused answer keeps it read-only with the server's words under it,
 said once, beside the field's own description, and once, as the field's error,
 where a refused save says the same sentence (the control's description reads it
-once). The server's refusal of a save
+once, and no hidden copy is left for a screen reader's browse mode, except the one
+a read-only field's mark is described by). The server's refusal of a save
 stays under the field across the re-read it causes, until the person changes
 that field or discards. A field bound through `BoundDescriptorField` takes the
 same states and lock. New public API: `WidgetControlProps.loading`,

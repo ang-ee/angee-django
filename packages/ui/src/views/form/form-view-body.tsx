@@ -787,7 +787,7 @@ function BoundFieldRow({
   const explanation = useUnregisteredImplementationExplanation(field.name);
   const controlProps = {
     id: controlId,
-    "aria-describedby": [descriptionId, explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
+    "aria-describedby": [descriptionId, explanation && explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
       .filter(Boolean).join(" ") || undefined,
     "aria-invalid": displayedMessages.length > 0 || undefined,
     "aria-required": field.required && !effectiveReadOnly || undefined,

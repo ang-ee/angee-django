@@ -270,7 +270,7 @@ export function LabeledDescriptorField({
     : undefined;
   const explanation = useUnregisteredImplementationExplanation(field.name);
   const describedBy =
-    [descriptionId, explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
+    [descriptionId, explanation && explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
       .filter(Boolean).join(" ") || undefined;
 
   return (

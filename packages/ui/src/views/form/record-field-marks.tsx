@@ -192,17 +192,21 @@ export function useUnregisteredImplementationExplanation(field: string): Unregis
  * @kind null
  * @reason Provider infrastructure: decides the record form's not-registered explanation for a field row.
  */
-export function explainsBeside(
-  explanation: UnregisteredImplementationExplanationText | null,
-  messages: readonly string[],
-): explanation is UnregisteredImplementationExplanationText {
-  return explanation !== null && !(explanation.refused && messages.includes(explanation.text));
+export function explainsBeside(explanation: UnregisteredImplementationExplanationText, messages: readonly string[]): boolean {
+  return !(explanation.refused && messages.includes(explanation.text));
+}
+
+/** Whether the field's "Not registered" mark is itself described by the explanation: where the field is
+ * read-only the mark is the keyboard's one stop, and its description is the explanation's id. */
+function explainsMark(explanation: UnregisteredImplementationExplanationText): boolean {
+  return explanation.marked && explanation.readOnly;
 }
 
 /** A field row's explanation of its not-registered mark, under the id its control is described by:
  * screen-reader text, or, when it gives the server's refusal of the repair, shown under the field, the
  * one place those words are said (the field's own description stays). Beside a field error saying the
- * same sentence (`explainsBeside`) it shows nothing more: the error says it, once.
+ * same sentence (`explainsBeside`) the error says it, once: the row renders nothing more, except the
+ * hidden text a mark is described by (`explainsMark`), so no unreferenced copy is read in browse mode.
  * @kind null
  * @reason Provider infrastructure: renders the record form's not-registered explanation for a field row.
  */
@@ -212,9 +216,9 @@ export function UnregisteredImplementationExplanation({ explanation, messages = 
   messages?: readonly string[];
 }) {
   if (!explanation) return null;
-  return explanation.refused && explainsBeside(explanation, messages)
-    ? <FieldDescription id={explanation.id}>{explanation.text}</FieldDescription>
-    : <span id={explanation.id} className="sr-only">{explanation.text}</span>;
+  const hidden = <span id={explanation.id} className="sr-only">{explanation.text}</span>;
+  if (!explainsBeside(explanation, messages)) return explainsMark(explanation) ? hidden : null;
+  return explanation.refused ? <FieldDescription id={explanation.id}>{explanation.text}</FieldDescription> : hidden;
 }
 
 /** Every native form field placement composes attention, provenance, and access marks once.
@@ -239,7 +243,7 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
     ...(explanation?.marked ? [{
       field, label: t("implementation.notRegistered"), tone: "warning" as const,
       // Where the field takes edits its control is the one stop and the one description.
-      explanation: explanation.text, describedBy: explanation.id, focusStop: explanation.readOnly,
+      explanation: explanation.text, describedBy: explanation.id, focusStop: explainsMark(explanation),
     }] : []),
     ...(restricted ? [{ field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }] : []),
   ];

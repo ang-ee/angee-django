@@ -429,8 +429,10 @@ async function refusedReadThenRefusedSave(read: string) {
 test("a refused read and a refused save saying the same sentence say it once under the field", async () => {
   const f = await refusedReadThenRefusedSave(CREATE_ONLY);
 
-  const visible = screen.getAllByText(CREATE_ONLY).filter((node) => !node.className.includes("sr-only"));
-  expect(visible).toHaveLength(1);
+  // Once in the document, as the field's error: no hidden copy that nothing references is left for browse mode.
+  const said = screen.getAllByText(CREATE_ONLY);
+  expect(said).toHaveLength(1);
+  expect(said[0]?.className).not.toContain("sr-only");
   // No control's description reads it twice.
   const described = [...document.querySelectorAll("[aria-describedby]")].map((element) =>
     (element.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "")
