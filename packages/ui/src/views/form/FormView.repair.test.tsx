@@ -405,23 +405,30 @@ test("a resource whose host generated no repair document offers no repair either
   f.clearClients();
 });
 
-test("a refused read and a refused save saying the same sentence say it once under the field", async () => {
+/** A pick made, then the row repaired in another tab: the read asked again is refused in `read`'s words,
+ * and the save that follows is refused as create-only. */
+async function refusedReadThenRefusedSave(read: string) {
   let registered = false;
   const f = fixture(RETIRED, { choices: async (variables) => {
-    if (variables?.id != null && registered) throw new Error(CREATE_ONLY);
+    if (variables?.id != null && registered) throw new Error(read);
     return answer(variables);
   } });
 
   await waitFor(() => expect(f.recordReads().length).toBe(1));
   await pick("Local");
-  // Another tab repairs the row; the read asked again is refused, and so is the save.
   registered = true;
   f.server.row = { ...RETIRED, backend: "STUB" };
   await act(async () => { await f.queryClient.invalidateQueries(); });
-  await waitFor(() => expect(screen.getAllByText(CREATE_ONLY).length).toBeGreaterThan(0));
+  await waitFor(() => expect(screen.getAllByText(read).length).toBeGreaterThan(0));
   save();
   await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
   await settle();
+  return f;
+}
+
+test("a refused read and a refused save saying the same sentence say it once under the field", async () => {
+  const f = await refusedReadThenRefusedSave(CREATE_ONLY);
+
   const visible = screen.getAllByText(CREATE_ONLY).filter((node) => !node.className.includes("sr-only"));
   expect(visible).toHaveLength(1);
   // No control's description reads it twice.
@@ -429,6 +436,16 @@ test("a refused read and a refused save saying the same sentence say it once und
     (element.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "")
       .filter((text) => text.includes(CREATE_ONLY)).length);
   expect(Math.max(0, ...described)).toBeLessThanOrEqual(1);
+  f.clearClients();
+});
+
+test("a refused read and a refused save saying different sentences show both, once each", async () => {
+  const notAdmitted = "This actor may not choose an implementation.";
+  const f = await refusedReadThenRefusedSave(notAdmitted);
+
+  for (const sentence of [notAdmitted, CREATE_ONLY]) {
+    expect(screen.getAllByText(sentence).filter((node) => !node.className.includes("sr-only"))).toHaveLength(1);
+  }
   f.clearClients();
 });
 
