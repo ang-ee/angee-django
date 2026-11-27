@@ -2545,7 +2545,13 @@ from another:
 
 A record form locks a `createOnly` field on an edit except while the stored key
 is not registered, when the field can be chosen once more (a repair); it offers
-the field on a create only where it is `creatable`.
+the field on a create only where it is `creatable`. A page cannot unlock what
+the model's metadata locks: its own `createOnly: false` over a create-only
+selector changes nothing, and its own `createOnly: true` on a field the model
+does not make create-only locks it on an edit with no repair. The repair is
+the record form's: a rail row or a list never offers it, and a list, a board
+or any other surface that changes a stored record asks `fieldChangeable`
+(updatable and not create-only), never `fieldUpdatable` alone.
 
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
