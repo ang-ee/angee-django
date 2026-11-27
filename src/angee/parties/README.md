@@ -365,14 +365,20 @@ handle, as before. That is
 one rule, the domain-spelling rule `Handle.normalize_email_domain`, wherever
 parties matches an identity by a domain: a handle's keys, an address's domain
 (`Handle.domain_of`), the email handles at a domain (`HandleQuerySet.at_domain`)
-and an organization's domain key. Accounts and sign-in allowlists compare
+and an organization's domain key. A name that would read longer than a domain
+name can be (`Handle.DOMAIN_NAME_LIMIT`, 253 characters, RFC 1034's bound as
+Django's `URLValidator` applies it) is no domain the codec could send: the rule
+keeps it as typed, so a name of ligatures that each read as many letters never
+outgrows the 512-character key columns. Accounts and sign-in allowlists compare
 domains for other intents, under their own owners. An
 organization keeps its domain as typed and, beside it, its domain key
 (`Organization.domain_key`): the domain in the rule's spelling, written by the
-organization's save whenever the domain is, and `""` for no domain. Several
+organization's save whenever the domain is, and `""` for no domain; a save
+naming the key without the domain keys the domain the row stores, never one
+changed in memory and not saved. Several
 organizations may share one. `Organization.domain_filter(domain)` finds the
 organizations whose domain is `domain` in any spelling the rule joins, by that
-key's index: from `bücher.example` it finds one typed `xn--bcher-kva.example`,
+key's one index (a btree in `Meta.indexes`, none on history): from `bücher.example` it finds one typed `xn--bcher-kva.example`,
 `BÜCHER.example` or in NFD, and from `strasse.example` one typed
 `straße.example`. Matching by domain goes through the key: the organization-domain
 suggestion (`PartyManager.suggest_for`) asks `domain_filter`, and suggests one
@@ -381,21 +387,41 @@ decides and every one goes to review, in primary-key order. The `organizations`
 resource's filter, sort and group axes are on the typed text, `Organization.domain`,
 so a list filtered by domain compares it as typed. History
 versions the key beside the domain, as a handle's keys, and a revert restoring a
-domain keys it again. A queryset `update` writes no key: the
+domain keys it again. The bulk paths write no key: a queryset `update` of the
+domain and a `bulk_update` naming it leave the key as it was, and the
 `renormalize_organization_domains` repair
 (`OrganizationManager.renormalize_domains`), which every provision runs,
-reads every organization's domain and key in batches and saves again, under its
-row lock and as its most derived row (a company in its own history), each one
-whose key is not the rule's, so a row stored before the column existed, a domain
-an `update` wrote and a changed rule all reach the key without a rule version.
+reads every organization's domain and key in batches and writes the key alone,
+under its row lock and on its most derived row (a company in its own history),
+of each one whose key is not the rule's, so a row stored before the column
+existed, a domain an `update` wrote and a changed rule all reach the key without
+a rule version. Reading the whole table at every provision is what catches a
+queryset `update` of the domain, which leaves no other trace: about 2.5 seconds
+for 50,000 keyed organizations (measured by the Django review on PostgreSQL 17,
+100 batch reads). Keying costs about 14 statements a row: an upgrade keys every
+organization with a domain once (5,000 rows took 446 seconds on a machine under
+load 44 to 51). A host that provisions before it has authored the migration
+adding the column fails on the missing column.
+
 Both key repairs walk through `repair_keys` (batches of `REPAIR_BATCH`, a
-savepoint per row: a row whose save raises is logged and counted, and the rest
-are saved); the handle repair selects by its version's index, the organization
-repair by a full scan, since `domain` is written like any field. A handle stores
+savepoint per row: a row whose write raises is logged and counted, and the rest
+are written); the handle repair selects by its version's index, the organization
+repair by a full scan, since `domain` is written like any field. A repair is no
+edit: each writes its key columns alone, by a queryset update that records one
+version of the row in the run's changeset, so `updated_at` (which orders lists)
+stays as it was. A run that finds nothing stale writes nothing, not even its
+system elevation's audit row. The row lock is PostgreSQL's `FOR NO KEY UPDATE`:
+neither repair writes a column another row's foreign key references (the
+organization repair writes `domain_key`, which no index makes unique; the handle
+repair writes `spelling_key`, `normalized_value` and `normalized_version`,
+whose only unique index, `uq_handle_spelling_key`, is partial and so no foreign
+key's target), so a writer adding a row that references a locked one (an
+address of a locked party) does not wait on the batch. A handle stores
 the keys its rule gave when it was last saved (`spelling_key`,
 `normalized_value`) and, beside them, the version the rule had then
 (`normalized_version`; 0 for a row stored before the rule had one). The
-handle's save is the one writer of the keys and writes them together. The rules
+handle derives the keys in one place (`Handle.derived_keys`): its save writes
+them together, and so does the key repair, alone. The rules
 `Handle` owns (`value_owner`, `is_spelling_of`, `validate_merge`) compute a row's
 own keys from its value, so a row the key repair has not reached decides as it
 will; `PartyManager`'s readers of the person-matching key (the twins
@@ -408,17 +434,18 @@ sample beside the number, so an output that changes under one number fails.
 The `renormalize_handles` repair (`HandleManager.renormalize_handles`), which
 every provision runs (`PartiesConfig.compose_provision`), selects the handles
 of every platform whose version is not the rule's, by that column's index, and
-saves each again through the handle's own save, under its row lock: an earlier
-version, 0, or a later one that newer code wrote before a rollback. A row
-whose keys are already what the rule gives has them written again unchanged
-beside its version, and leaves the selection. With no row behind, the repair is
+writes each one's keys again as the handle derives them (`Handle.derived_keys`,
+what its save writes), under its row lock: an earlier version, 0, or a later
+one that newer code wrote before a rollback. A row whose keys are already what
+the rule gives has them written again unchanged beside its version, and leaves
+the selection. With no row behind, the repair is
 that one indexed query. A run takes the whole backlog, because a row left with a
 stale key is one the lookups that read keys miss, and a writer that misses it
 makes a second row. It saves in batches of `REPAIR_BATCH` (500) rows
 (`repair_keys`), each in its own transaction, so an interrupted provision keeps what it
 saved and the next one resumes. Every batch starts after the last key the run
 selected, so a run selects no row twice and ends: a row deleted or already
-saved by another process is passed, and a row whose save raises is rolled
+saved by another process is passed, and a row whose write raises is rolled
 back alone, logged, counted ("The keys of N handle(s) could not be saved;
 ...") and left for the next run while the rest are saved. A live email handle
 that spells the address of another live one (two rows an earlier rule kept

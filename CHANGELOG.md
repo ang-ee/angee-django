@@ -79,7 +79,7 @@ live in code docstrings.
   repair has not reached compares as it will, and two phone handles whose
   numbers the rule reads only as their digits (`Handle.is_fallback_key`:
   `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
-  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2. A consumer rule
+  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 3. A consumer rule
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
@@ -148,8 +148,11 @@ live in code docstrings.
   - **An organization's domain key.** `Organization.domain_key` is its domain in
     the one spelling the domain-spelling rule gives (`Handle.normalize_email_domain`,
     the rule a handle's keys read), written by the organization's save whenever
-    the domain is, `""` for no domain, indexed, and versioned in history beside
-    the domain. `Organization.domain_filter(domain)` is a `Q` for the
+    the domain is (a save naming the key without the domain keys the domain the
+    row stores), `""` for no domain, indexed once (`Meta.indexes`, none on
+    history), and versioned in history beside the domain. The bulk paths write no
+    key: a queryset `update` of the domain and a `bulk_update` naming it leave it
+    until the provision repair. `Organization.domain_filter(domain)` is a `Q` for the
     organizations whose domain is `domain` in any spelling the rule joins;
     several may share one. The organization-domain suggestion
     (`PartyManager.suggest_for`) reads it, so an organization typed
@@ -167,6 +170,13 @@ live in code docstrings.
     `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
     One matching organization is suggested at `0.4` as before. Each further
     organization costs one suggestion's statements.
+  - **A name too long for a domain is kept as typed.** The domain-spelling rule
+    keeps as typed a name whose spelling would be longer than a domain name can
+    be (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
+    `URLValidator` bounds a host name). A name of ligatures that each read as many
+    letters (U+FDFA reads as 18) could otherwise key past the 512-character
+    columns: an organization's save raised `DataError` on PostgreSQL, and a handle
+    of such an address could not be stored. `Handle.NORMALIZATION_VERSION` is 3.
   - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,
     value)` is an email address's domain in the rule's spelling (`""` off email
     or with no `@`); `HandleQuerySet.at_domain(domain)` is the email handles at a
@@ -187,25 +197,46 @@ live in code docstrings.
     calls it on parties scoped as it needs.
   - **One walk for the key repairs.** `repair_keys` takes a key repair's rows in
     batches of `REPAIR_BATCH` (500), one transaction each, re-reads each under its
-    row lock and saves it in a savepoint of its own: a row whose save raises is
-    rolled back, logged and counted in `failed`, and the rest are saved.
-    `renormalize_handles` walks through it as before; `HandleManager.REPAIR_LIMIT`
+    row lock (`FOR NO KEY UPDATE`: neither repair writes a column a foreign key
+    references, so a writer adding an address to a locked party no longer waits
+    on the batch) and writes it in a savepoint of its own: a row whose write
+    raises is rolled back, logged and counted in `failed`, and the rest are
+    written. A repair is no edit: each writes its key columns alone, by a
+    queryset update that records one version of the row in the run's changeset,
+    and `updated_at`, which orders lists, no longer moves. The handle repair
+    writes what the handle derives (`Handle.derived_keys`, what its save writes)
+    and asks `Handle.value_owner` before it writes. A run that finds nothing
+    stale writes nothing, not even its system elevation's audit row.
+    `renormalize_handles` walks through it; `HandleManager.REPAIR_LIMIT`
     is now only the holder repair's default cap. The new provision repair
     `renormalize_organization_domains` (`OrganizationManager.renormalize_domains` on
     `Organization.objects`, a `PartyManager` of its own,
     also a command) walks through it too, reading every organization's domain and
-    key and saving, as its most derived row, each one whose key is not its
-    domain's; it returns a `KeyRepair`.
-  - **Upgrade:** run `makemigrations` and commit it: an `AddField` of
-    `domain_key` on `organization` and on `historicalorganization`, and on the
-    history model of any host model inheriting `Organization` with history,
-    each with a database default of `""` and an index. On PostgreSQL the column
-    is added without a table rewrite, and each index is a plain `CREATE INDEX`,
-    which blocks writes to its table while it builds. Between the migration and
-    the next provision every existing organization's key is `""`, so neither the
-    suggestion nor a consumer's `domain_filter` finds an organization by domain;
-    provision keys them all, writing one history version per organization it
-    keys. No `rebac sync` and no SDL change: the key is in no GraphQL type.
+    key and writing the key of each one whose key is not its domain's, on its
+    most derived row; it returns a `KeyRepair`. It reads the whole table at every
+    provision, which is what catches a queryset `update` of the domain: about
+    2.5 seconds for 50,000 keyed organizations on PostgreSQL 17.
+  - **Upgrade:** run `makemigrations` and commit it before the first
+    provision: a host that provisions first fails on the missing column. It
+    authors an `AddField` of `domain_key` on `organization` and on
+    `historicalorganization` (and on the history model of any host model
+    inheriting `Organization` with history), each with a database default of
+    `""`, one `AddIndex` on the organization table (history tables get no
+    index), and an `AlterModelManagers` on `organization` that runs no SQL
+    (`Organization.objects` is an `OrganizationManager`). On PostgreSQL the column is added without a table rewrite, and the
+    index is a plain `CREATE INDEX` in the migration's transaction, after the
+    column's `ALTER TABLE`, so organizations are locked against writes (and,
+    under that `ALTER TABLE`'s lock, reads) while it builds. Between the
+    migration and the next provision every existing organization's key is `""`,
+    so neither the suggestion nor a consumer's `domain_filter` finds an
+    organization by domain; provision keys them all, writing one history version
+    per organization and no `updated_at`, at about 14 statements a row (5,000
+    rows took 446 seconds on a machine under load 44 to 51). The handle rule's
+    version moves to 3, so the next provision writes every handle's keys again
+    (`renormalize_handles`, at about 65 rows a second): once from a release
+    before this one, as the move to 2 already did, and once more on a host
+    already keyed at 2. No `rebac sync` and no SDL change: the key is in no
+    GraphQL type.
     **Rollback:** older code runs beside the column (its database default fills
     an insert); a host leaving this code for good removes the column and its
     indexes with a reviewed migration.
@@ -2012,12 +2043,12 @@ live in code docstrings.
   the handle and to its history table, commits it, and provisions. Existing
   rows are then at version 0, so the provision repair `renormalize_handles`
   (`HandleManager.renormalize_handles`), which every provision runs, selects
-  them by the column's index and saves each again through the handle's own
-  save. It takes the whole backlog in that provision, because a row left with
+  them by the column's index and writes each one's keys again as the handle
+  derives them (`Handle.derived_keys`). It takes the whole backlog in that provision, because a row left with
   a stale key is one the lookups that read keys miss, and a writer that
   misses it makes a second row. So the first provision after the migration
-  saves every existing handle once (`updated_at` stamped, one history version
-  each); its time grows with the table: about 65 rows per second on
+  keys every existing handle once (its key columns alone, one history version
+  each, `updated_at` unmoved); its time grows with the table: about 65 rows per second on
   PostgreSQL 17 in a local container, measured twice with 10,000 handles
   (155 and 149 seconds) on an 18-core development machine that other work
   kept under heavy load (load average 75 to 87). The repair saves in batches
