@@ -1371,7 +1371,9 @@ describe("FormView", () => {
     expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
 
-    // A selector read-only in this form, declared so or create-only on a stored record, cannot change here.
+    // A selector read-only in this form cannot change here: declared so, or create-only on a stored
+    // record whose repair the server does not answer (this provider answers no `impl_choices`; the
+    // answered repair is FormView.repair.test.tsx).
     for (const locked of [{ readOnly: true }, { createOnly: true }]) {
       cleanup();
       page(locked);

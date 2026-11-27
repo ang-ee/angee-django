@@ -36,8 +36,17 @@ const backendById = (args: Record<string, unknown>) => {
   return typeof id === "string" ? stored.get(id) ?? null : null;
 };
 
-/** The backends' roots. A save writes what it sends and keeps the key the backend holds unless it chooses another. */
+/**
+ * The backends' roots. A save writes what it sends and keeps the key the backend holds unless it chooses
+ * another. `impl_choices` with a record answers, as the server does, only for a backend whose stored key
+ * is not registered: what choosing each implementation sets on it (these backends carry no config).
+ */
 export const backendOperations: Readonly<Record<string, GraphQLWireOperation>> = {
+  impl_choices: (args) => {
+    const record = typeof args.record === "string" ? stored.get(args.record) : undefined;
+    if (args.record != null && record?.backend_class != null) throw new Error("Implementation selection is create-only.");
+    return registered.map(({ value }) => ({ key: value.toLowerCase(), category: "", defaults: {}, config_schema: null }));
+  },
   backends: () => [...stored.values()],
   backends_aggregate: () => ({ aggregate: { count: stored.size } }),
   backends_by_pk: backendById,

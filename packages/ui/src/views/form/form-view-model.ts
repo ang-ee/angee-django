@@ -288,12 +288,18 @@ export function addFieldSelection(
   paths.add(field.name);
 }
 
+/**
+ * The form's mode lock: an `editOnly` field is read-only on a create, a `createOnly` one on an edit,
+ * unless `choosable` says the record lets it be chosen once more (a create-only selector whose stored
+ * key is not registered, `storedImplementationUnregistered`).
+ */
 export function withModeLockedFields(
   fields: readonly FieldDescriptor[],
   isCreate: boolean,
+  choosable?: (field: FieldDescriptor) => boolean,
 ): readonly FieldDescriptor[] {
   return fields.map((field) => {
-    const locked = isCreate ? field.editOnly : field.createOnly;
+    const locked = isCreate ? field.editOnly : field.createOnly && !choosable?.(field);
     return locked && !field.readOnly ? { ...field, readOnly: true } : field;
   });
 }

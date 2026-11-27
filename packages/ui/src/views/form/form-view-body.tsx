@@ -546,7 +546,8 @@ function BoundFormField({
       control={surface.form.control}
       name={field.name}
       render={({ field: controller, fieldState }) => (
-        <UnregisteredImplementationField field={unregistered ? field.name : null} readOnly={readOnly}><BoundFieldRow
+        <UnregisteredImplementationField field={unregistered ? field.name : null} readOnly={readOnly}
+          once={Boolean(field.createOnly)}><BoundFieldRow
           controlRef={controller.ref}
           field={field}
           rail={rail}

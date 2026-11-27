@@ -174,13 +174,17 @@ test("Views/FormView / Implementation Key Not Registered marks Backend, says it 
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
 
-test("Views/FormView / Implementation Key Not Registered, Create-only marks Backend as unchangeable on this record", async () => {
+test("Views/FormView / Implementation Key Not Registered, Create-only offers Backend once more, and only once", async () => {
   const said = consoleMessages();
   render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
   expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
-  const note = screen.getByText("Its implementation cannot run. It cannot be changed here.");
-  expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  const control = await screen.findByRole("combobox", { name: "Backend" });
+  expect(description(control)).toBe(
+    "Its implementation cannot run until another is chosen. Once chosen, it cannot be changed.");
+  fireEvent.click(control);
+  fireEvent.click(await screen.findByRole("option", { name: "Local folder" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });

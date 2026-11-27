@@ -43,6 +43,7 @@ import {
   relationListFieldInfo,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
+import { storedImplementationUnregistered } from "../resource/implementation-fields";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { useArchiveActions } from "../resource/archive";
 import { useTrashActions } from "../resource/trash";
@@ -474,25 +475,30 @@ export function useFormViewSurface({
     [baseGroups, contributedGroupSequences],
   );
   const pageActions = actions ?? childActions;
-  const resolvedFields = React.useMemo(
-    () =>
-      withModeLockedFields(
-        fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
-        isCreate,
-      ),
-    [declaredFields, isCreate, modelMetadata, schemaMetadata],
+  const declaredResolvedFields = React.useMemo(
+    () => fieldsWithMetadataDefaults(declaredFields, modelMetadata, schemaMetadata),
+    [declaredFields, modelMetadata, schemaMetadata],
   );
-  const resolvedGroups = React.useMemo(
-    () =>
-      declaredGroups.map((group) => ({
-        ...group,
-        fields: withModeLockedFields(
-          fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
-          isCreate,
-        ),
+  const declaredResolvedGroups = React.useMemo(
+    () => declaredGroups.map((group) => ({
+      ...group,
+      fields: fieldsWithMetadataDefaults(group.fields, modelMetadata, schemaMetadata),
+    })),
+    [declaredGroups, modelMetadata, schemaMetadata],
+  );
+  // The mode lock for one record: a create-only selector stays choosable on an edit while the key
+  // the record stores is not registered. It reads the stored row only, so a pick does not re-lock it.
+  const lockedFor = React.useCallback((record: Row | null) => {
+    const choosable = (field: FieldDescriptor) => storedImplementationUnregistered(modelMetadata, record, field.name);
+    return {
+      fields: withModeLockedFields(declaredResolvedFields, isCreate, choosable),
+      groups: declaredResolvedGroups.map((group) => ({
+        ...group, fields: withModeLockedFields(group.fields, isCreate, choosable),
       })),
-    [declaredGroups, isCreate, modelMetadata, schemaMetadata],
-  );
+    };
+  }, [declaredResolvedFields, declaredResolvedGroups, isCreate, modelMetadata]);
+  // Every candidate, with no record: each create-only field locked on an edit.
+  const { fields: resolvedFields, groups: resolvedGroups } = React.useMemo(() => lockedFor(null), [lockedFor]);
   const railGroups = React.useMemo(() => isCreate ? [] : recordRailGroups(railEntries).map((group) => ({
     ...group,
     fields: (group.fields ?? []).map((row) => ({
@@ -533,9 +539,11 @@ export function useFormViewSurface({
   // `formFields` registers every candidate so any record's values load; one record's form is its own
   // fields and those of the groups it displays and of its rail rows. Its layout and its save read these.
   const regularFormFieldsFor = React.useCallback(
-    (record: Row | null) =>
-      displayedFormFields(resolvedFields, resolvedGroups, (group) => displaysGroup(group, record), pageGroupCount),
-    [displaysGroup, pageGroupCount, resolvedFields, resolvedGroups],
+    (record: Row | null) => {
+      const locked = lockedFor(record);
+      return displayedFormFields(locked.fields, locked.groups, (group) => displaysGroup(group, record), pageGroupCount);
+    },
+    [displaysGroup, lockedFor, pageGroupCount],
   );
   // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
@@ -750,8 +758,12 @@ export function useFormViewSurface({
   );
   const fieldLayout = React.useMemo(
     // Title, status and body come from the sheet's own fields.
-    () => formViewFieldLayout(sheetFields, resolvedFields, resolvedGroups, modelMetadata, isCreate),
-    [isCreate, modelMetadata, resolvedFields, resolvedGroups, sheetFields],
+    () => {
+      // The sheet takes the lock from the record it shows, as the save does.
+      const locked = lockedFor(save.displayRecord);
+      return formViewFieldLayout(sheetFields, locked.fields, locked.groups, modelMetadata, isCreate);
+    },
+    [isCreate, lockedFor, modelMetadata, save.displayRecord, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [

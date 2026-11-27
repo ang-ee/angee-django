@@ -91,7 +91,11 @@ live in code docstrings.
   that record, the config it carries over (`ImplDefaultsMixin.repair_impl_defaults`),
   answered only for a record the actor may write whose stored key is not
   registered, and refused as the write is otherwise (not found, or
-  "Implementation selection is create-only."). A resource with no update root
+  "Implementation selection is create-only."). `@angee/ui`: the record form
+  offers a create-only selector once more while its stored key is not
+  registered, sets the config the chosen implementation carries over, and
+  saves the selector with that config; afterwards the selector is locked
+  again. A resource with no update root
   (calendar sources, directories, mounts) or a selector a connect flow chose is
   repaired by installing the implementation's addon again or by connecting the
   record again.

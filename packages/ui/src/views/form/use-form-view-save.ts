@@ -10,7 +10,9 @@ import {
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { invalidateAuthoredQueries, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
+import {
+  invalidateAuthoredQueries, useAngeeResourceSave, useAuthoredQueryBatch, type MutationRootArguments,
+} from "@angee/refine";
 import {
   useInvalidate,
   useOne,
@@ -31,8 +33,10 @@ import { deepEqual } from "@tanstack/react-router";
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
 import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
-import { asWidgetDefinition, slugify } from "../../widgets";
+import { asWidgetDefinition, optionToken, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
+import { BaseImplChoices, type ImplChoice } from "../resource/documents";
+import { storedImplementationUnregistered } from "../resource/implementation-fields";
 import {
   diffLines,
   lineDiffConfig,
@@ -412,10 +416,29 @@ export function useFormViewSave({
     [displayRecord, formFields, formFieldsFor],
   );
   // The paths the save writes (`formWritablePaths`), every one under a custom submit owner.
-  const writableFieldNames = React.useMemo(
-    () => formWritablePaths(recordFields, modeWritableNames, Boolean(submitOwner)),
-    [modeWritableNames, recordFields, submitOwner],
+  // A repair: a create-only selector this record lets be chosen once more (its stored key is not
+  // registered, so the mode lock left it writable). What choosing each implementation sets on the
+  // record comes from the server's rule (`impl_choices` with the record); until it answers, the
+  // selector takes no edits, so a pick always sends the config it carries over.
+  const repairFields = React.useMemo(
+    () => isCreate ? [] : recordFields.filter((field) => field.createOnly && !field.readOnly
+      && storedImplementationUnregistered(modelMetadata, displayRecord, field.name)),
+    [displayRecord, isCreate, modelMetadata, recordFields],
   );
+  const repairChoicesBatch = useAuthoredQueryBatch(repairFields.map((field) => ({
+    key: field.name,
+    document: BaseImplChoices,
+    variables: { model: dataResource?.modelLabel ?? resource, field: field.name, record: id ?? null },
+  })), { enabled: repairFields.length > 0 && id != null, errorNotification: false });
+  const repairChoices = React.useMemo(() => new Map(repairFields.flatMap((field) => {
+    const choices = repairChoicesBatch.get(field.name)?.data?.impl_choices;
+    return choices ? [[field.name, choices] as const] : [];
+  })), [repairChoicesBatch, repairFields]);
+  const writableFieldNames = React.useMemo(() => {
+    const writable = formWritablePaths(recordFields, modeWritableNames, Boolean(submitOwner));
+    const pending = new Set(repairFields.filter((field) => !repairChoices.has(field.name)).map((field) => field.name));
+    return writable && pending.size ? new Set([...writable].filter((name) => !pending.has(name))) : writable;
+  }, [modeWritableNames, recordFields, repairChoices, repairFields, submitOwner]);
   // Two facts, two sets. The record's own fields (`formFieldsFor`) its save can write (`pathWritable`):
   // what the save sends reads these, its resets of hidden fields included, and so do which declared
   // preset applies and the draft's drop and restore of hidden fields. A field only an undisplayed group
@@ -969,6 +992,13 @@ export function useFormViewSave({
       const loaded = form.formState.defaultValues;
       // The preset the form declares for this field is the one its save reads again (see
       // `hiddenResetWrites`); a descriptor's own preset still seeds, but drops nothing.
+      // A repair sets what the chosen implementation carries over on this record (`repairChoices`),
+      // which dirties the form, so the save sends the selector with the config the person sees.
+      const repair = scope ? undefined : repairChoices.get(field.name)
+        ?.find((choice: ImplChoice) => optionToken(choice.key) === optionToken(value));
+      for (const [path, seed] of Object.entries((repair?.defaults ?? {}) as Record<string, unknown>)) {
+        setValue(path, seed, { shouldDirty: true, shouldTouch: true });
+      }
       const declared = saveFields.find((candidate) => candidate.name === scoped(field.name));
       const own = declared && resolveField(declared, form.getValues());
       const preset = own?.prefill ? own : field;
@@ -1012,7 +1042,8 @@ export function useFormViewSave({
         });
       }
     },
-    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, presetMemory, saveFields, setValue],
+    [clearErrors, defaultSlugSource, form, formFields, getFieldState, isCreate, presetMemory, repairChoices, saveFields,
+      setValue],
   );
   const fieldReadOnly = React.useCallback(
     (field: FieldDescriptor): boolean => formReadOnly || previewBlocked || fieldControlReadOnly(field, {

@@ -27,12 +27,24 @@ export function isUnregisteredImplementation(
 }
 
 /**
- * Whether the record form's field at `path` (its full form path) is marked not registered: the
- * stored row reads null there for an implementation key the registry no longer names
- * ({@link isUnregisteredImplementation}), and the form's `value` for it is still empty. A create
- * form has no stored row, so it never marks one; picking a registered implementation clears the mark
- * until the draft is discarded. A nested path is never one of `implFields`, so it is never marked,
- * and a column the record redacts reads null for that reason alone, so it is not marked either.
+ * Whether the stored row reads null at `path` for an implementation key the registry no longer names
+ * ({@link isUnregisteredImplementation}): the one fact a create-only selector's repair reads. It reads
+ * the stored row only, never the form's value, so choosing a key does not change it. A create form
+ * has no stored row; a nested path is never one of `implFields`; and a column the record redacts
+ * reads null for that reason alone, so none of those holds it.
+ */
+export function storedImplementationUnregistered(
+  model: ModelMetadata | null | undefined,
+  stored: Row | null | undefined,
+  path: string,
+): boolean {
+  return stored != null && !fieldIsRedacted(stored, path) && isUnregisteredImplementation(model, path, stored[path]);
+}
+
+/**
+ * Whether the record form's field at `path` (its full form path) is marked not registered: its stored
+ * key is not registered ({@link storedImplementationUnregistered}) and the form's `value` for it is
+ * still empty. Picking a registered implementation clears the mark until the draft is discarded.
  */
 export function isUnregisteredImplementationField(
   model: ModelMetadata | null | undefined,
@@ -40,6 +52,5 @@ export function isUnregisteredImplementationField(
   path: string,
   value: unknown,
 ): boolean {
-  return stored != null && (value == null || value === "") && !fieldIsRedacted(stored, path)
-    && isUnregisteredImplementation(model, path, stored[path]);
+  return (value == null || value === "") && storedImplementationUnregistered(model, stored, path);
 }

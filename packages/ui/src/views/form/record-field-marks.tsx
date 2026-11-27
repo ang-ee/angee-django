@@ -118,7 +118,9 @@ function useRecordFieldMarksForField(field: string) {
   }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
-const UnregisteredImplementation = createContext<{ field: string; readOnly: boolean; explanationId: string } | null>(null);
+const UnregisteredImplementation = createContext<{
+  field: string; readOnly: boolean; once: boolean; explanationId: string;
+} | null>(null);
 
 /** Name the one field of the record's own form whose stored implementation key the registry no
  * longer names and whose value in the form is still empty; only that field's marks read it, and
@@ -129,13 +131,18 @@ const UnregisteredImplementation = createContext<{ field: string; readOnly: bool
  * @kind null
  * @reason Provider infrastructure: the record form's not-registered field.
  */
-export function UnregisteredImplementationField({ field, readOnly = false, children }: {
+export function UnregisteredImplementationField({ field, readOnly = false, once = false, children }: {
   field: string | null;
   readOnly?: boolean;
+  /** A create-only selector chosen once more here: after the save it cannot change again. */
+  once?: boolean;
   children: ReactNode;
 }) {
   const explanationId = useId();
-  const value = useMemo(() => field === null ? null : { field, readOnly, explanationId }, [explanationId, field, readOnly]);
+  const value = useMemo(
+    () => field === null ? null : { field, readOnly, once, explanationId },
+    [explanationId, field, once, readOnly],
+  );
   return <UnregisteredImplementation.Provider value={value}>{children}</UnregisteredImplementation.Provider>;
 }
 
@@ -151,7 +158,8 @@ export function useUnregisteredImplementationExplanation(field: string): { id: s
   if (unregistered?.field !== field) return null;
   return {
     id: unregistered.explanationId,
-    text: t(unregistered.readOnly ? "implementation.cannotRunUnchangeable" : "implementation.cannotRunUntilChosen"),
+    text: t(unregistered.readOnly ? "implementation.cannotRunUnchangeable"
+      : unregistered.once ? "implementation.cannotRunUntilChosenOnce" : "implementation.cannotRunUntilChosen"),
   };
 }
 

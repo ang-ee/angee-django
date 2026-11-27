@@ -34,14 +34,16 @@ interface BaseImplChoicesResult {
 type BaseImplChoicesVariables = {
   model: string;
   field: string;
+  /** A record whose stored key is not registered: each choice's `defaults` is then what choosing it sets on it. */
+  record?: string | null;
 };
 
 export const BaseImplChoices: TypedDocumentNode<
   BaseImplChoicesResult,
   BaseImplChoicesVariables
 > = gql`
-  query BaseImplChoices($model: String!, $field: String!) {
-    impl_choices(model: $model, field: $field) {
+  query BaseImplChoices($model: String!, $field: String!, $record: ID) {
+    impl_choices(model: $model, field: $field, record: $record) {
       key
       category
       defaults

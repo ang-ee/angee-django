@@ -315,8 +315,10 @@ export const ImplementationKeyNotRegistered: Story = {
 };
 
 /**
- * The same record with Backend create-only: read-only here, its mark is described "Its implementation
- * cannot run. It cannot be changed here." Renaming it saves, and Backend keeps its mark.
+ * The same record with Backend create-only: it can be chosen once more, since its stored key is not
+ * registered. Its mark is described "Its implementation cannot run until another is chosen. Once
+ * chosen, it cannot be changed." Choosing Local folder and saving keeps it, and Backend is then
+ * read-only.
  */
 export const ImplementationKeyNotRegisteredCreateOnly: Story = {
   name: "Implementation Key Not Registered, Create-only",
