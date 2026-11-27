@@ -331,7 +331,8 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
         </FieldRoot>
         <div className="flex items-start gap-2">
           {kindShown ? (
-            <FieldRoot invalid={Boolean(typeError)} className="w-full">
+            // It shares the row with the day: at the row's whole width the day's button had none left.
+            <FieldRoot invalid={Boolean(typeError)} className="min-w-0 flex-1">
               <Select
                 triggerRef={typeField.ref}
                 aria-label={t("recordTasks.type")}

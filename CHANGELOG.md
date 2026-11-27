@@ -44,7 +44,10 @@ live in code docstrings.
   the day's popover trigger), so a refusal of fields only focuses the first
   refused one in the form's order and one with a reason no field shows focuses
   the banner. The assignee, which the pane shows no control for, stays on the
-  banner as `assignee: …`. The workflow studio (`shownFieldNames: []`) and a
+  banner as `assignee: …`. The kind and the day share their row's width:
+  beside the kind's select, which took the whole row, the day's button was a
+  sliver under the submit button and took no click, and a reason under it
+  wrapped a word a line. The workflow studio (`shownFieldNames: []`) and a
   record thread's foot composer (its body argument) spread the hook's `banner`
   on their banner, so a refused post, and a save the studio refuses for anything
   but a stale revision, brings focus there; a stale revision shows the studio's
