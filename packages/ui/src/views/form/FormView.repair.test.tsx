@@ -405,6 +405,33 @@ test("a resource whose host generated no repair document offers no repair either
   f.clearClients();
 });
 
+test("a refused read and a refused save saying the same sentence say it once under the field", async () => {
+  let registered = false;
+  const f = fixture(RETIRED, { choices: async (variables) => {
+    if (variables?.id != null && registered) throw new Error(CREATE_ONLY);
+    return answer(variables);
+  } });
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  await pick("Local");
+  // Another tab repairs the row; the read asked again is refused, and so is the save.
+  registered = true;
+  f.server.row = { ...RETIRED, backend: "STUB" };
+  await act(async () => { await f.queryClient.invalidateQueries(); });
+  await waitFor(() => expect(screen.getAllByText(CREATE_ONLY).length).toBeGreaterThan(0));
+  save();
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  await settle();
+  const visible = screen.getAllByText(CREATE_ONLY).filter((node) => !node.className.includes("sr-only"));
+  expect(visible).toHaveLength(1);
+  // No control's description reads it twice.
+  const described = [...document.querySelectorAll("[aria-describedby]")].map((element) =>
+    (element.getAttribute("aria-describedby") ?? "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "")
+      .filter((text) => text.includes(CREATE_ONLY)).length);
+  expect(Math.max(0, ...described)).toBeLessThanOrEqual(1);
+  f.clearClients();
+});
+
 test("a page's own createOnly on a selector the model does not make create-only stays locked, with no repair read", async () => {
   const f = fixture(RETIRED, { meta: { createOnly: undefined },
     fields: [{ name: "title", title: true }, { name: "backend", label: "Backend", createOnly: true }, { name: "config", label: "Config" }] });

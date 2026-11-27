@@ -186,17 +186,33 @@ export function useUnregisteredImplementationExplanation(field: string): Unregis
   };
 }
 
+/** Whether a field row's control is described by its explanation beside the row's own `messages`: not
+ * when the explanation is the server's refusal and one of those messages says the same sentence (the
+ * refused read and a refused save both saying it), so the control's description reads it once.
+ * @kind null
+ * @reason Provider infrastructure: decides the record form's not-registered explanation for a field row.
+ */
+export function explainsBeside(
+  explanation: UnregisteredImplementationExplanationText | null,
+  messages: readonly string[],
+): explanation is UnregisteredImplementationExplanationText {
+  return explanation !== null && !(explanation.refused && messages.includes(explanation.text));
+}
+
 /** A field row's explanation of its not-registered mark, under the id its control is described by:
  * screen-reader text, or, when it gives the server's refusal of the repair, shown under the field, the
- * one place those words are said (the field's own description stays).
+ * one place those words are said (the field's own description stays). Beside a field error saying the
+ * same sentence (`explainsBeside`) it shows nothing more: the error says it, once.
  * @kind null
  * @reason Provider infrastructure: renders the record form's not-registered explanation for a field row.
  */
-export function UnregisteredImplementationExplanation({ explanation }: {
+export function UnregisteredImplementationExplanation({ explanation, messages = [] }: {
   explanation: UnregisteredImplementationExplanationText | null;
+  /** The row's own displayed messages (its field errors). */
+  messages?: readonly string[];
 }) {
   if (!explanation) return null;
-  return explanation.refused
+  return explanation.refused && explainsBeside(explanation, messages)
     ? <FieldDescription id={explanation.id}>{explanation.text}</FieldDescription>
     : <span id={explanation.id} className="sr-only">{explanation.text}</span>;
 }
