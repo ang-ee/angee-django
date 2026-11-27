@@ -101,6 +101,12 @@ test("the public token-name list follows the stylesheet export", () => {
   assert.equal(read("packages/ui/src/token-names.ts"), tokenModule(generateTokenNames()));
 });
 
+test("a Tailwind variable the stylesheet writes is not a token", () => {
+  // The focus ring writes Tailwind's ring layer, `--tw-ring-shadow`.
+  assert.match(read("packages/ui/src/styles/index.css"), /--tw-ring-shadow\s*:/);
+  assert.deepEqual(generateTokenNames().filter(name => name.startsWith("--tw-")), []);
+});
+
 test("no-owner tokens exist and have no production variable or utility reference", async () => {
   const production = ["packages/ui/src", "src"].flatMap(directory => walk(join(root, directory)))
     .filter(file => /\.(?:css|[cm]?[jt]sx?)$/.test(file) && !/\.(?:test|stories)\./.test(file) && !file.endsWith("token-names.ts"))

@@ -562,6 +562,82 @@ describe("date and JSON axes", () => {
   });
 });
 
+describe("which sort keys one group's records share", () => {
+  const query = ResourceQuery.forRows({ fields: {
+    title: { scalar: "String" }, status: { scalar: "String" }, done: { scalar: "Boolean" },
+    priority: { kind: "enum", values: [{ value: "high" }, { value: "low" }] },
+    due: { scalar: "Date" }, created_at: { scalar: "DateTime" },
+    owner: { kind: "relation", identityPath: "owner.id", labelPath: "owner.name" }, "owner.name": { scalar: "String" },
+    // Neighbours of the relation by spelling only: neither lies under the related record.
+    owner_name: { scalar: "String" }, "ownership.x": { scalar: "String" },
+  } });
+  test.each([
+    ["a plain field", { field: "status" }, "status"],
+    ["a Boolean", { field: "done" }, "done"],
+    ["an enum", { field: "priority" }, "priority"],
+    ["a Date by day: a day is one date", { field: "due", granularity: "day" }, "due"],
+    ["a Date by a finer unit: still one date a group", { field: "due", granularity: "hour" }, "due"],
+    ["a DateTime at its whole value", { field: "created_at" }, "created_at"],
+    ["a relation's identity", { field: "owner" }, "owner"],
+    ["a relation named by its identity path", { field: "owner.id" }, "owner"],
+    ["a relation's member", { field: "owner" }, "owner.name"],
+  ])("%s: its groups share the key", (_kind, spec, key) => {
+    expect(query.group(spec).shares(key)).toBe(true);
+    expect(query.group(spec).shares("title")).toBe(false);
+  });
+  test.each([
+    ["a DateTime by day: a day holds many instants", { field: "created_at", granularity: "day" }, "created_at"],
+    ["a Date by month", { field: "due", granularity: "month" }, "due"],
+    ["a member's own axis, which is not the relation's", { field: "owner.name" }, "owner"],
+    ["a field whose name only starts like the relation's", { field: "owner" }, "owner_name"],
+    ["a field under another record whose name starts like the relation's", { field: "owner" }, "ownership.x"],
+  ])("%s: its groups do not share the key", (_kind, spec, key) => {
+    expect(query.group(spec).shares(key)).toBe(false);
+  });
+  test("each of two axes shares its own field only", () => {
+    const [status, done] = query.groupsFrom([{ field: "status" }, { field: "done" }]);
+    expect([status!.shares("status"), status!.shares("done"), done!.shares("done"), done!.shares("status")]).toEqual([true, false, true, false]);
+  });
+  test("generated, authored and repeated axes answer from their own declarations", () => {
+    // A server axis listing only repeated values still groups one value a group.
+    const messages = ResourceQuery.from(resource());
+    expect(messages.group({ field: "channel", repeated: true }).shares("channel")).toBe(true);
+    // A calendar part names many dates; an authored summary axis without row identity still
+    // groups its own field's value, but without an identity path it names no members.
+    const authored = ResourceQuery.fromContract(testResourceQuery({
+      fields: {
+        due: testQueryField("due", { scalar: "Date" }), owner: testQueryField("owner", { kind: "relation", scalar: "ID", row: null }),
+        "owner.name": testQueryField("owner.name"),
+      },
+      axes: {
+        due: testQueryAxis("due", { kind: "date", server: { input: "DUE", key: "due" },
+          extractions: [{ name: "day_of_month", input: "DAY_OF_MONTH", key: "due_day_of_month" }] }),
+        owner: testQueryAxis("owner", { kind: "relation", identityPath: null, paths: [], server: { input: "OWNER", key: "owner_id" } }),
+      },
+    }));
+    expect(authored.group({ field: "due", granularity: "day_of_month" }).shares("due")).toBe(false);
+    expect([authored.axis("owner").shares("owner"), authored.axis("owner").shares("owner.name")]).toEqual([true, false]);
+    // A member is a field whose row paths ALL lie under the related record: one path outside it,
+    // or no path at all, and the group's records need not share it.
+    const members = ResourceQuery.fromContract(testResourceQuery({
+      fields: {
+        owner: testQueryField("owner", { kind: "relation", scalar: "ID", row: { path: "owner.id", paths: ["owner.id"] } }),
+        "owner.name": testQueryField("owner.name", { row: { path: "owner.name", paths: ["owner.name"] } }),
+        summary: testQueryField("summary", { row: { path: "owner.name", paths: ["owner.name", "title"] } }),
+        computed: testQueryField("computed", { row: { path: "computed", paths: [] } }),
+      },
+      axes: { owner: testQueryAxis("owner", { kind: "relation", identityPath: "owner.id", paths: ["owner.id"], server: { input: "OWNER", key: "owner_id" } }) },
+    }));
+    expect(["owner.name", "summary", "computed"].map((field) => members.axis("owner").shares(field))).toEqual([true, false, false]);
+    // A JSON axis groups by the value at its path.
+    const json = ResourceQuery.fromContract(testResourceQuery({
+      fields: { "metadata.mailbox": testQueryField("metadata.mailbox", { row: { path: "metadata.mailbox", paths: ["metadata"] } }) },
+      axes: { "metadata.mailbox": testQueryAxis("metadata.mailbox", { kind: "json", paths: ["metadata"] }) },
+    }));
+    expect(json.axis("metadata.mailbox").shares("metadata.mailbox")).toBe(true);
+  });
+});
+
 describe("local queries and filter values", () => {
   const query = ResourceQuery.forRows({
     fields: {

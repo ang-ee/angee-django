@@ -88,8 +88,9 @@ const storySchemas = storySchema({
   channels: () => channels,
   channels_aggregate: () => ({ aggregate: { count: channels.length } }),
   insert_channels_one: () => ({ id: "chn-new", name: "New channel" }),
-});
-storySchemas.public = { ...storySchemas.public!, metadata: channelMetadata };
+  // A mapping's target reads the channel it names for its label.
+  channels_by_pk: (args) => channels.find((channel) => channel.id === args.id),
+}, { resources: channelMetadata.angee.resources });
 
 const meta = {
   title: "Widgets/Rows",

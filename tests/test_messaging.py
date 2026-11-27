@@ -2164,7 +2164,6 @@ def test_group_ingest_resolves_visibility_and_accumulates_unique_recipients(chan
         with pytest.raises(IntegrityError), transaction.atomic():
             Recipient._base_manager.create(
                 message=landed[0],
-                thread=thread,
                 handle=duplicate.handle,
                 role=duplicate.role,
             )

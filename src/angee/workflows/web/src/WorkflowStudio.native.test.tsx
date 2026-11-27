@@ -1,14 +1,16 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { useRouter } from "@tanstack/react-router";
 import { StudioStory } from "./WorkflowStudio.stories";
 import type { GraphEditorProps } from "@angee/ui";
 const guards = vi.hoisted(() => ({ callbacks: [] as unknown[] }));
-const graph = vi.hoisted(() => ({ props: undefined as GraphEditorProps | undefined }));
+const graph = vi.hoisted(() => ({ props: undefined as GraphEditorProps | undefined, router: undefined as ReturnType<typeof useRouter> | undefined }));
 vi.mock("@angee/ui", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/ui")>();
   return { ...actual, GraphEditor: (props: GraphEditorProps) => {
     graph.props = props;
+    graph.router = useRouter();
     return <actual.GraphEditor {...props} />;
   }, useUnsavedChangesNavigationGuard: (options: Parameters<typeof actual.useUnsavedChangesNavigationGuard>[0]) => {
     guards.callbacks.push(options.isDirtyNow);
@@ -20,7 +22,7 @@ beforeAll(() => {
   class ResizeObserverStub { observe(): void {} unobserve(): void {} disconnect(): void {} }
   vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 });
-afterEach(() => { cleanup(); guards.callbacks = []; graph.props = undefined; });
+afterEach(() => { cleanup(); guards.callbacks = []; graph.props = undefined; graph.router = undefined; });
 
 test("Studio composes the native readable initial view and navigable MiniMap in a filling canvas", async () => {
   render(<StudioStory linked />);
@@ -331,6 +333,18 @@ test("a hidden retained Studio keeps its navigation guard and selection opens th
   expect(screen.getByTestId("workflow-studio-canvas").className).toContain("flex-1");
   expect(screen.getByTestId("workflow-studio-canvas").className).toContain("min-h-0");
   expect(document.querySelector(".react-flow__minimap")).toBeTruthy();
+});
+
+test("an edited Studio lets a move within its page through without asking", async () => {
+  render(<StudioStory retained />);
+  const key = await selectEntry();
+  fireEvent.change(key, { target: { value: "edited" } });
+  const router = graph.router!;
+  const pathname = router.history.location.pathname;
+  act(() => { void router.history.push(`${pathname}?panel=inspector`); });
+  await waitFor(() => expect(router.history.location.search).toBe("?panel=inspector"));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(router.history.location.pathname).toBe(pathname);
 });
 
 test("links wait for their declared source handles on the first outcomes load", async () => {

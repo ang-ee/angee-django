@@ -38,7 +38,6 @@ export function useProposalCeremonyActions(): readonly ActionDescriptor[] {
     invalidateModels: [PROPOSAL_MODEL, PROJECT_MODEL],
     idArgument: "proposal",
     linkTo: PROJECT_MODEL,
-    settle: { noResultTitle: t("proposal.action.failed") },
   });
 
   return React.useMemo<readonly ActionDescriptor[]>(

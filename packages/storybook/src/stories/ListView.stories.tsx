@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
   ListView,
+  PaneToolbarHost,
   RowsListView,
   type ListSearchDeclaration,
   defineRowAction,
@@ -79,12 +80,31 @@ const rowActions: readonly RowActionDeclaration<StoryRow>[] = [
   }),
 ];
 
+// A handful of tasks, two pairs of them tied on rank, ordered in the browser by status, rank, then title.
+const tasks = [
+  { id: "task-1", title: "Draft the brief", status: "open", rank: 1 },
+  { id: "task-2", title: "Book the room", status: "open", rank: 1 },
+  { id: "task-3", title: "Collect quotes", status: "open", rank: 2 },
+  { id: "task-4", title: "Send invites", status: "closed", rank: 3 },
+  { id: "task-5", title: "Archive notes", status: "closed", rank: 1 },
+  { id: "task-6", title: "Approve budget", status: "closed", rank: 3 },
+] as const;
+const taskFields = { id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" }, rank: { scalar: "Int" } } as const;
+const taskQuery = ResourceQuery.forRows({ fields: taskFields }).contract;
+const taskResource = testDataResource("notes.Task", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "tasks", aggregate: "tasks_aggregate" }, typeNames: { filter: "TaskFilter", order: "TaskOrder" },
+  fields: Object.entries(taskFields).map(([name, { scalar }]) => ({ name, kind: "scalar", scalar, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: { ...taskQuery, sort: { ...taskQuery.sort, default: (["status", "rank", "title"] as const).map((field) => ({ field, direction: "ASC" as const })) } },
+});
+
 const storySchemas = storySchema({
   notes: () => rows,
   notes_aggregate: () => ({ aggregate: { count: rows.length } }),
-});
-
-storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.Note", {
+  tasks: () => tasks,
+  tasks_aggregate: () => ({ aggregate: { count: tasks.length } }),
+}, { resources: [testDataResource("notes.Note", {
   schemaName: "public",
   roots: { list: "notes", aggregate: "notes_aggregate" },
   typeNames: { filter: "NoteFilter", order: "NoteOrder" },
@@ -92,7 +112,7 @@ storySchemas.public!.metadata = { angee: { resources: [testDataResource("notes.N
     ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
     ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
   ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
-})] } };
+}), taskResource] });
 
 const meta = {
   title: "Views/ListView",
@@ -110,6 +130,49 @@ export const VisibleFieldsChooser: Story = {
 export const SearchShortcuts: Story = {
   render: () => <ListFixture withShortcuts />,
 };
+
+/**
+ * Grouped by status and ordered by status, then rank, then title; open both groups to see their
+ * rows. At load the Status header shows no sort (a group's tasks share their status), Rank shows
+ * ascending (each group's rows follow it) and Title shows not sorted (it only breaks rank ties: Book
+ * the room before Draft the brief). Press Title's sort button: Title sorts ascending behind the
+ * status key, which a press never drops, Rank shows not sorted, and each group's rows follow their
+ * titles (Collect quotes moves above Draft the brief) while the groups keep their status order.
+ */
+export const GroupedWithTieBreakers: Story = {
+  name: "Grouped With Tie-breakers",
+  render: () => (
+    <div className="max-w-3xl">
+      <GroupedTasks />
+    </div>
+  ),
+};
+
+/**
+ * The same tasks as a side pane's list, grouped by status and ordered by status, then rank, then
+ * title. The pane toolbar's More menu holds an Order group that checks "Rank, ascending" and offers
+ * Rank and Title, each ascending and descending, and not Status. Choose "Title, descending": the
+ * groups stay where they are and the Title header shows descending. Choosing the item already
+ * checked changes nothing.
+ */
+export const PaneWithOrder: Story = {
+  render: () => (
+    <div className="h-[420px] w-[28rem] border border-border-subtle bg-canvas">
+      <PaneToolbarHost>
+        <GroupedTasks pane />
+      </PaneToolbarHost>
+    </div>
+  ),
+};
+
+/** The tasks grouped by status, in the order their resource declares; `pane` lists them as a side pane does. */
+function GroupedTasks({ pane = false }: { pane?: boolean }) {
+  return (
+    <ListView resource="notes.Task" defaultGroup={{ field: "status" }} {...(pane ? { pane: {} } : {})} columns={[
+      { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
+    ]} />
+  );
+}
 
 function ListFixture({ withShortcuts = false }: { withShortcuts?: boolean }) {
   return (

@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 
 import strawberry
 from django.contrib.auth.models import AnonymousUser
-from rebac import ObjectRef, current_actor
+from rebac import ObjectRef, current_actor, to_subject_ref
 from strawberry.permission import BasePermission
 from strawberry_django.auth.utils import get_current_user
 
@@ -26,12 +26,17 @@ def is_authenticated(user: Any) -> bool:
 
 
 def is_platform_admin(user: Any) -> bool:
-    """Return whether ``user`` reaches IAM's platform-admin role."""
+    """Return whether ``user`` is an effective member of IAM's platform-admin role.
+
+    The answer is ``user``'s own membership, whoever the ambient REBAC actor is and
+    inside a system context too; an anonymous user or ``None`` is never one. A
+    resolver asking about the request passes ``get_current_user(info)``.
+    """
 
     if not is_authenticated(user):
         return False
     role = platform_admin_role()
-    return role is not None and current_actor_has_role(role)
+    return role is not None and subject_has_role(to_subject_ref(user), role)
 
 
 def current_actor_has_role(role: ObjectRef) -> bool:

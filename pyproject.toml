@@ -29,6 +29,7 @@ dependencies = [
     "angee-graphql==3.0.0",
     "angee-iam==3.0.0",
     "angee-iam-integrate-oidc==3.0.0",
+    "angee-iam-messaging==3.0.0",
     "angee-intake==3.0.0",
     "angee-integrate==3.0.0",
     "angee-integrate-github==3.0.0",
@@ -104,6 +105,7 @@ dev = [
     "django-zed-rebac[caveats]>=0.38.0,<0.39",
     "faker>=30.0",
     "hypothesis>=6.100",
+    "html5lib>=1.1,<2",
     "import-linter>=2.1",
     "psycopg[binary,pool]>=3.2",
     "angee-django-stubs[compatible-mypy]==6.1.2.post3",
@@ -154,6 +156,7 @@ angee-extraction = {workspace = true}
 angee-graphql = {workspace = true}
 angee-iam = {workspace = true}
 angee-iam-integrate-oidc = {workspace = true}
+angee-iam-messaging = {workspace = true}
 angee-intake = {workspace = true}
 angee-integrate = {workspace = true}
 angee-integrate-github = {workspace = true}
@@ -345,6 +348,12 @@ source_modules = ["angee.integrate", "angee.integrate_google"]
 forbidden_modules = ["angee.iam_integrate_oidc"]
 
 [[tool.importlinter.contracts]]
+name = "IAM does not import its emailed sign-in"
+type = "forbidden"
+source_modules = ["angee.iam"]
+forbidden_modules = ["angee.iam_messaging"]
+
+[[tool.importlinter.contracts]]
 name = "Serving modules never import build owners"
 type = "forbidden"
 as_packages = false
@@ -374,7 +383,7 @@ type = "forbidden"
 as_packages = false
 allow_indirect_imports = true
 source_modules = ["angee.**"]
-forbidden_modules = ["tests", "angee.*.testing", "angee.*.testing.**"]
+forbidden_modules = ["tests", "angee.*.testing", "angee.*.testing.**", "html5lib"]
 ignore_imports = [
   "angee.*.tests.** -> angee.*.testing.**",
   "angee.*.tests.** -> tests",

@@ -20,6 +20,7 @@ from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 
 from angee.agents.acp_server import SessionAgent, V1SessionAgent, V2SessionAgent
 from angee.base.models.identity import instance_from_public_id
+from angee.base.serialization import decode_json
 from angee.iam.permissions import is_authenticated
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class WebsocketTransport:
             if not record.strip():
                 continue
             try:
-                message = json.loads(record)
+                message = decode_json(record)
             except ValueError, UnicodeDecodeError:
                 logger.warning("Invalid JSON on an ACP WebSocket.")
                 continue

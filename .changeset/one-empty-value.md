@@ -6,19 +6,23 @@ What a form field holds when it holds nothing is now decided by one rule, which
 the record form's draft and seeds, the action, mutation and schema dialogs and
 the presence control all read; the record form's own rule is gone. First match
 wins: a field that declares a `format` (a date, a date and time or a time
-carried as text) holds `null`; an explicit `string` kind holds `""`, whatever its widget; the `integer`,
-`float`, `date`, `datetime` and `time` widgets hold `null`; the list widgets
+carried as text) holds `null`; an explicit `string` kind holds `""`, whatever its widget; the number
+widgets (`integer`, `float`, `percent`, `progressBar`) and the `date`,
+`datetime` and `time` widgets hold `null`; the list widgets
 (`tagInput`, `list`, `rows`) and a relation list hold `[]`; the `switch` widget
 holds `false`, the `object` widget `{}`, and the `json` widget `[]` for an
 `array` kind, `null` for an untyped value and `{}` otherwise; then the kind
 decides (`array` `[]`, `object` `{}`, `boolean` or `switch` `false`, a number or an untyped
 value `null`, or `""` under the `select` widget); anything else holds `""`. A
 lines editor's new cell is not a form field and keeps its own rule. Not
-changed, and known: a boolean widget other than `switch` (`boolean`,
-`booleanToggle`, `booleanBadge`) and a number widget other than `integer` and
-`float` (`percent`, `progressBar`, `money`) still hold `""` when no kind is
-declared, so an optional argument declared by one of those widgets alone still
-reaches `submit` as `""`.
+changed, and known: the `boolean`, `booleanToggle` and `booleanBadge` widgets
+and the `money` widget still hold `""` when no kind is declared, so an optional
+argument declared by one of them alone still reaches `submit` as `""`. A
+boolean waits for a field's type to reach its descriptor, where a kind decides
+it: holding `null`, the presence control would show an unchecked box with "Left
+empty", unlike the `switch` widget and a `boolean` kind, which hold `false`. The
+`money` widget, which the money addon's fragment registers, waits for a seam
+where a widget declares the kind of value it holds; the rule does not name it.
 
 What an untouched field seeds and sends, where that changed. A record form
 sends a structured field whole once one of its members changed, so "a sibling
@@ -34,7 +38,7 @@ no member it emits reaches those rows today.
 | an `array` under the `json` widget | record form: the same two | `{}` | `[]` |
 | an untyped value under the `json` widget | record form: a create | `{}` | left out |
 | | record form: an edit, a sibling changed | `{}` | `null` |
-| a number kind under a widget that is not a number's (`percent`) | record form: a create | `""` | left out |
+| a number kind under a widget that is not a number's (`money`) | record form: a create | `""` | left out |
 | | record form: an edit, a sibling changed | `""` | `null` |
 | a date, a time, or a date and time, carried as text with no declared `format` (a `string` kind with only a date or time widget) | record form: an edit, a sibling changed | `null` | `""` |
 | the `date`, `time`, `integer` or `float` widget with no kind | an action dialog's optional argument, at its `submit`; a `MutationDialog` field, at its `parseValues` | `""` | `null` |

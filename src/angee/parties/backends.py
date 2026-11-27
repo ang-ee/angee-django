@@ -877,7 +877,7 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         """Lock a pull-only contacts page's identities in one call, then read who its addresses name under the locks.
 
         In parties' one identity order (``PartyManager.lock_identity_rows``),
-        handles first, then parties: every spelling of the page's contact
+        handles first, then parties: every spelling or alias of the page's contact
         addresses (``PartyManager.contact_handle_ids``), every handle stated on a
         party the page's links name (its tombstones' included), on a party those
         addresses' statements name, or on the person of an account one of them

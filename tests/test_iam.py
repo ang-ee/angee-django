@@ -14,6 +14,8 @@ from django.contrib.auth import (
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
+from django.test.utils import override_settings
+from django.utils.module_loading import import_string
 from rebac import RebacMixin, actor_context, system_context, to_subject_ref
 from rebac.managers import RebacManager
 from rebac.permissions_mixin import RebacPermissionsMixin
@@ -65,6 +67,24 @@ def test_iam_model_backend_uses_named_session_lookup(kind: str, is_active: bool,
     user = get_user_model().objects.create_user(f"backend-{kind}-{is_active}", kind=kind, is_active=is_active)
 
     assert ModelBackend().get_user(user.pk) == (user if allowed else None)
+
+
+@pytest.mark.django_db
+def test_a_session_recorded_under_the_session_backend_loads_its_person() -> None:
+    """Every credential's session records IAM's ``SESSION_BACKEND``, which IAM's ModelBackend loads."""
+
+    from angee.iam.auth import SESSION_BACKEND, ModelBackend
+
+    assert import_string(SESSION_BACKEND) is ModelBackend
+    user = get_user_model().objects.create_user("session-recorded", password="secret")
+    request = RequestFactory().get("/")
+    request.session = {
+        SESSION_KEY: str(user.pk),
+        BACKEND_SESSION_KEY: SESSION_BACKEND,
+        HASH_SESSION_KEY: user.get_session_auth_hash(),
+    }
+
+    assert get_user(request) == user
 
 
 @pytest.mark.django_db
@@ -161,3 +181,22 @@ def test_create_user_clears_insert_sudo_without_ambient_actor() -> None:
 
     assert user.actor() is None
     assert not user.is_sudo()
+
+
+@pytest.mark.parametrize(("backends", "messages"), [
+    pytest.param(
+        ["angee.iam.auth.ModelBackend", "angee.iam.auth.SignInLinkBackend"],
+        ["AUTHENTICATION_BACKENDS lists 'angee.iam.auth.SignInLinkBackend', which does not import"],
+        id="an-entry-that-does-not-import",
+    ),
+    pytest.param(["axes.backends.AxesStandaloneBackend"], ["does not list 'angee.iam.auth.ModelBackend'"],
+                 id="no-session-backend"),
+])
+def test_start_up_names_a_backend_that_does_not_import_and_a_missing_session_backend(backends, messages) -> None:
+    from angee.iam.checks import check_authentication_backends
+
+    assert check_authentication_backends() == []
+    with override_settings(AUTHENTICATION_BACKENDS=backends):
+        errors = check_authentication_backends()
+    assert [error.id for error in errors] == ["angee.iam.E006"] * len(messages)
+    assert all(message in error.msg for message, error in zip(messages, errors, strict=True))

@@ -29,7 +29,24 @@ export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
 export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
 export interface ThemeOptionsEnvelope { version: number; value: unknown }
 export type ThemeOptionsCapability = "palette-customization";
-export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; capability?: ThemeOptionsCapability; parse(value: unknown): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
+export interface ThemeOptionsDefinition<TOptions> {
+  version: number;
+  defaults: TOptions;
+  capability?: ThemeOptionsCapability;
+  /**
+   * False declines the run-time host appearance source (`AddonManifest.hostAppearance`):
+   * `createApp` asks it about no theme for this one, so the source supplies none of its
+   * options. The build's stated options and a person's own still apply. Absent means true.
+   * It is part of the definition, not of the options envelope.
+   */
+  acceptsHostAppearanceSource?: boolean;
+  parse(value: unknown): TOptions;
+  /**
+   * The token layers `value` adds over the theme's own. `resolveThemeOptions` passes the definition's
+   * authored tokens as `base`, so a derivation can read the colours the theme itself paints.
+   */
+  resolve(value: TOptions, base?: ThemeTokenLayers): Partial<ThemeTokenLayers>;
+}
 export type ThemeCustomizationFont = "theme" | "system" | "inter" | "humanist" | "industrial" | "editorial" | "mono";
 export type ThemeCustomizationRadius = "theme" | "square" | "compact" | "standard" | "soft" | "round";
 export type ThemeCustomizationDensity = "theme" | "compact" | "balanced" | "comfortable" | "spacious";
@@ -54,6 +71,12 @@ export interface ThemeCustomization {
 }
 export interface ThemeCustomizationConfiguration {
   version?: number;
+  /**
+   * False declines the run-time host appearance source (`AddonManifest.hostAppearance`);
+   * the build's stated options still apply. Defaults to true
+   * (`ThemeOptionsDefinition.acceptsHostAppearanceSource`).
+   */
+  acceptsHostAppearanceSource?: boolean;
 }
 export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
 export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
@@ -76,6 +99,22 @@ export const THEME_TOKEN_NAMES: readonly ThemeTokenName[];
  * @kind contribution
  */
 export function defineTheme<TOptions>(definition: ThemeDefinition<TOptions>): ThemeDefinition<TOptions>;
+/**
+ * Whether a value is a list of shadows within the contract's bounds: per layer, an optional leading or
+ * trailing `inset`, two to four lengths (`0`, or a number in `px`, `rem` or `em`; the blur not negative)
+ * and an optional colour (a hex value, `transparent`, `currentcolor`, `rgb()`/`rgba()` of three numbers
+ * and an optional alpha, `rgb(from <hex> r g b / <alpha>)`, or
+ * `color-mix(in srgb|oklab|oklch, <hex> <percentage>, transparent)`; no form holds a `var()`). The contract's rule for an
+ * elevation, `--ring` and `--ring-danger`.
+ * @kind null
+ * @reason Schema infrastructure: validates serialized runtime contracts.
+ */
+export function isShadowList(value: string): boolean;
+/**
+ * The elevation presets a customization can choose instead of its theme's own.
+ * @kind token
+ */
+export const THEME_ELEVATION_PRESETS: readonly Exclude<ThemeCustomizationElevation, "theme">[];
 /**
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.

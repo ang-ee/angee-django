@@ -336,7 +336,7 @@ def _first_handle(headers: tuple[Any, ...] | list[Any]) -> ParsedHandle | None:
         if address:
             return ParsedHandle(
                 platform=_EMAIL_PLATFORM,
-                value=address.strip().lower(),
+                value=Handle.email_value(address),
                 display_name=name.strip(),
             )
     return None
@@ -350,7 +350,7 @@ def _recipients(message: EmailMessage) -> tuple[ParsedRecipient, ...]:
     for header, role in _RECIPIENT_HEADERS:
         values = [str(value) for value in message.get_all(header, ())]
         for name, address in getaddresses(values):
-            cleaned = address.strip().lower()
+            cleaned = Handle.email_value(address)
             if not cleaned or (cleaned, role) in seen:
                 continue
             seen.add((cleaned, role))

@@ -17,4 +17,8 @@ reaches one of the two reads and not the other: the inbox would drop a grant
 generic reads keep, or keep one they refuse.
 """
 
-check_derived_reads = partial(check_sealed_permissions, "messaging", DERIVED_READS, "messaging.E003")
+check_derived_reads = partial(
+    check_sealed_permissions, "messaging", DERIVED_READS, "messaging.E003",
+    "Union the fragment's arm into an extension point the sealed expression composes, "
+    "or grant the need through the fragment's own record's read.",
+)

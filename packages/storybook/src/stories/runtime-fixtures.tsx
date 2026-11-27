@@ -4,6 +4,7 @@ import {
   refineResourcesFromAngeeSchemaMetadata,
   schemaFieldMetadataFromAngeeSchemaMetadata,
   type AngeeSchemaMetadata,
+  type DataResourceMetadata,
 } from "@angee/metadata";
 import {
   useLayoutEffect,
@@ -37,7 +38,7 @@ import {
 import type { IResourceItem } from "@refinedev/core";
 import { graphqlWireFetch, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 import { composeAddons } from "@angee/app";
-import { createApp, parseFlatSearch, stringifyFlatSearch, type CreateAppInput } from "@angee/app/create-app";
+import { createApp, parseFlatSearch, retryAppQuery, stringifyFlatSearch, type CreateAppInput } from "@angee/app/create-app";
 import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
 import { previewThemes, previewThemeId } from "../theme-global";
@@ -50,17 +51,31 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 
+/**
+ * A story's reads fail as the app's do: a refused request (a public GraphQL answer) is not
+ * retried, where the data library's own default retries every failure three times and a story
+ * about a refusal showed its error seconds late. Used when a story brings no client of its own.
+ * Only the retry rule is the app's: the client's other defaults (how long a read stays fresh and
+ * how long it is kept) are still the data library's, not the app's.
+ */
+const FIXTURE_QUERY_CLIENT_CONFIG = { defaultOptions: { queries: { retry: retryAppQuery } } };
+
 export { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 export { GraphQLError, type GraphQLWireOperation, type GraphQLWireRequest } from "@angee/refine/testing/wire";
 export { resourceSnapshotOperations } from "../resource-snapshots";
 
 /** Full product pages use the production composition root and native memory history.
  * The caller owns stable fixture input, including every schema's isolated transport.
+ * The workshop's toolbar is the host's appearance, so the composed addons' run-time
+ * `hostAppearance` source is left out, and its reads need no handler, unless the story
+ * is about that source (`hostAppearanceSource`).
  * Set angeeOwnRuntime so the global decorator does not mount a second provider stack.
  */
-export function ComposedRuntimeFixture({ input, initialEntry }: {
+export function ComposedRuntimeFixture({ input, initialEntry, hostAppearanceSource = false }: {
   input: CreateAppInput;
   initialEntry: string;
+  /** Install the composed addons' run-time host appearance source; the story's transports then answer its reads. */
+  hostAppearanceSource?: boolean;
 }) {
   const app = useMemo(() => {
     for (const [name, schema] of Object.entries(input.schemas)) {
@@ -68,8 +83,9 @@ export function ComposedRuntimeFixture({ input, initialEntry }: {
         throw new Error(`Story schema ${name} needs a fixture fetch and live subscriptions disabled.`);
       }
     }
-    return createApp({ ...input, history: createMemoryHistory({ initialEntries: [initialEntry] }) });
-  }, [input, initialEntry]);
+    const addons = hostAppearanceSource ? input.addons : input.addons.map(({ hostAppearance: _source, ...addon }) => addon);
+    return createApp({ ...input, addons, history: createMemoryHistory({ initialEntries: [initialEntry] }) });
+  }, [input, initialEntry, hostAppearanceSource]);
   return <RouterProvider router={app.router} />;
 }
 
@@ -118,16 +134,37 @@ export function storyAppearance(globals: Record<string, unknown>): NonNullable<R
   };
 }
 
+export interface StorySchemaOptions {
+  /** The schema's name, served at `/graphql/<schema>/`; `public` unless given. */
+  schema?: string;
+  /**
+   * The data resources the schema's metadata names, as a composed host's `angee.resources`
+   * does; each declares this schema as its `schemaName` (`testDataResource` defaults to
+   * `console`). A resource surface finds its model only here: without it, it finds no model,
+   * warns and loads no record.
+   */
+  resources?: readonly DataResourceMetadata[];
+  /** Receives each request the transport parses. */
+  onRequest?: (request: GraphQLWireRequest) => void;
+}
+
 /**
- * The `public` schema config of a story or native test, whose transport is
- * refine's GraphQL wire fake: each root field is answered by the handler named
+ * The schema config of a story or native test, keyed by its name, whose transport
+ * is refine's GraphQL wire fake: each root field is answered by the handler named
  * for it, and an unhandled field or a missing required variable fails loudly.
+ * Its metadata names `resources`; a resource of another schema is refused.
  */
 export function storySchema(
   operations: Readonly<Record<string, GraphQLWireOperation>>,
-  onRequest?: (request: GraphQLWireRequest) => void,
+  { schema = "public", resources, onRequest }: StorySchemaOptions = {},
 ): Record<string, StorySchemaConfig> {
-  return { public: { url: "/graphql/public/", fetch: graphqlWireFetch(operations, onRequest) } };
+  const foreign = resources?.find((resource) => resource.schemaName !== schema);
+  if (foreign) throw new Error(`Story schema ${schema} cannot name ${foreign.modelLabel}, a resource of schema ${foreign.schemaName}.`);
+  return { [schema]: {
+    url: `/graphql/${schema}/`,
+    fetch: graphqlWireFetch(operations, onRequest),
+    ...(resources ? { metadata: { angee: { resources } } } : {}),
+  } };
 }
 
 export interface RuntimeFixtureProps {
@@ -141,13 +178,18 @@ export interface RuntimeFixtureProps {
   routed?: boolean;
   operationDocuments?: ComponentProps<typeof OperationDocumentsProvider>["documents"];
   liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
+  /** Receives the data layer's notices, for a test that records what the data layer tells; none open without it. */
+  notificationProvider?: ComponentProps<typeof Refine>["notificationProvider"];
   queryClient?: ReturnType<typeof useQueryClient>;
 }
 
 /**
  * Wrap a data-bound view in the modal host, refine data providers over `schemas`,
  * the active schema's name and metadata, and the composed runtime — the stack every
- * fetching view needs to render in isolation.
+ * fetching view needs to render in isolation. The data layer tells its notices only
+ * to a given `notificationProvider`; the app's `useConnectionNotifications` is not
+ * mounted, so through the fixture a test records which notices the data layer opens
+ * for a surface's calls, not what `useConnectionNotifications` holds back or tells once.
  */
 export function RuntimeFixture({
   activeSchema = "public",
@@ -160,6 +202,7 @@ export function RuntimeFixture({
   routed = false,
   operationDocuments = {},
   liveProvider,
+  notificationProvider,
   queryClient,
 }: RuntimeFixtureProps): ReactNode {
   const QueryStateAdapter = routed ? NuqsAdapter : NuqsTestingAdapter;
@@ -196,9 +239,10 @@ export function RuntimeFixture({
         <Refine
           dataProvider={dataProvider}
           liveProvider={liveProvider}
+          notificationProvider={notificationProvider}
           resources={resources ?? [...refineResourcesFromAngeeSchemaMetadata(normalized[activeSchema]?.metadata)]}
           routerProvider={routed ? tanStackRouterProvider : undefined}
-          options={{ syncWithLocation, disableTelemetry: true, ...(queryClient ? { reactQuery: { clientConfig: queryClient } } : {}) }}
+          options={{ syncWithLocation, disableTelemetry: true, reactQuery: { clientConfig: queryClient ?? FIXTURE_QUERY_CLIENT_CONFIG } }}
         >
           <OperationDocumentsProvider documents={operationDocuments}>
             {/* As the app's layout route does: hooks outside a resource surface resolve the active schema. */}
@@ -230,6 +274,7 @@ export function RoutedRuntimeFixture({
   resourceName,
   operationDocuments,
   liveProvider,
+  notificationProvider,
   queryClient,
 }: {
   activeSchema?: string;
@@ -244,9 +289,10 @@ export function RoutedRuntimeFixture({
   resourceName?: string;
   operationDocuments?: ComponentProps<typeof OperationDocumentsProvider>["documents"];
   liveProvider?: ComponentProps<typeof Refine>["liveProvider"];
+  notificationProvider?: RuntimeFixtureProps["notificationProvider"];
   queryClient?: ReturnType<typeof useQueryClient>;
 }): ReactNode {
-  const store = useStorySnapshot({ activeSchema, schemas, children, appearance, runtime, resourceLabel, resourceName, operationDocuments, liveProvider, queryClient });
+  const store = useStorySnapshot({ activeSchema, schemas, children, appearance, runtime, resourceLabel, resourceName, operationDocuments, liveProvider, notificationProvider, queryClient });
   const router = useMemo(() => {
     function StoryRoot() {
       const { resourceLabel, resourceName, ...fixture } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);

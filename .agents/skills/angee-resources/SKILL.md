@@ -24,7 +24,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 | `src/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin`, `is_catalogue_model`, `check`, `after_resource_load` |
 | `src/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)` and its target-model compatibility; ledger writes for imports and owner-bound identities; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource`, `Resource.require_target_model`; `retired_seed_keys`, `seeded_record_merge_guard`, `ResourceManager`, `upsert_target`, `bind_instance`, `load_addons`, `load_xref`, `_check_load_tiers`, `_excluded_entry_keys`, `_check_xref_collisions` |
 | `src/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups` and the module docstring; `Command` |
-| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` |
+| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration`, `retired_primary_keys`; `DropGuardAutodetector` at authoring, `check_plan_drops` at `migrate` |
 
 ## Reuse first
 
@@ -105,7 +105,11 @@ description: "Declares and loads an addon's master, install and demo data: pypro
    `create_only = ["<field>", …]` in a row entry of its own: applied only to a row the load
    creates, never on adoption or re-application (`after_init_instance` and `load_scope` in
    `loader.py`; `iam_integrate_oidc/pyproject.toml`). Adding it to a shipped entry re-applies
-   that entry's existing rows once, since their hashes change. If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
+   that entry's existing rows once, since their hashes change. If an adapter's owner verb does not treat an
+   omitted column as keeping what is stored (it publishes the stored value or applies a default instead) → name
+   it, with the reason, in the adapter's `never_create_only` (`AngeeResource` in `loader.py`; `FormResource`,
+   `WorkflowDefinitionResource`); the load refuses an entry listing it before any row of that entry, and rolls back.
+   If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
    in a tier at or below yours (`EntryGraph.ordered` in `entries.py`). **Owner rule:** the manifest selects files
    and keys; the model owns uniqueness, so no field is adoptable without it
    ([addon declarations](../../../docs/composer.md#addon-declarations)).

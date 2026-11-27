@@ -131,13 +131,14 @@ describe("AddonSourceControls contribution", () => {
   });
 
   test("keeps domain failures available to MutationDialog's inline error owner", async () => {
-    mocks.addSource.mockResolvedValue({ ok: false, message: "Source refused.", validationErrors: { name: ["Choose another name."] } });
+    // As the server answers a field's refusal: its message joins the reasons, which stay under their fields.
+    mocks.addSource.mockResolvedValue({ ok: false, message: "Choose another name.", validationErrors: { name: ["Choose another name."] } });
     render(<AddonSourceControls />);
     const dialog = mocks.dialog.mock.calls[0]![0];
     const values = dialog.parseValues({ vcsBridgeId: "bridge-1", name: "angee/framework" });
 
     expect(dialog.mutationResult!(await dialog.mutation!(values, { errorNotification: false }))).toEqual({
-      status: "invalid", issues: { fieldErrors: { name: ["Choose another name."] }, formErrors: ["Source refused."] },
+      status: "invalid", issues: { fieldErrors: { name: ["Choose another name."] }, formErrors: [] },
     });
 
     expect(mocks.toast.success).not.toHaveBeenCalled();

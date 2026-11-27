@@ -532,10 +532,30 @@ function collectHeadlessSources(entry, packageRoot, seen, inputs) {
   return seen;
 }
 
-function stylesheetAssets(source, stylesheet, packageRoot, themeId, inputs) {
+/**
+ * Refuse what a theme stylesheet may not do: import another stylesheet (the definition lists them),
+ * or set an elevation. An elevation is a definition token the theme contract checks, since a
+ * `shadow-*` utility composes it with the focus ring and a value outside the contract's bounds voids
+ * the ring. The check reads the text, comments and strings included: `--elevation-` and a colon
+ * (with only whitespace or comments between them), `@property --elevation-`, or a backslash anywhere,
+ * which is how an escaped name is spelled and which no theme stylesheet needs. A
+ * `var(--elevation-…)` read stays allowed.
+ */
+export function assertThemeStylesheet(source, stylesheet, themeId) {
   if (/@import\s/i.test(source)) {
     throw new Error(`Theme ${themeId} stylesheet ${stylesheet} must declare additional stylesheets through the theme definition.`);
   }
+  const elevation = /(--elevation-[\w-]*)(?:\s|\/\*[\s\S]*?\*\/)*:/.exec(source) ?? /@property\s+(--elevation-[\w-]*)/i.exec(source);
+  if (elevation) {
+    throw new Error(`Theme ${themeId} stylesheet ${stylesheet} declares ${elevation[1]} (refused wherever it appears, a comment included); a theme sets its elevations in its definition, where the theme contract checks them.`);
+  }
+  if (source.includes("\\")) {
+    throw new Error(`Theme ${themeId} stylesheet ${stylesheet} holds a backslash; a theme stylesheet spells its names plainly, with no escapes.`);
+  }
+}
+
+function stylesheetAssets(source, stylesheet, packageRoot, themeId, inputs) {
+  assertThemeStylesheet(source, stylesheet, themeId);
   const assets = [];
   const urls = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
   for (const match of source.matchAll(urls)) {

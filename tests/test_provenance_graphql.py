@@ -29,6 +29,7 @@ from rebac import (
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
+from simple_history.utils import get_history_manager_for_model
 
 from angee.base.identity import public_subject_ref
 from angee.base.models.base import AngeeDataModel
@@ -43,17 +44,27 @@ from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
 from angee.provenance.context import changeset
 from angee.provenance.evidence import EvidenceReference, readable_records
+from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     StatementLinkMixin,
 )
-from tests.conftest import Page, addon_schema, create_user, current_stream, make_integration, vault_for
+from tests.conftest import (
+    Page,
+    addon_schema,
+    create_platform_admin,
+    create_user,
+    current_stream,
+    make_integration,
+    vault_for,
+)
 from tests.core_persistence import OwnedRow
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 Party = apps.get_model("parties", "Party")
 Handle = apps.get_model("parties", "Handle")
+Person = apps.get_model("parties", "Person")
 
 HISTORY = """
 query History($model: String!, $id: ID!, $limit: Int, $offset: Int, $selected: ID) {
@@ -75,7 +86,7 @@ query History($model: String!, $id: ID!, $limit: Int, $offset: Int, $selected: I
 
 REVERT = """
 mutation Revert($model: String!, $id: ID!, $changeset: ID!) {
-  revert_changeset(model: $model, id: $id, changeset: $changeset) { ok message id }
+  revert_changeset(model: $model, id: $id, changeset: $changeset) { ok message code validation_errors id }
 }
 """
 
@@ -254,7 +265,9 @@ def test_revert_restores_the_record_through_write_and_records_a_revert_changeset
     assert page.title == "Final title"
 
     reverted = result_data(execute_schema(schema, REVERT, variables, user=owner))["revert_changeset"]
-    assert reverted == {"ok": True, "message": "Changeset reverted.", "id": reverted["id"]}
+    assert reverted == {
+        "ok": True, "message": "Changeset reverted.", "code": None, "validation_errors": None, "id": reverted["id"],
+    }
     page.refresh_from_db()
     assert page.title == "Draft title"
     history = _history(schema, owner, "knowledge.Page", page)
@@ -283,6 +296,109 @@ def test_revert_refuses_a_changeset_that_did_not_touch_the_record() -> None:
 
     assert refused["ok"] is False
     assert "complete write boundary" in refused["message"]
+
+
+LATER_CHANGE = "A later change to this record prevents this revert."
+UNRECORDED = "The state before this change is no longer recorded, so it cannot be reverted."
+
+
+def _revert(schema: Any, user: Any, record: Any, entry: dict[str, Any], model: str = "knowledge.Page") -> Any:
+    variables = {"model": model, "id": public_id_of(record), "changeset": entry["id"]}
+    return result_data(execute_schema(schema, REVERT, variables, user=user))["revert_changeset"]
+
+
+def test_history_never_offers_a_revert_a_later_change_prevents_and_the_verb_refuses_it_in_plain_words() -> None:
+    """The latest change reverts; an earlier one is not offered, and a stale request names no internal identifier."""
+
+    owner = create_user("revert-later-change")
+    _vault, page = _titled_page(owner)
+    with actor_context(owner), changeset(fresh=True, change_reason="Retitle"):
+        page.title = "Later title"
+        page.save(update_fields=("title",))
+    schema = _schema()
+    retitle, rename, _draft = _history(schema, owner, "knowledge.Page", page)["entries"]
+
+    assert _revert(schema, owner, page, rename) == {
+        "ok": False, "message": LATER_CHANGE, "code": "later_change", "validation_errors": None, "id": None,
+    }
+    assert (retitle["can_revert"], rename["can_revert"]) == (True, False)
+    page.refresh_from_db()
+    assert page.title == "Later title"
+
+
+def test_history_never_offers_a_revert_whose_earlier_state_is_no_longer_recorded() -> None:
+    owner = create_user("revert-unrecorded")
+    _vault, page = _titled_page(owner)
+    with system_context(reason="tests.history.pruned_creation"):
+        get_history_manager_for_model(Page).filter(id=page.pk, history_type="+").delete()
+    schema = _schema()
+    [rename] = _history(schema, owner, "knowledge.Page", page)["entries"]
+
+    assert _revert(schema, owner, page, rename) == {
+        "ok": False, "message": UNRECORDED, "code": "earlier_state_unavailable", "validation_errors": None, "id": None,
+    }
+    assert rename["can_revert"] is False
+    page.refresh_from_db()
+    assert page.title == "Final title"
+
+
+def test_an_mti_parent_write_reverts_to_the_childs_version_dated_the_same_instant() -> None:
+    """An equal date is an earlier state: a person's version carries its party's columns up to and at that instant."""
+
+    admin = create_platform_admin("revert-carrier-tie")
+    with actor_context(admin), changeset(fresh=True, change_reason="Create person"):
+        person = Person.objects.create(display_name="Gamma")
+    with actor_context(admin), changeset(fresh=True, change_reason="Party-only write"):
+        party = Party._base_manager.get(pk=person.pk)
+        party.display_name = "Gamma P"
+        party.save(update_fields=("display_name",))
+    with system_context(reason="tests.history.carrier_tie"):
+        written = Party.history.filter(id=person.pk).latest("history_id")
+        get_history_manager_for_model(Person).filter(id=person.pk).update(history_date=written.history_date)
+    schema = _schema()
+    [write] = [entry for entry in _history(schema, admin, "parties.Party", party)["entries"]
+               if entry["change_reason"] == "Party-only write"]
+
+    assert write["can_revert"] is True
+    assert _revert(schema, admin, party, write, model="parties.Party")["ok"] is True
+    assert Party._base_manager.get(pk=person.pk).display_name == "Gamma"
+
+
+def test_a_baseline_recorded_after_a_change_is_not_a_later_change() -> None:
+    """A baseline is the state before the write that recorded it, never a later write, whenever it was recorded."""
+
+    owner = create_user("revert-baseline-after")
+    _vault, page = _titled_page(owner)
+    with system_context(reason="tests.history.baseline_after"):
+        model_history(Page).record_baselines(Page, [page.pk])
+    schema = _schema()
+    rename = next(entry for entry in _history(schema, owner, "knowledge.Page", page)["entries"]
+                  if entry["change_reason"] == "Rename")
+
+    assert rename["can_revert"] is True
+    assert _revert(schema, owner, page, rename)["ok"] is True
+    page.refresh_from_db()
+    assert page.title == "Draft title"
+
+
+def test_a_revert_refuses_a_boundary_another_record_shares_before_a_later_change() -> None:
+    owner = create_user("revert-boundary-first")
+    _vault, page = _titled_page(owner)
+    _other_vault, other = _titled_page(owner, vault_name="Other boundary")
+    with actor_context(owner), changeset(fresh=True, change_reason="Joint edit"):
+        for record in (page, other):
+            record.title = "Joint edit"
+            record.save(update_fields=("title",))
+    with actor_context(owner), changeset(fresh=True, change_reason="Later edit"):
+        page.title = "Later edit"
+        page.save(update_fields=("title",))
+    schema = _schema()
+    joint = _history(schema, owner, "knowledge.Page", page)["entries"][1]
+
+    refused = _revert(schema, owner, page, joint)
+
+    assert refused["message"] == "This changeset must be reverted from the owner of its complete write boundary."
+    assert (refused["ok"], refused["code"]) == (False, None)
 
 
 @pytest.fixture
@@ -473,12 +589,17 @@ def test_history_projects_a_readable_statement_link_and_evidence_inline() -> Non
     assert [evidence.id for evidence in projected.evidence] == [public_id_of(party)]
 
 
+HISTORY_PAGE_STATEMENTS = 32
+"""One party history page at any size: 29 for its versions, statements, redaction and admission, and per touched
+table what the revert verb refuses: two for the party, one for its statements, which no merge originates in."""
+
+
 @pytest.mark.parametrize("row_count", [1, 25])
 def test_history_page_query_count_does_not_grow_per_entry(
     row_count: int,
     django_assert_num_queries: Any,
 ) -> None:
-    """Loaded versions, statements, redaction and admission stay page-batched."""
+    """Loaded versions, statements, redaction, admission and the revert blockers stay page-batched."""
 
     person = create_user(f"history-budget-{row_count}")
     with actor_context(person), changeset(fresh=True, change_reason="Create party"):
@@ -496,6 +617,43 @@ def test_history_page_query_count_does_not_grow_per_entry(
         page = _history(schema, person, "parties.Party", party, limit=row_count)
 
     assert len(page["entries"]) == row_count
+    assert len(baseline) == HISTORY_PAGE_STATEMENTS
+    assert [entry["can_revert"] for entry in page["entries"]] == [True] + [False] * (row_count - 1)
+
+
+HISTORY_DOCUMENT_PAGE_STATEMENTS = 20
+"""One project history page at any size, each changeset editing the project and one of its lines: 18 as before,
+and per touched table the revert blockers' one statement (no merge originates in either table)."""
+
+
+@pytest.mark.parametrize("row_count", [1, 25])
+def test_a_document_history_page_costs_the_same_at_any_size_for_the_tables_it_touches(
+    row_count: int,
+    django_assert_num_queries: Any,
+) -> None:
+    """The blockers' cost is fixed per touched table: a document with owned lines pays it for each table."""
+
+    owner = create_user(f"history-document-budget-{row_count}")
+    with actor_context(owner), changeset(fresh=True, change_reason="Plan"):
+        project = apps.get_model("projects", "Project").objects.create(title="Plan 0", owner=owner)
+        milestone = apps.get_model("projects", "Milestone").objects.create(project=project, name="Line 0")
+    for index in range(1, 26):  # 25 revisions, so every page size holds revisions only
+        with actor_context(owner), changeset(fresh=True, change_reason=f"Revise {index}"):
+            project.title = f"Plan {index}"
+            project.save(update_fields=("title",))
+            milestone.name = f"Line {index}"
+            milestone.save(update_fields=("name",))
+
+    schema = _schema()
+    _history(schema, owner, "projects.Project", project, limit=1)
+    with CaptureQueriesContext(connection) as baseline:
+        _history(schema, owner, "projects.Project", project, limit=1)
+    with django_assert_num_queries(len(baseline)):
+        page = _history(schema, owner, "projects.Project", project, limit=row_count)
+
+    assert len(page["entries"]) == row_count
+    assert len(baseline) == HISTORY_DOCUMENT_PAGE_STATEMENTS
+    assert [entry["can_revert"] for entry in page["entries"]] == [True] + [False] * (row_count - 1)
 
 
 def test_history_names_a_statements_related_row_by_its_public_id() -> None:

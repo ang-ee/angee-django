@@ -2,7 +2,7 @@ import * as React from "react";
 import { set, useForm, useWatch, type FieldErrors } from "react-hook-form";
 import { stringValue as wireStringValue, type AuthoredMutateOptions } from "@angee/refine";
 
-import { DialogForm } from "../../fragments/DialogForm";
+import { DialogForm, type DialogFormFooterContext } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
 import { Button } from "../../ui/button";
 import type { DialogPlacement, DialogSize } from "../../ui/dialog";
@@ -10,16 +10,19 @@ import { useToast } from "../../feedback";
 import { useUiT, type UiTranslate } from "../../i18n";
 import { dateFromUnknown, formatDateTimeStorage } from "../../widgets/date-format";
 import { emptyValueForField, fieldRuleErrors, refusesSeed } from "./field-values";
-import { isFieldControlVisible, visibleFields } from "./form-view-model";
+import { fieldValidationSummary, shownFields, visibleFields } from "./form-view-model";
 import { DescriptorFieldList, type DescriptorField } from "./DescriptorFieldList";
 import {
-  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formSubmitError, invalidFormSubmit,
+  SURFACE_RENDERS_FAILURE, applyFormErrors, fieldErrorsFromRules, formErrorsFromForm, formSubmitError, formSubmitOutcome, invalidFormSubmit,
+  useRefusalFocus,
   markMemberErrors, savedFormSubmitResult, type FormSubmitResult, type ValidationErrors,
 } from "./validation-errors";
 import { useFieldValidation } from "./use-field-validation";
+import { useLateAnswerReport } from "./late-answer";
 import { ActionFormProvider } from "./ActionFormProvider";
 import { useRuntimeViewAs } from "../../runtime";
 import { useLatestRef } from "../../lib/use-latest-ref";
+import { useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
 
 export {
   LabeledDescriptorField,
@@ -103,22 +106,28 @@ export const mutationDialogValueCodecs = {
   },
 } as const;
 
+/** The idempotency key a keyed submission is called with last: none, or the draft's. */
+type SubmissionKey<TKeyed extends boolean> = TKeyed extends true ? [idempotencyKey: string] : [];
+/** What `onSubmit` is called with: the values, the quiet call options, and a keyed one's key. */
+type SubmitArguments<TValues, TKeyed extends boolean> = TKeyed extends true
+  ? [values: TValues, options: AuthoredMutateOptions, idempotencyKey: string]
+  : [values: TValues, options?: AuthoredMutateOptions];
+
 /**
  * The one submission of a {@link MutationDialog}: any `onSubmit`, or an authored `mutation` the dialog runs.
  * Either is called with the {@link AuthoredMutateOptions} that turn refine's generic error
  * notification off, to pass on to the authored call it makes: the dialog renders the failure.
+ * A keyed one (`TKeyed`, a dialog given `idempotencyScope`) is also called with its draft's
+ * idempotency key.
  */
-export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
+export type MutationDialogSubmission<TValues, TResult, TData = TResult, TKeyed extends boolean = false> =
   | {
       /**
        * Submit the parsed values through any owner (a store binding, an action
        * mutation), passing `options` on to the authored call it makes so the
        * failure the dialog renders raises no toast besides.
        */
-      onSubmit: (
-        values: TValues,
-        options?: AuthoredMutateOptions,
-      ) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
+      onSubmit: (...args: SubmitArguments<TValues, TKeyed>) => FormSubmitResult<TResult> | Promise<FormSubmitResult<TResult>>;
       mutation?: never;
       mutationResult?: never;
     }
@@ -129,17 +138,44 @@ export type MutationDialogSubmission<TValues, TResult, TData = TResult> =
        * renders its refusal itself, under the field it names or else in the dialog, so
        * the call turns refine's generic error notification off: a failure is reported once.
        */
-      mutation: (variables: TValues, options: AuthoredMutateOptions) => Promise<TData | undefined>;
+      mutation: (variables: TValues, options: AuthoredMutateOptions, ...key: SubmissionKey<TKeyed>) => Promise<TData | undefined>;
       /** Read the mutation's data as the submit result; by default the data is the result. */
       mutationResult?: (data: TData) => FormSubmitResult<TResult>;
       onSubmit?: never;
     };
 
+/** The draft a keyed dialog's submission writes. */
+interface MutationDialogScope {
+  /**
+   * The draft a keyed write's submission writes (`useIdempotencyKeys`): the dialog holds one
+   * idempotency key for it from its first attempt until an accepted answer, passes it to its
+   * submission, and gives the draft up when the person dismisses it with nothing possibly
+   * written. While open, the dialog holds the scope (`useIdempotencyDraftOwner`).
+   */
+  idempotencyScope: string;
+}
+
+/**
+ * A dialog's submission with the draft it writes: without `idempotencyScope` it is called with no
+ * key; with one, with the draft's.
+ */
+export type MutationDialogDraft<TValues, TResult, TData = TResult> =
+  | ({ idempotencyScope?: undefined } & MutationDialogSubmission<TValues, TResult, TData>)
+  | (MutationDialogScope & MutationDialogSubmission<TValues, TResult, TData, true>);
+
+/** A dialog whose submission writes no keyed draft: it is called with no idempotency key. */
 export type MutationDialogProps<
   TValues extends Record<string, unknown>,
   TResult = unknown,
   TData = TResult,
-> = MutationDialogBaseProps<TValues, TResult> & MutationDialogSubmission<TValues, TResult, TData>;
+> = MutationDialogBaseProps<TValues, TResult> & { idempotencyScope?: undefined } & MutationDialogSubmission<TValues, TResult, TData>;
+
+/** A dialog whose submission writes a keyed draft (`idempotencyScope`): it is called with the draft's key, a `string`. */
+export type KeyedMutationDialogProps<
+  TValues extends Record<string, unknown>,
+  TResult = unknown,
+  TData = TResult,
+> = MutationDialogBaseProps<TValues, TResult> & MutationDialogScope & MutationDialogSubmission<TValues, TResult, TData, true>;
 
 interface MutationDialogBaseProps<
   TValues extends Record<string, unknown>,
@@ -148,7 +184,8 @@ interface MutationDialogBaseProps<
   /** Controlled visibility. Omit with `trigger` to let the dialog own it. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /** Native trigger; when supplied, the dialog owns open state and focus pairing. */
+  /** Native trigger; when supplied, the dialog owns open state and focus pairing. Passing none
+   *  while the dialog is open keeps it open and mounted until it closes. */
   trigger?: React.ReactElement;
   title: React.ReactNode;
   description?: React.ReactNode;
@@ -184,13 +221,22 @@ interface MutationDialogBaseProps<
  * widget registry. It reports a failure once: under the field a refusal names,
  * else in the dialog. Every call it makes for its caller (`validate`, `onSubmit`,
  * `mutation`) gets the `AuthoredMutateOptions` that keep refine from toasting it besides.
+ * While a submission runs the dialog cannot be dismissed, and dismissing typed values asks
+ * first; a route move asks first in both cases (`DialogForm`, so it renders under the app's
+ * router and `ModalsHost`, as every app page does: opened without the router it throws
+ * `useUnsavedChangesNavigationGuard must be used under the app's router.`, and a test provides
+ * both through the shared providers, `createUiTestProviders` or `AppShellTestProviders` with
+ * `router`). An answer that lands after the dialog went away is still reported
+ * (`useLateAnswerReport`); only the dialog's own close and `onSubmitted` are skipped. A
+ * `trigger`-owned dialog stays mounted while open when its owner keeps rendering it without a
+ * trigger: hide the trigger by passing none, not by unmounting the dialog.
  * @kind surface
  */
 export function MutationDialog<
   TValues extends Record<string, unknown>,
   TResult = unknown,
   TData = TResult,
->(props: MutationDialogProps<TValues, TResult, TData>): React.ReactElement | null {
+>(props: MutationDialogProps<TValues, TResult, TData> | KeyedMutationDialogProps<TValues, TResult, TData>): React.ReactElement | null {
   const [open, setOpen] = React.useState(false);
   const controlled = props.open !== undefined;
   const visible = props.open ?? open;
@@ -204,22 +250,30 @@ export function MutationDialog<
 
 /**
  * Run a dialog's one submission, its `onSubmit` or its authored `mutation`, with the
- * generic error notification off (the dialog renders the refusal). The submission's
- * result is awaited, so every outcome, a throw included, settles the returned promise.
- * A mutation that resolves no data does not acknowledge the dialog: it fails with `fallback`.
+ * generic error notification off (the dialog renders the refusal), and a keyed one with its
+ * draft's `idempotencyKey`, which it requires. The submission's result is awaited, so every
+ * outcome, a throw included, settles the returned promise. A mutation that resolves no data does
+ * not acknowledge the dialog: it fails with `fallback`.
  * @kind null
  * @reason Runtime infrastructure: the dialog's submission contract, shared with its test double.
  */
 export async function submitMutationDialog<TValues, TResult, TData>(
-  submission: MutationDialogSubmission<TValues, TResult, TData>,
+  dialog: MutationDialogDraft<TValues, TResult, TData>,
   values: TValues,
   fallback: string,
+  idempotencyKey?: string,
 ): Promise<FormSubmitResult<TResult>> {
-  if (!submission.mutation) return submission.onSubmit(values, SURFACE_RENDERS_FAILURE);
-  const { mutation, mutationResult } = submission;
-  const data = await mutation(values, SURFACE_RENDERS_FAILURE);
-  if (data == null) return savedFormSubmitResult<TResult>(null, fallback);
-  return mutationResult ? mutationResult(data) : { status: "ok", data: data as unknown as TResult };
+  const answer = (data: TData | undefined): FormSubmitResult<TResult> => {
+    if (data == null) return savedFormSubmitResult<TResult>(null, fallback);
+    return dialog.mutationResult ? dialog.mutationResult(data) : { status: "ok", data: data as unknown as TResult };
+  };
+  if (dialog.idempotencyScope === undefined) {
+    if (!dialog.mutation) return dialog.onSubmit(values, SURFACE_RENDERS_FAILURE);
+    return answer(await dialog.mutation(values, SURFACE_RENDERS_FAILURE));
+  }
+  if (idempotencyKey === undefined) throw new Error(`The keyed dialog "${dialog.idempotencyScope}" was submitted without its draft's key.`);
+  if (!dialog.mutation) return dialog.onSubmit(values, SURFACE_RENDERS_FAILURE, idempotencyKey);
+  return answer(await dialog.mutation(values, SURFACE_RENDERS_FAILURE, idempotencyKey));
 }
 
 function MutationDialogInstance<TValues extends Record<string, unknown>, TResult, TData>({
@@ -244,8 +298,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   size = "md",
   placement = "prompt",
   trigger,
+  idempotencyScope,
 }: Omit<MutationDialogBaseProps<TValues, TResult>, "open" | "onOpenChange">
-  & MutationDialogSubmission<TValues, TResult, TData> & {
+  & MutationDialogDraft<TValues, TResult, TData> & {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.ReactElement {
@@ -267,36 +322,54 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   });
   const session = React.useRef(0);
   const submittingRef = React.useRef(false);
+  // Set when an accepted submit closes the dialog: its `onSubmitted` may move on in the same tick,
+  // before the close renders, and the dialog then holds nothing a move would lose.
+  const acceptedRef = React.useRef(false);
+  const openRef = useLatestRef(open);
   const previousOpen = React.useRef(open);
   React.useEffect(() => {
     if (previousOpen.current !== open) {
       previousOpen.current = open;
       session.current += 1;
       submittingRef.current = false;
+      acceptedRef.current = false;
       form.reset(initialDialogValues(fields, initialValues));
       form.clearErrors();
     }
   }, [fields, form, initialValues, open]);
   const values = useWatch({ control: form.control });
-  const shownFields = visibleFields(fields, values);
-  const renderedFieldNames = shownFields.filter((field) => !field.hidden).map((field) => field.name);
+  // The fields the values hold, hidden ones included, and of those the ones a control shows.
+  const visible = visibleFields(fields, values);
+  const renderedFieldNames = shownFields(fields, values).map((field) => field.name);
   const submitting = form.formState.isSubmitting;
-  const error = form.formState.errors.root?.server?.message ?? null;
+  const errors = formErrorsFromForm(form.formState.errors);
+  // Its fields lock while it submits: a refusal's focus waits until they are ready again.
+  const { banner, focus } = useRefusalFocus(errors, { form, ready: !submitting });
+  const fieldByName = React.useMemo(() => new Map(fields.map((field) => [field.name, field])), [fields]);
   const fieldsReady = form.formState.isValid || (!form.formState.isDirty
-    && shownFields
+    && visible
       .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values))
       .every((field) => !field.required && !field.presenceRequired));
   const ready = fieldsReady && (canSubmit?.(values) ?? true);
   const mounted = React.useRef(true);
   React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const footer = (
+  const dirty = form.formState.isDirty;
+  const holdsWork = React.useCallback(
+    () => openRef.current && !acceptedRef.current && (form.formState.isDirty || submittingRef.current),
+    [form, openRef],
+  );
+  const reportLate = useLateAnswerReport();
+  const keys = useIdempotencyKeys();
+  useIdempotencyDraftOwner(open && idempotencyScope !== undefined ? idempotencyScope : null,
+    typeof title === "string" ? `the dialog "${title}"` : "a MutationDialog");
+  const footer = ({ dismiss, dismissRefusal }: DialogFormFooterContext) => (
     <>
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        disabled={submitting}
-        onClick={() => onOpenChange(false)}
+        disabledReason={dismissRefusal}
+        onClick={dismiss}
       >
         {cancelLabel ?? t("dialog.cancel")}
       </Button>
@@ -313,10 +386,17 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     </>
   );
 
-  const errorOptions = { fieldNames: renderedFieldNames, fallback: errorFallback ?? t("error.generic") };
+  // A refusal brings the person to it: the banner, which then also names the refused fields, or
+  // the first refused field (`applyFormErrors` decides).
+  const errorOptions = {
+    fieldNames: renderedFieldNames,
+    fallback: errorFallback ?? t("error.generic"),
+    focus,
+    fieldSummary: (fieldErrors: Record<string, readonly string[]>) => fieldValidationSummary(fieldErrors, fieldByName, t),
+  };
   const allowRootErrorRetry = async (): Promise<void> => {
     if (!renderedFieldNames.some((name) => form.getFieldState(name).invalid)) {
-      await form.trigger(shownFields.map((field) => field.name));
+      await form.trigger(visible.map((field) => field.name));
     }
   };
 
@@ -326,6 +406,9 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
     const submittedSession = session.current;
     form.clearErrors();
     let accepted: { result: Extract<FormSubmitResult<TResult>, { status: "ok" }>; values: TValues } | undefined;
+    // Whether the write was sent: an answer that lands after the dialog went away is still reported.
+    let sent = false;
+    const current = () => mounted.current && session.current === submittedSession;
     try {
       const submittedValues = parseValues(collected);
       const validation = await validate?.(submittedValues, SURFACE_RENDERS_FAILURE);
@@ -335,23 +418,35 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
         await allowRootErrorRetry();
         return;
       }
-      const submission = (mutation ? { mutation, mutationResult } : { onSubmit }) as MutationDialogSubmission<TValues, TResult, TData>;
-      const result = await submitMutationDialog(submission, submittedValues, errorOptions.fallback);
-      if (!mounted.current || session.current !== submittedSession) return;
+      const dialog = { idempotencyScope, ...(mutation ? { mutation, mutationResult } : { onSubmit }) } as MutationDialogDraft<TValues, TResult, TData>;
+      sent = true;
+      const submitted = (idempotencyKey?: string) => submitMutationDialog(dialog, submittedValues, errorOptions.fallback, idempotencyKey);
+      const result = idempotencyScope
+        ? await keys.send(idempotencyScope, submitted, formSubmitOutcome)
+        : await submitted();
+      if (!current()) {
+        // The dialog went away while the write ran: its answer is still reported, so nobody
+        // writes it again, or trusts it went out, unaware; its close and `onSubmitted` are the dialog's own.
+        reportLate(result, errorOptions.fallback);
+        return;
+      }
       if (applyFormErrors(form, result, errorOptions)) {
         await allowRootErrorRetry();
         return;
       }
       accepted = { result, values: submittedValues };
     } catch (cause) {
-      if (mounted.current && session.current === submittedSession) {
-        applyFormErrors(form, formSubmitError(cause, errorOptions.fallback), errorOptions);
+      if (current()) {
+        applyFormErrors(form, formSubmitError(cause, errorOptions.fallback, idempotencyScope ? t("form.answerLostResend") : undefined), errorOptions);
         await allowRootErrorRetry();
+      } else if (sent) {
+        reportLate({ thrown: cause }, errorOptions.fallback);
       }
     } finally {
       if (session.current === submittedSession) submittingRef.current = false;
     }
     if (accepted) {
+      if (closeOnSubmit) acceptedRef.current = true;
       if (accepted.result.message) toast.success({ title: accepted.result.message });
       if (closeOnSubmit) onOpenChange(false);
       onSubmitted?.(accepted.result.data, accepted.values);
@@ -368,7 +463,14 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
   return (
     <DialogForm
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        // A dismissal gives the draft up; the accepted close has ended it already.
+        if (!next && idempotencyScope) keys.discard(idempotencyScope);
+        onOpenChange(next);
+      }}
+      pending={submitting}
+      dirty={dirty}
+      holdsWork={holdsWork}
       title={title}
       description={description}
       footer={footer}
@@ -380,14 +482,14 @@ function MutationDialogInstance<TValues extends Record<string, unknown>, TResult
       <ActionFormProvider {...{ ...form, registerFieldValidation }}>
         <DescriptorFieldList fields={fields} unregisterHidden />
       </ActionFormProvider>
-      <ErrorBanner description={error} />
+      <ErrorBanner {...banner} messages={errors} />
     </DialogForm>
   );
 }
 
 /** A dialog's errors for the rules its fields fail, each field's found by `fieldRuleErrors` and
  * worded by `fieldErrorsFromRules`. As the record form's check (`formRuleErrors`) does, it asks
- * only the fields shown for `values` (`isFieldControlVisible`) that the person can change. It
+ * only the fields shown for `values` (`shownFields`) that the person can change. It
  * differs from the record form's check in four facts only: it decides read-only by the field's
  * `readOnly` and `readOnlyWhen`, where the record form reads the resolved field's `readOnly`
  * alone; it reads each name as one flat key, where the record form reads dotted paths (both read
@@ -404,8 +506,8 @@ export function dialogRuleErrors(
   t: UiTranslate,
   validateConstraints = true,
 ): FieldErrors<Record<string, unknown>> {
-  const resolved = visibleFields(typeof fields === "function" ? fields(values) : fields, values);
-  const editable = resolved.filter((field) => isFieldControlVisible(field, values) && !field.readOnly && !field.readOnlyWhen?.(values));
+  const editable = shownFields(typeof fields === "function" ? fields(values) : fields, values)
+    .filter((field) => !field.readOnly && !field.readOnlyWhen?.(values));
   return fieldErrorsFromRules(editable.flatMap((field) => {
     const value = values[field.name];
     return fieldRuleErrors(

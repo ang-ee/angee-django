@@ -8,6 +8,7 @@ import type { ComponentProps } from "react";
 import { schemaFieldMetadataFromDataResources, type DataResourceFieldMetadata, type DataResourceMetadata, type ModelMetadata, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider, type ResourceSaveVariables } from "@angee/refine";
+import { useList } from "@refinedev/core";
 import { afterEach, expect, test, vi } from "vitest";
 import { ModalsHost, ToastProvider } from "../../feedback";
 import { AppRuntimeProvider, containersFromChildren, type ComposedContainers } from "../../runtime";
@@ -18,6 +19,7 @@ import { CLIENT_LINE_KEY, duplicateLineRow, emptyLineRow, lineDiffConfig } from 
 import { EditableLines } from "./EditableLines";
 import type { RecordTabDescriptor } from "./form-view-surface";
 import { FORM_CONTAINERS, FormView } from "./FormView";
+import { readNextSave } from "./next-save.test-support";
 import { acknowledgeFormSubmit, useFormViewSave, type FormSubmit, type FormViewSaveSurface } from "./use-form-view-save";
 import { Group, type FieldDescriptor } from "../page";
 
@@ -76,6 +78,8 @@ async function fixture(options: {
   widgets?: Record<string, WidgetDefinition>;
   /** The form loads with its lines in values but not on the page. */
   linesHidden?: boolean;
+  /** The resource's create takes an idempotency key. */
+  keyed?: boolean;
 } = {}) {
   const seedLines = options.lines ?? initialLines;
   const activeResource = options.resourceMetadata ?? (options.publicView ? renderedResource : resource);
@@ -109,7 +113,8 @@ async function fixture(options: {
   function Probe() {
     surface = useFormViewSave({
       resource: resource.modelLabel, id: options.isCreate ? null : "doc-1", isCreate: options.isCreate ?? false,
-      dataResource: resource, modelMetadata: model, formFields, fieldByName, refineFields,
+      dataResource: options.keyed ? { ...resource, createArguments: [{ name: "idempotency_key", type: "String" }] } : resource,
+      modelMetadata: model, formFields, fieldByName, refineFields,
       submit: options.isCreate ? undefined : submit, onSaved: options.onSaved, t: (key) => key,
     });
     const array = useFieldArray({
@@ -417,6 +422,21 @@ test("failed nested creation preserves the header and lines for retry", async ()
   expect(f.provider.update).not.toHaveBeenCalled();
 });
 
+test("a create that carries its lines is one keyed write: a retry after a lost answer sends the same key with the lines", async () => {
+  const saved: Row = { id: "doc-2", title: "Draft document", lines: [{ id: "line-9", label: "Lamp", quantity: 1, position: 0 }] };
+  const create = vi.fn<() => Promise<{ data: Row }>>().mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce({ data: saved });
+  const f = await fixture({ isCreate: true, keyed: true, create });
+  edit("title", "Draft document");
+  f.append({ label: "Lamp", quantity: "1" });
+  await act(async () => f.surface().submitForm());
+  await act(async () => f.surface().submitForm());
+  expect(f.provider.create).toHaveBeenCalledTimes(2);
+  // The provider's create is typed by the fixture's option, without its arguments.
+  const calls = (f.provider.create.mock.calls as unknown as [{ variables: Row; meta?: { gqlVariables?: Row } }][]).map(([call]) => call);
+  expect(calls.map((call) => call.meta?.gqlVariables?.idempotency_key)).toEqual([expect.any(String), calls[0]!.meta?.gqlVariables?.idempotency_key]);
+  expect(calls[1]!.variables.lines).toEqual({ data: [{ label: "Lamp", quantity: "1", position: 0 }] });
+});
+
 test("successful semantic no-op line saves accept the native draft baseline", async () => {
   const f = await fixture({ submit: async () => ({ status: "ok", data: { id: "doc-1", title: "Original", lines: initialLines } }) });
   act(() => f.surface().form.setValue<string>("lines.0.quantity", "10", { shouldDirty: true }));
@@ -549,11 +569,11 @@ test("changed server lines refuse a destructive full-list save and discard loads
   await f.refresh(remote);
   await act(async () => f.surface().submitForm());
   expect(f.submit).not.toHaveBeenCalled();
-  expect(f.surface().saveError).toBe("form.linesChanged");
+  expect(f.surface().saveErrors).toEqual(["form.linesChanged"]);
   expect(f.surface().form.getValues("lines")).toEqual([{ ...initialLines[0], label: "Local alpha" }, ...initialLines.slice(1)]);
   act(() => f.surface().discardChanges());
   expect(f.surface().form.getValues("lines")).toEqual(remote);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.surface().formIsDirty).toBe(false);
   edit("x.label", "Reconciled xray");
   await act(async () => f.surface().submitForm());
@@ -634,7 +654,7 @@ test.each([true, false])("concurrent edits to a newly saved line remain intact a
   expect(f.surface().form.getValues("lines")).toEqual([...initialLines, { ...newLine, label: "Later delta" }]);
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(1);
-  expect(f.surface().saveError).toBe("form.linesChanged");
+  expect(f.surface().saveErrors).toEqual(["form.linesChanged"]);
   if (!includesLines) {
     await act(async () => resolveRead({ data: accepted }));
     await waitFor(() => expect(f.surface().displayRecord?.lines).toEqual(accepted.lines));
@@ -879,6 +899,33 @@ test("a relation cell commits its group when a record is picked, and the pick is
   await replay(f, "undo");
   expect(formLines(f)).toEqual(initialLines);
   expect(f.surface().history.canUndo).toBe(false);
+});
+
+test("a relation cell offers inline edit of its picked record, and an authored line field declines it with `relationEdit: null`", async () => {
+  const related: DataResourceFieldMetadata = {
+    ...lineField("related", "ID"), kind: "relation", scalar: null, relationModelLabel: renderedResource.modelLabel,
+  };
+  const withRelation = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: { ...renderedResource.linesResource!, fields: [...renderedResource.linesResource!.fields!, related] },
+  });
+  const pick = async () => {
+    fireEvent.click(screen.getAllByRole("combobox", { name: /^Related/ })[0]!);
+    await act(async () => { fireEvent.click(await screen.findByRole("option", { name: "doc-2" })); });
+  };
+
+  const offered = await fixture({ publicView: true, resourceMetadata: withRelation });
+  offered.provider.getList.mockResolvedValue({ data: [{ id: "doc-2" }], total: 1 });
+  await pick();
+  expect(formLines(offered)[0]).toMatchObject({ related: "doc-2" });
+  expect(screen.getAllByRole("button", { name: "Edit record" }).length).toBeGreaterThan(0);
+  cleanup();
+
+  const declined = await fixture({ publicView: true, resourceMetadata: withRelation, formProps: { lineFields: [{ name: "related", relationEdit: null }] } });
+  declined.provider.getList.mockResolvedValue({ data: [{ id: "doc-2" }], total: 1 });
+  await pick();
+  expect(formLines(declined)[0]).toMatchObject({ related: "doc-2" });
+  expect(screen.queryByRole("button", { name: "Edit record" })).toBeNull();
 });
 
 const previewWidget: WidgetDefinition = {
@@ -1274,13 +1321,13 @@ test.each([
   await f.refresh(lines);
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(1);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
   expect(f.submit.mock.calls[0]?.[1].lines?.payload.map((row) => row.position)).toEqual([0, 1, 2]);
   act(() => f.surface().discardChanges());
   edit("b.label", "Edit after discard");
   await act(async () => f.surface().submitForm());
   expect(f.submit).toHaveBeenCalledTimes(2);
-  expect(f.surface().saveError).toBeNull();
+  expect(f.surface().saveErrors).toEqual([]);
 });
 
 test.each(["position change", "reorder", "field change"])("an actual observed server %s still conflicts when stored positions are duplicate defaults", async (change) => {
@@ -1294,4 +1341,80 @@ test.each(["position change", "reorder", "field change"])("an actual observed se
   await act(async () => f.surface().submitForm());
   expect(f.submit).not.toHaveBeenCalled();
   expect(f.surface().form.getFieldState("lines").error?.type).toBe("conflict");
+});
+
+/** Every request the fixture's provider and submit owner received. */
+function requests(f: Awaited<ReturnType<typeof fixture>>): number {
+  return f.provider.create.mock.calls.length + f.update.mock.calls.length + f.custom.mock.calls.length + f.submit.mock.calls.length;
+}
+
+test("nextSave reads a lines create as Save sends it, in one nested insert", async () => {
+  const saved = { id: "doc-new", title: "Draft document", lines: [{ id: "line-new", label: "Lamp", quantity: 1, position: 0 }] };
+  const f = await fixture({ isCreate: true, publicView: true, create: async () => ({ data: saved }) });
+  edit("Title", "Draft document");
+  fireEvent.click(screen.getByRole("button", { name: "Add line" }));
+  edit("Label", "Lamp");
+  const next = readNextSave(f.surface, () => requests(f));
+  expect(next.data).toEqual({ title: "Draft document" });
+  expect(next.lines?.created).toEqual([{ label: "Lamp", position: 0 }]);
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(f.provider.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    variables: { ...next.data, lines: { data: next.lines!.payload } },
+  })));
+});
+
+test("nextSave reads a lines edit as the resource save receives it, a list cell's own list included", async () => {
+  const taggedResource = testDataResource(renderedResource.modelLabel, {
+    ...renderedResource,
+    linesResource: {
+      ...renderedResource.linesResource!,
+      fields: [...(renderedResource.linesResource!.fields ?? []), { ...lineField("tags", "String"), kind: "list" }],
+    },
+  });
+  const lines = initialLines.map((row) => ({ ...row, tags: [`tag-${String(row.id)}`] }));
+  const f = await fixture({ publicView: true, resourceMetadata: taggedResource, lines });
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  const next = readNextSave(f.surface, () => requests(f));
+  expect(next.data).toEqual({});
+  expect(next.lines?.payload).toEqual([{ ...lines[0], label: "Edited alpha" }, ...lines.slice(1)]);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  expect(f.custom.mock.calls[0]![0].payload).toEqual({ pk: "doc-1", patch: next.data, lines: next.lines!.payload });
+});
+
+test("an own submit owner receives what nextSave reads of an edited, removed and reordered line list", async () => {
+  const f = await fixture({ submit: async () => ({ status: "ok" as const, data: { id: "doc-1", title: "Original", lines: [] } }) });
+  edit("a.label", "Edited alpha");
+  f.remove(1);
+  f.move(0, 1);
+  const next = readNextSave(f.surface, () => requests(f));
+  expect(next.lines?.payload.map((row) => row.id)).toEqual(["c", "a"]);
+  expect(next.lines?.deleted).toEqual(["b"]);
+  await act(async () => f.surface().submitForm());
+  expect(f.submit).toHaveBeenCalledOnce();
+  expect(f.submit.mock.calls[0]![0]).toEqual(next.data);
+  expect(f.submit.mock.calls[0]![1].lines).toEqual(next.lines);
+});
+
+/** The saved model's own native list, mounted beside the form as a list beside an open record is. */
+function OwnModelList() {
+  useList({ resource: renderedResource.roots.list!, dataProviderName: renderedResource.schemaName });
+  return null;
+}
+
+test("guard: a save that writes lines confirms only after its own model's lists have refreshed", async () => {
+  const f = await fixture({ publicView: true, recordExtras: () => <OwnModelList /> });
+  await waitFor(() => expect(f.provider.getList).toHaveBeenCalledTimes(1));
+  let answer!: () => void;
+  f.provider.getList.mockImplementationOnce(() => new Promise((resolve) => { answer = () => resolve({ data: [], total: 0 }); }));
+  fireEvent.change(screen.getByDisplayValue("Alpha"), { target: { value: "Edited alpha" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  // The write answered and the list was asked again: the save is at its wait.
+  await waitFor(() => expect(f.custom).toHaveBeenCalledOnce());
+  await waitFor(() => expect(f.provider.getList).toHaveBeenCalledTimes(2));
+  // This test holds the list's answer, so a save that waits for it cannot have confirmed, however slow the
+  // run; a save that stopped waiting confirms in the turn of the write's answer, before the lines above return.
+  expect(screen.queryByText("Changes saved")).toBeNull();
+  await act(async () => { answer(); });
+  expect(await screen.findByText("Changes saved")).toBeTruthy();
 });

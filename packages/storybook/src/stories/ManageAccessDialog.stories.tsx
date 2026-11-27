@@ -37,8 +37,7 @@ const schemas = storySchema({
     { id: "subject-1", name: "Ada Lovelace", assignmentSubject: "auth/user:ada" },
     { id: "subject-2", name: "Reviewers", assignmentSubject: "auth/group:7#member" },
   ],
-});
-schemas.public = { ...schemas.public!, metadata };
+}, { resources: metadata.angee.resources });
 
 const entries: readonly RecordAccessEntry[] = [{
   id: "project-1:reader:auth/user:ada",

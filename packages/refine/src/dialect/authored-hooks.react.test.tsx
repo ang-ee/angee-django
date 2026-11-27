@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { ActiveDataProviderNameProvider } from "./data-provider-context";
-import { useAuthoredMutation } from "./authored-hooks";
+import { AuthoredEnvelopeError, errorFromAuthoredEnvelope, useAuthoredMutation } from "./authored-hooks";
 
 const mutationMock = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -207,14 +207,26 @@ describe("useAuthoredMutation", () => {
       { wrapper: ConsoleProvider },
     );
 
-    await expect(
-      act(async () => {
-        await result.current[0]({ value: "fresh" } as never);
-      }),
-    ).rejects.toThrow("Permission denied");
+    let refusal: unknown;
+    await act(async () => {
+      refusal = await result.current[0]({ value: "fresh" } as never).catch((error: unknown) => error);
+    });
 
+    // The envelope is the server's answer, typed so a caller tells it from a lost one.
+    expect(refusal).toBeInstanceOf(AuthoredEnvelopeError);
+    expect(refusal).toMatchObject({ message: "Permission denied", code: "DENIED" });
     expect(invalidationMock.resourceInvalidations).toEqual([]);
     expect(invalidationMock.queryInvalidations).toBe(0);
+  });
+
+  test("an envelope refusal is typed with its code; a message alone has none; a caller's own error is kept", () => {
+    expect(errorFromAuthoredEnvelope({ error_code: "BAD_MESSAGE" })).toMatchObject({ message: "BAD_MESSAGE", code: "BAD_MESSAGE" });
+    const message = errorFromAuthoredEnvelope("Message not sent.");
+    expect(message).toBeInstanceOf(AuthoredEnvelopeError);
+    expect(message).toMatchObject({ message: "Message not sent.", code: null });
+    const own = new TypeError("bad data");
+    expect(errorFromAuthoredEnvelope(own)).toBe(own);
+    expect(errorFromAuthoredEnvelope({ error: "ignored", error_code: null })).toBeNull();
   });
 });
 

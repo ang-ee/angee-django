@@ -11,6 +11,7 @@ import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { useUiT } from "../../i18n";
 import { cn } from "../../lib/cn";
 import { formatNumber } from "../../lib/format-number";
+import { useRootTokens } from "../../lib/use-root-tokens";
 import { formatSize, isImageMime, normaliseMime } from "../../preview/model";
 import { formatDayLabel, type DateFormatValue } from "../../widgets/date-format";
 import { Button } from "../../ui/button";
@@ -410,8 +411,14 @@ export interface MessageHtmlFrameProps {
  * Untrusted message HTML in a sandboxed document: no scripts and no same origin;
  * links open in a new tab with no opener and no referrer; a content security policy
  * admits only inline styles and images from data, blob and the inline URLs' origins.
- * Remote images stay blocked behind the frame's "Load remote images" control. The one
- * sandbox for message HTML, shared by message parts and email previews.
+ * Remote images stay blocked behind the frame's "Load remote images" control. The
+ * framed document carries the frame's title, and its body is a tab stop of its own,
+ * whether or not the mail scrolls, before the mail's first link. While the body or
+ * anything in the mail has keyboard focus, the document draws a ring on the frame's
+ * edges in the theme's `--border-focus`, read when the document is assembled: a theme,
+ * brand or light/dark switch reloads an open mail, which returns to its top and shows
+ * no ring until the next Tab. The one sandbox for message HTML, shared by message
+ * parts and email previews.
  * @kind fragment
  */
 export function MessageHtmlFrame({
@@ -423,6 +430,7 @@ export function MessageHtmlFrame({
   className,
 }: MessageHtmlFrameProps): ReactElement {
   const t = useUiT();
+  const ringColor = useRootTokens(RING_COLOR_TOKENS)["--border-focus"];
   const [loadRemote, setLoadRemote] = useState(remoteImages);
   const blocked = !loadRemote && REMOTE_IMAGE.test(html);
   return (
@@ -439,7 +447,7 @@ export function MessageHtmlFrame({
         title={title}
         sandbox="allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
-        srcDoc={sandboxedMessageHtml(html, inlineUrls ?? {}, lang, loadRemote)}
+        srcDoc={sandboxedMessageHtml(html, title, inlineUrls ?? {}, lang, loadRemote, ringColor)}
         className="block min-h-0 w-full flex-1 bg-white"
       />
     </div>
@@ -450,6 +458,48 @@ const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
 const DATA_IMAGE_URL = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]*$/i;
 /** An image the body would fetch from another host: an image attribute or a CSS `url()` naming http(s) or `//`. */
 const REMOTE_IMAGE = /\b(?:src|srcset|background|poster)\s*=\s*["']?\s*(?:https?:)?\/\/|url\(\s*["']?\s*(?:https?:)?\/\//i;
+/** The page token the framed document's focus ring is drawn in: the theme's solid focus color, which the controls' focus border reads. */
+const RING_COLOR_TOKENS = ["--border-focus"] as const;
+/** The framed document's own accent: its links, and its focus ring when the theme's color cannot be used. */
+const FRAME_ACCENT = "#2457c5";
+/**
+ * What the framed style refuses even where the browser parses it as a color: a substitution
+ * (`var(`, `env(`, `attr(`) the framed document cannot resolve, a comment that would swallow
+ * the rest of the style, `<`, a way out of the `<style>`, and an escape (`\72 ed` is `red`).
+ */
+const UNFRAMED_COLOR = /(?:var|env|attr)\(|\/\*|[<\\]/i;
+
+/**
+ * `color` when the browser parses it as a color the framed style can hold, else the document's
+ * own accent; with no `CSS.supports` to ask, the accent. A color with an unclosed function
+ * (`rgb(1 2 3`) is refused although the browser parses it, closing the function itself: written
+ * into the framed rule, its open bracket would swallow the rest of the rule.
+ */
+function framedRingColor(color: string): string {
+  const parsed = color !== "" && typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("color", color);
+  const closed = color.split("(").length === color.split(")").length;
+  return parsed && closed && !UNFRAMED_COLOR.test(color) ? color : FRAME_ACCENT;
+}
+
+/**
+ * While the body or anything in the mail has keyboard focus: no outline on the body, and a
+ * ring fixed to the frame's edges, so it stays while the mail scrolls, on the root's own
+ * `::after`, which no mail CSS on `body` or its pseudo-elements reaches. The rule sits in an
+ * unnamed cascade layer, whose important declarations outrank every unlayered one of the
+ * mail, and starts from `all: initial`, so nothing the mail sets on the pseudo-element stays.
+ * The ring has three tones, 2px each: `color` outside, then a black line, then a white one.
+ * Whatever the mail paints behind it and whatever `color` is, the black or the white line
+ * holds contrast against it (at least 4.6:1 on any grey), so the ring needs nothing of the
+ * theme's color but to show it.
+ */
+function focusRingStyle(color: string): string {
+  return "body:focus-visible{outline:none!important}"
+    + "@layer{html:is(:focus-visible,:has(:focus-visible))::after{all:initial!important;content:\"\"!important;"
+    + "position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;"
+    + "z-index:2147483647!important;pointer-events:none!important;"
+    + `border:2px solid ${color}!important;`
+    + "box-shadow:inset 0 0 0 2px #000,inset 0 0 0 4px #fff!important}}";
+}
 
 /** A same-origin path, an http(s) URL, an image data URL or a blob URL; anything else is dropped. */
 function safeInlineUrl(url: string): string | undefined {
@@ -470,9 +520,11 @@ function inlineImageOrigin(url: string): string | undefined {
 
 function sandboxedMessageHtml(
   html: string,
+  title: string,
   inlineUrls: Readonly<Record<string, string>>,
   lang: string | undefined,
   remoteImages: boolean,
+  ringColor: string,
 ): string {
   let body = html;
   const origins = new Set<string>();
@@ -481,15 +533,16 @@ function sandboxedMessageHtml(
     if (!url) continue;
     const origin = inlineImageOrigin(url);
     if (origin) origins.add(origin);
-    body = body.replaceAll(`cid:${cid}`, escapeHtmlAttribute(url));
+    body = body.replaceAll(`cid:${cid}`, escapeHtml(url));
   }
   const imageSources = ["data:", "blob:", ...(remoteImages ? ["http:", "https:"] : [...origins].sort())].join(" ");
   const language = lang && LANGUAGE_TAG.test(lang) ? ` lang="${lang}"` : "";
-  return `<!doctype html><html${language}><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${imageSources}; style-src 'unsafe-inline'"><meta name="referrer" content="no-referrer"><base target="_blank"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:#2457c5}</style></head><body>${body}</body></html>`;
+  return `<!doctype html><html${language}><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${imageSources}; style-src 'unsafe-inline'"><meta name="referrer" content="no-referrer"><base target="_blank"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light}body{box-sizing:border-box;margin:0;padding:12px;max-width:100%;overflow-wrap:anywhere;font:14px/1.5 system-ui,sans-serif;color:#172033;background:#fff}img,table,pre{max-width:100%}img{height:auto}pre{white-space:pre-wrap}a{color:${FRAME_ACCENT}}${focusRingStyle(framedRingColor(ringColor))}</style></head><body tabindex="0">${body}</body></html>`;
 }
 
-function escapeHtmlAttribute(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+/** `value` as an attribute value, in either kind of quotes, or as text of the assembled document. */
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("'", "&#39;").replaceAll("<", "&lt;");
 }
 
 function renderMessagePartFile(
@@ -781,7 +834,8 @@ export interface MessageActionsProps extends Omit<HTMLAttributes<HTMLDivElement>
 }
 
 /** A presentational action row under a message (copy, reply, edit, …). Reveals on
- *  hover/focus of the enclosing `group` message and aligns per `align`. Transport-
+ *  hover/focus of the enclosing `group` message, and always shows where the primary
+ *  pointer is coarse (touch), which never hovers; aligns per `align`. Transport-
  *  agnostic: the consumer composes plain buttons or a binding's action controls inside
  *  it.
  * @kind fragment
@@ -790,7 +844,7 @@ export function MessageActions({ align = "start", className, children, ...props 
   return (
     <div
       className={cn(
-        "mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        "mt-1 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100",
         align === "end" ? "justify-end" : "justify-start",
         className,
       )}

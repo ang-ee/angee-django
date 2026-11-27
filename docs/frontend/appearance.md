@@ -36,8 +36,33 @@ before the application entry loads. Vite bundles the React-free
 [`bootstrapAppearance`](../../packages/ui/src/theme/runtime.mjs) owner; bootstrap
 and React share its token validation, cache protocol and root application.
 
-A signed-in user's `iam.User.preferences.appearance` fields override the host
-independently. The stored document contains stable IDs and versioned inputs:
+One installed addon may supply the host theme's options at run time, through the
+install-one `hostAppearance` manifest key
+([`HostAppearanceSource`](../../packages/app/src/define-addon.ts)). `createApp` asks
+it about the host theme: the selected app's, else the build's, locked or not. A
+theme whose options decline the source (`acceptsHostAppearanceSource: false`, as
+Fyltr and Ledger state) is not put to it: the source is asked about no theme and no
+build options, and `createApp` wears none of its answer, as it wears none for a
+theme without options, so the source never holds the first paint or the boot cache
+for either, and a declining theme wears the build's options when it is the build's
+own theme, else its own defaults. The
+options it answers replace the build's options for that theme; when it answers
+none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
+is that source. While the source's first read is on its way, the provider keeps
+each person's first paint, and the boot cache, where they wear the host's
+options: a person following the app default, or a locked app. A person's own saved
+theme or customization is painted at once. After the first paint, every choice
+applies at once, a draft's included; a return to the app default shows the build's
+options until the source answers. A failure or a pause releases the hold onto the
+build's options. Pages render meanwhile under that paint: on a device's first
+visit it is the build's appearance, which changes once when the answer arrives;
+on later visits it is the cached answer, so nothing changes. Every page inside the app wears the answer where it draws from
+tokens, signed in or out; a standalone web form page (`/forms/*`) keeps the build's
+look.
+
+A signed-in user's `iam.User.preferences.appearance` fields override the host,
+run-time options included, independently. The stored document contains stable
+IDs and versioned inputs:
 
 ```json
 {
@@ -129,7 +154,13 @@ accepts bounded inputs for identity, page and panel surfaces, app-rail chrome,
 the four semantic status roles, typography, corners, control density, elevation
 and logo treatment. The generator derives semantic tokens for light and dark
 together, including readable foregrounds, borders, interaction states and the
-complete solid/soft/surface status matrix. Appearance stores the inputs in the
+complete solid/soft/surface status matrix. The link and each tone's text read at
+4.5:1 on their own fills and on every surface of their scheme (canvas, sheets,
+popover and inset) wherever any colour can, and come nearest it where none can. A
+surface an input leaves at its default counts as the theme's definition states it,
+else as the defaults derive it, with a 1% margin. A text is worked out only when its
+own input changes, so changing only surfaces keeps the theme's own link and tone
+texts. Appearance stores the inputs in the
 user's preference and rebuilds the token overrides whenever the generator
 changes.
 
@@ -140,9 +171,11 @@ appearance choice. A theme preference therefore stores a small stable name
 rather than image data or a remote asset URL.
 
 An unchanged field emits no override. This keeps the selected addon's authored
-tokens authoritative and makes **Restore theme defaults** exact. Customizing
-while following the app default pins the current base theme in the user's
-preference so a later host-default change cannot reinterpret those options.
+tokens authoritative and makes **Restore theme defaults** exact. The editor
+starts from the options the person wears: their own, else the app default's.
+Customizing while following the app default therefore keeps the default's other
+fields and pins the current base theme in the user's preference so a later
+host-default change cannot reinterpret those options.
 
 Theme authors opt into the shared customization contract from the pure headless
 entry and attach the matching shared editor in the browser contribution:
@@ -186,6 +219,14 @@ defineThemeContribution({
   optionsEditor: ThemeCustomizationEditor,
 });
 ```
+
+A customizable theme takes the answer of the run-time host appearance source
+([host and user precedence](#host-and-user-precedence)) unless it declines it, as a
+theme whose palette is its identity does:
+`createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`.
+The flag belongs to the options definition, not to the options envelope, so it
+changes no options version and no saved customization; the build's stated
+options and a person's own still apply.
 
 ## Authoring a theme addon
 
@@ -255,13 +296,32 @@ It also includes typography weights (integer 100–900), selected font sizes
 (integer 10–40px) and line heights (integer 12–56px), chart series and surface
 colours, and motion durations (integer 0–1000ms). Easing is limited to the
 standard CSS keywords or `cubic-bezier(...)` with four finite numbers; chart
-colours retain the general safe token-value bounds above.
+colours retain the general safe token-value bounds above. An elevation
+(`--elevation-*`), `--ring` and `--ring-danger` are composed into one
+`box-shadow`, so the validator holds each to a list of shadows in these forms
+only, each layer matched whole: an optional leading or trailing `inset`; two to
+four lengths, each `0` or a number in `px`, `rem` or `em` (the blur not
+negative); and an optional colour before or after them: a hex value,
+`transparent`, `currentcolor`, `rgb()`/`rgba()` of three numbers and an optional
+alpha (`r g b / a` or the comma form), `rgb(from <hex> r g b / a)`, or
+`color-mix(in srgb|oklab|oklch, <hex> <percentage>, transparent)`.
+Anything else is refused, `none`, `0`, a named colour, `calc()`, another unit or
+a `var()` included (an undefined variable would void the ring with the shadow);
+"no elevation" is `0 0 #0000`.
 The type scale is authored in pixels by design, and the theme validator enforces
 those bounds.
 
 Put complex authored design in a stylesheet listed by the definition. Every
 visual selector in that file must be gated by its theme ID, and asset paths must
-be local and relative:
+be local and relative. A theme stylesheet never sets an elevation: elevations are
+definition tokens the validator checks. The composer refuses a theme stylesheet
+whose text, comments and strings included, declares an `--elevation-*` property,
+names one in `@property`, or holds a backslash (no theme stylesheet needs an
+escape), naming the theme. That is what the contract covers, a theme's
+definition and its stylesheet; an elevation set anywhere else (an addon's own
+stylesheet, the host's entry CSS, an inline style, an arbitrary-property class)
+is not checked, and neither is a rule of your own that removes a control's
+shadow outright (`box-shadow: none`), which removes its ring with it:
 
 ```js
 stylesheets: ["./theme.css"]
