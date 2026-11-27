@@ -374,9 +374,9 @@ live in code docstrings.
     `ChannelManager.system_mail_configured()` answers whether system mail can be
     sent, as the backend the registry binds to the system key decides.
     `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
-    recipient rule, which reads nothing. `carries_address(address)`
+    recipient rule, which reads nothing. `require_carried(address, key=...)`
     (`angee.messaging.email`) is the one rule for what the transport can carry,
-    and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
+    refusing `cannot_carry`. With `DEBUG` off, an
     error report hides every local of the system write's frames, and of the
     shared writer's, the delivery path's and the operator's retry and
     acknowledge frames for any mail. A transport's error never leaves the delivery task: when recording its
@@ -492,9 +492,25 @@ live in code docstrings.
   system channel's message is refused whole, settled failed with "A recipient of
   this message no longer names the address it was written for.", so system mail
   is exact or not sent, and the release does not hand it off again; a person's
-  row is mailed at the handle's value with a warning naming the row. An address the
-  transport cannot carry as given (`carries_address`) records nothing and is
-  mailed at the handle's value, as before. `HandleManager.find_identity_owners`
+  row is mailed at the handle's value with a warning naming the row; a message
+  whose channel is gone is refused the same way. `require_carried` now also
+  refuses a domain that is no host name in its IDNA form, or longer than
+  `Handle.DOMAIN_NAME_LIMIT` (253 characters), and a person's compose applies
+  it whole, as system mail and the sender rule do: a person's recipient, a
+  system mail's and a sender the transport cannot carry are refused
+  `cannot_carry` ("… its part before the @ is outside ASCII." or "… its domain
+  is not a host name.") before anything is written. Only an address no compose
+  was handed fails at delivery with that reason: a recipient a reply inherits
+  from its parent, the kept handle a person's address was merged into, and a
+  row written before the rule. `carries_address` is removed: `require_carried`
+  is the one rule. Before, a person's compose to an address whose part before the `@` is outside
+  ASCII was written and its delivery refused; of the 19 non-ASCII spaces right
+  after the `@`, 14 reached the wire as a mailbox with a space in it, one
+  (U+1680) failed at delivery with "The email could not be rendered.", and 4
+  were refused at compose as `invalid`; a space at the end of an entry was, and
+  is, stripped by the recipient rule and the backend, and the mail goes to the
+  address it pads.
+  `HandleManager.find_identity_owners`
   returns the row owning each identity before its merge redirect;
   `find_identities` is it resolved to each survivor. From is written as the
   channel configures it (`AnymailEmailChannelBackend.outbound_sender`: its
