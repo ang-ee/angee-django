@@ -587,13 +587,12 @@ database, and these commands do not create one.
 
 [CI](../.github/workflows/ci.yml) calls
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
-pushes to `main`. A pull request's merge gate is the static tier, the SQLite tests
-its changed paths reach, the PostgreSQL contracts they reach with the examples
-profile's planner gate, the packages and the composed stack with its smoke. A
-pull request's run tests its merge commit, the tree `main` gets, so a push to
-`main` runs the static tier and what a pull request runs in part: the whole SQLite
-suite, which also catches what a pull request's selection missed, and the whole
-PostgreSQL lane. The packages and the composed stack hold while `main` has not moved
+pushes to `main`. A pull request's merge gate includes the static tier, the SQLite
+tests, PostgreSQL contracts and addon hosts its changed paths reach, the
+packages, and the composed stack with its smoke. A pull request tests its
+merge commit, the tree `main` gets. A push to `main` runs the static tier,
+the whole SQLite suite, every addon host, and the whole PostgreSQL lane.
+The packages and the composed stack hold while `main` has not moved
 since the pull request's run started; merge only then, or run it again. Both events
 also run CI's `guards` job: gitleaks over the whole history, and no tracked
 `.work/` path. A new push to a pull request cancels the run it supersedes, and a new
@@ -609,9 +608,9 @@ repositories queue a pull request's jobs behind each other's. The organization's
 plan allows 20 GitHub-hosted jobs concurrently. The framework workflow can
 expand to 20 jobs for a full-fallback pull request, with at most 17 eligible to
 run at once. The selector precedes the test shards and the two aggregate checks
-wait for their jobs. A narrower change can use fewer PostgreSQL groups or skip
-the SQLite and addon-host jobs entirely. A private consumer can set
-`CI_RUNS_ON` to its self-hosted runners.
+wait for their jobs. The shared SQLite, PostgreSQL, and addon-host jobs skip
+empty selections. A narrower PostgreSQL selection can use fewer groups. A
+private consumer can set `CI_RUNS_ON` to its self-hosted runners.
 The current tiers are:
 
 - **Static** (the `python-quality` job): Ruff over the source tree, mypy over
@@ -646,8 +645,8 @@ The current tiers are:
   GraphQL documents and fixture data can broaden the legacy shared host.
   Addon frontend inputs reach their owning Python contracts, reverse consumers
   and declared shared readers.
-  Changes limited to prose or schema-independent frontend packages can leave
-  SQLite empty. The PostgreSQL planner gate still runs.
+  Changes limited to prose, schema-independent frontend packages or tests in
+  an isolated addon can leave both shared SQLite and PostgreSQL empty.
 - **PostgreSQL:** on `main`, in six groups of its own beside the
   SQLite shards, assigned by pytest-split's `least_duration` algorithm over the
   [PostgreSQL timings](../.test_durations_postgres) and with the shards' 60-minute
@@ -662,12 +661,13 @@ The current tiers are:
   in `template1` before any test database is created. Its server runs with
   `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. A pull request runs the same
-  job over the selection's entries its changed paths reach and
-  [`test_composed_examples.py`](../tests/test_composed_examples.py), in as many
-  groups as their stored time needs
-  ([`postgres_selection.py`](../scripts/postgres_selection.py)), so a PostgreSQL-only
-  contract the change can break fails before merge and the member planner-memory
-  gate catches a permission change's planning cost. A PostgreSQL-only test runs in
+  job over the selection's entries its changed paths reach, in as many groups
+  as their stored time needs ([`postgres_selection.py`](../scripts/postgres_selection.py)).
+  Changes to installed addon inputs, permissions, and the profile's named test
+  modules reach the planner profile in [`test_composed_examples.py`](../tests/test_composed_examples.py).
+  The test harness writes its composed host directly,
+  so project templates reach the tests that render them. An empty PostgreSQL
+  selection skips the job. A PostgreSQL-only test runs in
   CI only once the selection lists it. The `uv` job passes only when the static
   tier, the selection, every SQLite shard that started, every PostgreSQL group and
   the addon hosts pass, so callers keep one check name.

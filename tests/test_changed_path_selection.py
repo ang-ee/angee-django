@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from scripts.changed_path_selection import AppGraph, addon_graph, changed_paths, collected, isolated_suites, select
+from scripts.postgres_selection import entries, groups, kept
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/changed_path_selection.py"
@@ -31,16 +32,25 @@ def framework():
     return graph, tuple(paths), shared
 
 
-def test_isolated_addon_tests_exclude_shared_suites(framework) -> None:
+@pytest.mark.parametrize(("changes", "expected_hosts"), [
+    (["src/angee/uom/tests/test_uom.py"], ("angee.uom",)),
+    (["docs/checks.md"], ()),
+    ([], ()),
+])
+def test_changes_without_shared_inputs_exclude_shared_suites(framework, changes, expected_hosts) -> None:
     graph, paths, profiles = framework
     suites = isolated_suites(ROOT, graph.owners)
     assert list(suites.values()) == ["angee.uom"]
     shared, hosts = select(
-        ROOT, [Path("src/angee/uom/tests/test_uom.py")], paths,
+        ROOT, list(map(Path, changes)), paths,
         graph, isolated=suites, legacy=True, shared_tests=profiles,
     )
     assert shared.mode == "empty"
-    assert hosts.paths == ("angee.uom",)
+    assert hosts.paths == expected_hosts
+    postgres = entries()
+    chosen = kept(postgres, shared.paths)
+    assert chosen == []
+    assert groups(postgres, chosen, {}) == []
 
 
 def test_legacy_template_readers_and_profile_references_survive(framework) -> None:
@@ -50,6 +60,7 @@ def test_legacy_template_readers_and_profile_references_survive(framework) -> No
     assert {
         "tests/test_stack_templates.py", "tests/test_addon_templates.py", "tests/test_host_build.py",
     } <= set(shared.paths)
+    assert "tests/test_composed_examples.py" not in kept(entries(), shared.paths)
     profile = Path("tests/native_intake_capture.py")
     shared, _ = select(ROOT, [profile], paths, graph, legacy=True, shared_tests=profiles)
     assert "tests/test_composed_intake.py" in shared.paths
@@ -72,6 +83,21 @@ def test_calendar_change_reaches_global_composition_readers(framework) -> None:
         "tests/test_base_checks.py", "tests/test_composition.py", "tests/test_fields.py",
         "tests/test_merge.py", "tests/test_model_names.py", "tests/test_resource_fixtures.py",
     } <= set(shared.paths)
+
+
+@pytest.mark.parametrize(("change", "mode"), [
+    ("src/angee/calendar/models.py", "selected"),
+    ("src/angee/storage/permissions.zed", "full"),
+    ("tests/native_graphql_document_budgets.py", "selected"),
+    ("examples/src/example/notes/tests/test_workflow_steps.py", "selected"),
+])
+def test_postgres_examples_profile_runs_for_its_inputs(framework, change: str, mode: str) -> None:
+    graph, paths, profiles = framework
+    shared, _ = select(ROOT, [Path(change)], paths, graph, legacy=True, shared_tests=profiles)
+    assert shared.mode == mode
+    postgres = entries()
+    chosen = postgres if shared.mode == "full" else kept(postgres, shared.paths)
+    assert "tests/test_composed_examples.py" in chosen
 
 
 @pytest.mark.parametrize("path", [

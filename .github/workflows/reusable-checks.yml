@@ -224,7 +224,7 @@ jobs:
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/${{ strategy.job-total }}
     needs: select
-    if: ${{ inputs.uv-enabled }}
+    if: ${{ inputs.uv-enabled && needs.select.outputs.postgres-groups != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
@@ -279,9 +279,8 @@ jobs:
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         # The selection is .github/postgres-selection.txt; a pull request runs the
-        # entries its changed paths reach and the examples profile, whose member
-        # planner-memory gate budgets what every permission change adds to the
-        # console's reads.
+        # entries its changed paths reach. The examples profile's planner-memory
+        # gate follows its declared inputs, including changes to permissions.
         env:
           TESTS: ${{ needs.select.outputs.postgres-tests }}
         run: |
@@ -358,10 +357,14 @@ jobs:
           # The shards are skipped where select turned them off: the changed paths reach
           # no Python test.
           test "${{ needs.uv-shard.result }}" = success || {
-            test "${{ needs.select.outputs.sqlite-mode }}" = empty && test "${{ needs.uv-shard.result }}" = skipped; }
-          test "${{ needs.uv-postgres.result }}" = success
+            test "${{ needs.select.outputs.sqlite-mode }}" = empty && test "${{ needs.uv-shard.result }}" = skipped
+          } || exit 1
+          test "${{ needs.uv-postgres.result }}" = success || {
+            test "${{ needs.select.outputs.postgres-groups }}" = '[]' && test "${{ needs.uv-postgres.result }}" = skipped
+          } || exit 1
           test "${{ needs.addon-hosts.result }}" = success || {
-            test "${{ needs.select.outputs.addon-host-count }}" = 0 && test "${{ needs.addon-hosts.result }}" = skipped; }
+            test "${{ needs.select.outputs.addon-host-count }}" = 0 && test "${{ needs.addon-hosts.result }}" = skipped
+          } || exit 1
 
   pnpm:
     if: ${{ inputs.pnpm-enabled && inputs.pr-checks-enabled }}
