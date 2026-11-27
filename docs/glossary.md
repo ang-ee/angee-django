@@ -520,6 +520,11 @@ sites still open for a ruling, where it picks the handle a provider's alias land
 on: a directory adoption's handle that found the person, and a claimant's email
 handle.
 
+**Domain key** — an organization's domain in the one spelling the domain rule
+gives (`Handle.normalize_email_domain`), stored as `Organization.domain_key`
+beside the domain as typed; `Organization.domain_filter` finds an organization
+by any spelling of its domain through it. Several organizations may share one.
+
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.
 

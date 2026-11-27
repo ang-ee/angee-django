@@ -362,17 +362,24 @@ looked up; that key still picks the handle an alias lands on at two sites open
 for a ruling, a directory adoption's through-handle and a claimant's email handle
 (`PartyManager.claimant_as_system`). On other platforms, a spelling is a
 handle, as before. That is
-one rule, `Handle.normalize_email_domain`, for whoever compares a domain. The
-organization-domain suggestion (`PartyManager.suggest_for`) reads it on both
-sides, but `Organization.domain` is stored as typed, so it first finds
-organizations whose domain is the handle's in the rule's spelling, its punycode,
-or the address's own spelling, ASCII letter case aside: from `ada@bücher.example`
-or `ada@xn--bcher-kva.example` it finds `bücher.example` and
-`xn--bcher-kva.example`, and from `ada@straße.example` it finds `straße.example`
-and `strasse.example`. It does not find an organization typed in another
-spelling the rule joins (`straße.example` from `ada@strasse.example`, an NFD or
-full-width spelling from the plain one), since organizations store no domain
-key. A handle stores
+one rule, `Handle.normalize_email_domain`, for whoever compares a domain. An
+organization keeps its domain as typed and, beside it, its domain key
+(`Organization.domain_key`): the domain in the rule's spelling, written by the
+organization's save whenever the domain is, and `""` for no domain. Several
+organizations may share one. `Organization.domain_filter(domain)` finds the
+organizations whose domain is `domain` in any spelling the rule joins, by that
+key's index: from `bücher.example` it finds one typed `xn--bcher-kva.example`,
+`BÜCHER.example` or in NFD, and from `strasse.example` one typed
+`straße.example`. The organization-domain suggestion (`PartyManager.suggest_for`)
+and every reader asks it; nobody compares `Organization.domain` itself. History
+versions the key beside the domain, as a handle's keys, and a revert restoring a
+domain keys it again. A queryset `update` writes no key: the
+`renormalize_organization_domains` repair
+(`PartyManager.renormalize_organization_domains`), which every provision runs,
+reads every organization's domain and key in batches and saves again, under its
+row lock, each one whose key is not the rule's, so a row stored before the column
+existed, a domain an `update` wrote and a changed rule all reach the key without
+a rule version. A handle stores
 the keys its rule gave when it was last saved (`spelling_key`,
 `normalized_value`) and, beside them, the version the rule had then
 (`normalized_version`; 0 for a row stored before the rule had one). The
