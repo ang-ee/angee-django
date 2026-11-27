@@ -392,7 +392,9 @@ a sender is read; the message's source keeps its `From` header. See
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
 addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+(`Recipient.address`, empty for one no caller handed as an address), which the message
+is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
@@ -543,7 +545,9 @@ evidence gates.
 
 **Spelling key** — what makes two spellings one handle (`Handle.spelling_key_of`):
 for an email address, the address lower-cased (not case-folded) with its domain
-in the one spelling the email backend sends it in (IDNA 2003); none for a value
+in one spelling, each label read through IDNA 2003 into Unicode (the
+domain-spelling rule, `Handle.normalize_email_domain`), so the spellings the
+email backend sends as one domain are one; none for a value
 with no `@`, which is no address, nor on any other platform, where the value
 itself is the address. A live email handle is unique by it.
 
@@ -557,6 +561,11 @@ may merge. Which handle an address lands on is the spelling key's, except at two
 sites still open for a ruling, where it picks the handle a provider's alias lands
 on: a directory adoption's handle that found the person, and a claimant's email
 handle.
+
+**Domain key** — an organization's domain in the one spelling the domain-spelling rule
+gives (`Handle.normalize_email_domain`), stored as `Organization.domain_key`
+beside the domain as typed; `Organization.domain_filter` finds an organization
+by any spelling of its domain through it. Several organizations may share one.
 
 **Circle** — one user's private, Dunbar-sized organizing tree. It never gates
 visibility.

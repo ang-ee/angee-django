@@ -26,6 +26,7 @@ import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import datetime
+from functools import cache
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -81,6 +82,7 @@ from angee.parties.managers import (
     DirectoryManager,
     FolderManager,
     HandleManager,
+    OrganizationManager,
     PartyManager,
     PartyStatementQuerySet,
     RelationshipManager,
@@ -102,6 +104,18 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
 _HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
+
+
+@cache
+def _local_part_character(character: str) -> str:
+    """One character of an email address's local part as :meth:`Handle.normalize_local_part` compares it.
+
+    Its lower case, unless it is a non-ASCII character whose lower case is ASCII or of another length: that one
+    is kept as it is. Computed from ``str.lower`` per character, so the set it keeps moves with Unicode.
+    """
+
+    lowered = character.lower()
+    return lowered if character.isascii() or (len(lowered) == 1 and not lowered.isascii()) else character
 """Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
 
 
@@ -617,12 +631,11 @@ class Party(
             if all(addresses.identity_key(row) != proposed_key for row in current["addresses"]):
                 return True
         link_id = proposed["handle"]["statement_id"]
-        statement_model = self.statements.model
-        confirmed = (statement_model.StatementRank.PREFERRED, statement_model.StatementSnak.VALUE)
+        confirmed = self.statements.model.CONFIRMED_STANCE
         return bool(
             link_id
             and any(
-                row["id"] == link_id and (row["rank"], row["snak"]) != confirmed
+                row["id"] == link_id and any(row[name] != value for name, value in confirmed.items())
                 for row in current["handles"]
             )
         )
@@ -853,8 +866,17 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         sqid_prefix="ogs_",
     )
 
+    objects = OrganizationManager()
+
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
+    """``domain`` in the domain-spelling rule's one spelling (``Handle.normalize_email_domain``); ``""`` if none.
+
+    What :meth:`domain_filter` compares, through its one index (``Meta.indexes``). Written by :meth:`save` from
+    ``domain``, so history versions it beside the domain, as a handle's keys; the provision repair
+    (``OrganizationManager.renormalize_domains``) writes it alone on a row a save did not key.
+    """
 
     class Meta:
         """Django model options for the organization child model."""
@@ -862,6 +884,43 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/organization"
+        indexes = (
+            # One btree for domain_filter's equality: a field's db_index adds a pattern-ops twin and history copies.
+            models.Index(fields=("domain_key",), name="%(app_label)s_org_domain_key"),
+        )
+
+    @classmethod
+    def domain_filter(cls, domain: str) -> models.Q:
+        """The organizations whose domain is ``domain`` in any spelling the domain-spelling rule joins: its letter
+        case, a punycode or Unicode label, and the spellings IDNA 2003 sends as one (``Handle.normalize_email_domain``).
+
+        One indexed comparison of :attr:`domain_key`; an empty ``domain`` names no organization. Several
+        organizations may share a domain.
+        """
+
+        key = Handle.normalize_email_domain(domain)
+        return models.Q(domain_key=key) if key else models.Q(pk__in=[])
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Persist the organization with :attr:`domain_key` computed from the domain it stores.
+
+        An insert, a full save, and a partial save naming ``domain`` compute the key from ``domain`` and write it
+        beside it; a history revert restoring the domain keys it again. A partial save naming the key without the
+        domain writes the key of the domain the row stores, read first, never of one changed in memory and not
+        saved. A partial save of other fields leaves the key. The bulk paths write no key: a queryset ``update``
+        of the domain and ``bulk_update`` naming it leave the key as it was until the provision repair keys it
+        (``bulk_create`` cannot insert an organization, a multi-table child).
+        """
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is None or "domain" in update_fields:
+            self.domain_key = Handle.normalize_email_domain(self.domain)
+            if update_fields is not None and "domain_key" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "domain_key"]
+        elif "domain_key" in update_fields:
+            stored = type(self)._base_manager.filter(pk=self.pk).values_list("domain", flat=True).first()
+            self.domain_key = Handle.normalize_email_domain(self.domain if stored is None else stored)
+        super().save(*args, **kwargs)
 
 
 class Handle(
@@ -1096,32 +1155,68 @@ class Handle(
             return parsed.confidence >= 1.0
         return cls.identifies_account(parsed.platform, parsed.external_id)
 
+    ADDRESS_WHITESPACE: ClassVar[str] = "".join(character for character in map(chr, range(128)) if character.isspace())
+    """What an email address is trimmed of at either end: the ASCII characters ``str.isspace`` holds, and no other.
+
+    A non-ASCII space (a no-break space, an ideographic space) is kept: an address that begins with one is no
+    address (:meth:`is_email_address`), and its spelling key keeps it, so it is never another address's handle.
+    """
+
     @classmethod
     def spelling_key_of(cls, platform: str, value: str) -> str:
-        """Return what makes two spellings one email handle: the address trimmed and lower-cased, its domain read by
+        """Return what makes two spellings one email handle: the address trimmed of ASCII whitespace
+        (:attr:`ADDRESS_WHITESPACE`), its local part in one case (:meth:`normalize_local_part`) and its domain read by
         :meth:`normalize_email_domain`; ``""`` on every other platform, where ``value`` itself is the address, and for
         a value with no ``@``, which is no address and so has no other spelling.
 
-        ``lower()``, not ``casefold()``: ``Straße@`` and ``STRASSE@`` stay two
-        addresses. A provider's alias (a Gmail dot or plus-tag) is an address of
-        its own, which only the person-matching key (:meth:`normalize_value`)
-        groups. A live email handle is unique by it (``uq_handle_spelling_key``).
-        The key is stored: changing what this returns means bumping
+        A provider's alias (a Gmail dot or plus-tag) is an address of its own,
+        which only the person-matching key (:meth:`normalize_value`) groups. A
+        live email handle is unique by it (``uq_handle_spelling_key``). The key is
+        stored: changing what this returns means bumping
         :attr:`NORMALIZATION_VERSION`.
         """
 
         if platform != cls.Platform.EMAIL:
             return ""
-        local, at, domain = (value or "").strip().lower().rpartition("@")
-        return f"{local}@{cls.normalize_email_domain(domain)}" if at else ""
+        local, at, domain = (value or "").strip(cls.ADDRESS_WHITESPACE).rpartition("@")
+        return f"{cls.normalize_local_part(local)}@{cls.normalize_email_domain(domain)}" if at else ""
+
+    @staticmethod
+    def normalize_local_part(local: str) -> str:
+        """Return an email address's local part in the one case it compares by: no non-ASCII character may turn into
+        a different mailbox's ASCII letter.
+
+        Every character is lower-cased (``JOSÉ@`` and ``josé@``, ``MÜLLER@`` and ``müller@`` are one mailbox each)
+        but a non-ASCII character whose lower case would be ASCII or of another length, which is kept as typed: the
+        Kelvin sign (U+212A) would become ``k``, so the Kelvin sign followed by ``ate@`` would be ``kate@``'s handle,
+        and ``İ`` (U+0130) would become ``i`` and a combining dot. The kept characters are computed from ``str.lower``
+        per character, never listed, so a later Unicode version moves them with it; a test pins today's two. A sign
+        that lower-cases onto another letter outside ASCII still folds (the Angstrom sign onto ``å``, the Ohm sign onto
+        ``ω``). ``lower()``, not ``casefold()``: ``Straße@`` and ``STRASSE@`` stay two addresses. The spelling key
+        (:meth:`spelling_key_of`) and through it the person-matching key (:meth:`normalize_value`) and
+        :meth:`is_spelling_of` read a local part only through it.
+        """
+
+        return "".join(map(_local_part_character, local))
+
+    @classmethod
+    def domain_of(cls, platform: str, value: str) -> str:
+        """Return an email address's domain in the one spelling the domain-spelling rule gives: its spelling key's.
+
+        ``""`` where :meth:`spelling_key_of` gives none: off email, and for a value
+        with no ``@``. What a caller compares an address's domain by, never a split of
+        a stored key of its own.
+        """
+
+        return cls.spelling_key_of(platform, value).rpartition("@")[2]
 
     @classmethod
     def normalize_value(cls, platform: str, value: str) -> str:
         """Return the person-matching key for one platform/value pair: what groups the handles of probably one person.
 
-        Every platform strips surrounding whitespace and lowercases. An email
-        address starts from its spelling key (:meth:`spelling_key_of`, its domain
-        in one spelling) and additionally collapses dots and plus-tags in Gmail
+        Every other platform strips surrounding whitespace and lowercases. An email
+        address is its spelling key (:meth:`spelling_key_of`: its local part in one
+        case, its domain in one spelling) and additionally collapses dots and plus-tags in Gmail
         local parts for both ``gmail.com`` and ``googlemail.com`` domains, so a
         provider's aliases match one person while each stays a handle of its own.
         Phone and
@@ -1144,7 +1239,8 @@ class Handle(
 
         normalized = (value or "").strip().lower()
         if platform in (cls.Platform.EMAIL, cls.Platform.IMESSAGE) and "@" in normalized:
-            local, _, domain = cls.spelling_key_of(cls.Platform.EMAIL, normalized).rpartition("@")
+            # An address's case and trimming are the spelling key's, from the value as given.
+            local, _, domain = cls.spelling_key_of(cls.Platform.EMAIL, value).rpartition("@")
             if domain in ("gmail.com", "googlemail.com"):
                 local = local.split("+", 1)[0].replace(".", "")
             return f"{local}@{domain}"
@@ -1179,29 +1275,46 @@ class Handle(
     def normalize_email_domain(domain: str) -> str:
         """Return the one spelling an email domain compares by: lower-cased, each label as the IDNA codec reads it.
 
-        The one rule for a domain, whoever compares one: a handle's spelling key
+        The domain-spelling rule, wherever parties matches an identity by a domain (accounts
+        and sign-in allowlists compare domains for other intents): a handle's spelling key
         (:meth:`spelling_key_of`) and person-matching key (:meth:`normalize_value`)
-        and a domain stored as typed elsewhere, such as ``Organization.domain``,
-        read through it on both sides. Each label makes the standard library's
+        and an organization's domain key (``Organization.domain_key``, which
+        ``Organization.domain_filter`` compares), each stored from it, while the
+        domain itself stays as typed. Each label makes the standard library's
         ``idna`` round trip (IDNA 2003), the codec Django's ``punycode`` writes a
         domain with to send it: a punycode label reads as Unicode, and Unicode
         spellings IDNA 2003 sends as one domain are one (NFD and NFC, full-width
         letters, ``ß`` and ``ss``). A label the codec cannot read or write, such as
         ``xn--strae-oqa`` (IDNA 2008's ``straße``, a domain of its own), stays as
-        typed.
+        typed. So does a whole name whose spelling would be longer than a domain name
+        can be (:attr:`DOMAIN_NAME_LIMIT`): a label never reads longer than its
+        punycode, so such a name could not be sent as a domain, and a name of
+        ligatures that each read as many letters (U+FDFA reads as 18) would
+        otherwise outgrow the columns its keys are stored in.
 
         Handle keys are stored from it: changing what this returns means bumping
-        :attr:`NORMALIZATION_VERSION`.
+        :attr:`NORMALIZATION_VERSION`. An organization's key needs no version: its
+        provision repair compares every row with this rule as it is.
         """
 
+        name = (domain or "").strip().lower()
         labels = []
-        for label in (domain or "").strip().lower().split("."):
+        for label in name.split("."):
             try:
                 label = label.encode("idna").decode("idna")
             except UnicodeError:
                 pass
             labels.append(label)
-        return ".".join(labels)
+        spelled = ".".join(labels)
+        return name if len(spelled) > Handle.DOMAIN_NAME_LIMIT else spelled
+
+    # Django hard-codes it in django/core/validators.py, URLValidator.__call__ (len(hostname) > 253): RFC 1034 3.1.
+    DOMAIN_NAME_LIMIT: ClassVar[int] = 253
+    """The longest a domain name may be, in characters (RFC 1034 section 3.1), as Django's ``URLValidator`` bounds it.
+
+    255 octets on the wire, less the length byte and the root's trailing dot. :meth:`normalize_email_domain`
+    keeps as typed a name whose spelling would be longer.
+    """
 
     # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
@@ -1212,8 +1325,8 @@ class Handle(
         """Whether ``value`` can be an email address at all, read as :meth:`normalize_value` reads it.
 
         What cannot be an address is no address; anything else is one, however
-        unusual. Surrounding whitespace aside, the value has exactly one ``@``,
-        a non-empty name part in any script (``jörg@``, ``peña@``) with no
+        unusual. Surrounding ASCII whitespace aside (:attr:`ADDRESS_WHITESPACE`), the value
+        has exactly one ``@``, a non-empty name part in any script (``jörg@``, ``peña@``) with no
         whitespace, control or format character (Unicode categories ``Cc`` and
         ``Cf``: a zero-width space, a direction mark), and a domain that passes
         the domain rule of Django's ``EmailValidator``, which reads an
@@ -1225,7 +1338,7 @@ class Handle(
 
         column = cls._meta.get_field("value")
         assert isinstance(column, models.Field) and column.max_length is not None
-        address = (value or "").strip()
+        address = (value or "").strip(cls.ADDRESS_WHITESPACE)
         if not address or len(address) > min(cls.EMAIL_ADDRESS_LIMIT, column.max_length) or address.count("@") != 1:
             return False
         name, domain = address.split("@")
@@ -1273,12 +1386,24 @@ class Handle(
                 params={"owner": public_id_of(owner)},
             )})
         if self._state.adding or keyed:
-            self.spelling_key = self.spelling_key_of(self.platform, self.value)
-            self.normalized_value = self.normalize_value(self.platform, self.value)
-            self.normalized_version = self.NORMALIZATION_VERSION
+            for name, value in self.derived_keys().items():
+                setattr(self, name, value)
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
         super().save(*args, **kwargs)
+
+    def derived_keys(self) -> dict[str, Any]:
+        """The key columns this row's ``platform`` and ``value`` give under the rule as it is, with its version.
+
+        :meth:`save` writes them together; the key repair (``HandleManager.renormalize_handles``) writes them
+        alone, as they are here.
+        """
+
+        return {
+            "spelling_key": self.spelling_key_of(self.platform, self.value),
+            "normalized_value": self.normalize_value(self.platform, self.value),
+            "normalized_version": self.NORMALIZATION_VERSION,
+        }
 
     def value_owner(self) -> Handle | None:
         """Return the other live email handle owning the spelling key of this row's address, or ``None``.
@@ -1299,18 +1424,31 @@ class Handle(
         live = type(self)._base_manager.filter(platform=self.Platform.EMAIL, spelling_key=key, merged_into__isnull=True)
         return live.exclude(pk=self.pk).order_by("pk").first()
 
-    def is_spelling_of(self, value: str) -> bool:
+    def is_spelling_of(self, value: str, *, merged: bool = False) -> bool:
         """Whether ``value`` is this handle's address: its own ``value``, or on email another letter case or domain
-        spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column)."""
+        spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column).
+
+        ``merged`` also answers for every handle merged into this one, at any depth, by one read made only when
+        ``value`` is not this handle's own: a fold re-points the redirects of what it folds at the survivor, so
+        each handle merged into this one names it (``merged_into``), and :meth:`spellings_filter` finds a spelling
+        among them by its value or its stored key.
+        """
 
         key = self.spelling_key_of(self.platform, value)
-        return value == self.value or bool(key) and key == self.spelling_key_of(self.platform, self.value)
+        if value == self.value or bool(key) and key == self.spelling_key_of(self.platform, self.value):
+            return True
+        if not merged or self.pk is None:
+            return False
+        spelled = (self.spellings_filter((value,)) if self.platform == self.Platform.EMAIL
+                   else models.Q(platform=self.platform, value=value))
+        return type(self)._base_manager.filter(spelled, merged_into_id=self.pk).exists()
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
         """A contact alias keeps its platform and the directory identity lock order; a person merges an alias.
 
-        Every later message to a merged handle's address goes to the kept one. So a
-        person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
+        A merge redirects the mail people later address to a merged handle's address to
+        the kept one, and never system mail, which goes exactly to the address its
+        caller gave. So a person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
         binds the kept handle to its actor) admits only another spelling or alias of
         the kept address, the same person-matching key, unless that actor is a
         contact administrator: an effective member of ``parties/role:contact_admin``,

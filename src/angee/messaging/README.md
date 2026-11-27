@@ -68,9 +68,40 @@ display name the email backend writes takes), is refused (`invalid`) under its
 role, never re-read. `compose` lands every address as typed, the channel's
 sender as configured, on the handle the handle owner finds for it
 (`HandleManager.find_identities`): any letter case or domain spelling of a
-stored address is that handle, and a message to it is addressed as the handle
-stores it, so an address with no handle yet is stored, shown and addressed as
-typed; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
+stored address is that handle, which keeps the spelling it was first stored in
+and is what the message shows and search finds. The recipient row records the
+address as typed (`Recipient.address`), and the message is mailed at it
+(`Recipient.envelope_address`), From as the channel configures it
+(`outbound_sender`; the sender's own while that is refused), so an address with
+no handle yet is stored, shown and addressed as typed; a provider's alias is a handle of its own. Only an address
+the caller handed is recorded: a recipient a reply inherits from its parent is
+answered as its handle stores it (a reply is handed no address of its own:
+To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one
+records none. A recorded address is always, as written, a spelling of its
+handle's address or of a handle merged into it (`Handle.is_spelling_of(...,
+merged=True)`, checked when the row is saved). Who writes decides what a
+merge does (`MessageManager._land_addressees`): a person's compose to an
+address a contact administrator merged into another records nothing and
+follows the merge to the kept handle's value, which is what a merge is for and
+why only a contact administrator may merge two addresses; system mail
+(`compose_as_system`, so `send_mail`) records the address on the kept
+handle's row and goes exactly there, so a merge never redirects an account's
+or a workflow's mail. A person's compose in another spelling of the kept
+handle's own address is mailed as typed. An address the
+transport cannot carry as typed (`carries_address`) records nothing and is
+mailed at the handle's value. The reader (`Recipient.envelope_address`) asks
+the message's channel what a recorded address the handle's merges no longer
+name means (the merge it was written under reverted, a row written past that
+check): on the system channel (`Channel.system_only`) the whole message is
+refused, settled failed with the reason "A recipient of this message no longer
+names the address it was written for.", so system mail is exact or not sent and
+never reaches the kept handle's mailbox, and a new mail lands on the address's
+own handle; a person's row, which records only spellings of its own handle and
+follows the handle, is mailed at the handle's value with a warning naming the
+row. The one place a recorded address can outlive its handle's value is
+`HandleManager.reidentify` (and `upsert`'s external-id path into it), which
+rewrites a live handle's value: the row keeps the spelling it was given, and
+the message is read as above each time. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
@@ -401,7 +432,10 @@ takes, plus `carries_address`: a sender whose part before the `@` is outside
 ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
 `Message.objects.clean_system_recipient(entry, key=...)`, which
 `compose_as_system` applies to each recipient and a caller asks before offering
-a send; both read nothing.
+a send; both read nothing. A system mail is mailed exactly at the address its
+caller gave, after that rule, which its recipient row records, on whichever
+handle holds any spelling of it; it goes out from `DEFAULT_FROM_EMAIL` as
+configured, whatever spelling the sender's handle was first stored in.
 
 An error report hides every local of every frame of the system write, from the
 system mailer and `compose_as_system` down to the ORM's and the SQL's, and of

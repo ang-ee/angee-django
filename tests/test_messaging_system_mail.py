@@ -11,7 +11,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from email import message_from_bytes
-from email.utils import parseaddr
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,6 +26,7 @@ from django.db import DatabaseError, connection, transaction
 from django.db.models.signals import post_save
 from django.template.defaultfilters import pprint
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from django.utils.log import AdminEmailHandler, configure_logging
 from django.views.debug import ExceptionReporter
@@ -49,6 +49,7 @@ from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
 from tests.conftest import Vendor, create_platform_admin, make_integration
 from tests.messaging_campaign import make_user
+from tests.test_messaging_compose import _merge_as_contact_administrator
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -292,8 +293,9 @@ def test_the_system_sender_and_a_recipient_land_on_one_handle_whatever_their_spe
 ) -> None:
     """The handle owner's rule: an address lands on the handle of any earlier spelling, which keeps its own.
 
-    With no handle yet, the sender and the recipient are stored and sent as typed; after an earlier
-    lower-case spelling, they land on its handle and the mail carries that stored spelling.
+    With no handle yet, the sender and the recipient are stored as typed; after an earlier lower-case
+    spelling, they land on its handle. Either way the mail is from the sender as configured and to the
+    recipient as given, which its row records.
     """
 
     settings.DEFAULT_FROM_EMAIL = "Ops <Ops@Example.test>"
@@ -312,9 +314,318 @@ def test_the_system_sender_and_a_recipient_land_on_one_handle_whatever_their_spe
     typed = {"ops@example.test": "Ops@Example.test", "reader@example.test": "Reader@Example.test"}
     assert handles == [(key, key if earlier else typed[key]) for key in sorted(typed)]
     assert sender == Handle._base_manager.get(spelling_key="ops@example.test").pk
-    assert (parseaddr(sent.from_email)[1], sent.to) == (
-        ("ops@example.test", ["reader@example.test"]) if earlier else ("Ops@Example.test", ["Reader@Example.test"])
+    with system_context(reason="tests.messaging.system_mail.spelling"):
+        assert list(Recipient._base_manager.filter(message=message).values_list("address", flat=True)) == [
+            "Reader@Example.test",
+        ]
+    assert (sent.from_email, sent.to) == ("Ops <Ops@Example.test>", ["Reader@Example.test"])
+
+
+def _given(message: Any) -> list[tuple[Any, str]]:
+    """The message's recipient rows as ``(handle id, address)``, in their order."""
+
+    with system_context(reason="tests.messaging.system_mail.given"):
+        return list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("handle_id", "address"))
+
+
+@pytest.mark.parametrize("entry", ["send-mail", "compose-as-system"])
+def test_a_system_mail_is_mailed_at_the_address_its_caller_gave_on_the_handle_of_its_first_spelling(
+    system_mailer: Any, entry: str,
+) -> None:
+    """An account's address and a handle's first spelling differ in letter case: the mail goes to the account's
+    spelling, which its row records, on that one handle, with no second handle or party."""
+
+    party_model = apps.get_model("parties", "Party")
+    with system_context(reason="tests.messaging.system_mail.given"):
+        handle = Handle.objects.upsert(platform="email", value="Reader@Example.test")
+        parties = party_model._base_manager.count()
+    if entry == "send-mail":
+        assert send_mail("Report", "Body.", None, ["reader@example.test"]) == 1
+        (message,) = _recorded(system_mailer)
+    else:
+        message = Message.objects.compose_as_system(
+            reason="tests.messaging.system_mail.given", to=["reader@example.test"], subject="Report", text="Body.",
+        )
+    assert _deliver(message).to == ["reader@example.test"]
+    assert _given(message) == [(handle.pk, "reader@example.test")]
+    with system_context(reason="tests.messaging.system_mail.given"):
+        assert list(Handle._base_manager.filter(spelling_key="reader@example.test").values_list("pk", "value")) == [
+            (handle.pk, "Reader@Example.test"),
+        ]
+        assert party_model._base_manager.count() == parties
+
+
+def test_two_system_mails_to_two_spellings_of_one_handle_are_each_mailed_at_their_own(system_mailer: Any) -> None:
+    """Two accounts whose addresses differ only in letter case share one handle; each mail goes to its own."""
+
+    for address in ("Guest.Case@Example.COM", "guest.case@example.com"):
+        assert send_mail("Your link", "Body.", None, [address]) == 1
+    first, second = _recorded(system_mailer)
+    assert [_deliver(message).to for message in (first, second)] == [
+        ["Guest.Case@Example.COM"], ["guest.case@example.com"],
+    ]
+    ((handle_id, _first),), ((second_handle_id, _second),) = _given(first), _given(second)
+    assert handle_id == second_handle_id
+    with system_context(reason="tests.messaging.system_mail.given"):
+        assert Handle._base_manager.filter(spelling_key="guest.case@example.com").count() == 1
+
+
+def test_a_system_recipient_records_the_address_alone_as_its_rule_cleaned_it(system_mailer: Any) -> None:
+    """A named entry records its bare address, never its name or a header's text; the name is the handle's."""
+
+    assert send_mail("Report", "Body.", None, ["Reader Name <Reader@Example.test>"]) == 1
+    (message,) = _recorded(system_mailer)
+    ((_handle_id, address),) = _given(message)
+    assert address == "Reader@Example.test"
+    assert _deliver(message).to == ["Reader Name <Reader@Example.test>"]
+
+
+@pytest.mark.parametrize("first_try", ["a-failed-hand-off", "a-transient-refusal"])
+def test_a_system_mail_sent_again_is_mailed_at_the_address_its_caller_gave(
+    system_mailer: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, django_capture_on_commit_callbacks: Any,
+    first_try: str,
+) -> None:
+    """The release after a failed hand-off, and the retry after a transient refusal, mail the address given."""
+
+    with system_context(reason="tests.messaging.system_mail.again"):
+        Handle.objects.upsert(platform="email", value="Reader@Example.test")
+    if first_try == "a-failed-hand-off":
+        def refused(name: str, **options: Any) -> None:
+            raise OperationalError("[Errno 61] Connection refused")
+
+        monkeypatch.setattr(celery_app, "send_task", refused)
+    with django_capture_on_commit_callbacks(execute=True):
+        assert send_mail("Again", "Body.", None, ["reader@example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    if first_try == "a-transient-refusal":
+        settings.MAILERS = {"default": SYSTEM, "transport": {
+            "BACKEND": f"{FailingTransport.__module__}.FailingTransport",
+            "OPTIONS": {"failure": smtplib.SMTPRecipientsRefused({"reader@example.test": (450, b"Try again later")})},
+        }}
+        assert not deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+        settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    with system_context(reason="tests.messaging.system_mail.again"):
+        assert Message._base_manager.get(pk=message.pk).status == "queued"
+        Message._base_manager.filter(pk=message.pk).update(
+            scheduled_at=timezone.now() - timedelta(hours=1), delivery_lease_until=timezone.now() - timedelta(hours=1),
+        )
+    handed: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: handed.append(options["kwargs"]))
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 1
+    assert deliver_message(**handed[0])["delivered"]
+    assert [sent.to for sent in mail.outbox] == [["reader@example.test"]]
+
+
+def test_a_recipient_row_refuses_an_address_its_handle_does_not_name(system_mailer: Any) -> None:
+    """The row's validation, on save and on ``full_clean``: another address, or the address with surrounding space or a
+    line break, is refused before anything is written."""
+
+    assert send_mail("Report", "Body.", None, ["Reader@Example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    with system_context(reason="tests.messaging.system_mail.invariant"):
+        row = Recipient._base_manager.get(message=message)
+        for written in ("intruder@elsewhere.test", "Reader@Example.test\r\n", " Reader@Example.test"):
+            row.address = written
+            for check in (row.save, row.full_clean):
+                with pytest.raises(ValidationError) as refused:
+                    check()
+                assert [error.code for error in refused.value.error_dict["address"]] == ["not_its_handle"]
+        assert Recipient._base_manager.get(pk=row.pk).address == "Reader@Example.test"
+        row.address = "READER@example.test"
+        row.save()
+        assert Recipient._base_manager.get(pk=row.pk).address == "READER@example.test"
+
+
+def _system_mail(system_mailer: Any, entry: str, address: str) -> Any:
+    """One system mail to ``address``, through Django's ``send_mail`` or ``compose_as_system``."""
+
+    if entry == "send-mail":
+        before = {message.pk for message in _recorded(system_mailer)}
+        assert send_mail("Your link", "Body.", None, [address]) == 1
+        (message,) = [message for message in _recorded(system_mailer) if message.pk not in before]
+        return message
+    return Message.objects.compose_as_system(
+        reason="tests.messaging.system_mail.merged", to=[address], subject="Your link", text="Body.",
     )
+
+
+@pytest.mark.parametrize("entry", ["send-mail", "compose-as-system"])
+@pytest.mark.parametrize(
+    ("merged_address", "kept_address", "merge"),
+    [("Account@Example.test", "kept@example.net", "contact-administrator"),
+     ("client.example@gmail.com", "clientexample@gmail.com", "fold")],
+    ids=["two-addresses-merged", "an-alias-folded"],
+)
+def test_a_system_mail_to_a_merged_handles_address_is_delivered_to_that_address_on_the_kept_handle(
+    system_mailer: Any, entry: str, merged_address: str, kept_address: str, merge: str,
+) -> None:
+    """A merge never redirects system mail: the account's address is recorded on the kept handle's row as given and
+    the mail goes there, whoever merged it into another."""
+
+    with system_context(reason="tests.messaging.system_mail.merged"):
+        merged = Handle.objects.upsert(platform="email", value=merged_address)
+        kept = Handle.objects.upsert(platform="email", value=kept_address)
+    if merge == "fold":
+        with system_context(reason="tests.messaging.system_mail.merged"):
+            Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+    else:
+        _merge_as_contact_administrator(kept, merged)
+    given = merged_address.lower()
+    message = _system_mail(system_mailer, entry, given)
+    assert _given(message) == [(kept.pk, given)]
+    assert _deliver(message).to == [given]
+
+
+def test_a_system_mail_to_an_address_two_merges_deep_is_delivered_to_it_and_the_merges_are_one_read(
+    system_mailer: Any,
+) -> None:
+    """A fold re-points what was merged into the folded handle at the survivor, so the kept handle's merges are one
+    read at any depth; the system mail is recorded on the kept handle and delivered as given."""
+
+    with system_context(reason="tests.messaging.system_mail.merged"):
+        first, middle, kept = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("first@example.test", "middle@example.test", "kept@example.test")
+        )
+        Handle._base_manager.get(pk=middle.pk).fold([Handle._base_manager.get(pk=first.pk)])
+        survivor = Handle._base_manager.get(pk=kept.pk)
+        survivor.fold([Handle._base_manager.get(pk=middle.pk)])
+        assert Handle._base_manager.get(pk=first.pk).merged_into_id == kept.pk
+        with CaptureQueriesContext(connection) as merges:
+            assert survivor.is_spelling_of("FIRST@example.test", merged=True)
+        assert len(merges) == 1
+        assert not survivor.is_spelling_of("other@example.test", merged=True)
+    message = _system_mail(system_mailer, "send-mail", "FIRST@example.test")
+    assert _given(message) == [(kept.pk, "FIRST@example.test")]
+    assert _deliver(message).to == ["FIRST@example.test"]
+
+
+def test_a_system_mail_to_a_merged_handles_address_reads_only_its_redirect_more(system_mailer: Any) -> None:
+    """The writer holds the handle the address named, so the row's check reads nothing for the merge: what a system
+    mail to a merged handle's address costs beyond one to the kept handle's own is the redirect's own two reads."""
+
+    with system_context(reason="tests.messaging.system_mail.merged"):
+        merged, kept = (
+            Handle.objects.upsert(platform="email", value=value)
+            for value in ("client@example.test", "mine@example.net")
+        )
+        Handle._base_manager.get(pk=kept.pk).fold([Handle._base_manager.get(pk=merged.pk)])
+    counts: dict[str, int] = {}
+    for _round in range(3):
+        for address in ("mine@example.net", "client@example.test"):
+            with CaptureQueriesContext(connection) as queries:
+                Message.objects.compose_as_system(
+                    reason="tests.messaging.system_mail.merged", to=[address], subject="Hi", text="Hi.",
+                )
+            counts[address] = min(counts.get(address, len(queries)), len(queries))
+    assert counts["client@example.test"] - counts["mine@example.net"] == 2, counts
+
+
+def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_recorded_sender(
+    system_mailer: Any, settings: Any,
+) -> None:
+    """The sender rule refuses the deployment's sender after the mail was written: From is the sender's own, as
+    recorded, and the mail is sent."""
+
+    settings.DEFAULT_FROM_EMAIL = "Ops <Ops@Example.test>"
+    assert send_mail("Report", "Body.", None, ["reader@example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    settings.DEFAULT_FROM_EMAIL = "not an address"
+    assert _deliver(message).from_email == "Ops <Ops@Example.test>"
+
+
+UNNAMED = "A recipient of this message no longer names the address it was written for."
+
+
+def _not_sent(message: Any) -> None:
+    """Delivering ``message`` hands nothing to the transport and settles it failed, with the reason stored."""
+
+    sent = len(mail.outbox)
+    outcome = deliver_message(message._meta.label_lower, message.pk, message.external_id)
+    assert not outcome["delivered"], outcome
+    assert len(mail.outbox) == sent
+    with system_context(reason="tests.messaging.system_mail.unnamed"):
+        stored = Message._base_manager.get(pk=message.pk)
+    assert (stored.status, stored.local_fact("delivery_error")) == ("failed", UNNAMED)
+
+
+@pytest.mark.parametrize("recipients", [1, 2], ids=["its-one-recipient", "one-of-two-recipients"])
+def test_a_system_mail_whose_recipient_was_written_past_its_validation_is_not_sent_to_anyone(
+    system_mailer: Any, recipients: int,
+) -> None:
+    """A queryset update puts an unrelated address on a system mail's row: the whole message is refused, settled
+    failed with its reason, and nothing reaches the handle's mailbox, that address, or the other recipient."""
+
+    addresses = ["Reader@Example.test", "other@example.test"][:recipients]
+    assert send_mail("Report", "Body.", None, addresses) == 1
+    (message,) = _recorded(system_mailer)
+    with system_context(reason="tests.messaging.system_mail.unnamed"):
+        row = Recipient._base_manager.get(message=message, handle__value="Reader@Example.test")
+        Recipient._base_manager.filter(pk=row.pk).update(address="intruder@elsewhere.test")
+    _not_sent(message)
+
+
+def _revert_merge(merged: Any) -> None:
+    """Revert the changeset that merged ``merged`` away, as a platform administrator."""
+
+    reverter = create_platform_admin(f"system-mail-merge-reverter-{merged.pk}")
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        boundary = Handle.history.filter(id=merged.pk).order_by("-history_id").first().changeset
+    with actor_context(reverter):
+        boundary.with_actor(reverter).revert()
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        assert Handle._base_manager.get(pk=merged.pk).merged_into_id is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_sign_in_mail_written_while_its_address_was_merged_is_refused_after_the_revert_and_a_new_one_is_sent(
+    system_mailer: Any,
+) -> None:
+    """The account's address was merged into another when its link was written; the merge is reverted before
+    delivery. The link goes to neither mailbox: it is refused with its reason, and a new link lands on the account's
+    own handle, live again, and is delivered to it."""
+
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        merged = Handle.objects.upsert(platform="email", value="account@example.test")
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+    _merge_as_contact_administrator(kept, merged)
+    written = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(written) == [(kept.pk, "account@example.test")]
+    _revert_merge(merged)
+    _not_sent(written)
+    again = _system_mail(system_mailer, "compose-as-system", "account@example.test")
+    assert _given(again) == [(merged.pk, "account@example.test")]
+    assert _deliver(again).to == ["account@example.test"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_the_release_meets_the_same_refusal_for_a_system_mail_whose_merge_was_reverted(
+    system_mailer: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hand-off failed while the address was merged; the merge is reverted; the release hands the mail off again
+    and its delivery is refused, and a refused mail is not handed off again."""
+
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        merged = Handle.objects.upsert(platform="email", value="account@example.test")
+        kept = Handle.objects.upsert(platform="email", value="kept@example.net")
+    _merge_as_contact_administrator(kept, merged)
+
+    def refused(name: str, **options: Any) -> None:
+        raise OperationalError("[Errno 61] Connection refused")
+
+    monkeypatch.setattr(celery_app, "send_task", refused)
+    message = _system_mail(system_mailer, "send-mail", "account@example.test")
+    _revert_merge(merged)
+    handed: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: handed.append(options["kwargs"]))
+    with system_context(reason="tests.messaging.system_mail.revert"):
+        Message._base_manager.filter(pk=message.pk).update(delivery_lease_until=timezone.now() - timedelta(hours=1))
+    assert Message.objects.release_held_messages() == 1
+    assert [kwargs["pk"] for kwargs in handed] == [message.pk]
+    _not_sent(message)
+    assert Message.objects.release_held_messages() == 0
+    assert len(handed) == 1
 
 
 def test_a_django_email_is_recorded_on_the_system_channel_and_sent_once_through_the_transport(
