@@ -41,6 +41,7 @@ from angee.messaging.testing.models import Directory, Handle, Message, Party, Re
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance import checks as provenance_checks
 from angee.provenance.context import changeset
+from angee.provenance.contrib.angee.history import ModelHistory
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
@@ -215,6 +216,7 @@ def test_a_merge_whose_survivor_is_gone_is_not_refused_for_what_its_survivor_rec
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
     boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
     history = model_history(Tag)
+    assert isinstance(history, ModelHistory)
     assert not Tag.history.filter(id=mobile.pk, changeset=boundary).exists()
     with system_context(reason="merge test survivor write"), changeset(fresh=True, change_reason="Survivor write"):
         Tag._base_manager.filter(pk=mobile.pk).update(name="Mobile phones")
