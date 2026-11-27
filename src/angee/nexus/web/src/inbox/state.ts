@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { isStatusUpdate } from "@angee/messaging";
-import { Filter, localTimeZone, mergeResourceViewSearch, resourceViewStateToSearch, routeSearchParam, updateRouteSearch, useRouteSearch, type ResourceViewFilter, type ResourceViewState } from "@angee/ui";
+import { Filter, localTimeZone, mergeResourceViewSearch, resourceViewStateToSearch, routeSearchParam, updateRouteSearch, useRouteSearch, type ResourceViewFilter, type ResourceViewState, type UnsavedChangesMove } from "@angee/ui";
 import {
   InboxFilter,
   coverageKindFilter,
@@ -47,6 +47,18 @@ export const RESULTS_INITIAL = {
   groupStack: [{ field: "by_conversation" }],
 };
 export const RELATED_TAB = "nexus-related";
+
+/**
+ * Whether a route move leaves the open conversation, so an unsent reply in it asks first: another
+ * page, another conversation (`thread`), or a message's reader (`message`), which replaces the
+ * conversation. A move of its window (`at`) keeps it.
+ */
+export function conversationLeaves({ current, next }: UnsavedChangesMove): boolean {
+  const param = (location: UnsavedChangesMove["current"], key: string) =>
+    routeSearchParam(location.search as Record<string, unknown>, key) ?? "";
+  return current.pathname !== next.pathname || param(current, "thread") !== param(next, "thread")
+    || param(next, "message") !== "";
+}
 
 /** Translate the native collection filter to the Messaging input contract. */
 export function inboxQuery(

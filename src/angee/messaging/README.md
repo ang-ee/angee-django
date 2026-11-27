@@ -144,6 +144,10 @@ channel [`ChannelQuerySet.outbound_email_rule`](managers.py) admits, whose
 sender is checked only when a message is sent; and `message_recipient_limit`
 states the recipient bound.
 
+A channel's backend is chosen by connecting it, and its form shows the backend
+read-only: a channel whose backend is no longer registered (its addon removed) is
+not repaired there; connecting the channel again is the remedy.
+
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from
 [`backends.py`](backends.py). Acceptance settles the existing row to `sent` and
@@ -316,6 +320,13 @@ MAILERS:
       port: 587
       use_tls: true
 ```
+
+An email channel sends from the address its own config names (`from_email`), else
+from the deployment's `DEFAULT_FROM_EMAIL` (`AnymailEmailChannelBackend.outbound_sender`).
+While that address is not one valid address the transport can carry, a send on the
+channel is refused under `channel`: the person sending reads only that the channel
+needs a valid sender address, and an operator fixes the channel's `from_email`, or
+`DEFAULT_FROM_EMAIL` when the channel names none.
 
 Settings load refuses, naming the edit, a mailer setting that collides with the
 one messaging owns: a deployment's own `MAILERS.default` (rename it to

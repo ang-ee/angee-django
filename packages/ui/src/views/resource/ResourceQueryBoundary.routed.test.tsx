@@ -73,7 +73,7 @@ test("two immediate route updates retain both the first filter and the following
   await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: true }]));
   expect(f.view.state.filter).toEqual({ title: { iContains: "Kept" } });
   await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables).toMatchObject({
-    where: { title: { _ilike: "%Kept%" } }, order_by: { title: "desc" },
+    where: { title: { _ilike: "%Kept%" } }, order_by: [{ title: "desc" }],
   }));
 });
 

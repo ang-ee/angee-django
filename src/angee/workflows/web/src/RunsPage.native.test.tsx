@@ -189,7 +189,7 @@ test("step rows are paged in execution order without per-row detail queries", as
   expect(screen.queryByText("step-10")).toBeNull();
   expect(requests.some(({ fields }) => fields.includes("steprun_by_pk"))).toBe(false);
   expect(requests.find(({ fields, variables }) => fields.includes("steprun") && variables.limit !== undefined)?.variables).toMatchObject({
-    where: { _and: [{ run: { _eq: "wfr_review" } }] }, limit: 10, offset: 0, order_by: { rank: "asc", map_index: "asc" },
+    where: { _and: [{ run: { _eq: "wfr_review" } }] }, limit: 10, offset: 0, order_by: [{ rank: "asc" }, { map_index: "asc" }],
   });
   fireEvent.click(screen.getByRole("button", { name: "Next page" }));
   await screen.findByText("step-10");

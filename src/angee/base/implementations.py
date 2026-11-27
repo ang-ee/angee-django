@@ -155,6 +155,42 @@ class ImplBase:
         return validated.model_dump(mode="json", by_alias=True) if validated is not None else {}
 
     @classmethod
+    def carried_config(cls, stored: Any) -> dict[str, Any]:
+        """The config this implementation carries over from another implementation's ``stored`` config.
+
+        Choosing an implementation chooses its config's shape, so the result is valid by construction,
+        and nothing it changes is reported beyond the result itself (a repair read shows it before the
+        save):
+
+        - **kept:** a stored value under a key its wire contract names (by alias) that the config accepts;
+        - **reset to the default:** a kept value the config refuses; and every value, the defaults alone,
+          where a refusal names no key (a rule across several, such as one value smaller than another);
+          the defaults also fill the keys it names that the stored config lacks;
+        - **dropped:** every other key, an extra its config would allow included.
+
+        The result is normalized as a save normalizes it. An implementation without a config model leaves
+        a row's config untyped, so it carries the stored config whole.
+        """
+
+        given = dict(stored) if isinstance(stored, Mapping) else {}
+        schema = cls.config_json_schema()
+        if schema is None:
+            return given
+        readable = set(schema.get("properties", {}))
+        kept = {key: value for key, value in given.items() if key in readable}
+        defaults = cls.effective_defaults(config_schema=schema).get("config")
+        base = defaults if isinstance(defaults, dict) else {}
+        while True:
+            try:
+                return cls.normalize_config({**base, **kept})
+            except ValidationError as error:
+                if not kept:
+                    # The implementation's own defaults are refused: its defect, never a record's.
+                    raise
+                named = {path.split(".", 2)[1] for path in error.message_dict if path.startswith("config.")}
+                kept = {key: value for key, value in kept.items() if key not in named} if named & kept.keys() else {}
+
+    @classmethod
     def config_form_spec(cls, *, config_schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 
@@ -175,13 +211,15 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in mapping.items()}
 
 
-def resolve_impl_class[T: RegistryBase](base_class: type[T], key: str) -> type[T]:
+def resolve_impl_class[T: RegistryBase](base_class: type[T], key: str, *, owner: str = "") -> type[T]:
     """Return the impl class the base's named registry binds to ``key``.
 
     The dotted path comes from composed, trusted settings and is checked against
-    ``base_class`` before returning.
+    ``base_class`` before returning. ``owner``, the selector holding ``key`` (an
+    ``ImplClassField``'s ``app.Model.field``), leads every refusal.
     """
 
+    lead = f"{owner}: " if owner else ""
     registry_setting = base_class.registry_setting
     registry = impl_registry(registry_setting)
     try:
@@ -189,15 +227,15 @@ def resolve_impl_class[T: RegistryBase](base_class: type[T], key: str) -> type[T
     except KeyError as error:
         known = ", ".join(sorted(registry)) or "none configured"
         raise ImproperlyConfigured(
-            f"No impl for key {key!r} in settings.{registry_setting} (known: {known})."
+            f"{lead}No impl for key {key!r} in settings.{registry_setting} (known: {known})."
         ) from error
     impl = import_string(dotted)
     if not (isinstance(impl, type) and issubclass(impl, base_class)):
         base_name = base_class.__name__
-        raise ImproperlyConfigured(f"settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
+        raise ImproperlyConfigured(f"{lead}settings.{registry_setting}[{key!r}] = {dotted!r} is not a {base_name}.")
     if not impl.matches_registry_key(key):
         raise ImproperlyConfigured(
-            f"settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {impl.key!r}."
+            f"{lead}settings.{registry_setting}[{key!r}] resolves {impl.__name__} with key {impl.key!r}."
         )
     return impl
 

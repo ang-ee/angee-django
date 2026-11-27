@@ -77,13 +77,15 @@ export function GanttCollectionSurface<TRow extends Row>({
     columns, fields, filter: surfaceProps.filter, order: surfaceProps.order,
     resourceView, modelMetadata: metadata, laneSource, groupStack,
   });
-  // Offset pages need a stable tie-breaker while retaining the view's order.
-  const barOrder = useValueStable({
+  // Offset pages need a stable tie-breaker while retaining the view's order. Its keys are kept
+  // stable in their priority: a value comparison of the object alone reads them sorted.
+  const barKeys = useValueStable(Object.entries({
     ...facts.sortOrder,
     ...(query?.fields[query.contract.identity.field]?.sort
       ? { [query.contract.identity.field]: facts.sortOrder?.[query.contract.identity.field] ?? "ASC" }
       : {}),
-  });
+  }));
+  const barOrder = React.useMemo(() => Object.fromEntries(barKeys), [barKeys]);
   const barScope = React.useMemo(() => {
     try {
       if (!query || !lanes.length) return { filter: undefined, error: null };

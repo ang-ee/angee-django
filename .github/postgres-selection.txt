@@ -5,6 +5,8 @@
 # (scripts/postgres_selection.py).
 tests/test_workflows_definition.py
 tests/test_workflows_concurrency.py
+tests/test_impl_concurrency.py
+tests/test_integrate_graphql.py::test_authorize_update_called_alone_takes_no_row_lock_and_writes_nothing
 tests/test_workflows_runtime.py
 tests/test_workflows_install.py
 tests/test_workflows_subject.py
@@ -54,6 +56,7 @@ tests/test_extraction_models.py::test_competing_revision_requests_allocate_exact
 tests/test_extraction_models.py::test_retention_waits_for_a_held_file_and_refuses_its_committed_change
 tests/test_decisions_lifecycle.py
 tests/test_decisions_concurrency.py
+tests/test_decisions_messaging_concurrency.py
 tests/test_checklists.py
 tests/test_calendar_concurrency.py
 tests/test_brandkit_concurrency.py
@@ -126,6 +129,7 @@ tests/test_messaging_inbox_read.py
 tests/test_inbox_explorer.py
 tests/test_inbox_part_reads.py
 tests/test_group_rows.py
+tests/test_hasura_order_contract.py
 tests/test_optimistic_lock.py
 tests/test_ownership_seams.py
 tests/test_portfolio_concurrency.py

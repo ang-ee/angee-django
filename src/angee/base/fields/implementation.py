@@ -6,7 +6,7 @@ import copyreg
 from collections.abc import Sequence
 from enum import Enum
 from functools import cache, partialmethod
-from typing import Any, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -22,6 +22,27 @@ from angee.base.implementations import (
 )
 
 
+@runtime_checkable
+class _LoadedImplKeys(Protocol):
+    """A row that remembers the implementation keys it was loaded with (``ImplDefaultsMixin``)."""
+
+    def loaded_impl_key(self, field: ImplClassField[Any]) -> Any:
+        """The key ``field`` held when the row was loaded, or ``None`` when it was not loaded."""
+        ...
+
+
+def create_only_selectors(model: type[models.Model]) -> tuple[str, ...]:
+    """The names of ``model``'s implementation columns declared ``create_only``, in field order.
+
+    The resource layer reads them once: it adds them to an update input and publishes them in the
+    resource's metadata, while the model's save decides when one may change (a repair).
+    """
+
+    return tuple(
+        field.name for field in model._meta.concrete_fields if isinstance(field, ImplClassField) and field.create_only
+    )
+
+
 class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     """A column naming a non-model implementation class by a short key.
 
@@ -29,6 +50,39 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     Addons contribute impls into that setting through autoconfig, making
     the key set closed at composition time. The field renders as a
     ``TextChoices`` enum and resolves only configured, trusted paths.
+
+    A stored key its choices do not name (one a later release retired, or one
+    another process's registry holds) still loads, lists and filters, as its
+    text, and resolving it raises. Its GraphQL read is null, so the row's list
+    and record still answer. An update does not validate such a key it is not
+    changing (:meth:`holds`): the row saves its other fields, a whole-row save
+    and ``full_clean`` included, and keeps the key, so a person, a sync job, a
+    lifecycle change or a rolling deploy's other release goes on with it.
+    Nothing writes such a key the row does not already hold: choosing another
+    is validated as any write is, and an insert, ``bulk_update`` or
+    ``QuerySet.update`` has no stored row to keep, so each refuses it. A
+    ``create_only`` selector holding such a key may move, once, to a registered
+    key (``ImplDefaultsMixin.save``): the config its implementations own is
+    carried over (``ImplBase.carried_config``), the new key is written only
+    while the row still holds the old one, and afterwards the selector is
+    create-only again. A repair's config is what the chosen implementation
+    carries over, valid by construction (a kept value it refuses takes its
+    default; a key it does not read is dropped), which the repair read shows
+    before the save; a config sent with the selector is validated as sent. A
+    repair saved with ``update_fields`` names the config too, or is refused. A stale row
+    (loaded before its stored key moved) that would write another config is
+    refused as stale. Every update input of an Angee resource carries its
+    model's create-only selectors (:func:`create_only_selectors`), and its
+    metadata publishes them, so only the model decides when one may change.
+    ``check --database`` (``angee.E052``) names such rows.
+
+    Reads forgive and writes do not: a lookup matches what a person or a URL
+    may spell (``" local "``, the member's name ``"LOCAL"``), while a write
+    stores only the registry's key as the registry spells it, so a typo in
+    code keeps failing loudly, except where a model or the GraphQL input
+    normalises the key first: an ``ImplDefaultsMixin`` insert
+    (``prepare_impl_defaults``) and a GraphQL input, which maps the enum's
+    name to its key, both store ``"STUB"`` as ``stub``.
     """
 
     def __init__(
@@ -101,7 +155,7 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
         setattr(cls, accessor, partialmethod(_resolve_bound_implementation, field=self))
 
     refuses_unknown_keys = True
-    """Whether inserting a row refuses a key outside this field's choices.
+    """Whether writing the column refuses a key outside this field's choices.
 
     A history copy records the key its live row saved, so its owner turns this off.
     """
@@ -111,42 +165,138 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
 
         return self.key_for(value) in {member.value for member in self.choices_enum}
 
+    def holds(self, instance: models.Model, value: Any) -> bool:
+        """Whether ``instance``, a stored row, holds ``value``, a key the choices do not name, so an update keeps it.
+
+        A row that remembers the key it was loaded with (:class:`_LoadedImplKeys`) answers from that
+        key, reading nothing: it is the key an update not changing it keeps, even once another save
+        has moved the stored row, as the update then writes the column as itself (:meth:`pre_save`).
+        Any other row reads the column as it stands, spelled as it is stored, under REBAC's system
+        context (the field imports without REBAC), two statements with the context's audit row; a
+        save of such a row reads it up to four times (the field's and the model's clean, the config
+        check, ``pre_save``). A new row holds nothing.
+        """
+
+        if instance._state.adding or instance.pk is None or value in self.empty_values or self.has_key(value):
+            return False
+        spelled = value.value if isinstance(value, Enum) else value
+        if isinstance(instance, _LoadedImplKeys) and (loaded := instance.loaded_impl_key(self)) is not None:
+            return bool(loaded == spelled)
+        from rebac import system_context
+
+        with system_context(reason="base.impl.held_key"):
+            stored = (
+                type(instance)._base_manager.using(instance._state.db).filter(pk=instance.pk)
+                .values_list(self.attname, flat=True).first()
+            )
+        return stored is not None and stored == spelled
+
     def invalid_key(self, value: Any) -> ValidationError:
         """The field's plain refusal of ``value``, naming the key and nothing internal."""
 
         return ValidationError(self.error_messages["invalid_choice"], code="invalid_choice", params={"value": value})
 
     def to_python(self, value: Any) -> Any:
-        """Convert as the enum field does, refusing a key outside the choices with the plain message."""
+        """Convert an input value as the enum field does, refusing a key outside the choices with the plain message.
+
+        Input reaches the field here: ``full_clean``, a model form, a
+        deserialized fixture, a source statement's members. Loading and lookups
+        do not (:meth:`from_db_value`, :meth:`get_prep_value`).
+        """
 
         if value not in self.empty_values and not self.has_key(value):
             raise self.invalid_key(value)
         return super().to_python(value)
 
-    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
-        """Refuse, as a new row is inserted, a key outside this field's choices.
+    def clean(self, value: Any, model_instance: models.Model | None) -> Any:
+        """Clean ``value`` as input, except a key the choices do not name that the stored row holds (:meth:`holds`)."""
 
-        The insert runs after the save's REBAC gates, so a caller who may not
-        save the row gets that refusal. A stored row saves its key as it is,
-        and a historical migration field keeps whatever it stored.
+        if model_instance is not None and self.holds(model_instance, value):
+            return value
+        return super().clean(value, model_instance)
+
+    def pre_save(self, model_instance: models.Model, add: bool) -> Any:
+        """Write a key the choices do not name back as the column itself, on an update of the row holding it.
+
+        The update sets the column to its own stored value (``F``), not to the key read before the
+        row was locked, so a stale save cannot write a retired key back over a key changed since.
         """
 
         value = super().pre_save(model_instance, add)
-        if not add or not self.refuses_unknown_keys or self.base_class is None or value in self.empty_values:
-            return value
-        if not self.has_key(value):
-            raise ValidationError({self.name: self.invalid_key(value)})
+        if not add and not hasattr(value, "as_sql") and self.holds(model_instance, value):
+            return models.F(self.attname)
         return value
 
+    def from_db_value(self, value: Any, expression: Any, connection: Any) -> Any:
+        """Load a stored key as its member, or as the stored text once the choices no longer name it."""
+
+        if value in self.empty_values:
+            return None
+        try:
+            return self.choices_enum(value)
+        except ValueError:
+            return value
+
+    def get_prep_value(self, value: Any) -> Any:
+        """Prepare a value as its canonical key (:meth:`key_for`): the member where the choices name it, else its text.
+
+        ``" base "`` and the member's name ``"BASE"`` both prepare as ``base``,
+        so a filter finds the rows that store a key whichever spelling it is
+        given, and one on a key the choices no longer name finds those rows too;
+        :meth:`get_db_prep_save` refuses to write either such a key or a
+        spelling other than the registry's. Input keeps :meth:`to_python`'s
+        stricter conversion.
+        """
+
+        if value in self.empty_values:
+            return super().get_prep_value(value)
+        key = self.key_for(models.Field.get_prep_value(self, value))
+        return self.choices_enum(key) if self.has_key(key) else key
+
+    def get_db_prep_save(self, value: Any, connection: Any) -> Any:
+        """Refuse writing anything but a key the choices name, spelled as the registry spells it.
+
+        That holds for every value the field prepares: a plain value in an
+        insert, an update, ``QuerySet.update`` or ``bulk_update``, and a
+        ``Value``'s literal, top-level or typed as this field. ``" local "`` and
+        the member's name ``"LOCAL"`` are refused as any unknown key is, though
+        a lookup reads them as ``local`` (:meth:`get_prep_value`). Any other
+        expression (``F``, ``Subquery``, ``Cast``, ``Case``, or a ``Value``
+        inside one) is not checked: it writes what it computes. The write runs
+        after the save's REBAC gates, so a caller who may not save the row gets
+        that refusal. A stored row saves a key its choices name, even once the
+        registry dropped it; a save that leaves the column out writes nothing
+        here, and an update writes back the key its row holds as the column itself
+        (:meth:`pre_save`). A history copy and a historical migration field write a key
+        the choices no longer name (the one their row stored), but they refuse
+        another spelling of a key the choices name as every field does.
+        """
+
+        written = value.value if isinstance(value, models.Value) else value
+        spelled = written.value if isinstance(written, Enum) else written
+        if (
+            not hasattr(written, "as_sql")
+            and written not in self.empty_values
+            and spelled not in tuple(member.value for member in self.choices_enum)
+            and (self.has_key(spelled) or (self.refuses_unknown_keys and self.base_class is not None))
+        ):
+            raise ValidationError({self.name: self.invalid_key(written)})
+        return super().get_db_prep_save(value, connection)
+
     def resolve_class(self, key: Any, *, default: str | None = None) -> type[T]:
-        """Return the impl class the configured mapping binds to ``key``."""
+        """Return the impl class the configured mapping binds to ``key``.
+
+        A key the mapping does not bind raises ``ImproperlyConfigured`` naming
+        this field, the key and the registry's setting, where the class is
+        needed: never at load.
+        """
 
         if self.base_class is None:
             raise ImproperlyConfigured("Historical implementation fields do not resolve runtime classes.")
         selected = self.key_for(key if key is not None else default)
         if not selected and default is not None:
             selected = self.key_for(default)
-        return resolve_impl_class(self.base_class, selected)
+        return resolve_impl_class(self.base_class, selected, owner=str(self))
 
     def registered_keys(self) -> tuple[str, ...]:
         """Return this field's configured implementation keys in deterministic order."""
@@ -220,10 +370,11 @@ def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[mod
     compiled permission statement holding an implementation key then pickles too.
 
     A process whose registry holds other keys unpickles a member of an enum over
-    the pickling process's keys: it equals and hashes as its key, and the field's
-    ``to_python`` maps it onto the current member, or refuses a key the registry
-    no longer names. A pickler with a private ``dispatch_table`` that leaves out
-    copyreg's does not see the reduction and refuses the member.
+    the pickling process's keys: it equals and hashes as its key, and the field
+    takes it as that key's text. A key its choices name becomes the current
+    member; any other filters as its text and is refused as input or as a write.
+    A pickler with a private ``dispatch_table`` that leaves out copyreg's does
+    not see the reduction and refuses the member.
     """
 
     core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")

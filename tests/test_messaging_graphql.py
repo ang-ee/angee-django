@@ -37,6 +37,7 @@ from tests.conftest import (
     File as StorageFile,
 )
 from tests.conftest import create_platform_admin as _platform_admin
+from tests.test_messaging_compose import MAILERS
 
 messaging_schema = importlib.import_module("angee.messaging.schema")
 iam_schema = importlib.import_module("angee.iam.schema")
@@ -182,7 +183,8 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
     # Connect owns channel creation. Updates include the operator label, spaces'
-    # team and intake's configuration; the generated preview forecasts the purge.
+    # team and intake's configuration, and the create-only selector the model's
+    # save lets change only as a repair; the generated preview forecasts the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
         "display_name",
@@ -190,6 +192,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "intake_queue",
         "intake_field_map",
         "intake_requester_domains",
+        "backend_class",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "channels_delete"
@@ -3385,7 +3388,7 @@ def test_channel_purge_counts_every_recipient_row_its_writers_leave(db: None, se
     answering this channel's message lands in a thread of its own channel.
     """
 
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     channel = make_integration(
         "purge-recipients", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
     )

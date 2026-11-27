@@ -8,6 +8,8 @@ from django.apps import AppConfig
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 
+from angee.base.hooks import check_hook
+from angee.graphql.impl import IMPL_CHOICES_ADMISSION
 from angee.graphql.publishing import validate_channel_layer
 
 
@@ -67,3 +69,16 @@ def check_graphql_schemas(
                 )
             )
     return errors
+
+
+def check_impl_choices_admission(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Validate the ``ANGEE_IMPL_CHOICES_ADMISSION`` hook under the contract its caller resolves it by.
+
+    Optional and single (``check_hook``): unset is valid, and then only a model's own policy admits a
+    choices read; a path that does not import or is not callable is ``angee.E033``.
+    """
+
+    return check_hook(IMPL_CHOICES_ADMISSION, app_configs, **kwargs)

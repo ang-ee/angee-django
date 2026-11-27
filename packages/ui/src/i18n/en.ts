@@ -642,6 +642,9 @@ export const enUiMessages: Record<string, string> = {
   "form.list.actionNamed": "{action} {number}",
   "form.list.moveUpNamed": "Move item {number} up",
   "form.list.moveDownNamed": "Move item {number} down",
+  "form.repairChoicesFailed": "Could not read what choosing an implementation sets on this record.",
+  "form.repairLostSelector":
+    "Choosing {field} set its configuration, but this save no longer includes {field}, so the configuration cannot be saved without it. Show {field} again, or discard your changes.",
   "form.linesChanged":
     "These lines changed on the server. Discard local changes to load the saved lines before saving again.",
   "form.record": "Record",
@@ -720,6 +723,10 @@ export const enUiMessages: Record<string, string> = {
   "lines.system": "System",
   "lines.systemHint": "Managed by the system: it stays in place and its locked cells can't change.",
   "select.label": "Select",
+  "implementation.notRegistered": "Not registered",
+  "implementation.cannotRunUntilChosen": "Its implementation cannot run until another is chosen.",
+  "implementation.cannotRunUntilChosenOnce": "Its implementation cannot run until another is chosen. Once saved, the choice cannot be changed.",
+  "implementation.cannotRunUnchangeable": "Its implementation cannot run. It cannot be changed here.",
   "date.select": "Select date",
   "date.label": "Date",
   "date.clear": "Clear",

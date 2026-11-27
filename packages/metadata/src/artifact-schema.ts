@@ -26,6 +26,11 @@ const ResourceFieldSchema = v.looseObject({
   aggregatable: v.boolean(),
   creatable: v.boolean(),
   updatable: v.boolean(),
+  /**
+   * A create-only implementation selector (`ImplClassField(create_only=True)`): its update input
+   * carries it, and its model's save allows a change only while the stored key is not registered.
+   */
+  createOnly: v.optional(v.boolean()),
   requiredOnCreate: v.boolean(),
   nullable: v.optional(v.boolean()),
   /** The backend `TrashMixin` flag: its resource offers the shared trash verbs. */
@@ -72,6 +77,8 @@ const RootsSchema = v.objectWithRest({
   delete: OptionalString,
   deletePreview: OptionalString,
   changes: OptionalString,
+  /** `<res>_repair_choices(id, field)`: what choosing each implementation sets on one record (a repair). */
+  repairChoices: OptionalString,
 }, OptionalString);
 const TypeNamesSchema = v.objectWithRest({
   query: OptionalString,

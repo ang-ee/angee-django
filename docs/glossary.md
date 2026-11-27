@@ -122,6 +122,8 @@ parent's exposed kinds as `concrete_kinds`.
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
 shape stays the same. Its base class names the implementation registry setting.
+A stored key the registry no longer names is **not registered**: the row loads,
+its GraphQL read is null and the console labels it so.
 
 **`Meta`** — Django's model options class. Keep Angee facts out of `Meta` unless
 the owning library explicitly supports them, such as `rebac_resource_type`.
@@ -430,7 +432,10 @@ The console composes through the `compose_message` mutation, offers a new email
 on the channels its `sendable` filter keeps (`reply` on a channel
 `ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
 `MessageManager.recipient_limit`, as `message_recipient_limit`. A message
-messaging wrote, rather than synced, is `Message.is_locally_written`.
+messaging wrote, rather than synced, is `Message.is_locally_written`. Its pages
+write through `useComposeMessage`: **New message**, a new email
+(`NewMessageAction`), and **Reply**, an answer from the box a transcript docks
+under its conversation where its host opts in (`ThreadTranscript`'s `reply`).
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 

@@ -196,6 +196,13 @@ def finalize_data_resources(
             create_name = exposed(mutation, native_resource.insert_one_root, mutation_fields)
             update_name = exposed(mutation, native_resource.update_by_pk_root, mutation_fields)
             delete_name = exposed(mutation, native_resource.delete_by_pk_root, mutation_fields)
+            # The resource's repair read rides its query type; it reads only beside the update it guards.
+            repair_choices_name = exposed(query, f"{native_resource.name}_repair_choices", query_fields)
+            if repair_choices_name is not None and update_name is None:
+                raise ImproperlyConfigured(
+                    f"{model_label}: this schema exposes {repair_choices_name} without the resource's update root; "
+                    "a repair read is only where its update is (take the resource's mutation into the same schema)."
+                )
             save_name = _merge_description_values(
                 model_label, contributions, "roots", data_contract.DataResourceRoots
             ).save_name
@@ -211,6 +218,7 @@ def finalize_data_resources(
                 update_name=update_name,
                 save_name=save_name,
                 delete_name=delete_name,
+                repair_choices_name=repair_choices_name,
             )
             native_type_names = data_contract.DataResourceTypeNames(
                 query=resource_type_name(query),

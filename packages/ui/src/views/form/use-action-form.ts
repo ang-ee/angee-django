@@ -32,15 +32,17 @@ export interface UseActionFormOptions<TValues extends FieldValues, TData = unkno
   /** Toast the successful result's message. Default true. */
   toastSuccess?: boolean;
   /**
-   * The fields the form shows, in its order (`applyFormErrors`'s `fieldNames`): a refusal's reason
-   * under any other path also shows in the form-level messages, as `path: reason`. Fields that
-   * follow the values give a function, read with the form's values when the answer lands.
+   * The names of the fields the form shows, in its order (`applyFormErrors`'s `shownFieldNames`):
+   * a refusal's reason under any other path also shows in the form-level messages, as
+   * `path: reason`. Required: `[]` states the form shows no field a reason can sit under. Read when
+   * the answer lands, so it names the fields the form shows then, not those it showed at the
+   * submit; fields that follow the values give a function, called with the form's values then.
    */
-  fieldNames?: Iterable<string> | ((values: TValues) => Iterable<string>);
+  shownFieldNames: Iterable<string> | ((values: TValues) => Iterable<string>);
   genericErrorMessage?: string;
   /** What a lost answer reads, for a keyed submit (`formSubmitError`'s `answerLost`). */
   answerLost?: string;
-  /** The banner's line naming the refused fields (`applyFormErrors`'s `fieldSummary`). */
+  /** The banner's line naming the refused fields (`applyFormErrors`'s `fieldSummary`), read with the list when the answer lands. */
   fieldSummary?: (fieldErrors: Record<string, readonly string[]>) => string;
 }
 
@@ -97,7 +99,7 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
       await handleSubmit(async (collected) => {
         if (preview.current.viewAs || preview.current.pending) return;
         if (validateEditors()) return;
-        const { submit, onSuccess, toastSuccess = true, fieldNames = [], genericErrorMessage, answerLost, fieldSummary } = optionsRef.current;
+        const { submit, onSuccess, toastSuccess = true, genericErrorMessage, answerLost } = optionsRef.current;
         const fallback = genericErrorMessage ?? t("error.generic");
         let thrown: LateAnswer | undefined;
         const result = await Promise.resolve().then(() => submit(collected, SURFACE_RENDERS_FAILURE))
@@ -110,9 +112,10 @@ export function useActionForm<TValues extends FieldValues, TData = unknown, TSub
           return;
         }
         // A refusal brings the person to it: the banner, which then also names the refused fields, or
-        // the first refused field (`applyFormErrors` decides).
-        const shown = typeof fieldNames === "function" ? fieldNames(form.getValues()) : fieldNames;
-        if (applyFormErrors(form, result, { fieldNames: shown, fallback, focus, ...(fieldSummary ? { fieldSummary } : {}) })) return;
+        // the first refused field (`applyFormErrors` decides), among the fields the form shows now.
+        const { shownFieldNames, fieldSummary } = optionsRef.current;
+        const shown = typeof shownFieldNames === "function" ? shownFieldNames(form.getValues()) : shownFieldNames;
+        if (applyFormErrors(form, result, { shownFieldNames: shown, fallback, focus, ...(fieldSummary ? { fieldSummary } : {}) })) return;
         if (toastSuccess && result.message) toast.success({ title: result.message });
         succeeded = true;
         onSuccess?.(collected, result.data);

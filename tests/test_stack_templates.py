@@ -1257,6 +1257,7 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.brandkit",
         "angee.messaging_templates",
         "angee.iam_messaging",
+        "angee.decisions_messaging",
         "angee.checklists",
         "angee.agents",
         "angee.knowledge",

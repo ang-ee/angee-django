@@ -66,6 +66,8 @@ function Timeline() {
   );
 }
 
+// The shell's example of a pane of rows with a verb each, not the tasks pane a record ships: that
+// one's story is `Projects/Record tasks`.
 function Tasks() {
   return (
     <PaneToolbarHost>

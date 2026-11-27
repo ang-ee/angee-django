@@ -38,7 +38,14 @@ class DataResourceFieldMetadata:
     readable: bool = True
     aggregatable: bool = False
     creatable: bool = False
+    """Whether a create through this resource offers the field."""
     updatable: bool = False
+    """Whether this resource's update input accepts the field."""
+    create_only: bool = False
+    """Whether the model refuses a change once a registered value is stored (an implementation selector
+    declared ``create_only``), published only where this resource writes the field (``creatable`` or
+    ``updatable``); a read-only exposure says ``False``. It implies no create path: that is ``creatable``.
+    The one change the model allows is a repair, while the stored key is not registered."""
     required_on_create: bool = False
     archivable: bool = False
     trashable: bool = False
@@ -265,6 +272,7 @@ class DataResourceRoots:
     delete_name: Annotated[str | None, Field(serialization_alias="delete")] = None
     delete_preview_name: Annotated[str | None, Field(serialization_alias="deletePreview")] = None
     changes_name: Annotated[str | None, Field(serialization_alias="changes")] = None
+    repair_choices_name: Annotated[str | None, Field(serialization_alias="repairChoices")] = None
 
 
 @dataclass(frozen=True, slots=True)
