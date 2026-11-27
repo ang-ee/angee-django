@@ -516,9 +516,12 @@ Use these owners instead of maintaining another contract in an addon:
   selectors ([`create_only_selectors`](../../src/angee/base/fields/implementation.py),
   read by `hasura_model_resource`) and the resource metadata publishes them
   (`createOnly`), so no resource or page restates one; the model's save
-  decides. Create-only therefore means: chosen on create, and once more, by
-  a person who may write the record, only while its stored key is not
-  registered. The console's record form offers that choice exactly then and
+  decides. Create-only therefore means: chosen on create, and once more only
+  while its stored key is not registered: through the API, by a person the
+  create flow admits to choose it whose update of the record is allowed (the
+  repair read and the update ask the same gate, below); in code, by any save,
+  since a worker or a sync job has no request and no actor to admit and the
+  model's rules stand. The console's record form offers that choice exactly then and
   sends the config it shows: the resource's generated repair read,
   `<res>_repair_choices(id, field)` (`hasura_model_resource` generates it where
   an update root meets a create-only selector; the metadata names it
@@ -531,8 +534,15 @@ Use these owners instead of maintaining another contract in an addon:
   the update root's `write_permission_classes`; the update's own decision
   (`authorize_update`); then the model
   ([`repair_impl_choices`](../../src/angee/graphql/impl.py),
-  `ImplDefaultsMixin.repair_impl_defaults`). Composition refuses a schema that
-  would expose the read without the update root. A record without an update root (calendar sources, directories,
+  `ImplDefaultsMixin.repair_impl_defaults`). An update that names a
+  create-only selector asks the same admission
+  (`AngeeHasuraWriteBackend.require_selectors_admitted`), after the
+  `write_permission_classes` its root asks before the resolver and before
+  `authorize_update` and the model, so the read and the write cannot drift; an
+  update naming none asks nothing more. The admission's one refusal, for a read
+  and a write alike, is "This actor may not choose an implementation.".
+  Composition refuses a schema that would expose the read without the update
+  root. A record without an update root (calendar sources, directories,
   mounts) or a selector a connect flow chose is not repaired in the console:
   its mark says "It cannot be changed here.", and the remedy is installing
   again the addon that provides the implementation, or removing the record

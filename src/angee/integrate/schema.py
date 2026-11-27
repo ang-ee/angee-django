@@ -1828,7 +1828,7 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
         target.require_access("write", _session_user(info))
         return target
 
-    def update(
+    def _update_admitted(
         self,
         info: strawberry.Info,
         pk: str,
@@ -1836,12 +1836,14 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
         *,
         expected_revision: int | None = None,
     ) -> Any:
+        """The integration's write check and capability lock, after the selectors' admission (the update's order)."""
+
         with transaction.atomic():
             target = self.authorize_update(info, pk)
             # The final child is locked first, matching workers and parent-addressed writes.
             with system_context(reason="integrate.graphql.patch.lock"):
                 target.lock_capability()
-            return super().update(info, pk, data, expected_revision=expected_revision)
+            return super()._update_admitted(info, pk, data, expected_revision=expected_revision)
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """The integration factory owns defaults, the create decision and validation; it is claimed first."""

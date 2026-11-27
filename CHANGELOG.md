@@ -67,8 +67,8 @@ live in code docstrings.
   key's field with its own message. A `create_only` selector (`Channel`,
   `Feed`, `Directory`, `CalendarSource`, `Mount`, `VcsBridge`,
   `InferenceProvider`, `NotionConnection`) holding such a key may move, once,
-  to a registered key, by any save the person may make
-  (`ImplDefaultsMixin.save`): the config its implementations own is carried
+  to a registered key, by a code-level save (`ImplDefaultsMixin.save`) or,
+  through the API, by an update the create flow's admission admits (below): the config its implementations own is carried
   over by `ImplBase.carried_config`, valid by construction (the stored keys the
   new class reads kept, its defaults filling the rest and replacing a kept value
   it refuses, the defaults alone where a rule across keys refuses them; a key it
@@ -109,7 +109,15 @@ live in code docstrings.
   no new power; the resource's own `write_permission_classes`; the update's own
   decision on the record (`authorize_update`); then the model ("Implementation
   selection is create-only.", or "<label>.<field> has no repair." for a name that
-  is not a create-only selector). A schema that would expose the read without the
+  is not a create-only selector). An update that names a create-only selector
+  asks the same admission (`AngeeHasuraWriteBackend.require_selectors_admitted`),
+  after the root's `write_permission_classes` and before `authorize_update` and
+  the model, so under IAM a non-administrator owner of a channel, a Notion
+  connection or a feed is refused the selector on update as on the read; an
+  update naming none asks nothing more and costs what it did. The admission's
+  one refusal, for a read and a write alike, is now "This actor may not choose an
+  implementation." (it was "Implementation choices are not readable by this
+  actor.", the `impl_choices` root's included). A schema that would expose the read without the
   update root fails composition. `impl_choices(model, field)` is the create flow's
   read only, as before. `hasura_model_resource` takes `write_permission_classes`,
   asked on its insert, update and save roots, and a write backend's

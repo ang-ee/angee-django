@@ -1891,7 +1891,22 @@ _NO_UPDATE_ROOT = (
     ("parties", "Directory", "directories"),
     ("storage_integrate", "Mount", "mounts"),
 )
-_NOT_ADMITTED = ("PERMISSION_DENIED", "Implementation choices are not readable by this actor.")
+_NOT_ADMITTED = ("PERMISSION_DENIED", "This actor may not choose an implementation.")
+_ADMIN_REQUIRED = ("PERMISSION_DENIED", "Platform admin permission required.")
+# The resources whose own write_permission_classes admit only administrators: asked before the update's resolver,
+# so a non-administrator's update is refused in their words before the admission is asked.
+_ADMINISTRATOR_WRITES = frozenset({"inference_providers", "vcs_bridges"})
+# Who may choose the class when creating, through the console: its insert takes the selector, and the create's
+# own gate (the resource's permission classes, or REBAC's create) admits administrators only; or the insert does
+# not take it (a connect flow chooses it), or there is no insert root.
+_CHOSEN_ON_CREATE = {
+    ("inference_providers", "backend_class"): "administrators",
+    ("vcs_bridges", "backend_class"): "administrators",
+    ("notion_connections", "backend_class"): "not by the insert",
+    ("channels", "backend_class"): "no insert root",
+    ("feeds", "backend_class"): "not by the insert",
+    ("feeds", "feed_backend_class"): "administrators",
+}
 
 
 def _admit_every_signed_in_user(user: Any) -> bool:
@@ -1913,11 +1928,13 @@ def _outcome(result: Any) -> tuple[str, str] | str:
 def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admits(
     db: None, settings: Any, app_label: str, model_name: str, selector: str, root: str, admission: str,
 ) -> None:
-    """Four actors, each on its own retired row: the read run, then the repair update, side by side.
+    """Four actors, each on its own retired row: the read, the repair update and an insert choosing the class.
 
     Where the create flow's admission admits the actor (IAM's administrators; every signed-in person under an
-    open admission), the read answers exactly as the update does, in the update's words. Where it does not, the
-    read refuses whatever the update would do: write on the record grants no repair the create flow does not.
+    open admission), the read answers exactly as the update does, in the update's words. Where it does not,
+    both are refused: the read by the admission, and the update, which names the selector, by the same
+    admission, or first by the resource's own administrator-only write permission classes. Write on the record
+    grants no choice of class the create flow does not. The insert shows who may choose a class when creating.
     """
 
     from django.apps import apps
@@ -1936,8 +1953,24 @@ def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admit
           update_{root}_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ id }}
         }}
     """
+    insert = f"mutation($object: {root}_insert_input!) {{ insert_{root}_one(object: $object) {{ id }} }}"
+    insert_fields = schema._schema.get_type(f"{root}_insert_input")
+    insert_fields = insert_fields.fields if insert_fields is not None else {}
 
-    def side_by_side(actor_kind: str) -> tuple[tuple[str, str] | str, tuple[str, str] | str]:
+    def chooses_on_create(row: Any, actor: Any) -> str:
+        """Whether the console's insert lets ``actor`` choose the class: its create's gate, not the row's validation."""
+
+        if f"insert_{root}_one" not in schema._schema.get_type("Mutation").fields:
+            return "no insert root"
+        if selector not in insert_fields:
+            return "not by the insert"
+        values = {selector: registered.upper()}
+        if "vendor" in insert_fields:
+            values["vendor"] = _public_id(row.vendor)
+        result = execute_schema(schema, insert, {"object": values}, user=actor)
+        return "refused" if result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED" else "admitted"
+
+    def side_by_side(actor_kind: str) -> tuple[Any, Any, str]:
         slug = f"agree-{root[:12]}-{selector[:4]}-{admission}-{actor_kind}".replace("_", "-")
         row = make_integration(slug, model=model)
         store_column(field.model, row.pk, field.column, "retired")
@@ -1964,14 +1997,57 @@ def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admit
         by_update = _outcome(execute_schema(
             schema, update, {"id": target, "set": {selector: registered.upper()}}, user=actor,
         ))
-        return by_read, by_update
+        return by_read, by_update, chooses_on_create(row, actor)
 
+    on_create = _CHOSEN_ON_CREATE[(root, selector)]
     for actor_kind in ("admin", "owner", "reader", "stranger"):
-        by_read, by_update = side_by_side(actor_kind)
+        by_read, by_update, by_insert = side_by_side(actor_kind)
         if admission == "open" or actor_kind == "admin":
             assert by_read == by_update, (actor_kind, by_read, by_update)
         else:
             assert by_read == _NOT_ADMITTED, (actor_kind, by_read)
+            assert by_update == (_ADMIN_REQUIRED if root in _ADMINISTRATOR_WRITES else _NOT_ADMITTED), (
+                actor_kind, by_update,
+            )
+        if on_create == "administrators":
+            assert by_insert == ("admitted" if actor_kind == "admin" else "refused"), (actor_kind, by_insert)
+        else:
+            assert by_insert == on_create, (actor_kind, by_insert)
+
+
+_ADMISSIONS_ASKED: list[Any] = []
+
+
+def _admit_and_count(user: Any) -> bool:
+    """A test host's choices admission that admits everyone and records whom it was asked about."""
+
+    _ADMISSIONS_ASKED.append(user)
+    return True
+
+
+def test_an_update_asks_the_choices_admission_only_when_it_names_a_create_only_selector(
+    db: None, settings: Any,
+) -> None:
+    """The owner's ordinary update asks nothing more; the same owner's update naming the selector asks once."""
+
+    del db
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = f"{__name__}._admit_and_count"
+    channel = make_integration("asks-only-selector", model=Channel)
+    store_column(Channel, channel.pk, "backend_class", "retired")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    update = """
+        mutation($id: String!, $set: channels_set_input!) {
+          update_channels_by_pk(pk_columns: {id: $id}, _set: $set) { id }
+        }
+    """
+    key = Channel._meta.get_field("backend_class").registered_keys()[0].upper()
+    _ADMISSIONS_ASKED.clear()
+
+    target = _public_id(channel)
+    renamed = execute_schema(schema, update, {"id": target, "set": {"display_name": "Renamed"}}, user=channel.owner)
+    assert _outcome(renamed) == "ok" and _ADMISSIONS_ASKED == []
+    repaired = execute_schema(schema, update, {"id": target, "set": {"backend_class": key}}, user=channel.owner)
+    assert _outcome(repaired) == "ok" and _ADMISSIONS_ASKED == [channel.owner]
 
 
 @pytest.mark.parametrize(("app_label", "model_name", "root"), _NO_UPDATE_ROOT)

@@ -100,7 +100,7 @@ from angee.graphql.data.resource_fields import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.impl import ImplChoice, repair_impl_choices
+from angee.graphql.impl import ImplChoice, repair_impl_choices, require_impl_choices_admitted
 from angee.graphql.introspection import (
     FieldPathError,
     django_model,
@@ -372,6 +372,7 @@ class AngeeHasuraWriteBackend:
 
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
+        self.require_selectors_admitted(info, patch)
         with transaction.atomic():
             patch, extensions = self._split_input(patch)
             decoded = self._decode_public_id_fields(patch)
@@ -494,10 +495,37 @@ class AngeeHasuraWriteBackend:
             prepared.append((str(public_id) if public_id else None, values))
         return prepared
 
+    def require_selectors_admitted(self, info: strawberry.Info, data: Mapping[str, Any]) -> None:
+        """Refuse a write naming a create-only selector of this model unless the create flow admits the actor.
+
+        An update that names one chooses an implementation, as its repair read does, so it asks the same
+        admission (:func:`~angee.graphql.impl.require_impl_choices_admitted`, the one owner) before the
+        update's own decision on the row: the resource's ``write_permission_classes`` (asked before the
+        resolver), the admission, then ``authorize_update`` and the model's save. A write naming none asks
+        nothing more. Code-level saves are not affected: a worker or a sync job has no request and no actor
+        to admit, and the model's own rules on the selector stand.
+        """
+
+        for name in create_only_selectors(self.model):
+            if name in data:
+                require_impl_choices_admitted(info, self.model, name)
+
     def update(
         self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None
     ) -> Any:
-        """Patch one public-id-addressed row through the write queryset, then its input extensions."""
+        """Patch one public-id-addressed row: the selectors it names admitted first, then :meth:`_update_admitted`."""
+
+        self.require_selectors_admitted(info, data)
+        return self._update_admitted(info, pk, data, expected_revision=expected_revision)
+
+    def _update_admitted(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None
+    ) -> Any:
+        """Patch an admitted update through the write queryset, then its input extensions.
+
+        A subclass adding to the update's own decision on the row overrides this, so the selectors' admission
+        stays first.
+        """
 
         with transaction.atomic():
             data, extensions = self._split_input(data)

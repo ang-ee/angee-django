@@ -24,13 +24,16 @@ from angee.base.models.implementations import ImplDefaultsMixin, readable_impl_d
 from angee.graphql.mixins import ImplementationChoicesMixin
 
 IMPL_CHOICES_ADMISSION = "ANGEE_IMPL_CHOICES_ADMISSION"
-"""The hook setting naming who may read implementation choices: a callable taking the session user.
+"""The hook setting naming who may choose an implementation through the API: a callable taking the session user.
 
-It names one intent, who may read a selector's implementations (and so be offered a repair), and is
-kept apart from ``ANGEE_PROFILING_PERMISSION``, who may profile requests, even where a host points both
-at the same check (IAM points both at ``is_platform_admin``): two intents stay two settings, never one
-generic administrator check.
+It names one intent, who may choose a selector's implementation: read its choices, be offered a repair,
+and send an update that names a create-only selector. It is kept apart from ``ANGEE_PROFILING_PERMISSION``,
+who may profile requests, even where a host points both at the same check (IAM points both at
+``is_platform_admin``): two intents stay two settings, never one generic administrator check.
 """
+
+IMPL_CHOICES_REFUSED = "This actor may not choose an implementation."
+"""The admission's one refusal, the same for a read of the choices and for an update naming a selector."""
 
 
 @strawberry.type
@@ -54,10 +57,11 @@ class ImplChoice:
 
 
 def impl_choices_admitted(info: strawberry.Info, model: str | type[models.Model], field: str) -> bool:
-    """Whether the request's actor may read ``model.field``'s implementation choices: the create flow's admission.
+    """Whether the request's actor may choose ``model.field``'s implementation: the create flow's admission.
 
-    The one owner of that admission, which the ``impl_choices`` root and every resource's generated repair
-    read ask: the ``ANGEE_IMPL_CHOICES_ADMISSION`` hook's answer for the session user (IAM points it at
+    The one owner of that admission, which the ``impl_choices`` root, every resource's generated repair
+    read and every update naming a create-only selector (``AngeeHasuraWriteBackend.update``) ask: the
+    ``ANGEE_IMPL_CHOICES_ADMISSION`` hook's answer for the session user (IAM points it at
     ``is_platform_admin``), or the model's own ``can_read_impl_choices`` policy. With no hook set only the
     model's policy admits: closed by default. An anonymous request is refused as unauthenticated.
     """
@@ -72,10 +76,10 @@ def impl_choices_admitted(info: strawberry.Info, model: str | type[models.Model]
 
 
 def require_impl_choices_admitted(info: strawberry.Info, model: str | type[models.Model], field: str) -> None:
-    """Refuse an actor :func:`impl_choices_admitted` does not admit, in the choices read's one refusal."""
+    """Refuse an actor :func:`impl_choices_admitted` does not admit, in its one refusal (``IMPL_CHOICES_REFUSED``)."""
 
     if not impl_choices_admitted(info, model, field):
-        raise PermissionDenied("Implementation choices are not readable by this actor.")
+        raise PermissionDenied(IMPL_CHOICES_REFUSED)
 
 
 def impl_choices(model: str, field: str) -> list[ImplChoice]:
