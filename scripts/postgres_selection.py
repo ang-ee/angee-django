@@ -1,16 +1,15 @@
 """Print the PostgreSQL lane's tests for a run, or the groups that split them.
 
 The lane's selection is ``.github/postgres-selection.txt``: test files and node ids, one
-per line. Reads on stdin the test files a change reaches, as ``changed_path_selection.py``
-prints them (a reached directory reaches every entry under it), and prints the entries
+per line. Reads on stdin the shared test paths from the ``changed_path_selection.py`` plan
+(a reached directory reaches every entry under it), and prints the entries
 whose test file is reached, one per line, with the examples profile's planner gate, which
 budgets what any permission change adds to the console's reads. ``--all`` prints every
 entry and reads nothing. ``--groups`` prints instead the groups, as a JSON list, that split
 the printed entries' stored time (``.test_durations_postgres``) as finely as six groups
 split the whole selection's.
 
-    git diff --name-only <base> | uv run --locked python scripts/changed_path_selection.py \\
-        | uv run --locked python scripts/postgres_selection.py [--groups]
+    uv run --locked python scripts/postgres_selection.py [--groups] < reached-paths.txt
     uv run --locked python scripts/postgres_selection.py --all [--groups]
 """
 

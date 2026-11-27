@@ -230,6 +230,7 @@ bypass-selection = true
 only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 
 [tool.pytest.ini_options]
+markers = ["shared_inputs: reads inputs across the composed host or repository"]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]

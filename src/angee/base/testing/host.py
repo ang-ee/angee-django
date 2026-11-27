@@ -1,18 +1,16 @@
-"""Compose a test host for an addon's dependency closure and run the addon's own tests in it.
+"""Compose an addon's test host from its declared root apps and run native pytest.
 
-An addon whose tests live in its ``tests`` package runs them on a host that installs
-only that addon, its ``testing`` app when it ships one, and what their native
-requirements enable (``django_compose.components.enabled_apps``). The composer emits
-the concrete models, so the tests read them from the app registry; nothing copies
-composition by hand. The host is written under ``.test-hosts/<addon>/`` and composed
+The compiler resolves the addon and any explicit ``--app`` roots, then emits their
+concrete models. Tests read those models from the app registry. The host lives
+under ``.test-hosts/<addon>/`` and is composed
 with ``--if-stale``, so a host whose composition inputs have not changed since its last
 run starts without composing again::
 
     uv run --locked python -m angee.base.testing.host angee.uom [pytest arguments]
 
 The run uses SQLite unless ``DATABASE_URL`` names a PostgreSQL server, which then gets a
-test database of the addon's own. pytest loads the ``testing.fixtures`` plugin of every
-enabled app that ships one, and no conftest above the addon's package.
+test database of the addon's own. An addon-local pytest.ini owns test paths and
+optional plugins, and pytest loads no conftest above the addon's package.
 """
 
 from __future__ import annotations
@@ -123,44 +121,40 @@ def host_environ(host_root: Path, environ: Mapping[str, str]) -> dict[str, str]:
     return host
 
 
-def run(addon: str, pytest_args: Sequence[str], *, hosts_dir: Path, timeout: int = 1500) -> int:
-    """Compose ``addon``'s test host and run its ``tests`` package there; return pytest's exit code."""
-
-    from django_compose.components import enabled_apps
+def run(
+    addon: str, pytest_args: Sequence[str], *, hosts_dir: Path, apps: Sequence[str] = (), timeout: int = 1500,
+) -> int:
+    """Compose the addon and explicit extra roots, then run pytest in the addon directory."""
 
     spec = importlib.util.find_spec(addon)
     if spec is None or not spec.submodule_search_locations:
         raise ImproperlyConfigured(f"{addon} is not an importable package")
     package = Path(next(iter(spec.submodule_search_locations)))
-    if not (package / "tests").is_dir():
-        raise ImproperlyConfigured(f"{addon} has no tests package")
-    # Paths, not imports: a testing package may import models, and Django is not set up here.
-    roots = [addon, *([f"{addon}.testing"] if (package / "testing" / "apps.py").is_file() else [])]
+    config = package / "pytest.ini"
+    if not config.is_file():
+        raise ImproperlyConfigured(f"{addon} has no addon-local pytest.ini declaring its tests")
     host_root = (hosts_dir / addon).resolve()
     if database_url := os.environ.get("DATABASE_URL"):
         import environ as django_environ
 
+        from angee.base.conf import disable_jit
+
         database = django_environ.Env.db_url_config(database_url)
         if database["ENGINE"] != "django.db.backends.postgresql":
             raise ImproperlyConfigured("A test host takes a PostgreSQL DATABASE_URL or none.")
+        disable_jit(database)
         database["TEST"] = {"NAME": f"test_{addon.replace('.', '_')}"}
     else:
         database = sqlite_database(host_root / "test.sqlite3")
-    write(host_root, roots, database)
+    write(host_root, [addon, *apps], database)
     environ = host_environ(host_root, os.environ)
     compose(host_root, environ, if_stale=True, timeout=timeout)
-    plugins = [
-        f"{entry.name}.testing.fixtures"
-        for entry in enabled_apps(roots, group="angee.addons").app_entries
-        if (Path(entry.path) / "testing" / "fixtures.py").is_file()
-    ]
     return subprocess.run([
         # The host owns the import path: pytest-django must not add an enclosing project's.
         sys.executable, "-m", "pytest", "--ds", SETTINGS_MODULE, "-o", "django_find_project=false",
-        "--confcutdir", str(package),
-        "--nomigrations", "-p", "django", *(argument for plugin in plugins for argument in ("-p", plugin)),
-        str(package / "tests"), *pytest_args,
-    ], env=environ, check=False, timeout=timeout).returncode
+        "-c", str(config), "--confcutdir", str(package), "--nomigrations",
+        "-p", "django", "-p", "angee.base.testing.fixtures", *pytest_args,
+    ], cwd=package, env=environ, check=False, timeout=timeout).returncode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -171,9 +165,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="python -m angee.base.testing.host", description=__doc__.splitlines()[0], allow_abbrev=False,
     )
     parser.add_argument("addon", help="the addon's app name, such as angee.uom")
+    parser.add_argument("--app", action="append", default=[], help="explicit extra app root (repeatable)")
     parser.add_argument("--hosts-dir", type=Path, default=Path(".test-hosts"), help="where hosts are written")
     options, pytest_args = parser.parse_known_args(argv)
-    return run(options.addon, pytest_args, hosts_dir=options.hosts_dir)
+    return run(options.addon, pytest_args, hosts_dir=options.hosts_dir, apps=options.app)
 
 
 if __name__ == "__main__":
