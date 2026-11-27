@@ -3,6 +3,8 @@
 import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { AppRuntimeProvider, ModalsHost, ToastProvider } from "@angee/ui";
+import { recordFocusCalls } from "@angee/ui/testing";
+import type { ActionOutcome } from "@angee/refine";
 import type { ReactElement, ReactNode } from "react";
 
 /** Under an app runtime, as a page is: it holds the chatter box's idempotency key. */
@@ -750,6 +752,38 @@ describe("RecordThreadStream", () => {
       { body: "A new milestone" }, { record: { id: "prj_1", permissions: ["write"] }, selectedIds: [] },
       { errorNotification: false },
     ));
+  });
+
+  test.each<[string, ActionOutcome, string]>([
+    ["for the whole of it", { ok: false, message: "This thread is closed to new updates." }, "This thread is closed to new updates."],
+    // The composer claims its body argument: the body's reason is said once, by the banner that holds the editor's reasons.
+    ["for its body", { ok: false, message: "The update is too long.", validationErrors: { body: ["The update is too long."] } }, "The update is too long."],
+  ])("a create the verb refuses %s says its reason once and brings focus from the composer to the banner that says it", async (_name, outcome, reason) => {
+    const submit = vi.fn(async () => outcome);
+    render(<ToastProvider><RecordThreadStream heading={{ label: "Updates" }} source={{
+      kind: "children", modelLabel: "projects.Task", items: [],
+      createAction: { id: "create-update", label: "Post update", permission: "write",
+        record: { id: "prj_1", permissions: ["write"] }, args: [{ name: "body" }], submit },
+      createComposer: { bodyArg: "body", prompt: "What moved?" },
+    }} /></ToastProvider>);
+    fireEvent.change(screen.getByPlaceholderText("What moved?"), { target: { value: "A new milestone" } });
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Post update" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    // A click moves no focus in the test DOM: the button holds it first, as a person's press leaves it.
+    button.focus();
+    const recorder = recordFocusCalls();
+    try {
+      fireEvent.click(button);
+      const banner = (await screen.findByText(reason)).closest<HTMLElement>("[role='alert']");
+      expect(banner).not.toBeNull();
+      expect((document.body.textContent ?? "").split(reason).length - 1).toBe(1);
+      await waitFor(() => expect(document.activeElement).toBe(banner));
+      // The banner is what was asked to take focus, and the test DOM shows it can.
+      expect(recorder.calls.map((call) => ({ banner: call.target === banner, takesFocus: call.takesFocus })))
+        .toEqual([{ banner: true, takesFocus: true }]);
+    } finally {
+      recorder.restore();
+    }
   });
 });
 

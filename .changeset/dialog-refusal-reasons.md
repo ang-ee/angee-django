@@ -23,7 +23,7 @@ form holds when the answer lands, so a reason under a hidden field, a field
 its `showWhen` hides or a field of an inactive schema
 branch shows on the banner, as `key: reason`, instead of being bound to a field
 nobody sees. `ActionFormDefinition.fieldNames` is removed and
-`jsonSchemaActionArgs` no longer returns it. `UseActionFormOptions.fieldNames`
+`jsonSchemaActionArgs` no longer returns it. `UseActionFormOptions.shownFieldNames`
 also takes a function of the form's values, read when the answer lands. A row's
 direct submit (`useDescriptorRowActions` with `valuesFromRow`) whose result is
 refused for its fields only toasts under the verb's label, not its id (the id

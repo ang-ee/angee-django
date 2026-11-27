@@ -112,7 +112,7 @@ describe("DescriptorFieldList", () => {
     const values = (name: string) => nested ? { details: { config: { name } } } : { config: { name } };
     function Harness() {
       const action = useActionForm<Record<string, unknown>>({
-        defaultValues: values("Original"), submit,
+        defaultValues: values("Original"), submit, shownFieldNames: fields.map((field) => field.name),
         resolver: (collected) => new Promise((resolve) => { finishValidation = () => resolve({ values: collected, errors: {} }); }),
       });
       return <ActionFormProvider {...action.form}>
@@ -153,7 +153,7 @@ describe("DescriptorFieldList", () => {
     const submit = vi.fn(async () => ({ status: "ok" as const, data: null }));
     function Harness() {
       const [mode, setMode] = useState<"json" | "text" | "readOnly">("json");
-      const action = useActionForm<Record<string, unknown>>({ defaultValues: { payload: { note: "Retained" } }, submit });
+      const action = useActionForm<Record<string, unknown>>({ defaultValues: { payload: { note: "Retained" } }, submit, shownFieldNames: ["payload"] });
       return <ActionFormProvider {...action.form}>
         <form onSubmit={(event) => { event.preventDefault(); void action.run(); }}>
           <DescriptorFieldList fields={[{ name: "payload", label: "Payload", widget: mode === "text" ? "text" : "json", readOnly: mode === "readOnly" }]} />

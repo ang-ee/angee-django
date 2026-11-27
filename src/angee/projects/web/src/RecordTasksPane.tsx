@@ -1,4 +1,4 @@
-import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery } from "@angee/refine";
+import { extractActionOutcome, useAuthoredMutation, useAuthoredQuery, type ActionOutcome } from "@angee/refine";
 import * as React from "react";
 import {
   Button,
@@ -28,8 +28,9 @@ import {
   useActionOutcomeMutation,
   useActionResultRun,
   useConfirm,
+  useController,
   useUiT,
-  useWatch,
+  type FormSubmitResult,
   type ResolverResult,
 } from "@angee/ui";
 import type { ActionFieldName } from "@angee/gql/console/actions";
@@ -61,6 +62,44 @@ interface TaskFormValues {
 }
 
 const EMPTY_FORM: TaskFormValues = { text: "", note: "", day: "", activityType: "" };
+
+/**
+ * The fields the form can show, in its order: a refusal's reason under one it draws shows at its
+ * control. It draws the kind only when the catalog lists one (`kindShown`).
+ */
+const SHOWN_FIELDS: readonly (keyof TaskFormValues)[] = ["text", "note", "activityType", "day"];
+
+/**
+ * Each verb's name for a form field it does not take under the field's own name: the submit step
+ * sends the field under it, and a refusal's reasons under it come back to the field. The text is
+ * the schedule's title and the log's note. The log's note carries the form's note after the text,
+ * so the server's one `note` key always lands on the text and the form's note is never marked there.
+ */
+const VERB_NAMES = {
+  schedule: { text: "title", day: "dueDate" },
+  log: {
+    text: "note",
+    // The refusal's key, not the argument: the log takes the day as `occurredOn` and refuses it
+    // under `dueDate`, so its submit step sends `occurredOn` itself. When the verb refuses under
+    // its own argument, this line reads `occurredOn` and the submit step reads it here.
+    day: "dueDate",
+  },
+} as const satisfies Record<Mode, Partial<Record<keyof TaskFormValues, string>>>;
+
+/** A refusal's reasons moved from the verb's `names` for the fields to the fields; other keys stay. */
+function reasonsOnFields(
+  result: FormSubmitResult<ActionOutcome>,
+  names: Readonly<Partial<Record<keyof TaskFormValues, string>>>,
+): FormSubmitResult<ActionOutcome> {
+  if (result.status !== "invalid") return result;
+  const fieldOf = new Map(Object.entries(names).map(([field, name]) => [name, field]));
+  const fieldErrors: Record<string, readonly string[]> = {};
+  for (const [name, reasons] of Object.entries(result.issues.fieldErrors)) {
+    const field = fieldOf.get(name) ?? name;
+    fieldErrors[field] = [...(fieldErrors[field] ?? []), ...reasons];
+  }
+  return { ...result, issues: { ...result.issues, fieldErrors } };
+}
 
 /** The Tasks tab: the record's open or done tasks as pane rows under a scope
  * toolbar, a row's note and completion note when opened, then the scheduler and
@@ -95,6 +134,10 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
   const [scope, setScope] = React.useState<"open" | "done">("open");
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const textRef = React.useRef<HTMLInputElement | null>(null);
+  const kinds = tasksQuery.data?.activity_types ?? [];
+  // The kind is drawn, claimed and checked only when the catalog lists one to choose; with none,
+  // a reason under it shows on the banner and the server's answer decides a log's kind.
+  const kindShown = kinds.length > 0;
   const form = useActionForm<TaskFormValues>({
     defaultValues: EMPTY_FORM,
     resolver: (values): ResolverResult<TaskFormValues> => {
@@ -102,38 +145,47 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
       const errors: Record<string, { type: string; message: string }> = {};
       if (!text) errors.text = { type: "required", message: uiT("form.required") };
       if (mode === "log" && !values.day) errors.day = { type: "required", message: uiT("form.required") };
-      if (mode === "log" && !values.activityType) {
+      if (mode === "log" && kindShown && !values.activityType) {
         errors.activityType = { type: "required", message: uiT("form.required") };
       }
       return Object.keys(errors).length ? { values: {}, errors } : { values: { ...values, text }, errors: {} };
     },
-    submit: async ({ text, note, day, activityType }, options) =>
-      actionOutcomeSubmitResult(
-        mode === "log"
-          ? extractActionOutcome(
-            await logTask({ ...variables, activityType, occurredOn: day, note: note ? `${text}\n${note}` : text }, options),
-            "log_record_task",
-          )
-          : extractActionOutcome(
-            await scheduleTask({
-              ...variables, title: text, note, dueDate: day || null, activityType: activityType || null,
-            }, options),
-            "schedule_record_task",
-          ),
-      ),
+    shownFieldNames: kindShown ? SHOWN_FIELDS : SHOWN_FIELDS.filter((field) => field !== "activityType"),
+    submit: async ({ text, note, day, activityType }, options) => {
+      // A kind the pane does not draw is not sent: one chosen before the catalog emptied is still
+      // among the form's values.
+      const kind = kindShown ? activityType : "";
+      if (mode === "log") {
+        const names = VERB_NAMES.log;
+        const answer = await logTask({
+          ...variables, activityType: kind, [names.text]: note ? `${text}\n${note}` : text,
+          // Not `names.day`, the key the log refuses the day under (see `VERB_NAMES`).
+          occurredOn: day,
+        }, options);
+        return reasonsOnFields(actionOutcomeSubmitResult(extractActionOutcome(answer, "log_record_task")), names);
+      }
+      const names = VERB_NAMES.schedule;
+      const answer = await scheduleTask({
+        ...variables, [names.text]: text, note, [names.day]: day || null, activityType: kind || null,
+      }, options);
+      return reasonsOnFields(actionOutcomeSubmitResult(extractActionOutcome(answer, "schedule_record_task")), names);
+    },
     onSuccess: () => {
       form.form.reset(EMPTY_FORM);
     },
     toastSuccess: false,
     genericErrorMessage: mode === "log" ? t("recordTasks.errorLog") : t("recordTasks.errorSchedule"),
   });
+  // Each field hands the form its control, registered in the form's order: the form library focuses
+  // a field its own check refuses, and a refusal's focus reaches it through `setFocus`.
   const textField = form.form.register("text");
-  const day = useWatch({ control: form.form.control, name: "day" });
-  const activityType = useWatch({ control: form.form.control, name: "activityType" });
+  const noteField = form.form.register("note");
+  const { field: typeField, fieldState: { error: typeError } } = useController({ control: form.form.control, name: "activityType" });
+  const { field: dayField, fieldState: { error: dayError } } = useController({ control: form.form.control, name: "day" });
+  const day = dayField.value;
   const textError = form.form.formState.errors.text;
-  const dayError = form.form.formState.errors.day;
-  const typeError = form.form.formState.errors.activityType;
-  const kinds = tasksQuery.data?.activity_types ?? [];
+  const noteError = form.form.formState.errors.note;
+  const errorIds = React.useId();
   const kindByKey = React.useMemo(() => new Map(kinds.map((kind) => [kind.key, kind])), [kinds]);
   // The server orders them: open first, then by due date and title.
   const tasks = tasksQuery.data?.record_tasks ?? [];
@@ -263,31 +315,49 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
           />
           {textError ? <FieldRoot.Error match>{textError.message}</FieldRoot.Error> : null}
         </FieldRoot>
-        <Textarea
-          {...form.form.register("note")}
-          rows={2}
-          resize="none"
-          aria-label={t("recordTasks.note")}
-          placeholder={t("recordTasks.note")}
-        />
-        <div className="flex items-center gap-2">
-          {kindOptions.length > 0 ? (
-            <Select
-              aria-label={t("recordTasks.type")}
-              placeholder={t("recordTasks.type")}
-              options={kindOptions}
-              value={activityType}
-              onValueChange={(value) => form.form.setValue("activityType", value, { shouldDirty: true })}
-            />
+        {/* The field marks the text input and the kind's select and ties their reason itself; the
+            note's textarea and the day's popover trigger are not its controls, so they carry both by hand. */}
+        <FieldRoot invalid={Boolean(noteError)}>
+          <Textarea
+            {...noteField}
+            rows={2}
+            resize="none"
+            aria-label={t("recordTasks.note")}
+            placeholder={t("recordTasks.note")}
+            aria-invalid={noteError ? true : undefined}
+            aria-describedby={noteError ? `${errorIds}-note` : undefined}
+          />
+          {noteError ? <FieldRoot.Error id={`${errorIds}-note`} match>{noteError.message}</FieldRoot.Error> : null}
+        </FieldRoot>
+        <div className="flex items-start gap-2">
+          {kindShown ? (
+            <FieldRoot invalid={Boolean(typeError)} className="w-full">
+              <Select
+                triggerRef={typeField.ref}
+                aria-label={t("recordTasks.type")}
+                placeholder={t("recordTasks.type")}
+                options={kindOptions}
+                value={typeField.value}
+                onValueChange={(value) => typeField.onChange(value)}
+                // Its border: the select draws it from its own prop, not from the field.
+                invalid={Boolean(typeError)}
+              />
+              {typeError ? <FieldRoot.Error match>{typeError.message}</FieldRoot.Error> : null}
+            </FieldRoot>
           ) : null}
-          <div className="min-w-0 flex-1">
+          <FieldRoot invalid={Boolean(dayError)} className="min-w-0 flex-1">
             <DatePopover
+              triggerRef={dayField.ref}
+              controlProps={{
+                id: `${errorIds}-day-control`,
+                ...(dayError ? { "aria-invalid": true, "aria-describedby": `${errorIds}-day` } : {}),
+              }}
               selected={dateFromValue(day)}
               label={dayLabel}
               ariaLabel={mode === "log" ? t("recordTasks.occurredOn") : t("recordTasks.dueDate")}
               open={dateOpen}
               onOpenChange={setDateOpen}
-              onSelectDate={(date) => form.form.setValue("day", formatDateStorage(date) ?? "", { shouldDirty: true })}
+              onSelectDate={(date) => dayField.onChange(formatDateStorage(date) ?? "")}
               footer={
                 day ? (
                   <Button
@@ -296,7 +366,7 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
                     size="sm"
                     className="mt-2 w-full"
                     onClick={() => {
-                      form.form.setValue("day", "", { shouldDirty: true });
+                      dayField.onChange("");
                       setDateOpen(false);
                     }}
                   >
@@ -306,14 +376,14 @@ export function RecordTasksPane({ context }: RecordTasksPaneProps): React.ReactE
                 ) : null
               }
             />
-          </div>
+            {dayError ? <FieldRoot.Error id={`${errorIds}-day`} match>{dayError.message}</FieldRoot.Error> : null}
+          </FieldRoot>
           <Button type="submit" variant="primary" size="sm" disabled={form.submitting}>
             <Glyph name={mode === "log" ? "check" : "calendar"} />
             {mode === "log" ? t("recordTasks.log") : t("recordTasks.schedule")}
           </Button>
         </div>
-        {(dayError ?? typeError) ? <ErrorBanner description={(dayError ?? typeError)?.message} /> : null}
-        <ErrorBanner messages={form.formErrors} />
+        <ErrorBanner {...form.banner} messages={form.formErrors} />
       </FormRoot>
     </div>
   );

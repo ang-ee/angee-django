@@ -1381,12 +1381,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   on its banner otherwise; a reason under a name only a `content` editor holds
   shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  The surface names the fields it shows (`shownFieldNames`) and each claims the
+  reasons under its path; `useActionForm` requires them of every caller, and
+  `[]` states that the form shows none.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
   and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
   several as a list; never join them into one text. A surface that asks
   (`applyFormErrors` with `focus` and a `fieldSummary`; the record form and
-  both form dialogs do)
+  both form dialogs do, and an inline action form asks `focus` only, through
+  `useActionForm`, whose `banner` it spreads on its banner)
   has a refused submit bring the person to its reasons, and `applyFormErrors`
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries

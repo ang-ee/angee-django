@@ -10,6 +10,57 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, projects, workflows, messaging: **Changed contract.** An inline
+  action form says a refused field's reason at that field and brings the person
+  to the refusal. The option of `applyFormErrors` that lists the fields a
+  surface shows is renamed `shownFieldNames` (on a descriptor form, the names of
+  what `shownFields` returns); `useActionForm` takes it under the same name and
+  requires it, so a form that shows no field a reason can sit under says `[]`
+  and one that says nothing does not compile. `useDottedPathFieldErrors` names
+  its parameter the same way, and `useController` is exported beside
+  `useWatch`. The tasks pane passed no list: a refused schedule or log showed
+  every reason on its banner as `key: reason` (`title: …`, `dueDate: …`),
+  marked no field, left focus on its submit button and said a kind's reason
+  twice, and its own checks of the day and the kind shared one banner line that
+  showed only the first. Now it claims the fields it draws: the text, the note
+  and the day, and the kind when the catalog lists one to choose. With none, a
+  reason under the kind shows on the banner as `activityType: …`, and a schedule
+  or a log goes out without a kind for the server to decide, a kind chosen
+  before the catalog emptied included. `useActionForm` reads its list, and the
+  line naming the refused fields, when the answer lands, so a kind drawn or
+  gone while the submit was out is claimed, or left to the banner, as the pane
+  shows it then. One table per mode names a field the verb does not take under
+  the field's own name: the schedule takes the text
+  as `title` and the day as `dueDate`, the log the text as `note`, with the
+  form's note after it, so the log's one `note` reason lands on the text. The
+  submit step sends the fields under those names and a refusal's reasons under
+  them come back to the fields. The log takes the day as `occurredOn` but
+  refuses it under `dueDate`, so the log's line holds the refusal's key and its
+  submit step sends `occurredOn` itself until the verb names its own argument.
+  Each field it draws says its reason once, under its control, which is marked
+  and drawn invalid and described by it, and the pane's own `required` checks
+  show the same way, two at once included; each hands the form its control
+  (`register`'s ref, or `useController`'s `field.ref` for the kind's select and
+  the day's popover trigger), so a refusal of fields only focuses the first
+  refused one in the form's order and one with a reason no field shows focuses
+  the banner. The assignee, which the pane shows no control for, stays on the
+  banner as `assignee: …`. The workflow studio (`shownFieldNames: []`) and a
+  record thread's foot composer (its body argument) spread the hook's `banner`
+  on their banner, so a refused post, and a save the studio refuses for anything
+  but a stale revision, brings focus there; a stale revision shows the studio's
+  conflict alert in place of that banner. `applyFormErrors` keeps its list
+  optional: without one, every reason stays at its path and no field's reason
+  reaches the banner, for a caller that knows no drawn fields (`createJsonSchemaResolver`'s
+  errors, the studio's projection of its issues); the record form's lines
+  conflict now passes `[linesField]`, which binds it as before.
+  Upgrade: rename `fieldNames` to `shownFieldNames` on `applyFormErrors` and
+  `useActionForm`; a `useActionForm` caller that passed none passes the fields
+  its form shows, or `[]`. Not in this change: a line naming the refused fields
+  on an inline form's banner (`fieldSummary`); the studio's own issue banner;
+  the composer's body reason, which stays on its banner; and a log refused under
+  `title`, a key no field of the log names, which shows on the banner as
+  `title: …`.
+
 - `@angee/ui`, `@angee/metadata`: **Changed contract.** A grouped list orders its
   groups by what it groups by. A list grouped by status lists blocked, closed,
   open, pending however its records are sorted; a list grouped by month lists
@@ -257,7 +308,7 @@ live in code docstrings.
   message only when the outcome carries no reason, the rule `runActionResult`
   applies; `ActionFormDialog` tells the binder the fields it renders when the
   answer lands. `ActionFormDefinition.fieldNames` is removed and
-  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.fieldNames`
+  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.shownFieldNames`
   also takes a function of the form's values. Unchanged: a record form's save
   refusal, which the server already splits into field and form reasons and
   which never passes through the adapter, and the record bar's toast for a
@@ -268,9 +319,8 @@ live in code docstrings.
   field"; where a field's control still
   takes no focus (a member of a rows, object or list field, say) the banner
   takes it, and it names the field but no longer repeats its reason.
-  Nor inline action forms that claim no field (`useActionForm`'s empty
-  default), whose banner still repeats a field's reason as `key: reason`, nor a
-  raised domain error reading "Request failed." or its code.
+  Nor a raised domain error reading "Request failed." or its code; inline
+  action forms are the entry at the top of this section.
 - `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
   Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
   `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so

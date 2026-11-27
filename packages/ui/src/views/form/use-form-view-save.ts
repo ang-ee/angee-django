@@ -729,7 +729,7 @@ export function useFormViewSave({
     const values = form.getValues();
     const shown = shownFields(checkFields, values);
     return applyFormErrors(form, result, {
-      fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
+      shownFieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
       focus: (field) => {
@@ -892,7 +892,7 @@ export function useFormViewSave({
         // whose generated IDs cannot be matched to a concurrently edited draft.
         if (lineBaseline.some((row) => row[linesConfig.idField] == null)
           || !sameObservedLines(lineBaseline, rowsFromRecord(latest) ?? [], linesConfig)) {
-          applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField });
+          applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField }, { shownFieldNames: [linesField] });
           return;
         }
       }
