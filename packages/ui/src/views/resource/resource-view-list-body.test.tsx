@@ -196,6 +196,9 @@ test("a null implementation key reads as not registered, a null in another enum 
   expect(container.textContent).toBe("—");
   rerender(<ListCellContent column={backend!} row={{ backend_class: "LOCAL" }} metadata={metadata} />);
   expect(container.textContent).toBe("Local");
+  // A row that redacts the column reads null for that reason alone: no claim about its key.
+  rerender(<ListCellContent column={backend!} row={{ backend_class: null, redacted_fields: ["backend_class"] }} metadata={metadata} />);
+  expect(container.textContent).toBe("—");
 });
 
 test("a not registered cell wears the warning badge; a custom cell and a column through a relation are left alone", () => {

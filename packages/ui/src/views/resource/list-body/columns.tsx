@@ -10,7 +10,7 @@ import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, headerSort, pressedSorting, readPath } from "./cell-utils";
 import { groupLabel } from "./grouping";
 import { queryForColumns } from "../resource-query";
-import { isUnregisteredImplementation } from "../implementation-fields";
+import { storedImplementationUnregistered } from "../implementation-fields";
 export interface BuildColumnsOptions {
   /** The list's group axes, as the table state resolves them once (`useResourceViewTableState`). */
   axes?: readonly GroupAxis[];
@@ -159,7 +159,7 @@ function resolvedCellContent<TRow extends Row>(
   metadata: ModelMetadata | null | undefined,
   widget: WidgetDefinition | undefined,
 ): React.ReactNode {
-  if (!column.render && isUnregisteredImplementation(metadata, column.field, readPath(row, column.field))) {
+  if (!column.render && storedImplementationUnregistered(metadata, row, column.field)) {
     // The record form marks the same fact with the warning tone; the cell wears it through the badge.
     return <StatusBadge value={NOT_REGISTERED} tone={NOT_REGISTERED_TONE} display={column.statusDisplay}>
       {t("implementation.notRegistered")}
