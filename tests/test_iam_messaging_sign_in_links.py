@@ -1404,7 +1404,8 @@ def _link_read(sql: str, params: Any) -> bool:
 def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
     deliverable, iam_admin, settings, monkeypatch, depth,
 ):
-    """With ``DEBUG`` off, as a deployment's error mail runs: each depth of the send, the token minted by then."""
+    """With ``DEBUG`` off, as a deployment's error mail runs: each depth of the send, the token minted by then, and
+    the account's address from the action's own frame down."""
 
     settings.DEBUG = False
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
@@ -1427,6 +1428,7 @@ def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
     expected = {"before-the-render": PublicOriginUnavailable, "in-the-renders-refusal": ValidationError}
     assert isinstance(failed.value, expected.get(depth, DatabaseError))
     assert _reported(failed.value, address=target.email) == ([], [])
+    assert _reported_secret(failed.value, below="issue_sign_in_link", needle=target.email) == []
 
 
 def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(

@@ -115,6 +115,9 @@ class UserSignInLinks(Composable, extends="iam.User"):
         unavailable = () if SignInLink.deliverable() else ((Q(pk__isnull=False), SIGN_IN_LINK_UNAVAILABLE_MESSAGE),)
         return (*blockers, (inactive, "Only active accounts can receive a sign-in link."), *unavailable)
 
+    # The frame holds the account's address, and so do the frames below it until the next mark (messaging's
+    # recipient rule takes it under its own name): every local is hidden from an error report.
+    @sensitive_variables()
     def issue_sign_in_link(self) -> None:
         """Mail an active, unprotected person a single-use sign-in link, as system mail.
 
