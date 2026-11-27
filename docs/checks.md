@@ -57,6 +57,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Message template CPU-time bounds, skipped otherwise since they depend on the machine and its load: run whenever `src/angee/messaging_templates/` changes and at integration, serially, and report the times with the load | `ANGEE_TIMED_TESTS=1 env -u DATABASE_URL uv run --locked python -m pytest -q -s -n 0 tests/test_messaging_templates_render.py tests/test_messaging_templates_console.py` |
 | Message template mutations: drop or widen each rule that keeps a value text, and see that the value properties fail on generated examples alone where the mutation is a real break; run when those rules or their generator change, in a slot whose addon holds no uncommitted change (it restores the files) | `env -u DATABASE_URL uv run --locked python scripts/messaging_templates_mutations.py` |
 | Message templates console story fixture (`src/angee/messaging_templates/web/src/fixtures.recorded.json`), recorded from the test host: the test fails when the server's rows, words or schema drift from it; re-record it with the variable whenever they change, and review its diff. The recording and its check are SQLite's: a PostgreSQL host offers the `similar` and `notSimilar` filters on string fields, so the test skips there | `ANGEE_RECORD_FIXTURES=1 env -u DATABASE_URL uv run --locked python -m pytest -q tests/test_messaging_templates_console_fixture.py` |
+| Messaging composer story fixture (`src/angee/messaging/web/src/compose.fixtures.recorded.json`), recorded from the test host through the page's own documents: the test fails when the server's answers, words or schema drift from it; re-record it with the variable whenever they or a document of the page change, and review its diff; the recording and its check are SQLite's, and the module skips on PostgreSQL | `ANGEE_RECORD_FIXTURES=1 env -u DATABASE_URL uv run --locked python -m pytest -q tests/test_messaging_compose_console_fixture.py` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python import boundaries | `uv run --locked lint-imports` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
@@ -126,7 +127,8 @@ knowledge, [pgvector test-database readiness](../tests/test_postgresql_extension
 the test settings' [JIT-off sessions](../tests/test_postgresql_jit.py),
 messaging with its [channel owner](../tests/test_messaging_channel_concurrency.py) races,
 parties' [same-person pair](../tests/test_parties_same_as_concurrency.py) locks and
-[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) races,
+[handle-key repair](../tests/test_parties_handle_keys_concurrency.py) and
+[organization domain-key repair](../tests/test_parties_organization_domains_concurrency.py) races,
 [portfolio report](../tests/test_portfolio_concurrency.py) locks, proposals,
 sequences, spaces, storage with its
 [window-aligned download URLs and expiry](../tests/test_storage_access_campaign.py),

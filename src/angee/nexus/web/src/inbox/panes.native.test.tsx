@@ -13,6 +13,15 @@ import { InboxRelatedPane } from "./Related";
 import { InboxAccounts, InboxConnections, InboxNavigator, InboxNavigatorGroups, InboxRelatedTarget, InboxResultGroups, InboxResults, InboxSelection } from "./documents";
 import { COLLECTION_INITIAL, RESULTS_INITIAL, useInboxNavigation } from "./state";
 
+// Messaging's New message is its own suite's: here it stands in as the header control that reports a
+// written message's id, so the inbox's wiring of it is what this suite proves.
+vi.mock("@angee/messaging", async (original) => ({
+  ...await original<typeof import("@angee/messaging")>(),
+  NewMessageAction: ({ onSent }: { onSent?: (id: string) => void }) => (
+    <button type="button" onClick={() => onSent?.("msg-written")}>New message</button>
+  ),
+}));
+
 // The model metadata a test serves, as resource metadata would; every other model reads as it does.
 const served = vi.hoisted(() => ({ models: {} as Record<string, unknown> }));
 vi.mock("@angee/metadata", async (original) => {
@@ -308,4 +317,12 @@ test("a pending Links target keeps its label slot as a skeleton while its uses l
   expect(screen.getAllByRole("status").some((status) => status.textContent === "Loading inbox…")).toBe(true);
   expect(screen.queryByText("Pinned file")).toBeNull();
   expect(screen.queryAllByText(/Loading/, { ignore: ".sr-only, script, style" })).toEqual([]);
+});
+
+test("the results header offers New message beside clearing the selection, and a written message opens in the reader", async () => {
+  const f = fixture("results", "?sender=party:ada");
+  const header = (await screen.findByRole("button", { name: "Clear selection" })).parentElement!;
+  expect(within(header).getByRole("button", { name: "New message" })).toBeTruthy();
+  fireEvent.click(within(header).getByRole("button", { name: "New message" }));
+  await waitFor(() => expect(f.router.state.location.search).toMatchObject({ message: "msg-written", sender: "party:ada" }));
 });

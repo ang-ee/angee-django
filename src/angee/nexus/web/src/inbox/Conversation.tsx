@@ -1,14 +1,16 @@
 import { createContext, useContext, useEffect, useState, type ReactElement } from "react";
 import { useAuthoredQuery } from "@angee/refine";
-import { ThreadTranscript } from "@angee/messaging";
+import { ThreadTranscript, type ThreadTranscriptReply } from "@angee/messaging";
 import { Button, Chip, ErrorBanner, Glyph, PaneToolbarHost, RecordHeader, SkeletonStatus, SkeletonText } from "@angee/ui";
 import { InboxTranscriptMatches } from "./documents";
 import type { DocumentType } from "@angee/gql/console";
-import { INBOX_MODELS, type InboxNavigation, type InboxScope } from "./state";
+import { INBOX_MODELS, conversationLeaves, type InboxNavigation, type InboxScope } from "./state";
 import { useNexusT } from "../i18n";
 import { useInboxBreadcrumbs } from "./breadcrumbs";
 
 const Matches = createContext<readonly string[]>([]);
+/** Reply on the conversation's email: only leaving it asks about an unsent reply. */
+const INBOX_REPLY: ThreadTranscriptReply = { leaves: conversationLeaves };
 
 /** The open conversation as the subject: its compact header, then the full Messaging transcript
  *  annotated with result membership around the visible window. */
@@ -49,6 +51,7 @@ export function InboxConversation({
           timezone={scope.coverage.timezone}
           onAnchorChange={(at) => navigation.patch({ at: at || undefined })}
           onOpenReply={navigation.openInContext}
+          reply={INBOX_REPLY}
           toolbarActions={matches && matches.count < matches.total ? [
             { icon: "chevron-left", label: t("inbox.previousMatch"), text: true, disabled: !matches.previous,
               onClick: () => navigation.patch({ at: `message:${matches.previous}` }) },

@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from email import policy
 from email.parser import BytesHeaderParser
+from email.utils import parseaddr
 from functools import partial
 from hashlib import sha256
 from time import monotonic
@@ -70,6 +71,7 @@ from angee.integrate.sync import current_progress_bridge
 from angee.messaging.backends import ParsedMessage
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging_integrate_imap.parser import fallback_message, parse_message
+from angee.parties.models import Handle
 
 logger = logging.getLogger(__name__)
 
@@ -1002,16 +1004,20 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         return str(account.email or "").strip()
 
     def _resolve_own_addresses(self) -> frozenset[str]:
-        """Return the account's own addresses for direction classification."""
+        """Return the account's own addresses by spelling key, as direction compares them (``parse_message``).
 
-        addresses = {str(value).strip().lower() for value in (self.bridge.config.get("own_addresses") or [])}
+        Whether an address is the account's own is a same-address question, so
+        any spelling of it counts (``Handle.spelling_key_of``); a configured
+        address may carry a display name, and a username that is no address
+        counts for nothing.
+        """
+
         credential = self._credential
         material = credential.reveal() if credential is not None else {}
-        for candidate in (self._configured_username(), self._account_email(), str(material.get("username", ""))):
-            cleaned = candidate.strip().lower()
-            if "@" in cleaned:
-                addresses.add(cleaned)
-        return frozenset(address for address in addresses if address)
+        candidates = [str(value) for value in (self.bridge.config.get("own_addresses") or [])]
+        candidates += (self._configured_username(), self._account_email(), str(material.get("username", "")))
+        email = Handle.Platform.EMAIL
+        return frozenset(key for value in candidates if (key := Handle.spelling_key_of(email, parseaddr(value)[1])))
 
     def _batch_size(self) -> int:
         """Return the per-call fetch batch size (bounded below by one)."""

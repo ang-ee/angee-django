@@ -33,6 +33,9 @@ const upstream = [
     routes: [{ name: "posts.feeds", path: "/posts/feeds", layout: "console" }] }),
 ];
 const addons = [timeline, ...upstream, { ...nexus, dependsOn: ["timeline", ...upstream.map(({ id }) => id)] }];
+// The message resource with the status field the apps' scoped tones colour (messaging's and the inbox's).
+const MESSAGE_STATUS_FIELD = { name: "status", label: "Status", kind: "enum" as const, scalar: null, readable: true,
+  creatable: false, updatable: false, requiredOnCreate: false, aggregatable: false };
 const ownChildren = ["nexus.inbox", "nexus.graph", "nexus.ties", "nexus.cadences"];
 const included = ["messaging", "parties", "spaces", "posts"];
 const composed = composeAddons(addons, { canonicalModelLabel: (label) => label });
@@ -72,7 +75,10 @@ describe("Nexus menu aggregation", () => {
       layouts: { console: { requireAuth: false } },
       schemas: { console: {
         url: "/graphql/console/",
-        metadata: { angee: { resources: ["nexus.Tie", "nexus.Cadence", "parties.Party", "parties.Circle", "storage.File"].map((label) => testDataResource(label)) } },
+        metadata: { angee: { resources: [
+          ...["nexus.Tie", "nexus.Cadence", "parties.Party", "parties.Circle", "storage.File"].map((label) => testDataResource(label)),
+          testDataResource("messaging.Message", { fields: [MESSAGE_STATUS_FIELD] }),
+        ] } },
       } },
       defaultSchema: "console",
     });
@@ -101,6 +107,7 @@ describe("Nexus menu aggregation", () => {
       ...TEST_SCHEMAS.console,
       metadata: { angee: { resources: models.map((label) => testDataResource(label, {
         typeNames: { node: `${label.replaceAll(".", "_")}Type` },
+        ...(label === "messaging.Message" ? { fields: [MESSAGE_STATUS_FIELD] } : {}),
       })) } },
     } };
     const { explain } = createApp({ addons: liveAddons, schemas, layouts: {
