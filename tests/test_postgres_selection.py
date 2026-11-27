@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
-from scripts.postgres_selection import PLANNER_GATE, entries, groups, kept
+from scripts.postgres_selection import entries, groups, kept
 
 ROOT = Path(__file__).resolve().parents[1]
+PLANNER_GATE = "tests/test_composed_examples.py"
 SELECTION = [
     PLANNER_GATE,
     "tests/test_locks.py",
@@ -31,17 +32,17 @@ def test_every_entry_names_a_test_file_in_the_repository() -> None:
     assert [entry for entry in selection if not (ROOT / entry.partition("::")[0]).is_file()] == []
 
 
-def test_a_reached_file_keeps_its_whole_file_and_node_entries_with_the_planner_gate() -> None:
+def test_a_reached_file_keeps_its_whole_file_and_node_entries() -> None:
     assert kept(SELECTION, ["tests/test_races.py", "tests/test_unlisted.py"]) == [
-        PLANNER_GATE,
         "tests/test_races.py::test_two_writers",
         "tests/test_races.py::test_parametrized",
     ]
+    assert kept(SELECTION, [PLANNER_GATE]) == [PLANNER_GATE]
 
 
-def test_a_reached_directory_keeps_every_entry_under_it_and_nothing_reached_keeps_the_gate() -> None:
+def test_a_reached_directory_keeps_every_entry_under_it() -> None:
     assert kept(SELECTION, ["tests", "src/angee/resources/tests"]) == SELECTION
-    assert kept(SELECTION, []) == [PLANNER_GATE]
+    assert kept(SELECTION, []) == []
 
 
 def test_the_groups_split_the_kept_entries_as_finely_as_six_split_the_whole_selection() -> None:
@@ -49,3 +50,4 @@ def test_the_groups_split_the_kept_entries_as_finely_as_six_split_the_whole_sele
     assert groups(SELECTION, SELECTION, DURATIONS) == [1, 2, 3, 4, 5, 6]
     assert groups(SELECTION, ["tests/test_locks.py"], DURATIONS) == [1, 2, 3]
     assert groups(SELECTION, [PLANNER_GATE], DURATIONS) == [1]
+    assert groups(SELECTION, iter(()), {}) == []
