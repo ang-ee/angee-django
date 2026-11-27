@@ -321,6 +321,27 @@ test("a pick whose read is refused on a re-read still leaves with its selector, 
   f.clearClients();
 });
 
+test("a repair read refused where the record shown is now registered still gives the server's words under the field", async () => {
+  let registered = false;
+  const f = fixture(RETIRED, { choices: async (variables) => {
+    if (variables?.record != null && registered) throw new Error(CREATE_ONLY);
+    return answer(variables);
+  } });
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  await pick("Local");
+  // Another tab repairs the row; the re-read brings it, and the read asked again is refused.
+  registered = true;
+  f.server.row = { ...RETIRED, backend: "STUB" };
+  await act(async () => { await f.queryClient.invalidateQueries(); });
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
+  // The record shown is registered, so no mark; the refusal is still said, once, under the field.
+  expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
+  expect(screen.getAllByText(CREATE_ONLY)).toHaveLength(1);
+  expect(screen.getByText(CREATE_ONLY).className).not.toContain("sr-only");
+  f.clearClients();
+});
+
 test("a page's own createOnly on a selector the model does not make create-only stays locked, with no repair read", async () => {
   const f = fixture(RETIRED, { meta: { createOnly: undefined },
     fields: [{ name: "title", title: true }, { name: "backend", label: "Backend", createOnly: true }, { name: "config", label: "Config" }] });

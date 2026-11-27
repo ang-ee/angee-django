@@ -120,7 +120,7 @@ function useRecordFieldMarksForField(field: string) {
 }
 
 const UnregisteredImplementation = createContext<{
-  field: string; readOnly: boolean; once: boolean; refusal: string | null; explanationId: string;
+  field: string; marked: boolean; readOnly: boolean; once: boolean; refusal: string | null; explanationId: string;
 } | null>(null);
 
 /** Name the one field of the record's own form whose stored implementation key the registry no
@@ -132,19 +132,25 @@ const UnregisteredImplementation = createContext<{
  * @kind null
  * @reason Provider infrastructure: the record form's not-registered field.
  */
-export function UnregisteredImplementationField({ field, readOnly = false, once = false, refusal = null, children }: {
+export function UnregisteredImplementationField({ field, marked = true, readOnly = false, once = false, refusal = null, children }: {
+  /** The field this explains: one marked not registered, or one whose repair the server refused. */
   field: string | null;
+  /** Whether the field carries the "Not registered" mark: the record shown stores a key not registered. */
+  marked?: boolean;
   readOnly?: boolean;
   /** A create-only selector that can be chosen once more here: once saved, the choice cannot change again. */
   once?: boolean;
-  /** The server's refusal of the repair, which the explanation gives in its words. */
+  /**
+   * The server's refusal of the repair, which the explanation gives in its words, under the field,
+   * whatever the record shown now stores.
+   */
   refusal?: string | null;
   children: ReactNode;
 }) {
   const explanationId = useId();
   const value = useMemo(
-    () => field === null ? null : { field, readOnly, once, refusal, explanationId },
-    [explanationId, field, once, readOnly, refusal],
+    () => field === null || (!marked && refusal === null) ? null : { field, marked, readOnly, once, refusal, explanationId },
+    [explanationId, field, marked, once, readOnly, refusal],
   );
   return <UnregisteredImplementation.Provider value={value}>{children}</UnregisteredImplementation.Provider>;
 }
@@ -154,6 +160,8 @@ export function UnregisteredImplementationField({ field, readOnly = false, once 
 export interface UnregisteredImplementationExplanationText {
   id: string;
   text: string;
+  /** Whether the field carries the "Not registered" mark (a refusal alone carries none). */
+  marked: boolean;
   readOnly: boolean;
   refused: boolean;
 }
@@ -170,6 +178,7 @@ export function useUnregisteredImplementationExplanation(field: string): Unregis
   if (unregistered?.field !== field) return null;
   return {
     id: unregistered.explanationId,
+    marked: unregistered.marked,
     readOnly: unregistered.readOnly,
     refused: unregistered.refusal != null,
     text: unregistered.refusal ?? t(unregistered.readOnly ? "implementation.cannotRunUnchangeable"
@@ -211,7 +220,7 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
   const explanation = useUnregisteredImplementationExplanation(field);
   const marks: readonly ShownMark[] = [
     ...published,
-    ...(explanation ? [{
+    ...(explanation?.marked ? [{
       field, label: t("implementation.notRegistered"), tone: "warning" as const,
       // Where the field takes edits its control is the one stop and the one description.
       explanation: explanation.text, describedBy: explanation.id, focusStop: explanation.readOnly,

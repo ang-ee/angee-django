@@ -101,7 +101,7 @@ export function BoundDescriptorField({
   const repair = surface.repairState(recordField);
 
   return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
-    field={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value) ? resolved.name : null}
+    field={resolved.name} marked={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value)}
     readOnly={fieldReadOnly} once={repair.repairing} refusal={repair.refusal}
   ><LabeledDescriptorField
     field={resolved}
