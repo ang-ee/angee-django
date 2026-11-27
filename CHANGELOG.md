@@ -533,11 +533,15 @@ live in code docstrings.
   `ShellPageTestProviders` renders under a memory router unless one is already
   above, and `createUiTestProviders` takes `router`; a keyed dialog's
   submission drops any assertion of its key.
-- `angee.workflows`: a manual start that reuses a request key for a different
-  request raises `CreationKeyConflict`, as the other keyed creates do, rather
+- `angee.workflows`: **Changed behaviour.** A start that reuses a request key
+  for a different request (a manual start, or a step's child or continuation
+  start) raises `CreationKeyConflict`, as the other keyed creates do, rather
   than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
   so a client holding the spent key starts a new request. A trigger admission
-  still records the refusal on its event.
+  still records the refusal on its event. **Upgrade:** code that catches
+  `ValidationError` around a workflow start, to settle a concurrent first start
+  under one request key, catches `CreationKeyConflict`
+  (`angee.provenance.contrib.angee.exceptions`) instead.
 - `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
   JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
   `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
