@@ -223,6 +223,34 @@ live in code docstrings.
   of reading the setting; the callers that read it today move onto it in their
   own changes.
 
+- `angee.messaging_templates`: **A send's refusal says whose fault it is, and quotes no value.**
+  Every refusal item a send returns from this addon carries `params["source"]`
+  (`REFUSAL_SOURCE`), one of `RefusalSource` (`deployment`, `template`, `values`,
+  `unknown`), set where it is raised; both are exported from the engine beside
+  `SEND_CODES`, with `refusal_sources(error)`, which reads a refusal's sources, keyed
+  or not, and gives none for messaging's own refusals. `subject_too_long` and
+  `render_budget` are `values`: a subject or budget exceeded on every item of a run is
+  a template that is too long. A path the row requires is `values` when this item's
+  values hold null for it or above it, and `template` only when the values do not set
+  it; an empty string or list is not missing. No refusal holds the exception it replaces
+  (`render_failed`, values that are not JSON, a lone surrogate) as its `__cause__` or its
+  `__context__`, so a caller that logs one with its traceback prints neither; `refusals_only`
+  swallows the failure and its entry raises `guard.refused()` after the block. A
+  `ValidationError` that a filter, a tag or a loader raises inside a render with no source
+  is refused as `render_failed` (`unknown`), so every one a render raises carries a source.
+  A value of the wrong shape covers the required paths under it, in that list item alone. No refusal's
+  words or `params` quote a value, nor a key of the values the row does not declare
+  (`A value is over 10000 characters.`). **Changed words, which
+  no caller should match:** `render_failed` names the exception's type only
+  (`The message template did not render: it raised RuntimeError.`), no longer its
+  text; a date that is not one says what was given by kind and length (`it is
+  text of 12 characters`, `it is a number`, `it is true or false`), no longer the
+  value; `value_not_linkable` no longer names a link's host (`its host is neither a
+  domain name of two labels or more, the last a name, with an optional port, nor this
+  deployment's public origin`); values that are not JSON name the error's type. A
+  value of the wrong shape is refused with each path the row requires that is not
+  under it, never a path under it.
+
 - `angee.messaging_templates`: **A sender reads the send codes and the limits from the engine.**
   `SEND_CODES` holds the eleven codes `send_as_system` can return from this addon, built
   from their constants, and a test fails when a raise site names a code outside it or
