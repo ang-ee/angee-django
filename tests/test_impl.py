@@ -1884,6 +1884,23 @@ def test_a_stale_rename_after_a_repair_that_reshaped_the_config_is_refused_as_st
 
 
 @pytest.mark.django_db
+def test_a_repair_loaded_before_a_committed_rename_lands_and_writes_the_name_it_loaded() -> None:
+    """Pinned: the stale row is the repair's; it still holds the old key, so it repairs, and its whole-row save wins."""
+
+    bridge = _retired_bridge("repair-after-rename")
+    with system_context(reason="test.impl.repair.after_rename"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        renamer = VcsBridge._base_manager.get(pk=bridge.pk)
+        repairer = VcsBridge._base_manager.get(pk=bridge.pk)
+        renamer.display_name = "Renamed before the repair"
+        renamer.save()
+        repairer.backend_class = "local"
+        repairer.save()
+        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config__local_org")
+        assert stored.get(pk=bridge.pk) == ("local", bridge.display_name, "local")
+
+
+@pytest.mark.django_db
 def test_a_feed_s_own_selector_is_repaired_leaving_the_channel_s_selector_and_its_repair_alone() -> None:
     """The feed's selector owns the config: its repair reshapes it and leaves the channel's key, repaired after."""
 
