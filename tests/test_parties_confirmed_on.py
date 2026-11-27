@@ -176,6 +176,12 @@ def test_the_dismissal_stance_is_one_mapping_for_the_property_and_a_query(admin:
             row.pk for row in statements if row.is_dismissed
         }
         assert statements.filter(**stance).count() == 1
+    with actor_context(admin):
+        party.with_actor(admin).dismiss_statement(aspect="handle", handle=handles[0])
+    with system_context(reason="tests.parties.confirmed_on"):
+        # The person's later stance replaces their row: a dismissal, with no confirmation left beside it.
+        (row,) = Party.objects.handle_statements().model._base_manager.filter(subject=party, handle=handles[0])
+        assert row.is_dismissed and not row.is_confirmed
 
 
 def test_a_seeds_preferred_statement_confirms_and_a_holder_a_seed_row_names_is_stated_as_before(admin: Any) -> None:

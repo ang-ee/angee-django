@@ -167,7 +167,8 @@ live in code docstrings.
     a person's or a seed's preferred statement with a value). The mapping is the
     one statement of the stance: `confirm_statement` writes it and
     `Statement.is_confirmed` checks it of a row, which checks no status, so a
-    superseded confirmation is one as a row and is not in the scope.
+    confirmation that is not applied (a withdrawn one, say) is one as a row and
+    is not in the scope.
     `Statement.DISMISSED_STANCE` does the same for a dismissal
     (`dismiss_statement`, `Statement.is_dismissed`, and parties' same-person read).
     `PartyQuerySet.confirmed_on(handles)` is the canonical parties confirmed on

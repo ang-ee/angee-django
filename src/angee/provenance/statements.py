@@ -163,7 +163,7 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
 
         The stance is ``Statement.CONFIRMED_STANCE``, a person's or a seed's preferred statement with a
         value, which ``Statement.is_confirmed`` checks of a row; that property checks no status, so a
-        superseded confirmation is one as a row and is not here.
+        confirmation that is not applied (a withdrawn one, say) is one as a row and is not here.
         """
 
         return self.applied().filter(**self.model.CONFIRMED_STANCE)
@@ -1257,8 +1257,10 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
     Only a person or a seed source asserts a preferred statement (``stance_constraint``). The verb
     ``confirm_statement`` writes it, :attr:`is_confirmed` checks a row's stance alone, and
     ``confirmed()`` keeps the applied statements with it, so all three read this one mapping.
-    ``is_confirmed`` checks no status: a confirmation another stance superseded is still one as a
-    row and is absent from ``confirmed()``, on purpose.
+    ``is_confirmed`` checks no status: a confirmation that is not applied (a withdrawn one, say) is
+    still one as a row and is absent from ``confirmed()``, on purpose. A source's later stance on the
+    same key replaces its row (``set``), so a person who dismisses what they confirmed leaves a
+    dismissal, not a confirmation beside it.
     """
     DISMISSED_STANCE: ClassVar[Mapping[str, str]] = {"rank": StatementRank.PREFERRED, "snak": StatementSnak.NO_VALUE}
     """A dismissal's stance, column by column: a preferred statement asserting no value.
