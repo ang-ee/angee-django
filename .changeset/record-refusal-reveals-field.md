@@ -21,7 +21,20 @@ is not selected, where Save focused nothing, selected no pane and showed
 nothing, now has its pane selected and takes focus.
 
 With a reason no field shows as well, the banner takes focus and the selected
-pane stays. One exception is not new: the trailing lines select their own pane
-after any failed save that touches them, so a line refused beside a reason no
-field shows still moves the pane to the lines, and a pane group's field refused
-together with a line ends on the lines pane with focus on the banner.
+pane stays.
+
+`revealField` is the only thing that selects a pane for a refused save. The
+trailing lines selected their own pane after any failed save that touched them,
+beside it; they no longer do. So a line refused beside a reason no field shows,
+and a save refused because the lines changed elsewhere, leave the selected pane
+and say it on the banner; a pane group's field refused together with a line
+ends on that field, in its pane, the form's fields coming before its lines; and
+a pane the person picks after a refusal stays selected: when the pane strip goes
+and returns, and on a record whose caller holds its pane (a resource list's
+record panel), where every pane picked after a refused line was sent back to the
+lines. A form whose only pane is the lines, shown without a strip, writes no
+pane for its caller on a refusal. The form's own check failing under a line
+selects the lines, as before;
+failing in a pane group's field and under a line at once it selects that field's
+pane, while the form library's own focus still aims at the line's cell, which
+that pane hides.

@@ -719,6 +719,11 @@ export function useFormViewSave({
       keyed,
     ],
   );
+  /** The fields the form shows for its values now, in its order, then its lines: what a refusal or a failed check can name. */
+  const shownNames = React.useCallback(
+    () => [...shownFields(checkFields, form.getValues()).map((field) => field.name), ...(linesField ? [linesField] : [])],
+    [checkFields, form, linesField],
+  );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
     if (!mounted.current) return null;
     // Every refused field's message is set at its path, so a control a page renders itself shows
@@ -726,10 +731,8 @@ export function useFormViewSave({
     // nor excluded by its condition, and gives any other its own message, one only a group the
     // record does not display declares, one the save cannot write and one the record redacts
     // among them.
-    const values = form.getValues();
-    const shown = shownFields(checkFields, values);
     return applyFormErrors(form, result, {
-      shownFieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
+      shownFieldNames: shownNames(),
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
       focus: (field) => {
@@ -737,7 +740,7 @@ export function useFormViewSave({
         focusSaveRefusal(field);
       },
     }) ? null : result;
-  }, [checkFields, fieldByName, focusSaveRefusal, form, linesField, revealField, t]);
+  }, [fieldByName, focusSaveRefusal, form, revealField, shownNames, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -946,11 +949,12 @@ export function useFormViewSave({
       record,
     ],
   );
-  // The form's own check failed: its first errored field is brought into sight as a refusal's is
-  // (`revealField`), and the form library then focuses it on its own deferred timer.
+  // The form's own check failed: its first errored field, the lines among them, is brought into sight
+  // as a refusal's is (`revealField`); the form library then focuses, on its own deferred timer, the
+  // first errored control in its own mount order.
   const submitForm = form.handleSubmit(submitValues, (errors) => {
-    const first = shownFields(checkFields, form.getValues()).find((field) => get(errors, field.name) !== undefined);
-    if (first) revealField?.(first.name);
+    const first = shownNames().find((name) => get(errors, name) !== undefined);
+    if (first !== undefined) revealField?.(first);
   });
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {

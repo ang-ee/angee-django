@@ -113,6 +113,8 @@ const banner = () => [...document.querySelectorAll<HTMLElement>("[role='alert']"
 const detailsTrigger = () => screen.getByRole("button", { name: "Details" });
 /** One more zero-delay timer: the refusal hook's fallback, queued right after the form library's focus timer, has run. */
 const afterTheTimers = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve); }));
+/** Well past every timer: whatever would select a pane a moment after an answer or a pick has done so. */
+const pastEveryTimer = () => act(() => new Promise<void>((resolve) => { setTimeout(resolve, 100); }));
 
 async function selectPane(name: string) {
   fireEvent.click(screen.getByRole("tab", { name }));
@@ -251,19 +253,67 @@ describe("a refused save brings the person to its first refused field, selecting
     expect(CONTROLS.alpha_field!()).toBeNull();
   });
 
-  // The trailing lines select their own pane after any failed save that touches them
-  // (`FormViewLinesPane`), beside the reveal: the next two rows are where the two meet.
-  test("guard: a line member refused with a form-level reason as well: the banner takes focus, and the lines select their own pane", async () => {
+  // `revealField` is the only thing that selects a pane for a refused save: the lines select none of
+  // their own. The next rows are where a line meets another reason.
+  test("a line member refused with a form-level reason as well: the banner takes focus and the selected pane stays", async () => {
     const calls = await refuse({ refused: ["lines.0.label"], select: "Alpha", formReason: true });
     await expectFocusedBanner(calls);
     expect(banner()?.textContent).toContain(FORM_REASON);
-    expect(selectedPane()).toBe("Lines");
+    expect(selectedPane()).toBe("Alpha");
   });
 
-  test.fails("defect: a pane group's field refused together with a line member ends on the lines pane with focus on the banner, since the lines select their own pane after the reveal selected the field's; it should end on the first refused field, in its pane", async () => {
-    const calls = await refuse({ refused: ["alpha_field", "lines.0.label"], select: "Beta" });
+  // A record whose caller holds its pane (a resource list's record panel): the lines' own effect ran again
+  // each time the held pane changed, so every pane the person picked after a refused line went back to the lines.
+  test("a pane held by the caller: a refused line selects the lines, and a pane the person then picks stays", async () => {
+    const answer = answerFor(["lines.0.label"]);
+    function Host() {
+      const [tab, setTab] = React.useState<string | undefined>(undefined);
+      return <FormView {...recordFormProps({ answer: () => answer })} recordTab={tab} onRecordTabChange={setTab} />;
+    }
+    render(<Shell><Host /></Shell>);
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() => expect((title as HTMLInputElement).value).toBe("First"));
+    await screen.findByDisplayValue("Alpha line");
+    await selectPane("Alpha");
+    fireEvent.change(title, { target: { value: "Changed" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(selectedPane()).toBe("Lines"));
+    await pastEveryTimer();
+    for (const picked of ["Beta", "Alpha"]) {
+      fireEvent.click(screen.getByRole("tab", { name: picked }));
+      await pastEveryTimer();
+      expect(selectedPane()).toBe(picked);
+    }
+  });
+
+  test("a form whose only pane is the lines: a refused line focuses its cell and writes no pane for the caller, there being no strip", async () => {
+    const changes: string[] = [];
+    const answer = answerFor(["lines.0.label"]);
+    render(<Shell><FormView {...recordFormProps({ answer: () => answer })} recordTabs={[]} onRecordTabChange={(tab) => { changes.push(tab); }}>
+      <Group label="Main"><Field name="title" label="Title" widget="text" /></Group>
+    </FormView></Shell>);
+    const title = await screen.findByLabelText("Title");
+    await waitFor(() => expect((title as HTMLInputElement).value).toBe("First"));
+    await screen.findByDisplayValue("Alpha line");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    fireEvent.change(title, { target: { value: "Changed" } });
+    const save = await screen.findByRole("button", { name: "Save" });
+    save.focus();
+    const { calls } = recorder = recordFocusCalls();
+    fireEvent.click(save);
+    await expectFocusedField(calls, "lines.0.label");
+    expect(changes).toEqual([]);
+  });
+
+  test.each<[row: string, select: string]>([
+    ["another pane group selected", "Beta"],
+    ["the lines pane selected", "Lines"],
+  ])("a pane group's field refused together with a line member, %s: the field the form shows first, in its pane", async (_row, select) => {
+    const calls = await refuse({ refused: ["alpha_field", "lines.0.label"], select });
     await expectFocusedField(calls, "alpha_field");
+    await pastEveryTimer();
     expect(selectedPane()).toBe("Alpha");
+    expect(document.activeElement).toBe(CONTROLS.alpha_field!());
   });
 });
 
@@ -345,6 +395,8 @@ describe("the surface's reveal of a refused field names it to its sections and t
     ["12: two pane groups' fields", { refused: ["alpha_field", "beta_field"], select: "gamma" }, "alpha_field", "alpha"],
     ["13: a pane group's field with a form-level reason", { refused: ["alpha_field"], select: "beta", formReason: true }, null, "beta"],
     ["14: a record verb's refusal of a pane group's field", { refused: ["alpha_field"], select: "beta", via: "action" }, "alpha_field", "alpha"],
+    ["15: a line member with a form-level reason: nothing is named and the pane stays", { refused: ["lines.0.label"], select: "alpha", formReason: true }, null, "alpha"],
+    ["16: a pane group's field and a line member: the field the form shows first", { refused: ["alpha_field", "lines.0.label"], select: "beta" }, "alpha_field", "alpha"],
   ])("%s", async (_row, { refused, select, create = false, formReason = false, via = "save" }, named, pane) => {
     const seen: [string | undefined, string | null][] = [];
     const surfaceRef: { current: FormViewSurface | null } = { current: null };
@@ -364,5 +416,25 @@ describe("the surface's reveal of a refused field names it to its sections and t
     expect([...new Set(after.map(([, path]) => path).filter((path) => path !== null))]).toEqual(named === null ? [] : [named]);
     expect(after.at(-1)).toEqual([pane, null]);
     expect(surfaceRef.current!.requestedFocusPath).toBeNull();
+  });
+
+  test("the form's own check failing under a line names the lines and selects their pane, and nothing is sent", async () => {
+    const seen: [string | undefined, string | null][] = [];
+    const surfaceRef: { current: FormViewSurface | null } = { current: null };
+    let submitted = 0;
+    render(<Shell><SurfaceProbe {...recordFormProps({ answer: () => { submitted += 1; return answerFor([]); } })} seen={seen} surfaceRef={surfaceRef} /></Shell>);
+    await waitFor(() => expect(surfaceRef.current?.displayRecord).not.toBeNull());
+    act(() => surfaceRef.current!.setActiveRecordTab("alpha"));
+    await waitFor(() => expect(surfaceRef.current!.activeRecordTab).toBe("alpha"));
+    // A page's own validation registered at a line's path.
+    const unregister = surfaceRef.current!.form.registerFieldValidation("lines.0.label", () => "The label is not valid.");
+    const before = seen.length;
+    await act(async () => { await surfaceRef.current!.submitForm(); });
+    await afterTheTimers();
+    const after = seen.slice(before);
+    expect([...new Set(after.map(([, path]) => path).filter((path) => path !== null))]).toEqual(["lines"]);
+    expect(after.at(-1)).toEqual(["editable-lines", null]);
+    expect(submitted).toBe(0);
+    unregister();
   });
 });

@@ -1407,9 +1407,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   ([useFormViewSurface](../../packages/ui/src/views/form/form-view-surface.ts),
   the owner `focusField` composes) selects the pane that holds the field and
   opens a collapsed section around it, for a refusal and for the form's own
-  check alike; a refusal that brings the person to the banner asks no reveal
-  (the trailing lines still select their own pane after a failed save that
-  touches them). Save stays focusable while a save runs.
+  check alike; a line selects the lines' pane. Nothing else selects a pane for
+  a refused save, so a refusal that brings the person to the banner leaves the
+  selected pane, the lines included. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.

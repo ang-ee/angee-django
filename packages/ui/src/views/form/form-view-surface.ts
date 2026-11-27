@@ -914,9 +914,8 @@ export function useFormViewSurface({
    * visible pane `options.recordTabId` names, else the trailing lines for a path under the lines
    * field, else the pane group declaring it; none for a field the sheet shows), and name it to the
    * sheet's sections (`requestedFocusPath`) so a collapsed one holding it opens. The one owner of
-   * which pane holds a field; returns the pane it selected, undefined when it selected none. It is
-   * not the only thing that selects a pane after a failed save: the trailing lines select their
-   * own when the failure touches them (`FormViewLinesPane`), whatever this selected.
+   * which pane holds a field, and the only thing that selects a pane for a refused save; returns the
+   * pane it selected, undefined when it selected none.
    */
   const revealField = React.useCallback((path: string, options?: RecordFieldFocusOptions): string | undefined => {
     const { paneIds, linesPane, fieldPanes } = focusPanesRef.current;
@@ -926,7 +925,8 @@ export function useFormViewSurface({
     const target = options?.recordTabId && paneIds.includes(options.recordTabId) ? options.recordTabId
       : linesPane && linePath ? EDITABLE_LINES_SECTION : fieldPanes.get(path);
     setRequestedFocusPath(path);
-    if (target !== undefined) setActiveRecordTab(target);
+    // A lone pane is the one shown, with no strip: selecting it would only write its id for the caller.
+    if (target !== undefined && paneIds.length > 1) setActiveRecordTab(target);
     return target;
   }, [focusPanesRef, save.linesField, setActiveRecordTab]);
   revealRef.current = revealField;

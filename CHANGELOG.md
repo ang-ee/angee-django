@@ -127,15 +127,28 @@ live in code docstrings.
   is not selected, where Save focused nothing, selected no pane and showed
   nothing, now has its pane selected and takes focus. With a reason no field
   shows as well, the banner takes focus and the pane stays. `focusField`
-  composes `revealField`, the one owner of which pane holds a field. Left as
-  they are: the trailing lines still select their own pane after any failed
-  save that touches them, so a line refused beside a reason no field shows
-  moves the pane to the lines, and a pane group's field refused together with
-  a line ends on the lines pane with focus on the banner; only the first
-  refused field is revealed and no pane's tab marks that it holds one; the
-  lines refused as a whole show their reason nowhere, the banner names them by
-  their path and takes focus; `useFormViewSave` returns a new `form` every
-  render; a refused member of a rows, object or list field; and the dialogs.
+  composes `revealField`, the one owner of which pane holds a field and the
+  only thing that selects a pane for a refused save. **Changed behaviour:**
+  the trailing lines selected their own pane after any failed save that
+  touched them, beside it; they no longer do. A line refused beside a reason
+  no field shows, and a save refused because the lines changed elsewhere,
+  leave the selected pane and say it on the banner; a pane group's field
+  refused together with a line ends on that field, in its pane, the form's
+  fields coming before its lines; and a pane the person picks after a refusal
+  stays selected: when the pane strip goes and returns, and on a record whose
+  caller holds its pane (a resource list's record panel), where every pane
+  picked after a refused line was sent back to the lines. A form whose only
+  pane is the lines, shown without a strip, writes no pane for its caller on a
+  refusal (it wrote the lines' id to a routed page's address). The form's own
+  check failing in a pane group's field and under a line at once selects that
+  field's pane, where it selected the lines; the form library's own focus aims
+  at the line's cell either way, which that pane now hides. The form's own
+  check failing under a line alone selects the lines, as before. Left as they
+  are: only the first refused field is revealed and no pane's tab marks that
+  it holds one; the lines refused as a whole show
+  their reason nowhere, the banner names them by their path and takes focus;
+  `useFormViewSave` returns a new `form` every render; a refused member of a
+  rows, object or list field; and the dialogs.
 - `@angee/ui`, parties, IAM: a refused field now takes and keeps the focus its
   refusal brings, on the record form and in every dialog, except a refused
   member, a record form's rows field refused as a whole, and the controls left
