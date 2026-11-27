@@ -503,7 +503,14 @@ Use these owners instead of maintaining another contract in an addon:
   selectors ([`create_only_selectors`](../../src/angee/base/fields/implementation.py),
   read by `hasura_model_resource`) and the resource metadata publishes them
   (`createOnly`), so no resource or page restates one; the model's save
-  decides. A record without an update root (calendar sources, directories,
+  decides. Create-only therefore means: chosen on create, and once more, by
+  a person who may write the record, only while its stored key is not
+  registered. The console's record form offers that choice exactly then and
+  sends the config it shows: `impl_choices(model, field, record)` answers,
+  for each choice, what choosing it sets on that record (the config
+  `carried_config` carries over), gated as the write is
+  ([`record_impl_choices`](../../src/angee/graphql/impl.py),
+  `ImplDefaultsMixin.repair_impl_defaults`). A record without an update root (calendar sources, directories,
   mounts) or a selector a connect flow chose is not repaired in the console:
   its mark says "It cannot be changed here.", and the remedy is installing
   again the addon that provides the implementation, or removing the record

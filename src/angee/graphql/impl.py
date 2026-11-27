@@ -28,7 +28,10 @@ class ImplChoice:
     label: str
     icon: str
     category: str
-    defaults: JSON
+    defaults: JSON = strawberry.field(description=(
+        "What choosing this implementation sets: an insert's defaults, or, for a record "
+        "(impl_choices' record), the config it carries over from that record's stored config."
+    ))
     config_schema: JSON | None
 
     @classmethod
@@ -54,6 +57,28 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     for choice in choices:
         choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
+
+
+def record_impl_choices(info: strawberry.Info, model: str, field: str, record: strawberry.ID) -> list[ImplChoice]:
+    """Return ``model.field``'s choices for repairing ``record``: each sets the config it carries over.
+
+    The record resolves as the write does (:func:`angee.graphql.actions.authorized_action_target`
+    with ``write``): a record the actor cannot write reads as not found, never an existence oracle.
+    The model then refuses as create-only unless the record's stored key is one the field's choices
+    no longer name (``ImplDefaultsMixin.repair_impl_defaults``).
+    """
+
+    from angee.graphql.actions import authorized_action_target
+
+    django_model = _model_for_label(model)
+    field_name = _field_name(field)
+    row = authorized_action_target(info, django_model, record, "write")
+    repairs = row.repair_impl_defaults(field_name)
+    return [
+        ImplChoice(**{**asdict(choice), "defaults": JSON(repairs[choice.key])})
+        for choice in model_impl_choices(django_model, field_name)
+        if choice.key in repairs
+    ]
 
 
 def model_impl_choices(model: type[models.Model], field_name: str) -> list[BaseImplChoice]:

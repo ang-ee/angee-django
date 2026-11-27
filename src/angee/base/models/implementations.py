@@ -401,6 +401,29 @@ class ImplDefaultsMixin(models.Model):
             )})
         config_field.save_form_data(self, carried)
 
+    def repair_impl_defaults(self, field_name: str) -> dict[str, dict[str, Any]]:
+        """What choosing each implementation of ``field_name`` sets on this stored row: a repair.
+
+        Each registered key maps to the config it carries over from the stored config
+        (``ImplBase.carried_config``) under the model's config column, the one value a repair sets.
+        Refused as create-only, as the write is, unless the stored row holds a key the field's
+        choices no longer name.
+        """
+
+        field = self._meta.get_field(field_name)
+        if not isinstance(field, ImplClassField):
+            raise ImproperlyConfigured(f"{type(self)._meta.label}.{field_name} is not an ImplClassField.")
+        config_field = self._config_field()
+        stored = self._stored_values(field.attname, config_field.attname)
+        if stored is None or field.has_key(stored[0]):
+            raise ValidationError({field.name: "Implementation selection is create-only."})
+        repairs: dict[str, dict[str, Any]] = {}
+        for key in field.registered_keys():
+            impl = field.resolve_class(key)
+            readable = isinstance(impl, type) and issubclass(impl, ImplBase)
+            repairs[key] = {config_field.name: impl.carried_config(stored[1]) if readable else stored[1]}
+        return repairs
+
     def _stored_values(self, *attnames: str) -> tuple[Any, ...] | None:
         """The stored row's values of ``attnames``, read under the system context; ``None`` without a row."""
 

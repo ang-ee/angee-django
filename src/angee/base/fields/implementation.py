@@ -68,8 +68,9 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     create-only again. A repair that would drop a stored config key the new
     implementation does not use is refused unless the config is sent with it;
     a repair saved with ``update_fields`` names the config too, or is refused.
-    The console's form sends the config it shows with a repair, so a person
-    never meets those refusals; code and a bare GraphQL update do. A stale row
+    The console's form sends the config it shows with a repair (the config
+    ``impl_choices(model, field, record)`` says the choice carries over), so a
+    person never meets those refusals; code and a bare GraphQL update do. A stale row
     (loaded before its stored key moved) that would write another config is
     refused as stale. Every update input of an Angee resource carries its
     model's create-only selectors (:func:`create_only_selectors`), and its

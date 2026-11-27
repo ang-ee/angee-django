@@ -86,7 +86,12 @@ live in code docstrings.
   `notion_connections_set_input`, `feeds_set_input` (both selectors) and any
   consumer resource over such a model gain the column, and
   `inference_providers_set_input` and `vcs_bridges_set_input` list it last; a
-  resource field's metadata gains `createOnly`. A resource with no update root
+  resource field's metadata gains `createOnly`. `impl_choices` takes an
+  optional `record`: each choice's `defaults` is then what choosing it sets on
+  that record, the config it carries over (`ImplDefaultsMixin.repair_impl_defaults`),
+  answered only for a record the actor may write whose stored key is not
+  registered, and refused as the write is otherwise (not found, or
+  "Implementation selection is create-only."). A resource with no update root
   (calendar sources, directories, mounts) or a selector a connect flow chose is
   repaired by installing the implementation's addon again or by connecting the
   record again.

@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from enum import StrEnum
 from functools import partial, wraps
-from typing import Any, ParamSpec, Self, cast
+from typing import Annotated, Any, ParamSpec, Self, cast
 
 import strawberry
 import strawberry_django
@@ -56,7 +56,7 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.impl import ImplChoice, can_read_impl_choices
+from angee.graphql.impl import ImplChoice, can_read_impl_choices, record_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
 from angee.graphql.node import AngeeNode
 from angee.graphql.related_counts import RelatedCount
@@ -131,12 +131,26 @@ _OPEN_FAILURE_LINKS = Prefetch(
 class ConsoleImplChoicesQuery:
     """Administrator metadata with explicit model-owned author access."""
 
-    @strawberry.field
-    def impl_choices(self, info: strawberry.Info, model: str, field: str) -> list[ImplChoice]:
-        """Return registry choices under the administrator or owning model's policy."""
+    @strawberry.field(description=(
+        "A selector's implementations and what choosing each sets: for an insert, its defaults; "
+        "for record, the config it carries over from that record (a repair)."
+    ))
+    def impl_choices(
+        self,
+        info: strawberry.Info,
+        model: str,
+        field: str,
+        record: Annotated[strawberry.ID | None, strawberry.argument(description=(
+            "A record the actor may write whose stored key the field's choices no longer name: each choice's "
+            "defaults are then what choosing it sets on that record; refused otherwise, as the write is."
+        ))] = None,
+    ) -> list[ImplChoice]:
+        """Return registry choices under the administrator or owning model's policy, for an insert or a repair."""
         actor = _session_user(info)
         if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
             raise PermissionDenied("Implementation choices are not readable by this actor.")
+        if record is not None:
+            return record_impl_choices(info, model, field, record)
         return resolve_impl_choices(model, field)
 
 

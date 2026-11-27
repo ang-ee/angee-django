@@ -24,7 +24,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models.signals import post_save
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -46,6 +46,7 @@ from angee.integrate.schema import integration_action_guard
 from angee.integrate.states import StreamDirection, StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
+from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.messaging.testing.models import Channel
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
@@ -1791,6 +1792,75 @@ def test_every_update_input_carries_its_model_s_create_only_selectors_and_the_me
         ("calendar.CalendarSource", "backend_class"), ("parties.Directory", "backend_class"),
         ("storage_integrate.Mount", "backend_class"),
     }
+
+
+_REPAIR_CHOICES = """
+    query($record: ID) {
+      impl_choices(model: "integrate_vcs.VcsBridge", field: "backend_class", record: $record) { key defaults }
+    }
+"""
+
+
+def test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is_refused_as_the_write_is(
+    db: None,
+) -> None:
+    """With a record, each choice's defaults are the config it carries over; the gate is the write's."""
+
+    del db
+    admin = _platform_admin("repair-choices-admin")
+    plain = User.objects.create_user(username="repair-choices-plain", email="repair-plain@example.com")
+    bridge = make_integration("repair-choices", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    with system_context(reason="test.repair.choices"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team", "retired_option": True})
+    record = {"record": _public_id(bridge)}
+
+    choices = {choice["key"]: choice["defaults"] for choice in _data(
+        execute_schema(_schema(), _REPAIR_CHOICES, record, user=admin))["impl_choices"]}
+    assert choices["local"] == {"config": LocalVCSBackend.carried_config({"local_root": "/srv/team"})}
+    assert choices["stub"] == {"config": {"local_root": "/srv/team", "retired_option": True}}
+
+    assert execute_schema(_schema(), _REPAIR_CHOICES, record, user=plain).errors is not None
+    unknown = execute_schema(_schema(), _REPAIR_CHOICES, {"record": "vcs_unknown"}, user=admin)
+    assert unknown.errors is not None and "backend_class" not in str(unknown.errors[0].extensions)
+    registered = make_integration("repair-choices-registered", model=VcsBridge, backend_class="local")
+    refused = execute_schema(_schema(), _REPAIR_CHOICES, {"record": _public_id(registered)}, user=admin)
+    assert refused.errors is not None and refused.errors[0].extensions["validationErrors"] == {
+        "backend_class": ["Implementation selection is create-only."],
+    }
+
+
+def test_the_read_offers_a_bridge_s_repair_exactly_when_the_update_allows_it(db: None) -> None:
+    """The contract a form reads: the key reads null exactly while its record read and its update are allowed."""
+
+    del db
+    admin = _platform_admin("repair-agreement-admin")
+    bridge = make_integration("repair-agreement", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    read = "query($id: String!) { vcs_bridges_by_pk(id: $id) { backend_class } }"
+    update = """
+        mutation($id: String!, $set: vcs_bridges_set_input!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: $set) { backend_class }
+        }
+    """
+    target = {"id": _public_id(bridge)}
+
+    def state(key: str) -> tuple[bool, bool, bool]:
+        """(the key reads null, the record read answers, the update is allowed), the update rolled back."""
+
+        stored = _data(execute_schema(_schema(), read, target, user=admin))["vcs_bridges_by_pk"]["backend_class"]
+        offered = execute_schema(_schema(), _REPAIR_CHOICES, {"record": target["id"]}, user=admin).errors is None
+        with transaction.atomic():
+            allowed = execute_schema(_schema(), update, {**target, "set": {"backend_class": key}}, user=admin)
+            transaction.set_rollback(True)
+        return stored is None, offered, allowed.errors is None
+
+    assert state("local") == (True, True, True)
+    _data(execute_schema(_schema(), update, {**target, "set": {"backend_class": "local"}}, user=admin))
+    assert state("stub") == (False, False, False)
+    registered = make_integration("repair-agreement-registered", model=VcsBridge, backend_class="local")
+    target = {"id": _public_id(registered)}
+    assert state("stub") == (False, False, False)
 
 
 def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(db: None) -> None:
