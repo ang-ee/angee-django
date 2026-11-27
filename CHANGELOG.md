@@ -162,9 +162,14 @@ live in code docstrings.
     value)` is an email address's domain in the rule's spelling (`""` off email
     or with no `@`); `HandleQuerySet.at_domain(domain)` is the email handles at a
     domain in any spelling. A consumer that split a stored key at its `@` asks them.
-  - **Who a person confirmed on an address.** `StatementQuerySet.confirmed()` is the
-    applied statements a person confirmed, from `Statement.CONFIRMED_STANCE`, the
-    one statement of the stance `Statement.is_confirmed` reads.
+  - **Who is confirmed on an address.** `StatementQuerySet.confirmed()` is the
+    applied statements whose stance is a confirmation (`Statement.CONFIRMED_STANCE`:
+    a person's or a seed's preferred statement with a value). The mapping is the
+    one statement of the stance: `confirm_statement` writes it and
+    `Statement.is_confirmed` checks it of a row, which checks no status, so a
+    superseded confirmation is one as a row and is not in the scope.
+    `Statement.DISMISSED_STANCE` does the same for a dismissal
+    (`dismiss_statement`, `Statement.is_dismissed`, and parties' same-person read).
     `PartyQuerySet.confirmed_on(handles)` is the canonical parties confirmed on
     any of the handles: every confirmation, not only the party a handle
     resolves to, plus each handle's own confirmed party, in one query. It reads
@@ -176,7 +181,8 @@ live in code docstrings.
     rolled back, logged and counted in `failed`, and the rest are saved.
     `renormalize_handles` walks through it as before; `HandleManager.REPAIR_LIMIT`
     is now only the holder repair's default cap. The new provision repair
-    `renormalize_organization_domains` (`PartyManager.renormalize_organization_domains`,
+    `renormalize_organization_domains` (`OrganizationManager.renormalize_domains` on
+    `Organization.objects`, a `PartyManager` of its own,
     also a command) walks through it too, reading every organization's domain and
     key and saving, as its most derived row, each one whose key is not its
     domain's; it returns a `KeyRepair`.
@@ -2005,7 +2011,7 @@ live in code docstrings.
   PostgreSQL 17 in a local container, measured twice with 10,000 handles
   (155 and 149 seconds) on an 18-core development machine that other work
   kept under heavy load (load average 75 to 87). The repair saves in batches
-  of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
+  of `REPAIR_BATCH` (500) rows (`repair_keys`), each in its own transaction, so
   an interrupted provision keeps what it saved and the next one resumes. The
   provision log prints "Saved the keys of N handle(s) again." A row
   whose save raises is rolled back alone, logged with its error, counted in

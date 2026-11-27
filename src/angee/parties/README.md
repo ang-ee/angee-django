@@ -379,7 +379,7 @@ and every reader asks it; nobody compares `Organization.domain` itself. History
 versions the key beside the domain, as a handle's keys, and a revert restoring a
 domain keys it again. A queryset `update` writes no key: the
 `renormalize_organization_domains` repair
-(`PartyManager.renormalize_organization_domains`), which every provision runs,
+(`OrganizationManager.renormalize_domains`), which every provision runs,
 reads every organization's domain and key in batches and saves again, under its
 row lock and as its most derived row (a company in its own history), each one
 whose key is not the rule's, so a row stored before the column existed, a domain
@@ -410,8 +410,8 @@ whose keys are already what the rule gives has them written again unchanged
 beside its version, and leaves the selection. With no row behind, the repair is
 that one indexed query. A run takes the whole backlog, because a row left with a
 stale key is one the lookups that read keys miss, and a writer that misses it
-makes a second row. It saves in batches of `HandleManager.REPAIR_LIMIT` (500)
-rows, each in its own transaction, so an interrupted provision keeps what it
+makes a second row. It saves in batches of `REPAIR_BATCH` (500) rows
+(`repair_keys`), each in its own transaction, so an interrupted provision keeps what it
 saved and the next one resumes. Every batch starts after the last key the run
 selected, so a run selects no row twice and ends: a row deleted or already
 saved by another process is passed, and a row whose save raises is rolled
@@ -468,15 +468,20 @@ and compares the references it returns with its own by the record each names
 (`EvidenceReference.named_record`: the label without case and the public id,
 the pointer aside), as the verb does.
 
-Which parties a person confirmed on an address is one read,
-[PartyQuerySet.confirmed_on(handles)](managers.py): every party with a
-confirmation on any of the handles (`PartyStatementQuerySet.confirmed`, the
-applied statements whose stance `Statement.is_confirmed` reads, both from
-`Statement.CONFIRMED_STANCE`), and each handle's own confirmed party, not only the
-party a handle resolves to, which is whoever confirmed last. It reads the
-confirmations structurally in one query; the caller passes handles it may read
-and calls it on parties scoped as it needs. A consumer that must not route an
-address two parties hold to one of them asks it.
+Which parties are confirmed on an address is one read,
+[PartyQuerySet.confirmed_on(handles)](managers.py): every party with an applied
+confirmation on any of the handles (`StatementQuerySet.confirmed`: a person's or a
+seed's preferred statement with a value, `Statement.CONFIRMED_STANCE`), and each
+handle's own confirmed party, not only the party a handle resolves to, which is
+whoever confirmed last. It reads the confirmations structurally in one query; the
+caller passes handles it may read and calls it on parties scoped as it needs. A
+consumer that must not route an address two parties hold to one of them asks it.
+Three reads say "confirmed" and answer different questions:
+`StatementQuerySet.confirmed()` is statements (which stances are applied
+confirmations), `PartyQuerySet.confirmed_on(handles)` is parties (who is confirmed
+on these handles), and `HandleQuerySet.confirmed(platform, value)` is handles (an
+address's handles, by the person-matching key, whose resolved party link is
+confirmed).
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization

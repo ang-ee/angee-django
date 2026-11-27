@@ -161,11 +161,12 @@ Use these owners instead of maintaining another contract in an addon:
   reconcile/load flows, and writes that begin from a model class. QuerySets own
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
-  promote it to a model or manager method. A predicate several managers or a
-  relation path must compose (the base manager, an unaudited read, a join from
-  another model) is a model classmethod returning a `Q`, named `*_filter`, and
-  the scopes call it: [`Handle.spellings_filter`](../../src/angee/parties/models.py),
-  `Handle.identifies_account_filter(prefix)`, `Organization.domain_filter`.
+  promote it to a model or manager method. A read predicate's second home is a
+  model classmethod returning a `Q` that its callers compose, for a predicate
+  several managers or a relation path must share (the base manager, an unaudited
+  read, a join from another model); for example
+  [`Handle.spellings_filter`](../../src/angee/parties/models.py),
+  `Handle.identifies_account_filter(prefix)` and `Organization.domain_filter`.
 - **Database routing:** Angee runs on one database, Django's `default`. It
   selects no database per operation, and the base system check `angee.E050`
   requires only the `default` alias in `DATABASES` and refuses any
