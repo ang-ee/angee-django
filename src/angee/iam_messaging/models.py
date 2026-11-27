@@ -33,7 +33,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.timestamps import auto_now_stamps
 from angee.base.origins import PublicOriginUnavailable, configured_public_origin
-from angee.messaging_templates.engine import VALUE_NOT_PRINTED
+from angee.messaging_templates.engine import NO_BRAND_KIT, VALUE_NOT_PRINTED
 
 ISSUE_SIGN_IN_LINK = "issue_sign_in_link"
 """The account action that emails a sign-in link, named by its Zed permission on ``auth/user``."""
@@ -70,6 +70,13 @@ SIGN_IN_LINK_NOT_SHOWN_MESSAGE = (
 )
 """Refusal of a link whose effective template, as the deployment wrote or edited it or a row it includes, does not show
 the link (the template's ``VALUE_NOT_PRINTED``), code ``link_not_shown``."""
+
+SIGN_IN_LINK_NO_BRAND_KIT_MESSAGE = (
+    "This deployment has no default brand kit, so no sign-in link was sent: make a brand kit the default in "
+    "Settings, under Brand kits."
+)
+"""Refusal of a link while no brand kit is the default, which every message renders in (the template's
+``NO_BRAND_KIT``), code ``brand_kit_missing``: the deployment's to fix, as for a missing template."""
 
 SIGN_IN_LINK_NOT_RENDERED_MESSAGE = (
     "The sign-in link's email template could not be rendered for this mail, so no link was sent: preview it to see "
@@ -171,10 +178,11 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
         whatever ``MessageTemplateManager.send_as_system`` refuses, as its
         docstring orders it: the system channel's and compose's refusals (the
         channel missing or paused among them) as they are, and the render's in
-        this addon's words, as the deployment's fault, each logged as a warning
-        naming the row and the refusal's code: a template whose bodies do not
-        both show the link (``must_print``) as ``link_not_shown``, any other as
-        ``link_not_rendered``. That send renders the template with the link,
+        this addon's words, as the deployment's fault: no default brand kit as
+        ``brand_kit_missing``; a template whose bodies do not both show the link
+        (``must_print``) as ``link_not_shown`` and any other as
+        ``link_not_rendered``, each logged as a warning naming the row and the
+        refusal's code. That send renders the template with the link,
         its expiry and the person's first name, and records it on messaging's system channel,
         queued for delivery when the outermost transaction commits. Only then is
         the row saved, its ``sent_at`` stamped: recorded and queued, which makes
@@ -227,6 +235,8 @@ class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
                 if set(refused) != {NON_FIELD_ERRORS}:
                     raise
                 codes = sorted({str(item.code) for item in refused[NON_FIELD_ERRORS]})
+                if codes == [NO_BRAND_KIT]:
+                    raise ValidationError(SIGN_IN_LINK_NO_BRAND_KIT_MESSAGE, code="brand_kit_missing") from None
                 hidden = codes == [VALUE_NOT_PRINTED]
                 logger.warning(
                     "Refused a sign-in link: the message template %s (%s), row %s, or a block or part it includes, "

@@ -67,8 +67,9 @@ live in code docstrings.
   template, its language, its row's public id and the refusal's code. Every other
   refusal of the render is answered the same way in the addon's words
   (`link_not_rendered`, "…could not be rendered for this mail…"), never the
-  render's, which can quote a value; the system channel's and compose's refusals
-  pass as they are. The action answers "Sign-in
+  render's, which can quote a value, and no default brand kit in words of its own
+  (`brand_kit_missing`, "This deployment has no default brand kit…"); the system
+  channel's and compose's refusals pass as they are. The action answers "Sign-in
   link queued for the account's email." (it said "sent"), and so do the
   cooldown's refusal and the log: its mail's delivery is the recorded message's
   to show on the system channel. A missing template's refusal names no command

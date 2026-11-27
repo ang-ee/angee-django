@@ -52,6 +52,7 @@ from angee.iam_messaging.models import (
     ISSUE_SIGN_IN_LINK,
     SIGN_IN_LINK_COOLDOWN_MESSAGE,
     SIGN_IN_LINK_NO_ADDRESS_MESSAGE,
+    SIGN_IN_LINK_NO_BRAND_KIT_MESSAGE,
     SIGN_IN_LINK_NOT_RENDERED_MESSAGE,
     SIGN_IN_LINK_NOT_SHOWN_MESSAGE,
     SIGN_IN_LINK_PATH,
@@ -63,7 +64,7 @@ from angee.iam_messaging.models import (
 from angee.iam_messaging.testing.models import SignInLink
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Fragment, Handle, Message, Person
-from angee.messaging_templates.engine import INVALID_VALUES, NO_BRAND_KIT, VALUE_NOT_PRINTED
+from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_PRINTED
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.resources.testing.models import Resource
 from tests.conftest import addon_schema, create_platform_admin
@@ -1212,8 +1213,8 @@ def _broken(state: str, channel: Any) -> None:
     pytest.param("system channel missing", "channel", "SYSTEM_CHANNEL_MISSING", id="system-channel-missing"),
     pytest.param("system channel paused", "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", id="system-channel-paused"),
     pytest.param("template missing", None, "template_missing", id="template-missing"),
-    # The render's refusal of another code than a hidden link, answered in the action's words like every render's.
-    pytest.param("no default brand kit", None, "link_not_rendered", id="the-renders-refusal-of-another-code"),
+    # The render's refusal for want of a default brand kit, the deployment's to fix, in words naming that cause.
+    pytest.param("no default brand kit", None, "brand_kit_missing", id="no-default-brand-kit"),
     pytest.param("cooldown", None, None, id="within-the-cooldown"),
 ])
 def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_link_current(
@@ -1244,9 +1245,10 @@ def test_a_refused_issue_writes_nothing_names_no_token_and_leaves_the_earlier_li
         assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_TEMPLATE_MISSING_MESSAGE])
         assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
     if state == "no default brand kit":
-        assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_NOT_RENDERED_MESSAGE])
+        assert (refusal.value.code, refusal.value.messages) == (code, [SIGN_IN_LINK_NO_BRAND_KIT_MESSAGE])
         assert refusal.value.__suppress_context__ and refusal.value.__cause__ is None
-        assert f"could not be rendered for it ({NO_BRAND_KIT})." in caplog.text
+        assert result_data(result)["issue_user_sign_in_link"]["message"] == SIGN_IN_LINK_NO_BRAND_KIT_MESSAGE
+        assert "Refused a sign-in link" not in caplog.text
     if state == "cooldown":
         assert refusal.value.messages == [SIGN_IN_LINK_COOLDOWN_MESSAGE]
     assert result_data(result)["issue_user_sign_in_link"]["ok"] is False

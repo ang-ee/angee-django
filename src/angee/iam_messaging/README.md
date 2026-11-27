@@ -64,7 +64,8 @@ shows it only under a condition that is false for this person, is refused when a
 link is issued. The action refuses in band ("The sign-in link's email template does
 not show the link…", code `link_not_shown`), nothing is written, the earlier link
 stays current, and a warning on this addon's logger names the template row and
-the refusal's code. Any other refusal of the render (a value the template reads
+the refusal's code. Any other refusal of the render but a missing default brand
+kit (a value the template reads
 as a date, a value or a text over its limit, a render that fails) is answered the
 same way in this addon's words ("…could not be rendered for this mail…", code
 `link_not_rendered`), never in the render's, which can quote a value, the link
@@ -96,9 +97,11 @@ Otherwise no link is offered, and the action refuses without naming a setting:
 an operator sets `ANGEE_PUBLIC_ORIGIN` and messaging's transport and sender. What
 settings cannot tell is refused in band, with nothing written: the system
 channel's row missing (`SYSTEM_CHANNEL_MISSING`, under `channel`) or the template
-missing (`template_missing`), which mean provision's resource load has not run,
-and the system channel paused by an administrator
-(`OUTBOUND_EMAIL_CHANNEL_MISSING`, under `channel`).
+missing (`template_missing`), which mean provision's resource load has not run;
+the system channel paused by an administrator
+(`OUTBOUND_EMAIL_CHANNEL_MISSING`, under `channel`); and no default brand kit,
+which every mail renders in (`brand_kit_missing`: "This deployment has no default
+brand kit…", which says where an administrator makes one the default).
 
 `sent_at` means recorded and queued, not delivered, and the new link is current
 from then on, in the same transaction as its mail. The action says no more than
