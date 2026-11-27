@@ -17,7 +17,7 @@ import importlib
 import logging
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx2
 import pytest
@@ -25,6 +25,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connection, transaction
+from django.db.models import QuerySet
 from django.db.models.signals import post_save
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -2013,6 +2014,40 @@ def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admit
             assert by_insert == ("admitted" if actor_kind == "admin" else "refused"), (actor_kind, by_insert)
         else:
             assert by_insert == on_create, (actor_kind, by_insert)
+
+
+@pytest.mark.parametrize("implementation", ["base", "integration"])
+def test_authorize_update_called_alone_takes_no_row_lock_and_writes_nothing(db: None, implementation: str) -> None:
+    """The update's own decision, which the repair read asks before anything is written: no lock, no write.
+
+    Both implementations, the base backend's (feeds) and the integration's (VCS bridges). The statement
+    capture finds a ``FOR UPDATE`` on PostgreSQL; on SQLite, which takes no row locks, the guard on
+    ``select_for_update`` finds the same intent.
+    """
+
+    from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+    from angee.graphql.testing.documents import graphql_request
+    from angee.integrate.schema import IntegrationWriteBackend
+    from tests.conftest import Feed
+
+    del db
+    model, backend = {
+        "base": (Feed, AngeeHasuraWriteBackend), "integration": (VcsBridge, IntegrationWriteBackend),
+    }[implementation]
+    row = make_integration(f"no-lock-{implementation}", model=model)
+    info = SimpleNamespace(context=SimpleNamespace(request=graphql_request(row.owner)))
+    locked = AssertionError("authorize_update asked for a row lock")
+    with (
+        actor_context(row.owner),
+        patch.object(QuerySet, "select_for_update", autospec=True, side_effect=locked),
+        CaptureQueriesContext(connection) as queries,
+    ):
+        assert backend(model).authorize_update(info, _public_id(row)).pk == row.pk
+
+    statements = [query["sql"].upper() for query in queries.captured_queries]
+    assert statements
+    assert [sql for sql in statements if "FOR UPDATE" in sql or "FOR NO KEY UPDATE" in sql] == []
+    assert [sql for sql in statements if sql.lstrip().startswith(("INSERT", "UPDATE", "DELETE"))] == []
 
 
 _ADMISSIONS_ASKED: list[Any] = []
