@@ -539,15 +539,18 @@ class TemplateWalk:
            refused over 50,000 characters of JSON (characters, not escapes), with
            a string over 10,000, with over 500 list items in all, with a
            reserved root, or holding a character no mail can encode (a lone
-           surrogate).
+           surrogate). A string's path is named only when the row declares it:
+           a caller's own key may be its data.
         2. Keys outside ``D`` dropped at every level and in every list item; a
            present inner segment is an object, a ``*`` parent a list, a leaf a
            string, number, boolean or null, a string without its control
            characters and bidirectional overrides and isolates
            (:data:`UNPRINTED`), so one holding nothing else is empty;
            at a :attr:`float_paths` path, a number one a float holds.
-        3. Each :attr:`required` path present and not null, in every present item.
-           Each value at a :attr:`link_paths` path that :func:`~angee.messaging_templates.engine.url`
+        3. Each :attr:`required` path present and not null, in every present item,
+           but for one under a value of the wrong shape, which that value's
+           refusal covers; both are refused together. Each value at a
+           :attr:`link_paths` path that :func:`~angee.messaging_templates.engine.url`
            would empty and is not blank is refused, code ``value_not_linkable``,
            as :func:`~angee.messaging_templates.engine.clean_link` words it: a
            render never sends an empty link in place of one it was given.
@@ -588,19 +591,19 @@ class TemplateWalk:
                     "The values hold a character no mail can encode, a lone surrogate.", INVALID_VALUES,
                     RefusalSource.VALUES,
                 ) from error
-            errors = _value_errors(data)
+            errors = _value_errors(data, self.declared)
             if errors:
                 raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
             tree = _tree(self.declared)
-            shaped = {key: _shaped(data[key], subtree, (key,), errors) for key, subtree in tree.items() if key in data}
-            if errors:  # a value of the wrong shape, alone: a path it leaves missing is its consequence
-                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES))
+            misshaped: list[Path] = []
+            shaped = {key: _shaped(data[key], subtree, (key,), errors, misshaped)
+                      for key, subtree in tree.items() if key in data}
             required = [  # the row's text reads these unguarded: the template decides what a mail must be given
                 f"{_dotted(path)} is required and missing or null." for path in sorted(self.required)
-                if _lacks(shaped, path)
-            ]
-            if required:
-                raise _refused(INVALID_VALUES, (required, RefusalSource.TEMPLATE))
+                if _lacks(shaped, path) and not any(path[:len(bad)] == bad for bad in misshaped)
+            ]  # a path under a value of the wrong shape is that value's consequence, not missing on its own
+            if errors or required:
+                raise _refused(INVALID_VALUES, (errors, RefusalSource.VALUES), (required, RefusalSource.TEMPLATE))
             filled = {key: _filled(shaped.get(key), subtree) for key, subtree in tree.items()}
             for path in sorted(self.float_paths):
                 errors.extend(f"{_dotted(path)} is not a number a float holds." for number in _at(filled, path)
@@ -815,7 +818,7 @@ def _one_line(text: str, name: str) -> str:
     line = ENCODED_WORD_OPENER.sub("= ?", line)
     if len(line) > SUBJECT_LIMIT:
         raise refusal_item(
-            "The rendered %(name)s is over %(limit)s characters.", SUBJECT_TOO_LONG, RefusalSource.TEMPLATE,
+            "The rendered %(name)s is over %(limit)s characters.", SUBJECT_TOO_LONG, RefusalSource.VALUES,
             params={"name": name, "limit": SUBJECT_LIMIT},
         )
     return line
@@ -830,14 +833,18 @@ def _plain(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip() + "\n"
 
 
-def _value_errors(data: Any) -> list[str]:
+def _value_errors(data: Any, declared: Iterable[str]) -> list[str]:
+    """What is wrong with ``data`` as a whole, read before undeclared keys are dropped: a path is named only when it
+    is a prefix the row declares; a caller's own key, which may be its data, is not."""
+
+    named = {".".join(prefix) for prefix in _prefixes(tuple(path.split(".")) for path in declared)}
     errors: list[str] = []
     items = 0
     pending: list[tuple[str, Any]] = [("", data)]
     while pending:
         path, value = pending.pop()
         if isinstance(value, str) and len(value) > VALUE_STRING_LIMIT:
-            errors.append(f"{path or 'A value'} is over {VALUE_STRING_LIMIT} characters.")
+            errors.append(f"{path if path in named else 'A value'} is over {VALUE_STRING_LIMIT} characters.")
         elif isinstance(value, list):
             items += len(value)
             pending.extend((f"{path}.*", item) for item in value)
@@ -861,8 +868,8 @@ def _tree(declared: Iterable[str]) -> dict[str, Any]:
     return tree
 
 
-def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> Any:
-    """Drop what ``D`` does not declare and refuse a value whose shape it contradicts."""
+def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str], misshaped: list[Path]) -> Any:
+    """Drop what ``D`` does not declare and refuse a value whose shape it contradicts, its path in ``misshaped``."""
 
     if value is None:
         return None
@@ -872,16 +879,20 @@ def _shaped(value: Any, tree: dict[str, Any], here: Path, errors: list[str]) -> 
         if isinstance(value, (int, float, bool)):
             return value
         errors.append(f"{_dotted(here)} is a string, a number, true, false or null.")
+        misshaped.append(here)
         return None
     if "*" in tree:
         if not isinstance(value, list):
             errors.append(f"{_dotted(here)} is a list.")
+            misshaped.append(here)
             return None
-        return [_shaped(item, tree["*"], (*here, "*"), errors) for item in value]
+        return [_shaped(item, tree["*"], (*here, "*"), errors, misshaped) for item in value]
     if not isinstance(value, dict):
         errors.append(f"{_dotted(here) or 'The values'} is an object.")
+        misshaped.append(here)
         return None
-    return {key: _shaped(value[key], subtree, (*here, key), errors) for key, subtree in tree.items() if key in value}
+    return {key: _shaped(value[key], subtree, (*here, key), errors, misshaped)
+            for key, subtree in tree.items() if key in value}
 
 
 def _finite(number: float) -> bool:
@@ -932,6 +943,18 @@ def _filled(value: Any, tree: dict[str, Any]) -> Any:
     return {key: _filled(present.get(key), subtree) for key, subtree in tree.items()}
 
 
+def _kind(value: Any) -> str:
+    """What a JSON value is, in plain words with its article."""
+
+    if value is None:
+        return "nothing"
+    if isinstance(value, bool):
+        return "true or false"
+    if isinstance(value, (int, float)):
+        return "a number"
+    return "a list" if isinstance(value, list) else "an object" if isinstance(value, dict) else "text"
+
+
 def _parse_dates(
     value: Any, path: Path, full: Path, printer: _DatePrinter, errors: list[str], formats: list[str],
 ) -> None:
@@ -961,7 +984,7 @@ def _parse_dates(
             except ValueError:
                 parsed = None
         if parsed is None:
-            given = f"text of {len(child)} characters" if isinstance(child, str) else f"a {type(child).__name__}"
+            given = f"text of {len(child)} characters" if isinstance(child, str) else _kind(child)
             errors.append(f"{_dotted(full)} is not a date, or a date and time with its offset: it is {given}.")
             continue
         if (refusal := printer.refusal(full, parsed)) is not None:

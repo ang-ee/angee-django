@@ -128,6 +128,16 @@ REFUSAL_SOURCE = "source"
 """The ``params`` key of a send's refusal item that holds its :class:`RefusalSource`."""
 
 
+def refusal_sources(error: ValidationError) -> frozenset[RefusalSource]:
+    """The sources of a send's refusal items: empty for a refusal that is not this addon's, such as messaging's keyed
+    ones (a recipient's, the system channel's), whose items carry none. Safe on a keyed or a listed error alike."""
+
+    keyed = getattr(error, "error_dict", None)
+    items = error.error_list if keyed is None else [item for listed in keyed.values() for item in listed]
+    return frozenset(RefusalSource(item.params[REFUSAL_SOURCE]) for item in items
+                     if isinstance(item.params, Mapping) and REFUSAL_SOURCE in item.params)
+
+
 def refusal_item(
     message: str, code: str, source: RefusalSource, *, params: Mapping[str, Any] | None = None,
     error: type[ValidationError] = ValidationError,
@@ -215,7 +225,7 @@ class RenderBudget:
 
         if self.exceeded:
             raise refusal_item(
-                BUDGET_EXCEEDED_MESSAGE, RENDER_BUDGET_EXCEEDED, RefusalSource.TEMPLATE, params=self.limits,
+                BUDGET_EXCEEDED_MESSAGE, RENDER_BUDGET_EXCEEDED, RefusalSource.VALUES, params=self.limits,
                 error=RenderBudgetExceeded,
             )
 
@@ -439,7 +449,8 @@ def _link(value: Any) -> tuple[str, str | None]:
         if not LINK_HOST.fullmatch(authority):
             own = _own_origin_authority(scheme, authority)
             if own is None:
-                return "", "its host is not one a mail can link to"
+                return "", ("its host is neither a domain name of two labels or more, the last a name, with an "
+                            "optional port, nor this deployment's public origin")
             link = f"{link.partition(':')[0]}://{own}{rest[2 + len(authority):]}"
     return link, None
 

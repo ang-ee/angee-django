@@ -539,14 +539,20 @@ live in code docstrings.
   Every refusal item a send returns from this addon carries `params["source"]`
   (`REFUSAL_SOURCE`), one of `RefusalSource` (`deployment`, `template`, `values`,
   `unknown`), set where it is raised; both are exported from the engine beside
-  `SEND_CODES`. No refusal's words or `params` quote a value. **Changed words, which
+  `SEND_CODES`, with `refusal_sources(error)`, which reads a refusal's sources, keyed
+  or not, and gives none for messaging's own refusals. `subject_too_long` and
+  `render_budget` are `values`: a subject or budget exceeded on every item of a run is
+  a template that is too long. No refusal's words or `params` quote a value, nor a key
+  of the values the row does not declare (`A value is over 10000 characters.`). **Changed words, which
   no caller should match:** `render_failed` names the exception's type only
   (`The message template did not render: it raised RuntimeError.`), no longer its
   text; a date that is not one says what was given by kind and length (`it is
-  text of 12 characters`), no longer the value; `value_not_linkable` no longer
-  names a link's host (`its host is not one a mail can link to`); values that are
-  not JSON name the error's type. Values of the wrong shape are refused alone; a
-  path the row requires is refused only when the shapes are right.
+  text of 12 characters`, `it is a number`, `it is true or false`), no longer the
+  value; `value_not_linkable` no longer names a link's host (`its host is neither a
+  domain name of two labels or more, the last a name, with an optional port, nor this
+  deployment's public origin`); values that are not JSON name the error's type. A
+  value of the wrong shape is refused with each path the row requires that is not
+  under it, never a path under it.
 - `angee.messaging_templates`: **A sender reads the send codes and the limits from the engine.**
   `SEND_CODES` holds the eleven codes `send_as_system` can return from this addon, built
   from their constants, and a test fails when a raise site names a code outside it or

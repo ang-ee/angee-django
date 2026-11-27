@@ -38,12 +38,14 @@ from rebac.schema.ast import PermBinOp, PermRef
 
 from angee.brandkit.testing.models import BrandKit
 from angee.jobs.enqueue import celery_app
+from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient
 from angee.messaging_templates.engine import (
     INVALID_VALUES,
+    MESSAGE_TEMPLATE_REFUSED,
     NOT_A_TEMPLATE,
     NOT_EFFECTIVE,
     REFUSAL_SOURCE,
@@ -55,6 +57,8 @@ from angee.messaging_templates.engine import (
     VALUE_NOT_PRINTED,
     VALUES_TOO_LARGE,
     RefusalSource,
+    refusal_item,
+    refusal_sources,
 )
 from angee.messaging_templates.testing.faults import failing_filter, failing_render
 from angee.messaging_templates.testing.models import MessageTemplate
@@ -276,11 +280,12 @@ def _paused(channel: Any) -> None:
         pytest.param(None, "Two <a@example.test>, b@example.test", "to", "invalid", False, id="two-addresses"),
         pytest.param(None, "rëader@example.test", "to", "cannot_carry", False,
                      id="recipient-the-transport-cannot-carry"),
-        pytest.param("unconfigured", ADDRESS, "channel", "OUTBOUND_EMAIL_NOT_CONFIGURED", False, id="unconfigured"),
+        pytest.param("unconfigured", ADDRESS, "channel", OutboundEmailNotConfigured.code, False, id="unconfigured"),
+        pytest.param("invalid sender", ADDRESS, "channel", "invalid", False, id="sender-not-one-address"),
         pytest.param("uncarried sender", ADDRESS, "channel", "cannot_carry", False,
                      id="sender-the-transport-cannot-carry"),
-        pytest.param("missing", ADDRESS, "channel", "SYSTEM_CHANNEL_MISSING", True, id="missing"),
-        pytest.param("paused", ADDRESS, "channel", "OUTBOUND_EMAIL_CHANNEL_MISSING", True, id="paused"),
+        pytest.param("missing", ADDRESS, "channel", SystemChannelMissing.code, True, id="missing"),
+        pytest.param("paused", ADDRESS, "channel", OutboundEmailChannelMissing.code, True, id="paused"),
     ],
 )
 def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_nothing_written(
@@ -292,6 +297,7 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
     In ``compose_as_system``'s own order, after the render: its argument checks and an address the transport cannot
     carry, then system mail not configured, from settings, none of which reads the system channel; then, after the
     lookup's own audit row, the missing channel and a channel not connected. The render's audit row comes first.
+    Each is messaging's, keyed: the documented reader of a send's sources reads none from it, and does not fail.
     """
 
     del mailing, plain
@@ -303,9 +309,13 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
         settings.MAILERS = {}
     if state == "uncarried sender":
         settings.DEFAULT_FROM_EMAIL = "Angee <nöreply@example.test>"
+    if state == "invalid sender":
+        settings.DEFAULT_FROM_EMAIL = "Angee <noreply@example.test>, other@example.test"
     row, audits = _greeting(), _audits()
-    with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError, key=key, code=code):
+    with (django_capture_on_commit_callbacks(execute=True) as callbacks,
+          _refused(ValidationError, key=key, code=code) as refusal):
         _send(row, {"name": "Ana", "title": "Welcome"}, to=to)
+    assert refusal_sources(refusal.value) == frozenset()
     assert (callbacks, sent) == ([], [])
     reasons = [reason for _, reason in _audits()[len(audits):]]
     assert reasons[0] == REASON, reasons
@@ -313,6 +323,8 @@ def test_what_the_system_channel_refuses_comes_back_under_its_argument_with_noth
 
 
 LINKED = {"link": "Where the reader signs in."}
+UNLINKABLE_HOST = ("link is not a link this mail can carry: its host is neither a domain name of two labels or more,"
+                   " the last a name, with an optional port, nor this deployment's public origin.")
 LINK = {"link": "https://app.example.test/sign-in/once"}
 
 
@@ -472,8 +484,8 @@ def test_a_link_the_mail_cannot_carry_is_refused_before_anything_is_written_not_
     system_channel: Any, sent: list[str], settings: Any, django_capture_on_commit_callbacks: Any, must_print: list[str],
 ) -> None:
     """A single-label host that is not this deployment's origin: the rule cannot link to it, so the send is refused
-    in band, naming the value's path and the host, instead of sending an empty ``href`` and a label with nothing after
-    it."""
+    in band, naming the value's path and why, never the host, instead of sending an empty ``href`` and a label with
+    nothing after it."""
 
     del system_channel
     settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
@@ -481,7 +493,7 @@ def test_a_link_the_mail_cannot_carry_is_refused_before_anything_is_written_not_
     with django_capture_on_commit_callbacks(execute=True) as callbacks, _refused(ValidationError) as refusal:
         _send(row, {"link": DECISION}, must_print=must_print)
     assert [(item.code, item.message) for item in refusal.value.error_list] == [
-        (VALUE_NOT_LINKABLE, "link is not a link this mail can carry: its host is not one a mail can link to."),
+        (VALUE_NOT_LINKABLE, UNLINKABLE_HOST),
     ]
     assert (callbacks, sent) == ([], [])
 
@@ -517,7 +529,7 @@ def test_the_preview_shows_a_sample_link_the_mail_cannot_carry_as_its_render_err
     assert preview.rendered is None
     assert [(warning.code, warning.detail) for warning in preview.warnings] == [(
         TemplateWarningCode.RENDER_ERROR,
-        "link is not a link this mail can carry: its host is not one a mail can link to.",
+        UNLINKABLE_HOST,
     )]
 
 
@@ -610,9 +622,9 @@ def test_the_deployments_own_public_origin_is_linked_in_both_bodies_and_no_other
         pytest.param("http://intranet token=SECRET-marker", id="a-space"),
     ],
 )
-def test_a_refused_link_names_no_part_of_it_past_its_host(plain: Any, settings: Any, value: str) -> None:
-    """A refusal's words reach an action's answer, the preview and logs: one naming a host never runs into the rest
-    of the link, whatever spelling hides its separator."""
+def test_a_refused_link_names_no_part_of_it(plain: Any, settings: Any, value: str) -> None:
+    """A refusal's words reach an action's answer, the preview and logs: they name the value's path and why, never a
+    part of the link, whatever spelling hides its separator."""
 
     del plain
     settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
@@ -660,7 +672,7 @@ def _rendered_or_refused(caller: str, value: str, tester: Any) -> tuple[str, str
     ("value", "outcome", "words"),
     [
         pytest.param("http://intranet:8080/decisions/1", "refused",
-                     "link is not a link this mail can carry: its host is not one a mail can link to.",
+                     UNLINKABLE_HOST,
                      id="a-host-the-rule-refuses"),
         pytest.param("https://localhost:8000/decisions/1", "rendered", "https://localhost:8000/decisions/1",
                      id="the-deployments-own-origin"),
@@ -732,7 +744,7 @@ def test_an_exception_inside_compose_reports_no_value_or_rendered_text_in_the_se
 
 def test_a_report_of_the_link_checks_refusal_shows_no_part_of_the_link(settings: Any) -> None:
     """A caller that lets the check's refusal propagate: neither the check's frame nor the rule's below it shows the
-    link, and the refusal's own words name only its host."""
+    link, and the refusal's own words name no part of it."""
 
     settings.ANGEE_PUBLIC_ORIGIN = "https://app.example.test"
     with pytest.raises(ValidationError) as raised:
@@ -855,7 +867,7 @@ def test_an_engine_failure_quoting_a_value_logs_the_templates_identity_and_type_
 
 SEND_SITES = sorted([
     # (module, function, code, source): the per-site table; a site whose fault changes fails here.
-    ("engine.py", "check", "RENDER_BUDGET_EXCEEDED", "TEMPLATE"),  # the template's loops and includes
+    ("engine.py", "check", "RENDER_BUDGET_EXCEEDED", "VALUES"),  # loops and includes over these values
     ("engine.py", "clean_link", "VALUE_NOT_LINKABLE", "VALUES"),
     ("walker.py", "refusals_only", "RENDER_FAILED", "UNKNOWN"),  # nothing at the site names whose fault
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # not an object
@@ -863,8 +875,8 @@ SEND_SITES = sorted([
     ("walker.py", "prepare", "VALUES_TOO_LARGE", "VALUES"),
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a lone surrogate
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # sizes, a reserved name
-    ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a value of the wrong shape
-    ("walker.py", "prepare", "INVALID_VALUES", "TEMPLATE"),  # a path the row's text requires
+    ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a value of the wrong shape, and with it
+    ("walker.py", "prepare", "INVALID_VALUES", "TEMPLATE"),  # a path the row's text requires, not under one
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # a number a float does not hold
     ("walker.py", "prepare", "VALUE_NOT_LINKABLE", "VALUES"),
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # not a date; a moment the zone cannot hold
@@ -872,7 +884,7 @@ SEND_SITES = sorted([
     ("walker.py", "render", "VALUE_NOT_PRINTED", "TEMPLATE"),  # the text does not print the path
     ("walker.py", "render", "VALUE_NOT_PRINTED", "VALUES"),  # blank, or not text
     ("walker.py", "render", "VALUE_NOT_PRINTED", "TEMPLATE"),  # this mail's body does not show it
-    ("walker.py", "_one_line", "SUBJECT_TOO_LONG", "TEMPLATE"),  # the template's subject
+    ("walker.py", "_one_line", "SUBJECT_TOO_LONG", "VALUES"),  # the subject these values render
     ("walker.py", "walk", "MESSAGE_TEMPLATE_REFUSED", "TEMPLATE"),
     ("models.py", "send_refusal", "NOT_A_TEMPLATE", "TEMPLATE"),
     ("models.py", "send_refusal", "NOT_EFFECTIVE", "TEMPLATE"),
@@ -882,11 +894,20 @@ SEND_SITES = sorted([
 
 def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, str]], list[str]]:
     """The (module, function, code, source) of each refusal ``tree`` makes through ``refusal_item`` or ``_refused``,
-    and every other place that names a send code as ``code=`` (a refusal made around the one way)."""
+    and every other call that names a send code, by its constant or its string, as ``code=`` or as a positional
+    argument (``ValidationError(message, code)``): a refusal made around the one way."""
+
+    from angee.messaging_templates import engine as engine_module
 
     sites: list[tuple[str, str, str, str]] = []
     stray: list[str] = []
     send_codes = {name for _, _, name, _ in SEND_SITES}
+
+    def is_send_code(node: ast.expr) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in send_codes
+        return isinstance(node, ast.Constant) and node.value in SEND_CODES and node.value in {
+            getattr(engine_module, name) for name in send_codes}
 
     def source_of(node: ast.expr) -> str:
         assert isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name), ast.unparse(node)
@@ -909,10 +930,9 @@ def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, s
                 for group in node.args[1:]:
                     assert isinstance(group, ast.Tuple), ast.unparse(node)
                     sites.append((module, function, code.id, source_of(group.elts[1])))
-        if isinstance(node, ast.Call):
-            stray.extend(f"{module}:{node.lineno} {ast.unparse(keyword.value)}" for keyword in node.keywords
-                         if keyword.arg == "code" and isinstance(keyword.value, ast.Name)
-                         and keyword.value.id in send_codes)
+        elif isinstance(node, ast.Call):
+            named = [*node.args, *(keyword.value for keyword in node.keywords if keyword.arg == "code")]
+            stray.extend(f"{module}:{node.lineno} {ast.unparse(node)}" for value in named if is_send_code(value))
         for child in ast.iter_child_nodes(node):
             visit(child, function)
 
@@ -923,27 +943,35 @@ def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, s
 def test_every_refusal_a_send_makes_names_its_code_and_its_source_as_the_table_says() -> None:
     """Every send refusal is made through ``refusal_item`` (or ``_refused``) with an engine constant for its code and
     a ``RefusalSource`` member for its source, set at the site: the per-site table is exact, ``SEND_CODES`` and the
-    sources are exactly what the sites use, and no site names a send code any other way."""
+    sources are exactly what the sites use, and no call in any module of the addon names a send code any other way."""
 
     from angee.messaging_templates import engine as engine_module
 
     addon = Path(engine_module.__file__).parent
     found: list[tuple[str, str, str, str]] = []
     stray: list[str] = []
-    for module in ("engine.py", "walker.py"):
-        sites, strays = _send_sites(module, ast.parse((addon / module).read_text()))
+    for path in sorted(addon.rglob("*.py")):
+        sites, strays = _send_sites(path.name, ast.parse(path.read_text()))
         found += sites
         stray += strays
-    models = ast.parse((addon / "models.py").read_text())
-    for node in ast.walk(models):
-        if isinstance(node, ast.FunctionDef) and node.name in {"send_refusal", "_brand_kit"}:
-            sites, strays = _send_sites("models.py", node)
-            found += sites
-            stray += strays
     assert sorted(found) == SEND_SITES
     assert stray == []
     assert {getattr(engine_module, code) for _, _, code, _ in found} == SEND_CODES
     assert {source for _, _, _, source in found} == {member.name for member in RefusalSource}
+
+
+def test_the_reader_of_a_refusals_sources_reads_listed_and_keyed_items_and_none_from_messagings() -> None:
+    """``refusal_sources`` reads a refusal as a sender holds it: listed, as the send raises it; keyed, as a caller's
+    own form may file it under its field; one bare item; and messaging's keyed refusals, whose items carry no source,
+    and a plain one with no ``params``, read as nothing rather than failing."""
+
+    values = refusal_item("The values are not JSON (TypeError).", INVALID_VALUES, RefusalSource.VALUES)
+    template = refusal_item("A row is refused.", MESSAGE_TEMPLATE_REFUSED, RefusalSource.TEMPLATE)
+    assert refusal_sources(ValidationError([values, template])) == {RefusalSource.VALUES, RefusalSource.TEMPLATE}
+    assert refusal_sources(ValidationError({"values": [values], "row": [template]})) == {"values", "template"}
+    assert refusal_sources(values) == {RefusalSource.VALUES}
+    assert refusal_sources(ValidationError({"to": ValidationError("Not one address.", code="invalid")})) == set()
+    assert refusal_sources(ValidationError("A refusal of someone else's.")) == frozenset()
 
 
 MARK = "SECRET-marker"
@@ -958,6 +986,12 @@ VALUE_CASES = [
      {(INVALID_VALUES, "values")}),
     ("a-string-too-long", "Hi {{ name }}.", {"name": "A name."}, {"name": MARK + "x" * 10_001}, [],
      {(INVALID_VALUES, "values")}),
+    ("a-key-name-at-the-root", "Hi {{ name }}.", {"name": "A name."}, {"name": "Ana", MARK: "x" * 10_001}, [],
+     {(INVALID_VALUES, "values")}),
+    ("a-key-name-nested", "Hi {{ person.first_name }}.", {"person.first_name": "A name."},
+     {"person": {"first_name": "Ana", MARK: "x" * 10_001}}, [], {(INVALID_VALUES, "values")}),
+    ("a-key-name-in-a-list", "{% for item in items %}{{ item.name }}{% endfor %}", {"items.*.name": "A name."},
+     {"items": [{"name": "Ana", MARK: "x" * 10_001}]}, [], {(INVALID_VALUES, "values")}),
     ("the-wrong-shape", "Hi {{ person.first_name }}.", {"person.first_name": "A name."}, {"person": MARK}, [],
      {(INVALID_VALUES, "values")}),
     ("a-required-path", "Hi {{ name }}.{% if other %} {{ other }}{% endif %}", {"name": "A name.", "other": "More."},
@@ -973,10 +1007,10 @@ VALUE_CASES = [
      {"link": "A link.", "flag": "A flag.", "note": "A note."},
      {"link": f"https://app.example.test/{MARK}", "flag": "", "note": MARK}, ["link"],
      {(VALUE_NOT_PRINTED, "template")}),
-    ("a-subject-too-long", "Hi.", {"name": "A name."}, {"name": MARK * 100}, [], {(SUBJECT_TOO_LONG, "template")}),
+    ("a-subject-too-long", "Hi.", {"name": "A name."}, {"name": MARK * 100}, [], {(SUBJECT_TOO_LONG, "values")}),
     ("the-budget", "{% for i in items %}{% for j in items %}{{ name }}{% endfor %}{% endfor %}",
      {"items.*": "Items.", "name": "A name."}, {"items": ["a"] * 20, "name": MARK + "x" * 2_000}, [],
-     {(RENDER_BUDGET_EXCEEDED, "template")}),
+     {(RENDER_BUDGET_EXCEEDED, "values")}),
     ("a-failing-filter", "Hi {{ name|upper }}.", {"name": "A name."}, {"name": MARK}, [],
      {(RENDER_FAILED, "unknown")}),
 ]
@@ -988,9 +1022,10 @@ def test_no_refusal_quotes_a_value_and_each_names_its_source_through_every_calle
     system_channel: Any, source: str, variables: dict[str, str], values: Any, must_print: list[str],
     expected: set[tuple[str, str]],
 ) -> None:
-    """For each refusal a value can cause, a marker in the values is in no refusal's message, ``params`` or string
-    form, through ``send_as_system``, the test send and the preview (an administrator's sample, in its warnings);
-    each item names the source the per-site table gives."""
+    """For each refusal a value can cause, a marker in the values, or in a key of them the row does not declare, is
+    in no refusal's message, ``params`` or string form, through ``send_as_system``, the test send and the preview (an
+    administrator's sample, in its warnings); each item names the source the per-site table gives, and
+    ``refusal_sources`` reads exactly those."""
 
     del system_channel
     tester = create_platform_admin("messaging-templates-quoting")
@@ -1013,6 +1048,7 @@ def test_no_refusal_quotes_a_value_and_each_names_its_source_through_every_calle
                     _send(row, values, must_print=must_print)
             items = refusal.value.error_list
             assert {(item.code, (item.params or {})[REFUSAL_SOURCE]) for item in items} == expected, caller
+            assert refusal_sources(refusal.value) == {source for _, source in expected}, caller
             held = [str(refusal.value), *refusal.value.messages, *(repr(item.params) for item in items)]
             assert all(MARK not in text for text in held), (caller, held)
 

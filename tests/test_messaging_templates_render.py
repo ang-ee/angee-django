@@ -58,6 +58,7 @@ from angee.messaging_templates.engine import (
     INVALID_VALUES,
     MESSAGE_TEMPLATE_REFUSED,
     NO_BRAND_KIT,
+    REFUSAL_SOURCE,
     RENDER_BUDGET,
     RENDER_BUDGET_EXCEEDED,
     RENDER_FAILED,
@@ -67,6 +68,7 @@ from angee.messaging_templates.engine import (
     SUBJECT_TOO_LONG,
     VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
+    RefusalSource,
     RenderBudget,
     RenderBudgetExceeded,
     register,
@@ -1716,6 +1718,13 @@ def test_required_values_and_shapes(plain: Any, kit: Any) -> None:
             _render(template, values, kit)
     rendered = _render(template, {"order": {"total": 3}, "coupon": None, "note": None}, kit)
     assert "3 [] []" in rendered.plain_text and "None" not in rendered.html
+    both = _mail("Hi {{ person.first_name }}, {{ name }}.", {"person.first_name": "x", "name": "x"}, key="tests.both")
+    with pytest.raises(ValidationError) as refusal:  # a path under the wrong shape is its consequence, not missing
+        _render(both, {"person": "flat"}, kit)
+    assert [(item.messages[0], item.params[REFUSAL_SOURCE]) for item in refusal.value.error_list] == [
+        ("person is an object.", RefusalSource.VALUES),
+        ("name is required and missing or null.", RefusalSource.TEMPLATE),
+    ]
     rendered = _render(template, {"order": {"total": SafeString("<b>3</b>")}}, kit)
     assert "&lt;b&gt;3&lt;/b&gt;" in rendered.html
 
@@ -2212,9 +2221,11 @@ def test_a_date_path_parses_iso_strings_and_refuses_what_is_not_a_date(plain: An
     assert _render(template, {"when": "2026-11-24"}, kit).plain_text.strip() == "2026-11-24"
     with timezone.override(zoneinfo.ZoneInfo("Europe/Berlin")):
         assert _render(template, {"when": "2026-11-24T23:30:00+00:00"}, kit).plain_text.strip() == "2026-11-25"
-    for value in ("2026-11-24T15:30:00", "2026-02-30", "soon", 12):
-        with pytest.raises(ValidationError, match="when is not a date"):
+    for value, kind in (("2026-11-24T15:30:00", "text of 19 characters"), ("2026-02-30", "text of 10 characters"),
+                        ("soon", "text of 4 characters"), (12, "a number"), (1.5, "a number"), (True, "true or false")):
+        with pytest.raises(ValidationError) as refusal:
             _render(template, {"when": value}, kit)
+        assert refusal.value.messages == [f"when is not a date, or a date and time with its offset: it is {kind}."]
 
 
 # ---------- the probes, by name ----------

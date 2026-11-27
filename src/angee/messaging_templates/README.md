@@ -221,7 +221,8 @@ which may quote a value the render was given. Every code
 row's `NOT_A_TEMPLATE` and `NOT_EFFECTIVE`, and the render's `INVALID_VALUES`,
 `VALUES_TOO_LARGE`, `MESSAGE_TEMPLATE_REFUSED`, `VALUE_NOT_LINKABLE`,
 `VALUE_NOT_PRINTED`, `RENDER_BUDGET_EXCEEDED`, `SUBJECT_TOO_LONG`, `NO_BRAND_KIT` and
-`RENDER_FAILED`. `SEND_CODES` is all eleven: a sender compares its own handling
+`RENDER_FAILED`. `SEND_CODES` is all eleven, and `refusal_sources(error)` reads a
+refusal's sources ([A send's refusals](#a-sends-refusals)): a sender compares its own handling
 against it, so a code added later fails the sender's test instead of falling
 into a default. The limits a sender may read are there too: `VALUES_JSON_LIMIT`,
 `VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` (the values a render admits) and
@@ -358,30 +359,33 @@ a patch's unsaved edits), of `TemplateWalk.render` and of `clean_link` and of ea
 frame they call; messaging marks its system write below them
 ([System mail](../messaging/README.md#system-mail)).
 Django's filter hides them only with `DEBUG` off, and it never filters an
-exception's own message: a `value_not_linkable` refusal names the link's host.
+exception's own message, so no refusal's words quote a value
+([A send's refusals](#a-sends-refusals)).
 
 ### A send's refusals
 
 Every refusal item a send returns from this addon carries its source in
 `params["source"]` (`REFUSAL_SOURCE`), one of `RefusalSource`, set where it is
-raised; a sender reads a refusal's sources as
-`{item.params[REFUSAL_SOURCE] for item in error.error_list}`. The sources are named
-for what a sender does:
+raised. A `RefusalSource` is a string enum: it compares equal to its string
+(`"values"`) and serializes as it. A sender reads a refusal's sources with
+`refusal_sources(error)`, exported beside `SEND_CODES`: the set of its items'
+sources, keyed or not, and empty for a refusal that is not this addon's, whose
+items carry none. The sources are named for what a sender does:
 
 | source | what a sender does |
 |---|---|
 | `deployment` | fix the deployment's configuration; stop the run |
 | `template` | fix this template: it is out in this language, the others still go |
-| `values` | this mail's values: skip the item. Whether they are one item's for every reader or one reader's own is the caller's to know; the renderer cannot tell |
+| `values` | this mail's values: skip the item. Whether they are one item's for every reader or one reader's own is the caller's to know; the renderer cannot tell. A subject or a render budget exceeded on every item of a run is a template, or a brand kit field, that is too long, seen as every item skipped |
 | `unknown` | an unexpected failure: nothing the renderer can name is at fault |
 
 | code | source |
 |---|---|
 | `NOT_A_TEMPLATE`, `NOT_EFFECTIVE` | `template` |
 | `NO_BRAND_KIT` | `deployment` |
-| `MESSAGE_TEMPLATE_REFUSED`, `SUBJECT_TOO_LONG`, `RENDER_BUDGET_EXCEEDED` | `template` |
-| `VALUES_TOO_LARGE`, `VALUE_NOT_LINKABLE` | `values` |
-| `INVALID_VALUES` | `values`; `template` for a path the row's text requires and the sender left out, and for a date format that cannot print the value given |
+| `MESSAGE_TEMPLATE_REFUSED` | `template` |
+| `VALUES_TOO_LARGE`, `VALUE_NOT_LINKABLE`, `SUBJECT_TOO_LONG`, `RENDER_BUDGET_EXCEEDED` | `values` |
+| `INVALID_VALUES` | `values`; `template` for a path the row's text requires and the values leave out, and for a date format that cannot print the value given. A value of the wrong shape and a required path not under it are refused together |
 | `VALUE_NOT_PRINTED` | `template` when the text, or a condition for these values, leaves the output out; `values` when the value is blank or not text |
 | `RENDER_FAILED` | `unknown` |
 
@@ -392,9 +396,36 @@ the row's own validity (a preview: `row.preview()`), and the values' sizes again
 the exported limits. Only `NOT_EFFECTIVE` can succeed on a retry with nothing
 changed, after the sender picks the effective row again; the rest are permanent
 until someone changes the row, the values or the deployment. No refusal's words
-or `params` quote a value the mail was given: a path's name, a limit, a count, a
-length or a type, never the value. A recipient's refusal and the system
-channel's are messaging's, from compose, and carry none of this.
+or `params` quote a value the mail was given, nor a key of the values the row
+does not declare: a declared path's name, a limit, a count, a length or a kind,
+never the value. An item's `.message` is Django's format string, a literal `%`
+doubled; read its words as `item.messages[0]` (`str(item)` is that list's repr).
+
+`PublicOriginUnavailable` never escapes a send: the link rule reads it as no
+origin of its own. A caller that builds its link through
+`configured_public_origin()` gets it (code `PUBLIC_ORIGIN_UNAVAILABLE`) before
+any send; one that reads `ANGEE_PUBLIC_ORIGIN` itself gets `value_not_linkable`
+(`values`) on every item whose link's host is not a domain name of two labels or
+more, such as `localhost` or an address.
+
+What else `send_as_system` raises is not in `SEND_CODES`, and `refusal_sources`
+gives it no source:
+
+- messaging's refusals, from compose, keyed by the argument at fault, each named
+  by messaging's constant where it has one (its classes in
+  `angee.messaging.backends`). Under `to`, this recipient's: skip
+  the item. `invalid` when the entry is not one email address, a bad address or
+  two in one entry, and `cannot_carry` when the transport cannot carry it.
+  Under `channel`, the deployment's: stop the run. System mail not configured
+  (`OutboundEmailNotConfigured.code`), the system sender
+  (`DEFAULT_FROM_EMAIL`) not one email address (`invalid`) or one the transport
+  cannot carry (`cannot_carry`), no system channel
+  (`SystemChannelMissing.code`), and a system channel not connected
+  (`OutboundEmailChannelMissing.code`).
+- a caller's own mistakes: `ValueError` for a blank `reason`, `TypeError` for a
+  `must_print` that is one string rather than an iterable of paths.
+- `MemoryError` and `RecursionError` from the render, which pass through as
+  they are.
 
 ### A test send
 
