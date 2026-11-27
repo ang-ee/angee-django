@@ -335,6 +335,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   serves authored verbs (extract the outcome field inside `fire`) and derived
   verbs (`useActionMutation`'s mutate resolves the full `ActionOutcome`)
   alike; never hand-roll the fire → toast → navigate ceremony in a chrome.
+  A hook that toasts a verb's failure itself (`useActionResultMutation`,
+  `useRecordChromeActionMutation`, `useRecordActionMutation`) turns the data
+  layer's own error notice off for it, so a failed request is told once.
   A record action bound with `useRecordActionMutation` is not settled there:
   its bar toasts it, and both follow a created record through one hook. A
   record action whose own `run` calls `useActionResultRun`, directly or
@@ -544,6 +547,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   describes the record (see the shell's regions below). Page tests use
   `ShellPageTestProviders`, `PrimaryPaneTestHost`, and `ChatterTabsTestHost`
   from `@angee/app/testing` instead of hand-rolled shell provider wrappers.
+  `ShellPageTestProviders` renders under a memory router, as a shell page
+  renders under the app's router, unless the test brings its own around it.
 - **The shell has four regions, each with a test.** The left pane is the
   explorer: trees, collection lists in split placement, session rails, smart
   views and the record pager; it changes which record is in the middle and
@@ -1346,10 +1351,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
   and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
-  several as a list; never join them into one text. A record form's refused
-  save brings the person to its reason: the first shown field it names takes
-  focus (`applyFormErrors` with `focus`), else the banner does, and Save stays
-  focusable while it runs.
+  several as a list; never join them into one text. A surface that asks
+  (`applyFormErrors` with `focus` and a `fieldSummary`; the record form and
+  both form dialogs do)
+  has a refused submit bring the person to its reasons, and `applyFormErrors`
+  decides where: with a reason no field shows (a form-level one, or one of a
+  field the form does not display) the banner takes focus and also carries
+  the line naming the refused fields, so one focused place says everything;
+  with field reasons only, the first shown field takes focus. A surface gives
+  its banner's focus through `useRefusalBannerFocus`, never an effect of its
+  own. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
@@ -1374,8 +1385,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the record form's draft, every dialog's seeds and the presence control read: a
   descriptor with a declared `format` (a date, a date and time or a time carried
   as text) holds `null`, then an explicit `string` kind holds `""` whatever its
-  widget, the `integer` and `float` widgets and the date and time widgets
-  `null`; a lines editor's new cell has its own rule. A form spec's parser
+  widget, the number widgets (`NUMBER_WIDGETS`: `integer`, `float`, `percent`,
+  `progressBar`) and the date and time widgets `null`, read before the kinds,
+  so a `boolean` kind under one of them holds `null`; a lines editor's new
+  cell has its own rule. A form spec's parser
   carries the `format` from the schema
   ([deserializeFormSpec](../../packages/ui/src/views/form/form-spec.ts)), and
   the backend's form spec keeps it beside the date control it selects; a
@@ -1390,7 +1403,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Record forms and dialogs find a field's failed rules through one owner,
   [fieldRuleErrors](../../packages/ui/src/views/form/field-values.ts); inside a
   structured field `required` means presence and the field's own bounds judge a
-  blank. A record form asks the fields its save can write and the record does
+  blank. The check composes the seed rule at every depth: the `null` a form
+  seeds an optional field or member with when it holds nothing is not held
+  against it for holding the key, so a form does not refuse its own seed; a
+  list item that holds nothing is always missing. A
+  record form asks the fields its save can write and the record does
   not redact, whose descriptor is neither hidden, nor read-only, nor excluded by
   its condition, whatever their widget. Its fields are its own, the fields of
   the groups it displays for the record
@@ -1522,6 +1539,42 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   error reporting. Clear settled failures through
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
+  [`DialogForm`](../../packages/ui/src/fragments/DialogForm.tsx) owns that rule
+  for every form dialog: it refuses dismissal while `pending` (Close and Cancel
+  stay focusable and say why), asks before discarding while `dirty`, and asks
+  before a route move while it holds either, through the unsaved-changes guard;
+  its owner's `holdsWork` says no once an accepted submit moves on. A dialog
+  never guards its own `onOpenChange`, and an answer that lands after it went
+  away is still reported (`useLateAnswerReport`).
+- A keyed write (one the server replays by its idempotency key) takes its key
+  from [`useIdempotencyKeys`](../../packages/ui/src/lib/idempotency-key.ts):
+  one key per draft, named by its scope (the surface and what it writes to),
+  minted at the draft's first attempt and kept until a confirmed answer ends it,
+  or the person gives the draft up with nothing possibly written. What an error
+  says never releases the key: a resend, edited or not, carries it. The server
+  replays the write for the same content and answers `CREATION_KEY_CONFLICT` for
+  other content under a spent key; the owner then starts a new draft at the
+  next send, and the caller only says what happened. The owner reads a thrown
+  answer itself and a resolved one through `send`'s `outcome`
+  (`formSubmitOutcome` for a submit's result, whose conflict carries its
+  `code`), so a conflict ends the draft whether thrown or returned.
+  `formSubmitError` marks a lost answer's result `outcome: "unconfirmed"`, so
+  the draft keeps it as possibly written either way; a result a caller builds
+  by hand for a lost answer carries that mark, or the draft forgets the
+  attempt may have been written. A dialog takes its draft as
+  `idempotencyScope`. Never hold a key in component
+  state, and promise "it will not go out twice" only from this page.
+- One draft scope belongs to one surface at a time: two holding it at once
+  would send one key for two writes. A surface that holds a draft says so with
+  `useIdempotencyDraftOwner` (the keyed dialogs, every create form and the
+  composers do), and development fails at once, naming the scope and both
+  holders, when two hold it; a production build logs it once. A create form
+  names its draft under the surface hosting it (`useDraftScope`): the record
+  form provides its own scope, and a relation field's dialog its
+  `relation:<field>` slot (a lines cell's field names its row), so a create
+  opened from another form, or from another relation field or row to the same
+  resource, never shares a draft with it.
+  Name a scope after its target, never after a component.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:
@@ -2393,7 +2446,10 @@ resources, runtime and operation documents; the preview mounts the shared
 [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
 Transport fixtures use the GraphQL wire fake
 [`graphqlWireFetch`](../../packages/refine/src/testing-wire.ts)
-(`@angee/refine/testing/wire`, free of Vitest so stories bundle it): it answers
+(`@angee/refine/testing/wire`, free of Vitest so stories bundle it; the app
+shell's providers, `AppShellTestProviders` from `@angee/ui/testing/shell`, and
+`@angee/app/testing` are free of it too, while `@angee/ui/testing` and
+`@angee/refine/testing` hold spied fakes and stay with tests): it answers
 each root field of a request from the handler named for it, fails loudly on a
 field without a handler or a missing required variable, and reports each parsed
 request; a handler throws `GraphQLError` to answer an error. Stories and addon

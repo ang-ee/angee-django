@@ -19,6 +19,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -70,12 +71,12 @@ from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.lineage import concrete_child
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.models.identity import instances_from_public_ids, public_id_for
+from angee.base.models.identity import instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.timestamps import auto_now_stamps
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.pagination import clamp_page_size
 from angee.base.permissions import actor_user_id, reader_queryset
-from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size
+from angee.base.querysets import MergeableQuerySet, by_key, query_batch_size, row_lock_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import canonical_json
 from angee.base.signals import MutedChanges, mute_changes, publish_change
@@ -381,15 +382,27 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
 _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 
+class ValueOwned(ValidationError):
+    """Another live email handle owns this address's spelling key; a second live handle of it is not kept.
+
+    ``Handle.save`` raises it on ``value`` before it writes (``Handle.value_owner``).
+    """
+
+
 class KeyRepair(NamedTuple):
     """What a key repair did (:meth:`HandleManager.renormalize_handles`)."""
 
     saved: int
-    """Rows whose comparison key was saved again, with the rule's version beside it."""
+    """Rows whose keys were saved again, with the rule's version beside them, the folded ones included."""
     failed: int = 0
-    """Rows whose save raised: logged, left as they were, and still behind."""
+    """Rows whose save or fold raised: logged with the error, left as they were, and still behind."""
     remaining: int = 0
-    """Rows still behind when the run ended: the failed ones, and those a capped run did not reach."""
+    """Rows still behind when the run ended: the failed and refused ones, and those a capped run did not reach."""
+    folded: int = 0
+    """Live email handles that spelled the address of another, folded into the older one and kept as redirects."""
+    refused: int = 0
+    """Live email handles that spell an address another handle owns and whose fold the merge refused: logged,
+    left live and unkeyed, and still behind."""
 
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
@@ -422,12 +435,37 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             ),
         )
 
+    def clean_identity(self, *, platform: str, value: str, external_id: str = "") -> None:
+        """Validate an identity as :meth:`upsert` lands it, without a write.
+
+        Runs the platform, value, person-matching key, spelling key and
+        external-id field validators and raises the ``ValidationError`` keyed by
+        the failing field that ``upsert`` raises, so a caller refuses an address
+        before it writes anything (a value whose lower-cased form outgrows its
+        column included).
+        """
+
+        for name, identifier in {
+            "platform": platform,
+            "value": value,
+            "normalized_value": self.model.normalize_value(platform, value),
+            "spelling_key": self.model.spelling_key_of(platform, value),
+            "external_id": external_id,
+        }.items():
+            try:
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                field.run_validators(identifier)
+            except ValidationError as error:
+                raise ValidationError({name: error}) from error
+
     def upsert(
         self,
         *,
         platform: str,
         value: str,
         created_by_id: Any = None,
+        fill_only: Collection[str] = (),
         **fields: Any,
     ) -> Any:
         """Get-or-create a handle on the identity it actually has, refreshing display fields.
@@ -438,11 +476,22 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         changed number) refreshes the existing row instead of forking a duplicate.
         :meth:`find_identity` owns which existing row the identity lands on,
         including the convergence of a ``@lid`` and its phone JID on the row that
-        owns the value; only when it finds none does this create one, and a
-        concurrent insert of the same identity lands where it did. A pre-check,
-        never a failed save, keeps a value collision out of the caller's
+        owns the value, and any letter case or domain spelling of an email address
+        on its one live handle, which keeps the spelling first written as its
+        ``value``; only when it finds none does this create one, and a concurrent
+        insert of the same identity lands where it did (a unique collision, or the
+        handle's refusal of a second live handle of an address, ``ValueOwned``). A
+        pre-check, never a failed save, keeps a value collision out of the caller's
         transaction. The value-keyed path never rewrites ``external_id`` (it is
-        not the key it matched on).
+        not the key it matched on). Rewriting ``value`` behind a matched
+        ``external_id`` is the one change of a write-once key
+        (``Handle.immutable_fields``) this verb makes, and only when the address
+        moved: another spelling of the row's own address rewrites nothing
+        (``Handle.is_spelling_of``). It never changes ``platform`` or ``external_id``, and
+        it rewrites nothing when another row already holds the new address (a
+        spelling merged into the matched row): the call then lands on the matched
+        row, which keeps its address. Only a moved address costs that extra read.
+        An ``external_id`` given as a number is matched and stored as its text.
 
         ``created_by_id`` stamps the creator, who holds the handle's access. Control
         is deliberately excluded from the generic refresh loop; :meth:`claim_control`
@@ -450,31 +499,27 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         without one, so a routine upsert cannot silently move an account between users.
         The holder is refused too: it is the projection of the winning statement, so a
         source states the link (``Party.objects.assert_handle``) and resolution writes it.
-        ``normalized_value`` tracks ``value`` on every hit. Display fields refresh
-        on every hit; blank values never clobber. Source display text is truncated
-        to its field limit; identifiers are validated without changing their meaning.
+        A hit writes no key: ``Handle.save`` derives the keys whenever ``value``
+        changes, and the key repair (:meth:`renormalize_handles`) keys a row stored
+        under an earlier rule. Display fields refresh
+        on every hit; blank values never clobber, and a field named in ``fill_only``
+        is written only while the handle's own value is blank, so a name a person
+        typed fills a handle that has none and never renames a shared one. Source
+        display text is truncated to its field limit; identifiers are validated
+        (:meth:`clean_identity`) without changing their meaning.
         """
 
         if "controller" in fields or "controller_id" in fields:
             raise TypeError("Handle control must be written through claim_control().")
         if {"party", "party_id", "party_link_confirmed"}.intersection(fields):
             raise TypeError("Handle.party is resolved from statements: state it with Party.objects.assert_handle().")
-        if {"normalized_value", "normalized_version"}.intersection(fields):
-            raise TypeError("Handle.normalized_value and its version are maintained by Handle.save().")
-        normalized_value = self.model.normalize_value(platform, value)
+        if {"spelling_key", "normalized_value", "normalized_version"}.intersection(fields):
+            raise TypeError("Handle.spelling_key, normalized_value and their version are maintained by Handle.save().")
         external_id = str(fields.get("external_id") or "")
-        for name, identifier in {
-            "platform": platform,
-            "value": value,
-            "normalized_value": normalized_value,
-            "external_id": external_id,
-        }.items():
-            try:
-                field = self.model._meta.get_field(name)
-                assert isinstance(field, models.Field)
-                field.run_validators(identifier)
-            except ValidationError as error:
-                raise ValidationError({name: error}) from error
+        if "external_id" in fields:
+            # Matched and stored as text: an account id a source gives as a number is that id.
+            fields["external_id"] = external_id
+        self.clean_identity(platform=platform, value=value, external_id=external_id)
         for name in ("display_name", "label"):
             if fields.get(name):
                 field = self.model._meta.get_field(name)
@@ -485,24 +530,25 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             try:
                 # A savepoint isolates the insert, so the caller's transaction stays usable.
                 with transaction.atomic():
-                    return self.create(
-                        platform=platform,
-                        value=value,
-                        normalized_value=normalized_value,
-                        created_by_id=created_by_id,
-                        **fields,
-                    )
-            except IntegrityError:
-                # A concurrent writer created this identity first: land where it did.
+                    return self.create(platform=platform, value=value, created_by_id=created_by_id, **fields)
+            except (IntegrityError, ValueOwned):
+                # A concurrent writer created this identity, or a spelling of it, first: land where it did.
                 handle = self.find_identity(platform=platform, value=value, external_id=external_id)
                 if handle is None:
                     raise
-        if external_id and handle.external_id == external_id:
-            self._refresh(handle, {"value": value, "normalized_value": normalized_value, **fields})
+        if (
+            external_id
+            and handle.external_id == external_id
+            and not handle.is_spelling_of(value)
+            and (platform, value) not in self.find_identities([(platform, value)])
+        ):
+            # The source's stable id matched: the address behind it moved, and the row follows it.
+            self._refresh(handle, {"value": value, **fields}, fill_only=fill_only, allow_immutable=("value",))
         else:
-            # The value matched, not the external id: never rewrite it here.
+            # The value or another spelling of it matched, not the external id, or another row holds the address the
+            # id's row would move to (a spelling merged into it): never rewrite a key here.
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
-            self._refresh(handle, {"normalized_value": normalized_value, **refresh})
+            self._refresh(handle, refresh, fill_only=fill_only)
         return handle
 
     def reidentify(
@@ -510,7 +556,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     ) -> tuple[bool, bool] | None:
         """Rewrite a canonical handle or fold it into the existing value owner.
 
-        This is admitted system work, like the native fold it composes.
+        This is admitted system work, like the native fold it composes. The
+        rewrite changes ``value``, a write-once key (``Handle.immutable_fields``),
+        and its one save holds that allowance; a fold changes neither row's keys.
         Return ``(folded, name_filled)``; a gone/redirected/changed source is a
         stale request and returns None. Source and target Handles are locked in
         canonical identity order before Parties and their statements. A value
@@ -551,6 +599,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         if dry_run:
                             return False, bool(display_name and not source.display_name)
                         source.value = value
+                        source.allow_immutable_save("value")
                         source.save(update_fields=("value", "updated_at"))
                         kept, folded = source, False
                     named = bool(display_name and not kept.display_name)
@@ -558,7 +607,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         kept.display_name = display_name
                         kept.save(update_fields=("display_name", "updated_at"))
                     return folded, named
-            except IntegrityError:
+            except (IntegrityError, ValueOwned):
                 target = self.find_identity(platform=handle.platform, value=value)
                 if target is None or target.pk == handle.pk:
                     raise
@@ -566,61 +615,114 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     def find_identity(self, *, platform: str, value: str, external_id: str = "") -> Any | None:
         """Return the existing handle :meth:`upsert` lands an identity on, or ``None`` when it would create one.
 
-        The ``external_id`` match wins, unless its ``value`` would move onto a
-        contact point a different row already owns: a WhatsApp ``@lid`` handle
-        whose sender resolved to an ``+E164`` a phone-JID handle holds. The value
-        *is* the contact point, so that owner wins, as it does when no row has the
-        external id; it keeps its own ``external_id`` (the other source's
-        idempotency key), and the moved row keeps its old value for the offline
-        backfill to merge. Without an external id, the row owning
-        ``(platform, value)``. Read-only, so a verb that must never create a
-        handle shares this rule.
+        The ``external_id`` match wins, unless its ``value`` is no spelling of the
+        reported one (``Handle.is_spelling_of``, computed from the row's ``value``) and the
+        reported address lands on a contact point a different row already owns
+        (:meth:`find_identities`): a WhatsApp ``@lid`` handle whose sender resolved
+        to an ``+E164`` a phone-JID handle holds. The value *is* the contact point,
+        so that owner wins, as it does when no row has the external id; it keeps
+        its own ``external_id`` (the other source's idempotency key), and the moved
+        row keeps its old value for the offline backfill to merge. Without an
+        external id, :meth:`find_identities`' rule. Read-only, so a verb that must
+        never create a handle shares this rule.
         """
 
         if not external_id:
             return self.find_identities([(platform, value)]).get((platform, value))
-        handles = self.filter(platform=platform)
-        handle = handles.filter(external_id=external_id).first() if external_id else None
-        if handle is None or handle.value != value:
-            owner = handles.filter(value=value).exclude(pk=(handle.pk if handle is not None else None)).first()
-            handle = owner or handle
+        handle = self.filter(platform=platform, external_id=external_id).first()
+        if handle is None or not handle.is_spelling_of(value):
+            owner = self.find_identities([(platform, value)]).get((platform, value))
+            if owner is not None:
+                return owner
         return handle.canonical() if handle is not None else None
 
     def find_identities(self, identities: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Any]:
-        """Return the handle each ``(platform, value)`` lands on, for the identities that have one.
+        """Return the handle each ``(platform, value)`` lands on, for the identities that have one, keyed as asked.
 
         :meth:`find_identity`'s rule without an external id, for many identities in
-        one read: the row owning ``(platform, value)``, resolved to its merge
-        survivor (``canonical``, a read only for a merged row). Read-only, for a
-        caller that resolves a whole batch (a sync page's attendees) at once.
+        one read: the row owning ``(platform, value)``; else, for an email address,
+        the live handle owning its spelling key (``Handle.spelling_key_of``: any
+        letter case or domain spelling of a stored address), else the oldest
+        merged-away row owning it; each resolved to its merge survivor
+        (``canonical``, a read only for a merged row). Read-only, for a caller that
+        resolves a whole batch (a sync page's attendees) at once. Each platform's
+        values are one arm naming that platform (the email arm is
+        ``Handle.spellings_filter``), so an index serves every arm.
         """
 
-        wanted = set(identities)
-        if not wanted:
+        values: defaultdict[str, set[str]] = defaultdict(set)
+        for platform, value in identities:
+            values[platform].add(value)
+        if not values:
             return {}
-        rows = self.filter(value__in=sorted({value for _platform, value in wanted}))
-        return {
-            (row.platform, row.value): row.canonical() for row in rows if (row.platform, row.value) in wanted
-        }
+        email = self.model.Platform.EMAIL
+        match = Q()
+        for platform, spelled in sorted(values.items()):
+            if platform == email:
+                match |= self.model.spellings_filter(spelled)
+            else:
+                match |= Q(platform=platform, value__in=sorted(spelled))
+        rows = list(self.filter(match))
+        exact: dict[tuple[str, str], Any] = {(str(row.platform), row.value): row for row in rows}
+        owners: dict[str, Any] = {}
+        # The live owner of a key first, then the oldest merged-away one: a spelling of an address merged away lands
+        # on its survivor. Only email rows carry a key.
+        for row in sorted(rows, key=lambda row: (row.merged_into_id is not None, _age(row))):
+            if row.spelling_key:
+                owners.setdefault(row.spelling_key, row)
+        found = {}
+        for platform, spelled in values.items():
+            for value in spelled:
+                landed = exact.get((platform, value)) or owners.get(self.model.spelling_key_of(platform, value))
+                if landed is not None:
+                    found[(platform, value)] = landed.canonical()
+        return found
 
     @staticmethod
-    def _refresh(handle: Any, fields: dict[str, Any]) -> None:
+    def _refresh(
+        handle: Any,
+        fields: dict[str, Any],
+        *,
+        fill_only: Collection[str] = (),
+        allow_immutable: Collection[str] = (),
+    ) -> None:
         """Apply the non-blank ``fields`` that differ; one save, only when dirty.
 
-        Adapter-owned metadata merges key-wise so refreshing one identifier does
-        not erase another adapter's retained identifiers. Assertion provenance
-        belongs to statements, independently of this transport metadata.
+        A field named in ``fill_only`` is applied only while the handle's stored
+        value is blank: when the loaded handle shows it blank, the row is locked
+        and read again first, so a value another transaction has just written is
+        kept rather than overwritten (and the handle given that value). Only that
+        fill pays for the lock. ``allow_immutable`` names the write-once keys
+        (``Handle.immutable_fields``) the calling verb may change: the one save that
+        applies them holds that allowance, and the handle's guard refuses any other.
+        Adapter-owned metadata merges key-wise so refreshing one identifier does not
+        erase another adapter's retained identifiers. Assertion provenance belongs to
+        statements, independently of this transport metadata.
         """
 
         merged = fields.get("metadata")
         if isinstance(merged, dict):
             current = handle.metadata if isinstance(handle.metadata, dict) else {}
             fields = {**fields, "metadata": {**current, **merged}}
-        dirty = [name for name, new in fields.items() if new and getattr(handle, name, None) != new]
-        if dirty:
-            for name in dirty:
-                setattr(handle, name, fields[name])
-            handle.save(update_fields=[*dirty, "updated_at"])
+        dirty = [
+            name for name, new in fields.items()
+            if new and getattr(handle, name, None) != new and not (name in fill_only and getattr(handle, name, None))
+        ]
+        filling = [name for name in dirty if name in fill_only]
+        if not dirty:
+            return
+        with transaction.atomic() if filling else nullcontext():
+            if filling:
+                stored = row_lock_queryset(type(handle)).get(pk=handle.pk)
+                for name in filling:
+                    if value := getattr(stored, name, None):
+                        setattr(handle, name, value)
+                        dirty.remove(name)
+            if dirty:
+                for name in dirty:
+                    setattr(handle, name, fields[name])
+                handle.allow_immutable_save(*(name for name in dirty if name in allow_immutable))
+                handle.save(update_fields=[*dirty, "updated_at"])
 
     def claim_control(
         self,
@@ -844,24 +946,46 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         return repair._replace(resolved=resolved, remaining=remaining)
 
     def renormalize_handles(self, *, limit: int | None = None) -> KeyRepair:
-        """Save again every comparison key computed under another version of its rule; return what the run did.
+        """Save again every handle's keys computed under another version of their rule; return what the run did.
 
-        ``normalized_value`` is what ``Handle.normalize_value`` gave when a row
-        was last saved, and ``normalized_version`` the version the rule had then.
-        A change of the rule (``Handle.NORMALIZATION_VERSION``) leaves stored keys
-        behind, the lookups that read keys miss those rows, and a writer that
-        misses a row makes a second one. So a run takes the whole backlog;
-        ``limit`` is for an operator who wants a share of it, the most rows the
-        run saves. The run selects the rows whose version is not the rule's, of
-        every platform, by the version's index: an earlier one, 0 for a row
-        stored before the rule had a version, or a later one that newer code
-        wrote before a rollback. Each is read again under its lock and saved
-        through the handle's own save, which derives the key and writes both key
-        columns together, so a row whose key is already what the rule gives has
-        it written again unchanged beside its version and leaves the selection.
-        ``value`` is never written, ``updated_at`` is stamped as every save of an
-        audited row stamps it, and the row's history records the save as any
-        other.
+        ``spelling_key`` and ``normalized_value`` are what ``Handle.spelling_key_of``
+        and ``Handle.normalize_value`` gave when a row was last saved, and
+        ``normalized_version`` the version the rule had then. A change of the rule
+        (``Handle.NORMALIZATION_VERSION``) leaves stored keys behind, the lookups
+        that read keys miss those rows, and a writer that misses a row makes a
+        second one. So a run takes the whole backlog; ``limit`` is for an operator
+        who wants a share of it, the most rows the run saves. The run selects the
+        rows whose version is not the rule's, of every platform, by the version's
+        index: an earlier one, 0 for a row stored before the rule had a version, or
+        a later one that newer code wrote before a rollback. Each is read again
+        under its lock and saved through the handle's own save, which derives the
+        keys and writes the key columns together, so a row whose keys are already
+        what the rule gives has them written again unchanged beside its version and
+        leaves the selection. ``value`` is never written, ``updated_at`` is stamped
+        as every save of an audited row stamps it, and the row's history records
+        the save as any other.
+
+        A live email handle whose spelling key another live handle owns is one
+        address with it, and the handle's save refuses to key it
+        (``Handle.value_owner``, ``ValueOwned``): the row is rolled back to its
+        savepoint and deferred. After its batch commits, each deferred row is taken
+        in a transaction of its own, so no transaction holds a batch's locks while
+        it takes another row's and its parties'. The row and the owner are locked
+        in the identity order (``PartyManager.lock_identity_rows``: handles, their
+        parties, their statements) and the owner is asked again under that lock,
+        since an earlier fold of the run or a person may have merged it away; a
+        row no live handle shares its key with any more is saved alone. Else the
+        older of the two survives (``_age``, which for a handle is key order in
+        effect) and the other is folded into it (``Handle.fold``): what refers to
+        the folded row moves or stays by each reference's merge policy, and the
+        folded row is kept as a redirect, saved with its keys once it is read
+        again. Both count in ``saved``, a fold in ``folded`` too. A fold the merge
+        refuses (``Handle.validate_merge``, a merge blocker, an
+        ``ANGEE_MERGE_GUARDS`` guard) writes nothing; it is logged once, without a
+        traceback, naming both handles and the reason, and counted in
+        ``refused``. That row stays live, unkeyed and behind: its exact value
+        still finds it, every save that would key it is refused, and the next run
+        tries again.
 
         Rows are taken in key batches of at most :attr:`REPAIR_LIMIT`, each batch
         in its own transaction, so an interrupted run keeps what it saved and
@@ -869,11 +993,11 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         last key the run selected, whatever became of that row: no row is
         selected twice in one run. A row deleted before its lock is not there to
         save, one another process saved meanwhile is read at the rule's version
-        and skipped, and a save that raises is rolled back to its own savepoint,
+        and skipped, and a save or fold that raises otherwise is rolled back,
         logged with its traceback and counted in ``failed``. That row stays
         behind for the next run and the rest of the backlog is still saved. With
         nothing behind, the selection is the one query the repair issues. Named
-        system work. Idempotent.
+        system work. Idempotent: a second run saves and folds nothing.
         """
 
         version = self.model.NORMALIZATION_VERSION
@@ -882,7 +1006,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             Q(normalized_version__lt=version) | Q(normalized_version__gt=version)
         ).order_by("pk")
         size = min(query_batch_size(behind), self.REPAIR_LIMIT)
-        saved = failed = 0
+        saved = failed = folded = refused = 0
         last: Any = None
         with system_context(reason="parties.handle.renormalize"):
             while limit is None or saved < limit:
@@ -890,22 +1014,78 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 batch = behind if last is None else behind.filter(pk__gt=last)
                 keys = list(batch.values_list("pk", flat=True)[:reach])
                 if not keys:
-                    # Every row that was behind has been selected once: the failed ones are what is left.
-                    return KeyRepair(saved, failed, remaining=failed)
+                    # Every row that was behind has been selected once: the failed and refused ones are what is left.
+                    return KeyRepair(saved, failed, failed + refused, folded=folded, refused=refused)
                 last = keys[-1]
+                deferred: list[Any] = []
                 with transaction.atomic():
                     for handle in self.filter(pk__in=keys).order_by("pk").lock_if_supported():
                         if handle.normalized_version == version:
                             continue
                         try:
                             with transaction.atomic():
-                                handle.save(update_fields=["normalized_value", "normalized_version"])
+                                # The handle's save writes every key column beside the version.
+                                handle.save(update_fields=["normalized_version"])
+                        except ValueOwned:
+                            deferred.append(handle.pk)
                         except Exception:  # noqa: BLE001 -- one row never stops the backlog; it is logged and counted.
-                            logger.exception("The comparison key of handle %s could not be saved again.", handle.pk)
+                            logger.exception("The keys of handle %s could not be saved again.", handle.pk)
                             failed += 1
                         else:
                             saved += 1
-            return KeyRepair(saved, failed, remaining=behind.count())
+                for pk in deferred:
+                    try:
+                        outcome = self._key_spelling(pk)
+                    except Exception:  # noqa: BLE001 -- as above: logged, counted, left for the next run.
+                        logger.exception("The keys of handle %s could not be saved again.", pk)
+                        failed += 1
+                        continue
+                    saved += outcome in ("saved", "folded")
+                    folded += outcome == "folded"
+                    refused += outcome == "refused"
+            return KeyRepair(saved, failed, behind.count(), folded=folded, refused=refused)
+
+    def _key_spelling(self, pk: Any) -> str:
+        """Key a row its batch deferred, folding it with the live handle that owns its spelling key; say what it did.
+
+        ``"saved"`` when no live handle shares its key any more, ``"folded"``,
+        ``"refused"``, or ``""`` for a row gone or saved by another process
+        meanwhile (:meth:`renormalize_handles`). The owner is read first without a
+        lock, to lock the pair in the identity order, then asked again under it;
+        one that changed in between is locked anew.
+        """
+
+        version = self.model.NORMALIZATION_VERSION
+        party_owner = apps.get_model("parties", "Party").objects
+        while True:
+            row = self.model._base_manager.filter(pk=pk).first()
+            if row is None or row.normalized_version == version:
+                return ""
+            candidate = row.value_owner()
+            with transaction.atomic():
+                ids = (pk,) if candidate is None else (pk, candidate.pk)
+                handles, _parties = party_owner.lock_identity_rows(party_ids=(), handle_ids=ids)
+                row = handles.get(pk)
+                if row is None or row.normalized_version == version:
+                    return ""
+                owner = row.value_owner()
+                if getattr(owner, "pk", None) != getattr(candidate, "pk", None):
+                    continue
+                if owner is None:
+                    row.save(update_fields=["normalized_version"])
+                    return "saved"
+                survivor, other = sorted((row, handles[owner.pk]), key=_age)
+                try:
+                    survivor.fold([other])
+                except ValidationError as refusal:
+                    logger.warning(
+                        "Handle %s spells the address of handle %s and was not folded into it: %s",
+                        public_id_of(other), public_id_of(survivor), " ".join(refusal.messages),
+                    )
+                    return "refused"
+                # The fold read both rows afresh and refreshed only the survivor: read this row again before keying it.
+                self.model._base_manager.get(pk=pk).save(update_fields=["normalized_version"])
+                return "folded"
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
@@ -1086,7 +1266,7 @@ class EmailLookup:
     for each address read (an empty list when it names nobody), less the claim
     basis for an address a lapsed holder keeps; ``lapsed`` the keys of each
     address's lapsed holders (:meth:`PartyManager.lapsed_holders`); and
-    ``sign_in`` the addresses a person account signs in with, in any spelling.
+    ``sign_in`` the addresses a person account signs in with, in any spelling or alias.
     A record that lands or withdraws an address marks it ``changed``, so the
     next lookup of it reads it again. ``verdicts`` keeps each adoption verdict
     (:meth:`PartyManager.adoption_blocker`) by person and link, so the target
@@ -1112,7 +1292,7 @@ class EmailLookup:
 
 @dataclass(frozen=True, slots=True)
 class SameAsPair:
-    """One deterministic pair with its normalized identity and readable evidence rows."""
+    """One deterministic pair with the person-matching key it shares and readable evidence rows."""
 
     left: Any
     right: Any
@@ -1220,15 +1400,17 @@ class SamePersonLink(NamedTuple):
     """
 
 
-def _age(party: Any) -> tuple[Any, Any]:
-    """A party's place in a merge: the oldest record survives, then key order.
+def _age(record: Any) -> tuple[Any, Any]:
+    """A record's place in a merge: the oldest record survives, then key order.
 
-    Its age is its ``created_at``: the earliest time its provenance states, a
-    source's creation time included (``Party.backdate_creation``), so the record
-    its sources have known longest survives, not the one imported here first.
+    Its age is its ``created_at``. A party's is the earliest time its provenance
+    states, a source's creation time included (``Party.backdate_creation``), so
+    the record its sources have known longest survives, not the one imported here
+    first. A handle's is the moment it was recorded here, so for handles the rule
+    is key order in effect.
     """
 
-    return party.created_at, party.pk
+    return record.created_at, record.pk
 
 
 _LOCK_CONFLICT_SQLSTATES = frozenset({"40P01", "55P03"})
@@ -1669,7 +1851,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         An address more parties are linked to is shared (a switchboard, a family
         line) and left out, as is one that a ``shared`` handle has (a sender the
         shared-sender providers name, :meth:`shared_sender_ids`). The candidate
-        addresses are found in SQL first, grouped by platform and normalized value,
+        addresses are found in SQL first, grouped by platform and person-matching key,
         and only their links are read. ``addresses`` narrows the read to those.
         Each link names the source it is attributed to (:class:`SamePersonLink`).
         """
@@ -1880,11 +2062,13 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> Any:
         """Add one unconfirmed manual contact claim without asserting sender identity.
 
-        Handles are globally deduplicated on their native ``(platform, value)``
-        identity, while the Party association remains a reviewable ``PartyStatement``.
-        Reusing a global Handle therefore requires read access and never refreshes
-        its display fields. Repeating a dismissed Party association returns that
-        durable anti-link unchanged; confirmation remains the explicit human action.
+        Handles are globally deduplicated on the identity the handle owner lands
+        (``HandleManager.find_identity``: any letter case or domain spelling of an
+        email address is its one handle), while the Party association remains a
+        reviewable ``PartyStatement``. Reusing a global Handle therefore requires
+        read access and never refreshes its display fields. Repeating a dismissed
+        Party association returns that durable anti-link unchanged; confirmation
+        remains the explicit human action.
         """
 
         actor = to_subject_ref(party.require_access("write", actor))
@@ -1911,11 +2095,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         with transaction.atomic(), actor_context(actor):
             handle_owner = handle_model.objects
-            handle = (
-                handle_owner.sudo(reason="parties.statement.propose_manual_contact.handle")
-                .filter(platform=normalized_platform, value=contact_value)
-                .first()
-            )
+            with system_context(reason="parties.statement.propose_manual_contact.handle"):
+                handle = handle_owner.find_identity(platform=normalized_platform, value=contact_value)
             if handle is None:
                 if not candidate.with_actor(actor).has_access("create"):
                     raise PermissionDenied("Denied: cannot create this contact point.")
@@ -1925,7 +2106,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                         value=contact_value,
                         created_by_id=actor_user_id(actor),
                     )
-            handle = handle.canonical()
             handles, parties = self.lock_identity_rows(
                 party_ids=(party.pk,),
                 handle_ids=(handle.pk,),
@@ -2023,7 +2203,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         is decided by its number. The person found again is one whose standing
         claim on a handle of that address has a row of ``own`` behind it
         (:meth:`PartyStatementQuerySet.standing_claims`), never one a column
-        names: another spelling of the address is the same address, a trashed
+        names: another spelling or alias of the address is the same address, a trashed
         person is nobody's answer, a merged one is found as its survivor
         (``Party.canonical_ids``), and of several the earliest. Nobody else's
         person is taken, whoever holds or claims the address, an account's own
@@ -2129,7 +2309,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
     @staticmethod
     def _address_handles(platform: str, value: str) -> list[Any]:
-        """Return the handle rows of ``value`` on ``platform``, every spelling of it, oldest first.
+        """Return the handle rows of ``value`` on ``platform``, every spelling or alias of it, oldest first.
 
         A row merged away is left out: its survivor is the address's row, and a
         claim stated on a redirect would link nobody.
@@ -2184,9 +2364,15 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         pair: indexed normalized twins contribute distinct candidate parties (the
         first at ``1.0``, which decides the handle's party, competing parties at ``0.3`` for
         review); otherwise an email whose non-generic domain matches a tracked
-        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``,
-        both domains read in the one spelling ``Handle.normalize_email_domain``
-        gives, so a punycode and a Unicode spelling match;
+        :attr:`Organization.domain` contributes a rule suggestion at ``0.4``:
+        the handle's domain is its spelling key's (``Handle.spelling_key_of``,
+        from its own value), and an organization is found when its domain, stored
+        as typed, is that spelling, its punycode, or the address's own spelling,
+        ASCII letter case aside, and the one rule
+        (``Handle.normalize_email_domain``) reads it as the same domain. Another
+        spelling the rule joins is not found (an organization typed
+        ``straße.example`` for an address typed ``strasse.example``, NFD for NFC,
+        full-width letters for ASCII), since organizations store no domain key;
         otherwise no-op. Both branches stay inside the partition of the handle's
         creator: handles that user created and parties that user owns. Public
         mailbox-provider domains never imply organization membership. Returns the
@@ -2227,13 +2413,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 strongest = link
         if strongest is not None:
             return strongest
-        if handle.platform == handle_model.Platform.EMAIL and "@" in handle.normalized_value:
-            domain = handle_model.normalize_email_domain(handle.normalized_value.rsplit("@", 1)[1])
+        if key := handle_model.spelling_key_of(handle.platform, handle.value):
+            domain = key.rpartition("@")[2]
             organization_model = apps.get_model("parties", "Organization")
             org = None
             if domain and domain not in GENERIC_EMAIL_DOMAINS:
-                # An organization's domain is stored as typed, in either spelling: read both, compare by the one rule.
-                spelled = Q(domain__iexact=domain)
+                # An organization's domain is stored as typed: read the rule's spelling, its punycode and the address's
+                # own spelling, then compare by the one rule.
+                spelled = Q(domain__iexact=domain) | Q(domain__iexact=handle.value.strip().rpartition("@")[2])
                 if not domain.isascii():
                     try:
                         spelled |= Q(domain__iexact=punycode(domain))
@@ -3618,8 +3805,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         not count as holding the address: the next handle a live Person holds
         answers ``HELD``, and with none the claims answer, so a person minted
         earlier for an organization's address is found again by their claim.
-        Handles compare by ``Handle.normalized_value``, so another spelling of the
-        address is the same address whichever row its exact value made (the account
+        Handles compare by ``Handle.normalized_value``, so an alias of the address
+        (a Gmail dot or plus-tag) is the same address whichever row holds it (the account
         compares by the account's own normalization). A trashed person, an
         organization and a merged-away row are nobody's answer. One person may come
         under several bases, and an address two people share (a family's) names
@@ -3702,7 +3889,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         Only an address it has not read, or one a record of its page changed
         since (:attr:`EmailLookup.changed`), is read: its holders through
         :meth:`people_for_emails`, its lapsed holders (:meth:`lapsed_holders`),
-        and whether a person account signs in with it in any spelling, the one
+        and whether a person account signs in with it in any spelling or alias, the one
         given or one a handle holds, compared by iam's own key and by the
         handle's normalized one (``UserManager.sign_in_addresses``). An address
         a lapsed holder keeps is still theirs, so a claim names nobody by it:
@@ -3743,10 +3930,10 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return lookup
 
     def lapsed_holders(self, platform: str, values: Collection[str]) -> dict[str, set[Any]]:
-        """Return, by normalized value, the keys of the trashed people who still hold an address of ``platform``.
+        """Return, by person-matching key, the keys of the trashed people who still hold an address of ``platform``.
 
         Such a person (trashed, never merged away) has an applied, current
-        statement of a handle of the address in some spelling: a restore makes
+        statement of a handle of the address in some spelling or alias: a restore makes
         them its holder again, so what a source may state about the address, and
         who may confirm it, treats them as its holder (:meth:`lookup_emails`).
         :meth:`people_for_emails` answers nobody for them and stays as it is.
@@ -3774,7 +3961,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         A person's stance that wins a handle (a confirmation, taking control, a
         restored confirmation) gives ``party`` the address and what is
         attributed to it. Its holders are read by the address, its platform and
-        normalized value in every spelling, as the page lookup reads them: each
+        person-matching key in every spelling or alias, as the page lookup reads them: each
         live party a handle of it resolves to (through merge survivors, an
         organization included), each lapsed holder (:meth:`lapsed_holders`), and,
         for an email address, the person of the person account that signs in
@@ -4035,7 +4222,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         locks the caller holds, never from the objects passed in: the link's
         stream is pull-only; the person is live (neither trashed nor merged away)
         and no account's own; no address the contact carries is a person
-        account's sign-in address in any spelling (``lookup.sign_in``), whichever
+        account's sign-in address in any spelling or alias (``lookup.sign_in``), whichever
         address found the person and whether or not the account has a person;
         the directory's owner holds ``adopt`` on them (their owner, an editor of their party or a
         stored member of the contact manager or admin role: no platform-admin arm, so a platform
@@ -4188,10 +4375,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         return set(asserted.filter(handle__platform=email).values_list("handle__normalized_value", flat=True))
 
     def contact_handle_ids(self, contacts: Iterable[ParsedContact | ParsedOrganization]) -> set[Any]:
-        """Return the handles the contacts' emails and phones name, every spelling of each (by normalized value).
+        """Return the handles the contacts' emails and phones name, every spelling or alias of each.
 
-        The upsert path keys on the exact value, so two spellings of one address
-        can be two rows; a lock of an address's identities covers them all.
+        A provider's alias of an address (a Gmail dot or plus-tag) is a row of its
+        own, and a row the key repair has not reached may still spell another's
+        address; a lock of an address's identities covers them all.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -4215,7 +4403,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         """Lock the mapped contact aggregates of ``parties`` before a caller rechecks or lands one.
 
         Follow the shared Handle, Party, PartyStatement order (the handles the
-        parties' statements and ``parsed`` name first, every spelling of each:
+        parties' statements and ``parsed`` name first, every spelling or alias of each:
         :meth:`contact_handle_ids`) before locking each Person, Organization or
         Party row given and its mapped collections. The parent row lock also
         fences inserts through its foreign keys while the page transaction is
@@ -4403,9 +4591,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         Each handle dedupes on its value and keeps the label and preference the
         source gives it, and the name the source gives its party (``display_name``;
         a blank one keeps the handle's); the Party row is the assertion's evidence.
-        An email spelling ``through``'s address lands on that handle, the one an
-        adoption found ``party`` by, never on a second row of another spelling.
-        An email or phone whose ``(platform, normalized value)`` is in ``claims``
+        An email alias of ``through``'s address (its person-matching key) lands on that handle, the one an
+        adoption found ``party`` by, never on a second row of another alias.
+        An email or phone whose ``(platform, person-matching key)`` is in ``claims``
         is someone else's (:meth:`_contested_addresses`): it is stated as a claim for review, below
         ``Party.REVIEW_CONFIDENCE``, so it never resolves the handle, and the
         handle's display fields stay its holder's. ``replaces`` are the links of
@@ -4433,7 +4621,9 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 if through is not None and platform == through.platform and normalized == through.normalized_value:
                     value = through.value
                 claim = (platform, normalized) in claims
-                shown = {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
+                shown: dict[str, Any] = (
+                    {} if claim else {"display_name": display_name, "label": label, "is_preferred": preferred}
+                )
                 handle = handles.upsert(platform=platform, value=value, created_by_id=created_by_id, **shown)
                 mapped = {} if claim else {"label": label, "is_preferred": preferred}
                 dirty = [name for name, value in mapped.items() if getattr(handle, name) != value]
@@ -4457,7 +4647,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     ) -> tuple[set[tuple[str, str]], list[tuple[Any, Handle | None]]]:
         """Return the contact's addresses ``source`` may only claim for ``person``, and the parties they name instead.
 
-        Claims are ``(platform, normalized value)`` pairs. A phone number names one
+        Claims are ``(platform, person-matching key)`` pairs. A phone number names one
         account as an email does (``Handle.identifies_account``): one another live
         party is linked to (:meth:`same_person_links` with ``every_address``: a
         holding, or a standing statement by a source that states its own record)
@@ -4567,7 +4757,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         binds only as adoption admits it (:meth:`adoption_blocker`), under the
         contact's locks, taken first. ``through`` is the handle an adoption
         found ``target`` by: the identity statement cites it as evidence,
-        restated on every later record, and the contact's spelling of its address
+        restated on every later record, and the contact's spelling or alias of its address
         lands on it. On a pull-only stream, whether or not its directory adopts,
         ``lookup`` (the page's, :meth:`lookup_emails`; else one read here) says
         who each address names: an email another person is linked to (holds it,

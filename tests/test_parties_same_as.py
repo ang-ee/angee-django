@@ -130,6 +130,10 @@ def _address(owner: Any, value: str = "ada@example.com", *, platform: str = "ema
         return Handle._base_manager.create(platform=platform, value=value, created_by=owner, **fields)
 
 
+_ALIASES = ("ada.example@gmail.com", "adaexample@gmail.com", "ada.example+crm@gmail.com")
+"""Three aliases of one Gmail mailbox: three handles that the person-matching key groups."""
+
+
 def _holder(owner: Any, handle: Any, name: str = "Ada Example") -> Any:
     """A party whose own statement of ``handle`` decides it: the address's holder."""
 
@@ -705,10 +709,10 @@ def test_a_proposal_its_evidence_does_not_support_proposes_nothing(
 def test_a_proposal_cites_the_survivor_of_a_merged_handle(db: None, django_capture_on_commit_callbacks: Any) -> None:
     del db
     owner = create_user("same-person-verb-merged-handle")
-    handle = _address(owner)
+    handle = _address(owner, "ada.example@gmail.com")
     holder, claimant = _holder(owner, handle), _claimant(owner, handle)
-    alias = _address(owner, "Ada@Example.com")
-    with system_context(reason="same_as a spelling folds into its address"):
+    alias = _address(owner, "adaexample@gmail.com")
+    with system_context(reason="same_as an alias folds into its address"):
         handle.fold([alias])
 
     (statement,) = _propose(django_capture_on_commit_callbacks, holder, claimant, [alias])
@@ -761,11 +765,11 @@ def test_a_proposal_citing_a_deleted_handle_is_restated_with_the_handles_that_li
     owner = create_user("same-person-deleted-evidence")
     with system_context(reason="same_as a holder written onto its row"):
         holder = Party._base_manager.create(display_name="Ada Example", created_by=owner)
-        written = Handle._base_manager.create(platform="email", value="Ada@Example.com", party=holder, created_by=owner)
-    stated = _address(owner, "ADA@example.com")
+        written = Handle._base_manager.create(platform="email", value=_ALIASES[0], party=holder, created_by=owner)
+    stated = _address(owner, _ALIASES[1])
     with system_context(reason="same_as the holder's own statement"):
         Party.objects.assert_handle(holder, stated, asserted_by=owner)
-    claimed = _address(owner)
+    claimed = _address(owner, _ALIASES[2])
     claimant = _claimant(owner, claimed)
     assert _reconcile() == 1
     with system_context(reason="same_as the written row goes"):
@@ -926,11 +930,11 @@ def _decided_pair_citing_a_deleted_handle(owner: Any, decide: Any) -> tuple[Any,
 
     with system_context(reason="same_as a holder written onto its row"):
         holder = Party._base_manager.create(display_name="Ada Example", created_by=owner)
-        written = Handle._base_manager.create(platform="email", value="Ada@Example.com", party=holder, created_by=owner)
-    stated = _address(owner, "ADA@example.com")
+        written = Handle._base_manager.create(platform="email", value=_ALIASES[0], party=holder, created_by=owner)
+    stated = _address(owner, _ALIASES[1])
     with system_context(reason="same_as the holder's own statement"):
         Party.objects.assert_handle(holder, stated, asserted_by=owner)
-    claimant = _claimant(owner, _address(owner))
+    claimant = _claimant(owner, _address(owner, _ALIASES[2]))
     assert _reconcile() == 1
     decide(owner, holder, claimant)
     with system_context(reason="same_as the written row goes"):

@@ -10,6 +10,7 @@ import {
   createAngeeGraphQLClient,
   createAngeeHasuraDataProvider,
   createAngeeChangeLiveProvider,
+  hasGraphQLAnswer,
   resolveGraphQLWebSocketEndpoint,
   retryableQueryError,
 } from "./provider";
@@ -1227,6 +1228,30 @@ describe("retryableQueryError", () => {
     expect(retryableQueryError(new TypeError("Failed to fetch"))).toBe(true);
     expect(retryableQueryError({ response: { status: 502, errors: [] } })).toBe(true);
     expect(retryableQueryError({ graphQLErrors: [answer("INTERNAL_SERVER_ERROR")] })).toBe(true);
+  });
+});
+
+describe("hasGraphQLAnswer", () => {
+  const internal = { message: "boom", extensions: { code: "INTERNAL" } };
+
+  test("a response holding a GraphQL errors list is the server's answer, public or masked", () => {
+    expect(hasGraphQLAnswer(boundedGraphQLTransportError({
+      response: { status: 200, errors: [{ message: "Not allowed.", extensions: { code: "PERMISSION_DENIED" } }] },
+    }))).toBe(true);
+    const masked = boundedGraphQLTransportError({ request: {}, response: { status: 200, errors: [internal] } });
+    expect(masked.message).toBe("Request failed.");
+    expect(hasGraphQLAnswer(masked)).toBe(true);
+    expect(hasGraphQLAnswer({ graphQLErrors: [internal] })).toBe(true);
+  });
+
+  test("a network failure, a cancelled request and a gateway's own page carry no answer", () => {
+    expect(hasGraphQLAnswer(boundedGraphQLTransportError(new TypeError("Failed to fetch")))).toBe(false);
+    expect(hasGraphQLAnswer(boundedGraphQLTransportError(new DOMException("aborted", "AbortError")))).toBe(false);
+    const gateway = boundedGraphQLTransportError({ request: {}, response: { status: 504, error: "<html>Gateway Timeout</html>" } });
+    expect(gateway).toMatchObject({ response: { status: 504 }, graphQLErrors: [] });
+    expect(hasGraphQLAnswer(gateway)).toBe(false);
+    expect(hasGraphQLAnswer({ graphQLErrors: [] })).toBe(false);
+    expect(hasGraphQLAnswer(new Error("Offline"))).toBe(false);
   });
 });
 

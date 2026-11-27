@@ -48,6 +48,7 @@ vi.mock("@angee/storage", async (importOriginal) => ({
   useStorageUpload: () => ({ tasks: [], upload: vi.fn(), clearFinished: vi.fn() }),
 }));
 
+import { AppRuntimeProvider } from "@angee/ui";
 import { RecordChatterPane } from "./RecordChatterPane";
 import messaging from "./index";
 
@@ -248,7 +249,8 @@ describe("RecordChatterPane", () => {
 
   test("passes the host's submit key to its record conversation", () => {
     mocks.threadData = threadPayload([message()]);
-    render(<RecordChatterPane context={context} submitKey="mod-enter" />);
+    // Under an app runtime, as a page is: it holds the chatter box's idempotency key.
+    render(<AppRuntimeProvider runtime={{}}><RecordChatterPane context={context} submitKey="mod-enter" /></AppRuntimeProvider>);
     const input = screen.getByLabelText("Message");
     fireEvent.change(input, { target: { value: "Next step" } });
     fireEvent.keyDown(input, { key: "Enter" });

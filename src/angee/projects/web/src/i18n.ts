@@ -35,6 +35,7 @@ export const enProjectsMessages: Record<string, string> = {
   "project.action.complete": "Complete",
   "project.action.drop": "Drop",
   "project.action.createFromTemplate": "Create project",
+  "project.createdEarlier": "An earlier attempt already created a project from this template.",
   "project.isTemplate": "Template",
   "project.templates.empty": "No project templates yet. Mark a project as a template to reuse its milestones and tasks.",
   "task.assigneeRole": "Assignee role",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
@@ -35,6 +36,7 @@ from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
 from strawberry_django.utils.requests import get_request
 
+from angee.base.serialization import MAX_JSON_DOCUMENT_DEPTH
 from angee.base.signals import publish_change
 from angee.graphql import access, publishing, subscriptions
 from angee.graphql.actions import session_user
@@ -466,6 +468,63 @@ def test_ws_consumer_uses_rebac_channels_mixin() -> None:
     """The GraphQL WS consumer delegates actor setup to REBAC."""
 
     assert issubclass(AngeeGraphQLWSConsumer, RebacChannelsConsumerMixin)
+
+
+def ping_message(depth: int) -> str:
+    """A ``{ ping }`` subscribe message whose extension nests its innermost member in ``depth`` containers."""
+
+    levels = depth - 3
+    return (
+        '{"id": "1", "type": "subscribe", "payload": {"query": "{ ping }", "extensions": {"x": '
+        + "[" * levels + "0" + "]" * levels + "}}}"
+    )
+
+
+async def ping_over_ws(message: str) -> list[dict[str, Any]]:
+    """Send ``message`` after the handshake and return what the consumer answers until it closes or completes."""
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> bool:
+            return True
+
+    communicator = WebsocketCommunicator(
+        AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)),
+        "/graphql",
+        subprotocols=["graphql-transport-ws"],
+    )
+    communicator.scope["user"] = AnonymousUser()
+    connected, _subprotocol = await communicator.connect()
+    assert connected
+    await communicator.send_json_to({"type": "connection_init"})
+    assert await communicator.receive_json_from() == {"type": "connection_ack"}
+    await communicator.send_to(text_data=message)
+    answers: list[dict[str, Any]] = []
+    while True:
+        output = await communicator.receive_output()
+        if output["type"] == "websocket.close":
+            await communicator.wait()
+            return [*answers, output]
+        answers.append(json.loads(output["text"]))
+        if answers[-1]["type"] == "complete":
+            await communicator.disconnect()
+            return answers
+
+
+def test_ws_message_nested_past_the_document_bound_closes_as_invalid_json() -> None:
+    """A level past ``MAX_JSON_DOCUMENT_DEPTH`` gets Strawberry's own close for a message that is not JSON."""
+
+    assert asyncio.run(ping_over_ws(ping_message(MAX_JSON_DOCUMENT_DEPTH + 1))) == [
+        {"type": "websocket.close", "code": 4400, "reason": "WebSocket message must be valid JSON"},
+    ]
+
+
+def test_ws_message_at_the_document_bound_is_executed() -> None:
+    assert asyncio.run(ping_over_ws(ping_message(MAX_JSON_DOCUMENT_DEPTH))) == [
+        {"id": "1", "type": "next", "payload": {"data": {"ping": True}}},
+        {"id": "1", "type": "complete"},
+    ]
 
 
 @pytest.mark.django_db(transaction=True)

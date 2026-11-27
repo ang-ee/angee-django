@@ -270,7 +270,7 @@ def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(db: None)
             matched = User.objects.filter(pk__in=pks).filter(User.objects.protection_condition(actor))
             return set(matched.values_list("pk", flat=True))
 
-    # A member reaches only their own account in pickers, and no verb or preview,
+    # A member reaches only their own account in pickers, and no account action or preview,
     # so every account counts as protected from them.
     assert disclosed(viewer, "active_account") == {viewer.pk}
     assert disclosed(viewer, "nonstaff_account") == set()
@@ -301,9 +301,8 @@ def test_the_policy_decides_every_iam_permission(db: None) -> None:
             RelationshipTuple(_DIRECTORY, "reader", to_subject_ref(seats["directory-reader"])),
             RelationshipTuple(to_object_ref(target), "directory_reader", to_subject_ref(seats["named-reader"])),
         ])
-    account_verbs = (
-        "write", "delete", "issue_password", "issue_sign_in_link", "reset_password", "set_active", "rename",
-        "administer",
+    account_actions = (
+        "write", "delete", "issue_password", "reset_password", "set_active", "rename", "administer",
         *(f"write__{field}" for field in (
             "username", "email", "password", "kind", "is_active", "is_staff", "is_superuser", "preferences",
             "date_joined", "last_login",
@@ -324,7 +323,7 @@ def test_the_policy_decides_every_iam_permission(db: None) -> None:
         (seats["staff"], "nonstaff_account", "", "admin"),
         (target, "read_private", "target named-reader", "outsider"),
         *((target, f"read__{field}", "target", "outsider") for field in restricted),
-        *((target, verb, "admin", "directory-reader target") for verb in account_verbs),
+        *((target, action, "admin", "directory-reader target") for action in account_actions),
         # audiences, protected accounts, groups and roles
         (ObjectRef("iam/audience", "active"), "disclosed", "outsider", "anonymous"),
         (ObjectRef("iam/protected", "main"), "member", "admin", "outsider"),

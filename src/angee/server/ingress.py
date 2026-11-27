@@ -20,6 +20,7 @@ from django.core.exceptions import RequestDataTooBig
 from django.http import HttpRequest
 
 from angee.base.cache import increment_window
+from angee.base.serialization import decode_json
 
 AnonymousIngressTokenHook = Callable[[HttpRequest, Mapping[str, Any]], bool | None]
 
@@ -175,7 +176,7 @@ def _bounded_body(request: HttpRequest, max_body_bytes: int) -> bytes:
 
 def _json_object(body: bytes) -> Mapping[str, Any]:
     try:
-        value = json.loads(
+        value = decode_json(
             body.decode("utf-8"),
             parse_constant=lambda token: _raise_invalid_number(token),
         )

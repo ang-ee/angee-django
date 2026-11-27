@@ -44,6 +44,27 @@ describe("a field whose empty value is null has no present-but-empty state", () 
     expect(screen.getByRole("button", { name: /^Due/ })).toBeTruthy();
   });
 
+  test("a nullable percent holding null shows the Left empty hint and no Set value, which wrote an empty text", () => {
+    const changes = renderField({ name: "share", label: "Share", widget: "percent", nullable: true }, null);
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+    expect(screen.getByText("Left empty")).toBeTruthy();
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  test("an omittable progress bar holding nothing shows its own control with the Optional hint and no Set value, which wrote an empty text", () => {
+    renderField({ name: "progress", label: "Progress", widget: "progressBar", omittable: true }, undefined);
+    expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();
+    expect(screen.getByText("Optional")).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "Progress" })).toBeTruthy();
+  });
+
+  test("an omittable progress bar whose default is null, holding nothing, shows its own control with the Optional hint and no Use default, as an omittable number does", () => {
+    renderField({ name: "progress", label: "Progress", widget: "progressBar", omittable: true, hasDefault: true, defaultValue: null }, undefined);
+    expect(screen.queryByRole("button", { name: "Use default" })).toBeNull();
+    expect(screen.getByText("Optional")).toBeTruthy();
+    expect(screen.getByRole("slider", { name: "Progress" })).toBeTruthy();
+  });
+
   test("a nullable number holding nothing, with no default, shows its own control and never writes a 0", () => {
     const changes = renderField({ name: "limit", label: "Limit", kind: "integer", widget: "integer", nullable: true }, undefined);
     expect(screen.queryByRole("button", { name: "Set value" })).toBeNull();

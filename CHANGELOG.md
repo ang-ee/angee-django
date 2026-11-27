@@ -71,9 +71,946 @@ live in code docstrings.
   row published although the entry declared `publish: false`. **Upgrade:** remove
   `draft` and `publish` from a workflow entry's `create_only`; no shipped entry lists
   either.
-- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`: **Changed behaviour.**
+- `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
+  answers for `user`. It checked the ambient REBAC actor instead, so asking about
+  someone else returned the current actor's answer, and asking outside any actor
+  (a worker, a mail bridge) returned `False` even for an administrator. It now
+  checks `user`'s own effective membership of the platform-admin role
+  (`REBAC_UNIVERSAL_ADMIN_ROLE`), under any actor and inside a system context; an
+  anonymous user or `None` is still never an administrator. The framework's
+  callers (the platform-admin GraphQL gate, IAM's role and grant catalogues,
+  integrate's implementation choices and the profiling hook) pass the request's
+  own user, so their answers are unchanged. New
+  `angee.iam.roles.platform_admin_holders()` lists the user ids holding the role
+  in the shape of `protected_account_holders()`: every path REBAC's subject lookup
+  follows, `None` when every user holds it, empty when no role is configured.
+  **Upgrade:** a caller that passed one user while relying on the answer for the
+  ambient actor now gets that user's answer; pass the actor it means
+  (`get_current_user(info)` in a resolver), or ask
+  `angee.iam.permissions.current_actor_has_role(role)` about the ambient actor.
+  Code that spelled `platform_admin_role()` with `subject_has_role` or a subject
+  lookup to read someone else's membership or the role's holders can call
+  `is_platform_admin` or `platform_admin_holders()`.
+
+- Framework images: `django-angee-base` and `django-angee` build on the CPython
+  release `.python-version` pins, `python:3.14.9-slim`. The Dockerfile's
+  `PYTHON_VERSION` default stayed `3.14`, a tag that now carries 3.14.10, while the
+  dependency stage's `uv sync` reads the pin and never downloads an interpreter, so
+  every image build since the pin failed with `No interpreter found for Python
+  3.14.9` and no framework image was published. The default names the pin, and the
+  static tier's runtime image tests refuse a Dockerfile whose default differs from
+  `.python-version`: a pin change edits both. Docker rebuilds only the current
+  patch release's tags, so the base stage first upgrades the Debian packages of
+  `python:3.14.9-slim`'s last build (2026-10-21) when it builds.
+
+- CI: a pull request that changes `.python-version` runs the whole SQLite suite on
+  the interpreter it pins. The changed-path selection did not count the pin among
+  the inputs every test reads, so a pin change alone started no SQLite shard,
+  although the pin exists for the SQLite library that suite needs.
+
+- **Message templates render, on Django's template engine.**
+  - **What renders.** `MessageTemplate.render(values, *, kit=None)` returns a
+    `RenderedMessage` (`subject`, `preheader`, `html`, `plain_text`,
+    `language`, and `direction`, a `TextDirection` the HTML's `dir` says, for
+    showing the text outside the HTML): the subject and preheader on one line each, the
+    HTML body with every value escaped, and the plain-text body rendered from
+    the rows' text forms, never scraped from the HTML. Rows render on a
+    standalone, restricted
+    Django engine (`MessageTemplateEngine` in `angee.messaging_templates.engine`)
+    whose one library allows the tags `if`, `for`, `with`, `comment`, `block`,
+    `include`, `extends` and `templatetag` and fourteen filters, `url` among them;
+    anything else fails to compile. A template names its layout in its `layout`
+    column and never writes `extends` or `block`; blocks and parts are included
+    by name with `{% include "…" with … only %}`. A Markdown row goes through
+    markdown-it first, with raw HTML off, its template code kept whole. Each pass
+    runs in the row's language, with `dir` from Django's
+    `translation.get_language_bidi()`, and inside a `RenderBudget` (500 loop or
+    include renders, 200,000 characters of loop output, 500,000 characters of
+    filter input; a tenth of that for the subject and preheader). The walk
+    renders itself (`TemplateWalk.render`); the result types
+    (`RenderedMessage`, `TemplatePreview`, `TemplateWarning`) live in
+    `angee.messaging_templates.walker`.
+  - **What is refused.** `TemplateWalker` (`angee.messaging_templates.walker`)
+    walks a row and every row it reaches and refuses what may not render safely:
+    oversized sources and lines, literals holding `<`, `>` or `"`, costly or
+    unsafe filter use, template code the Markdown pass would not keep whole, HTML
+    a mail may not carry, reads no row declares, include cycles and the walk's
+    bounds. Every list a row or a value varies along is closed, and the addon
+    README's table names each with its owner and test: the tags and filters; a
+    markup filter (`linebreaksbr`) as the last filter of a printed value, no
+    other filter's result marked safe; one strict HTML spelling every reader
+    tokenises alike (`SpellingRule` in `angee.messaging_templates.html_checks`);
+    the elements (`MAIL_ELEMENTS`) and attributes (`MAIL_ATTRIBUTES`) a mail is
+    written with, Office's settings inside a layout's Outlook comment alone; the
+    places a value sits; a link `url` gives (an absolute `https`, `http`,
+    `mailto` or `tel` link, an `https` or `http` one to a named host with no
+    userinfo) and one an author writes (that, a `#fragment`, a `cid:` image, an
+    `sms:` or `webcal:` link); the one character set, `utf-8`; no control
+    character in a row's text, a carriage return written as a newline by
+    every save, and none in a value, which drops them with the bidirectional
+    overrides and isolates; `dir` and `lang` set by the engine alone; a `<title>`
+    holding outputs and notes, no tag; end tags held to the element list; link
+    attributes on the elements they link on; at most ten operators in a
+    condition, each a node; every form capped straight after the Markdown pass,
+    and the walk stopped at the tree's caps as it gathers rows. A rendered subject
+    and preheader break every encoded-word opener (`=?charset?b?` or `?q?`), so a
+    mail library stores the subject exactly as rendered. `clean()` refuses
+    with a `ValidationError` whatever a column cannot store: a lone surrogate,
+    a NUL, a value nested over 64 levels, NaN, an infinity, a number over 4,300
+    digits, `None` where the column is not null; and a template with no layout,
+    under `layout`. A walk also stops once what its rows' checks read passes
+    600,000 characters of forms or 4,000 spans, comments included, fetches no
+    row past the include depth a tree reaches, counts each level from its rows'
+    lengths before it reads their text and their `variables` (never their
+    description or sample), the variables against 100,000 characters, and
+    on a save resolves a level's include targets in one query. A Markdown row's
+    link and image labels may
+    make the pass scan at most 50,000 characters, and no row holds an opener
+    that opens no template code. A layout alone
+    writes the doctype and Outlook's conditional comments, static and balanced,
+    their markup checked. A Markdown link takes its label and its target from
+    values (`[{{ label }}]({{ link }})`). It runs from `clean()` when what a row
+    renders changed (`MessageTemplate.validate_source()`), after every resource
+    load, and before every render. `TemplateWalk.prepare(values)` drops
+    undeclared keys, refuses a required value missing or null, fills every
+    declared path and parses ISO dates read through `date`; a path printed with a
+    time takes an aware `datetime`. It costs a constant per declared path per
+    value, and drops the control characters from every string. A render raises
+    `ValidationError` and nothing else, every item carrying its code in
+    `error_list` (`invalid_values`, `message_template_refused`,
+    `render_budget`, `subject_too_long`, `no_brand_kit`, and `render_failed`
+    for a failure nobody foresaw, logged with its traceback first).
+  - **Preview.** `MessageTemplate.preview(*, kit=None, patch=None)` renders a
+    row's `sample` (a layout around a fixed body, a block or part alone) and
+    returns a `TemplatePreview` with `TemplateWarning`s: the subject or preheader
+    length, unused variables, a missing stop link, an empty plain-text body, the
+    size, or a render error, one for each refusal, naming its column
+    (`TemplateWarning.field`). With a `patch` of edited columns it previews the row
+    as that patch would save: `write` is asked as well as `preview`, and what the
+    save's gates ask of the columns it edits (`write__<field>` included), before
+    anything is copied or walked; the copy is validated as the save validates it,
+    refused for what the save refuses (`save_refused`, apart from the render's
+    `render_error`), and never saved. The console's
+    `message_template_preview(template, brand_kit, patch)` read returns it to
+    callers holding the new `preview` permission (platform admins;
+    `messaging_templates/message_template` revision 2); `patch` is the resource's
+    `message_templates_set_input`, decoded as the update decodes it
+    (`MessageTemplateWriteBackend.patch_values`), and a warning's `field` is the
+    column the update reports a refusal under.
+  - **Shipped rows.** The addon's install tier ships the `base` layout, the
+    `header`, `footer`, `button`, `quote` and `record_card` blocks and the
+    `greeting`, `ignore_notice` and `signature` parts; the layout carries the
+    Outlook DPI setting, font override and 600-wide ghost table. A block or part
+    other rows include can no longer be deleted while its key would stop
+    resolving. A baseline is walked among shipped rows, so a shipped defect fails
+    its load; a refusal reached only through a deployment's override or own row
+    is logged as a warning on `angee.messaging_templates.models`, the load
+    completes, and that shipped row refuses at render until the deployment's row
+    is fixed.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-brandkit` and
+    `markdown-it-py` below 5. The dev group gains `html5lib`, a test-only reader
+    of HTML as a browser reads it.
+  - **Upgrade.** Synchronize the permission schema (`rebac sync`), load the
+    install tier (`resources load`), and regenerate the console schema and its
+    codegen. No migration: no column changed. Existing rows are walked when they
+    render, and when their source, forms, variables or layout are next edited.
+- `@angee/ui`, `@angee/metadata`: **Changed API.** A list header shows a sort
+  only for the key its rows visibly follow, the first of the order's keys that
+  its groups do not share. A declared or default order's later keys only break
+  ties, and each of them that has a column showed as sorted: a list grouped by
+  kind and ordered by kind, key and language showed "Language, ascending" over
+  rows not in language order, and the first press on that header sorted it
+  descending. That header now shows "not sorted", and its first press sorts it
+  in its first direction as a fresh single-key order, decided from the
+  table's state when pressed. A key a group's records share shows no sort:
+  the field grouped by its whole value (a `Date` by day included) and a
+  grouped relation's members, which the new `GroupAxis.shares` in
+  `@angee/metadata` answers; each list's table carries its group axes as
+  `meta.groupAxes`. A grouping column's press is the table's toggle, as
+  before: it turns the groups of a list grouped in the browser, and on a
+  server-grouped list it leaves the groups in place and asks for their records
+  in that column's order alone. The table's sorting still holds the whole
+  order: every read asks for each key and a list sorted in the browser keeps
+  its tie-breakers. A tie-breaker press drops the grouping key with the rest,
+  so groups made in the browser lose its order (the table orders them by the
+  pressed column's value on each group).
+  `ariaSortForColumn` is removed from
+  `@angee/ui/views/resource-view-list-body`; a custom header renders its cells
+  with `ListHeaderCell` from the same entry, which sets `aria-sort` (on a table
+  of your own, set `meta.groupAxes` for it). `@angee/ui` augments TanStack's
+  `TableMeta` with the optional `groupAxes`: a program that passes `meta` to a
+  table of its own declares its keys by augmenting `TableMeta` too.
+- `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
+  as its value, are honoured by every relation control a descriptor field
+  renders through. The dialogs' own relation control passed the picker
+  neither the opt-out nor a known option, so a dialog still offered Edit and
+  read a record it had been given. An action's relation argument
+  (`ActionRelationArg`) can declare the opt-out; it still holds a bare id, so
+  its record is read for its label. A registered widget's `field` now carries
+  `relationEdit` (declared on `FieldPresentation`) from a form, a dialog and a
+  line's cell, and the party picker and the calendar picker pass it on.
+  `relationSelectedOption` returns `undefined` when the row's label path reads
+  `undefined`, so a relation value such as `{ id }` is read for its label
+  instead of showing its raw id; a member held as `null` or blank still labels
+  the option by its id. A form spec cannot declare the opt-out.
+- `@angee/ui`, `@angee/refine`, `@angee/app`: **Changed API.** A write from a
+  dialog or a composer is safe to retry. `useIdempotencyKeys()` (beside
+  `createClientKey`) keeps one idempotency key per draft, named by its scope,
+  for the app runtime: minted at the draft's first attempt and kept, whatever
+  an error says, until a confirmed answer ends it; the server replays the same
+  content, and answers `CREATION_KEY_CONFLICT` for other content under the
+  spent key, after which the draft's next send starts a new draft and the
+  caller only says what happened. A draft with an attempt lost or on its way is
+  never given up. Forgotten on a change of signed-in person, never persisted
+  (a retry writes once from this page only). The record form's create (its ref
+  is gone), chatter's post, knowledge's note and vault clone, the project from
+  a template, the dashboards' create and duplicate (which minted a new key per
+  attempt, so a retried lost answer made two) and the workflow start sit on it;
+  `MutationDialog` and actions take `idempotencyScope`, and a keyed dialog's
+  submission takes its key as a required `string`. One draft scope belongs to
+  one surface at a time (`useIdempotencyDraftOwner`, failing in development
+  when two hold one), and a create form names its draft under the form or
+  relation dialog hosting it (`useDraftScope`), so a create opened from another
+  form never shares its key.
+  `errorFromAuthoredEnvelope` throws an `AuthoredEnvelopeError` with the
+  envelope's `code`, and a bounded transport error keeps `response.errors` only
+  when the server answered with a GraphQL errors list. `DialogForm` takes `pending` (no dismissal while a submission runs) and
+  `dirty` (a dismissal asks first, with the shared unsaved-changes question),
+  and it asks before a route move while it holds either (saying it is still
+  sending while it is), with `holdsWork` saying no once an accepted submit
+  moves on; Close and Cancel stay focusable and say why while it sends.
+  `ActionFormDialog` drops its own guard for it, and every `MutationDialog` and
+  typed-args action dialog behaves so. An answer that lands after a dialog went
+  away is still reported (`useLateAnswerReport`, reading refine's
+  `failedWriteOutcome`, exported for any surface whose answer can land after
+  it is gone). `MessageActions` shows on a coarse pointer. The
+  unsaved-changes guard takes `leaves` in place of `allowSearchChanges`.
+  **Upgrade:** `allowSearchChanges: true` becomes `leaves: pathnameChanges`;
+  every surface the unsaved-changes guard protects (a `DialogForm` given
+  `dirty` as it opens, so both form dialogs; `FormView`; a page guarding its
+  own edits) renders under the app's router and `ModalsHost`, and without the
+  router throws at render
+  `useUnsavedChangesNavigationGuard must be used under the app's router.`, so a
+  test or a story provides both through the shared providers below;
+  `createUiTestProviders` and `ShellPageTestProviders` render
+  one app shell (`AppShellTestProviders`, from the runner-free
+  `@angee/ui/testing/shell`), which provides `ModalsHost`;
+  `ShellPageTestProviders` renders under a memory router unless one is already
+  above, and `createUiTestProviders` takes `router`; a keyed dialog's
+  submission drops any assertion of its key.
+- `angee.workflows`: a manual start that reuses a request key for a different
+  request raises `CreationKeyConflict`, as the other keyed creates do, rather
+  than a `ValidationError`: the GraphQL start answers `CREATION_KEY_CONFLICT`,
+  so a client holding the spent key starts a new request. A trigger admission
+  still records the refusal on its event.
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
+  - A request body, WebSocket message or ACP record nested deeper than
+    `MAX_JSON_DOCUMENT_DEPTH` (128) is malformed JSON on every machine,
+    through `decode_json` in `angee.base.serialization`: the GraphQL view
+    answers Strawberry's own 400, a refused view-as preview still answers its
+    403, the GraphQL WebSocket closes with Strawberry's 4400, anonymous
+    ingress refuses it as `invalid_request`, and an agent's ACP WebSocket
+    skips the record as invalid JSON. Before, only the decoder's own limit
+    stood in the way, and on Python 3.14 it follows the thread's C stack (some
+    60,000 levels on a macOS main thread, 100,000 and more on GitHub's Linux
+    runners): past it, the decoder raised an uncaught `RecursionError`; within
+    it, the document reached the recursive walks behind the decoder. A
+    document too deep for a small thread's stack is malformed JSON too.
+  - The document bound admits every value the value bound admits. The deepest
+    envelope, a graphql-transport-ws message carrying a nested insert's line
+    field, encloses a value in 7 arrays and objects, so 71 is the least such
+    bound; a GraphQL HTTP body encloses one in 6, an ACP record its view
+    context in 4, and an ingress body its fields in 1. The rest of 128 leaves
+    an envelope room to grow and keeps graphql-core's input coercion and
+    strawberry-django-hasura's input reduction far inside Python's recursion
+    limit. `json_bound_violation` measures it, without the member bound.
+  - `angee.integrate` decodes a pasted key file and a vendor's error body
+    through `decode_json` as well: a key file nested past the document bound
+    is refused as "Paste the provider's JSON key file.", and a refusal keeps
+    no body nested past it.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
+- `angee.appearance_integrate`: **Changed behaviour.** Website appearance
+  analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
+  signed-in contract states. It refused only a request with no actor at all, so
+  the anonymous actor REBAC gives an unauthenticated request was admitted: it
+  could make the server fetch outside URLs, and every anonymous caller spent
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
+- **Emailed sign-in links: the new addon `angee.iam_messaging`.** The emailed,
+  single-use sign-in link leaves base IAM for its own addon, with everything
+  about it: `SignInLink` and its manager, the `UserSignInLinks` donor that adds
+  `issue_sign_in_link` to IAM's account actions, `SignInLinkBackend` and
+  `sign_in_credentials` (`angee.iam_messaging.auth`), the `redeem_sign_in_link`
+  and `issue_user_sign_in_link` mutations (names and arguments kept), the public
+  `/sign-in-link` route (now `iam_messaging.sign-in-link`, path and fragment key
+  kept), the Send sign-in link action, its copy (namespace `iam_messaging`) and
+  the document, now `IamMessagingRedeemSignInLink`. The permission
+  `auth/user#issue_sign_in_link` is the addon's own declaration
+  (`permissions.extends.zed`); IAM's Zed (revision 32) names no link action.
+  Platform administrators send links, and for now no other role can be given the
+  action: the permission merge lets other fragments add arms only to the
+  permissions a resource type's owner declares, so a consumer's
+  `issue_sign_in_link` arm is refused, where on main it could join IAM's. The
+  addon joins the template's `full` profile; a host without it, the `base`
+  profile included, offers and redeems no sign-in link. A link's session records
+  IAM's `SESSION_BACKEND`, so it survives the addon being removed. Settings are
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL` and
+  `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN`, and the digests are keyed by new
+  salts. `angee.iam.events.sign_in_link_sent`, which had no receiver, is removed.
+  **Upgrade:** `SignInLink` moves to `angee.iam_messaging` with its own table
+  (`iam_messaging_signinlink`) and was in no release, so no migration template
+  ships.
+  - Every host that tracks main deletes the old rows, whether or not it keeps
+    emailed sign-in links; one that keeps them adds `angee.iam_messaging` to
+    `INSTALLED_APPS` and composes first. Before it runs `makemigrations`, and
+    before it runs `migrate` with what that writes, it deletes them on every
+    database it deploys to: `DELETE FROM iam_signinlink;` in `manage.py dbshell`
+    (`--database <alias>` for each other alias), the same statement on SQLite
+    and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
+    and, with the addon, its initial migration. After migrating, the host
+    provisions, which syncs the permissions: IAM's schema at revision 32 and,
+    with the addon, its fragment at revision 2.
+  - Until the rows are gone, both commands refuse, on django-compose
+    0.1.0.dev14, which the framework requires since the composer upgrade below:
+    - `makemigrations`, on the databases of the environment that authors the
+      migration: "unsafe autodetected drop: iam.signinlink: iam_signinlink.*
+      holds data in N rows on 'default'. To proceed, declare a reviewed cutover
+      migration before native makemigrations." (0.1.0.dev13 said the same, its
+      last sentence "Declare a reviewed cutover migration before native
+      makemigrations.")
+    - `migrate`, and so `provision`, on a database that still holds links when a
+      migration authored where none were drops their table: "unsafe migration
+      drop: iam.0002_delete_signinlink (Delete model SignInLink): iam.signinlink:
+      iam_signinlink.* holds data in N rows on 'default'. Nothing was migrated.
+      To proceed, keep the storage, or move its data and declare the drop in
+      that migration of the project's history with
+      django_compose.operations.IntendedRemoveField or IntendedDeleteModel."
+      Nothing was applied, the addon's initial migration included. Delete the
+      rows on that database and run `migrate` (or `provision`) again; the links
+      cannot move, so declaring the drop loses them the same way. On a stack, a
+      refused `provision` holds Django stopped until the rows are deleted. Under
+      0.1.0.dev13 that `migrate` dropped the table without a word.
+  - This move and the composer upgrade to django-compose 0.1.0.dev14 are both
+    under this heading, so the framework release that brings either brings both.
+  - Such a host loses the links already sent (they stop working; send them
+    again), the record of who was sent a link, and every session a link opened
+    (it named `angee.iam.auth.SignInLinkBackend`, which no longer exists; those
+    people sign in again).
+  - The stale `iam.signinlink` content type can be removed with
+    `manage.py remove_stale_contenttypes`, which also deletes that model's
+    `auth.Permission` rows; it lists what it deletes and asks first.
+  - Projects that author `AUTHENTICATION_BACKENDS` replace
+    `angee.iam.auth.SignInLinkBackend` with
+    `angee.iam_messaging.auth.SignInLinkBackend`. Until they do, every sign-in
+    raises, a password's included, as does every request that carries a
+    session a link opened before the upgrade; start-up reports
+    `angee.iam.E006`, which names the entry.
+  - Settings `ANGEE_IAM_SIGN_IN_LINK_*` become `ANGEE_IAM_MESSAGING_SIGN_IN_LINK_*`.
+- `angee.base`: `check_sealed_permissions(app_label, seals, check_id, hint)` takes the
+  seal's own remedy, which a refused fragment's error carries; it no longer gives every
+  seal one hint that names a record's own read. Messaging's `messaging.E003` and
+  storage's `storage.E001` keep that hint, `angee.iam.E004` names its two union points,
+  and `angee.iam.E001`, `angee.iam.E003` and `integrate.E001` say their arm is dropped.
+  **Upgrade:** an owner that binds the check with `functools.partial` passes its hint.
+- `angee.iam`, `@angee/iam`: **Changed behaviour.** IAM's account actions are an
+  open set another addon extends: `User.account_actions()` names the actions
+  `account_actions` offers, in offer order, and it and
+  `User.account_action_blockers` (now a classmethod) are extended through
+  `super()`; a contributed action runs under `User.lock_for_account_action`, the
+  private `_lock_for_account_action` made public, and meets IAM's person-kind
+  and protected-account blockers before its own, whatever its hook returns:
+  `angee.iam.models.account_action_refusals` puts them first, and no override
+  drops them. `account_actions` is
+  typed by one enum of the composed actions, built when the schema is by the
+  permissions builder (`angee.graphql.capabilities.permission_enum`, the private
+  `_permission_enum` made public beside `permissions_field`)
+  and named after its members (`Permissions_10_set_active_…`): its values are the
+  actions' Zed permission names (`issue_password`), where the fixed
+  `UserAccountAction` enum serialized member names (`ISSUE_PASSWORD`). That enum
+  leaves the console and public schemas, and the web's TypeScript type
+  `UserAccountAction` goes. `offersAccountAction` compares
+  names exactly, and `@angee/iam` exports `AccountActionBar` and
+  `ACCOUNT_ACTION_FIELDS` for a contributed action's `iam.User#actions-menu` child;
+  `useIssueSignInLinkAction` is no longer exported. The disclosures
+  `auth/user#active_account` and `#nonstaff_account` derive from the union points
+  `active_account_granted` and `nonstaff_account_granted`, which a fragment's
+  action extends; IAM seals the disclosures (`angee.iam.E004`). Start-up refuses
+  a composed account action offered twice or not declared on `auth/user`
+  (`angee.iam.E005`), and one whose `AUTHENTICATION_BACKENDS` lists a path that
+  does not import or leaves out `SESSION_BACKEND` (`angee.iam.E006`). A credential
+  backend names the account it signs in under `angee.iam.auth.SIGN_IN_ACCOUNT`
+  (`sign_in_account`) and marks a genuine but spent credential with
+  `angee.iam.auth.mark_spent_credential`; `AXES_WHITELIST_CALLABLE` is
+  `angee.iam.auth.spent_credential`, which replaces `spent_sign_in_link`.
+  `angee.iam.auth.SESSION_BACKEND` names the backend every session records; the
+  OIDC addon binds it, and `angee.iam_integrate_oidc.identity.SESSION_AUTH_BACKEND`
+  is removed. **Upgrade:** an enum stays, now composed from the open set: a client
+  that compares `account_actions` values with the old enum's upper-case names
+  compares the permission names, and one typed by `UserAccountAction` reads the
+  field's composed type; a host regenerates its schemas and `@angee/gql`. A project that sets `AXES_WHITELIST_CALLABLE` to
+  `angee.iam.auth.spent_sign_in_link` names `spent_credential`.
+- `angee.base`: **Changed behaviour.** A `DATABASE_URL` whose libpq `options`
+  carry other server settings now connects with JIT off too:
+  `angee.base.conf.disable_jit` puts `-c jit=off` before those options, where
+  the URL's options used to replace it and leave JIT at the server's default.
+  For example, `-c lock_timeout=1234` becomes `-c jit=off -c lock_timeout=1234`.
+  PostgreSQL applies the last setting, so a `jit` the URL sets itself still
+  wins, and a URL with no options still connects with `-c jit=off`. PostGIS URLs
+  (`postgis://`, `prometheus_postgis://`) now get the JIT setting and
+  `ANGEE_DB_POOL` too: one set of the PostgreSQL engines django-environ selects
+  replaces two `"postgresql" in ENGINE` checks. The test settings compose the
+  same rule, so the PostgreSQL CI lane's sessions now run with JIT off, as
+  deployed ones do. A hand-written `DATABASES` entry opts in by calling
+  `disable_jit`, which recognises only those four engines; a custom backend
+  path gets no setting. `PGOPTIONS` stays ignored on the connections built from
+  `DATABASE_URL`, because they always pass `options`; a hand-written `DATABASES`
+  entry without `options` still uses it. A direct client such as psql or
+  `dbshell` still gets the server's default; a diagnostic runs `SET jit = off`
+  first, or `PGOPTIONS='-c jit=off' manage.py dbshell`. **Upgrade:** nothing,
+  unless a deployment relied on URL options to leave JIT on; it now adds
+  `-c jit=on` to them. A PostGIS deployment with `ANGEE_DB_POOL` set now gets
+  the pool.
+- `angee.base`: an implementation key, the value an `ImplClassField` holds,
+  pickles. Its choices enum is built at run time, so no module holds it by name
+  and pickle refused it (`PicklingError: Can't pickle <enum '…Impl'>`): Django's
+  query pickling failed for any filter on such a field, and so did a REBAC
+  permission whose compiled statement filters on one; so did any row loaded from
+  the database, which holds its key as that member. A key now pickles as its
+  registry setting, its key set and its value, and unpickles without reading
+  settings: as that very member in any process with the same key set; elsewhere
+  as a member that equals its key, which the field maps onto its own. Upgrade:
+  nothing.
+- `angee.parties`: **Changed behaviour.** An email handle is one address whatever
+  its letter case or domain spelling. A handle has a spelling key,
+  `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
+  address trimmed and lower-cased, not case-folded, its domain in the one
+  spelling the email backend sends it in, so a punycode label and its Unicode,
+  NFD and NFC, full-width letters and their ASCII, and `ß` and `ss` are one
+  domain (`Handle.normalize_email_domain` takes each label through the
+  standard library's IDNA 2003 codec and keeps one it cannot read, such as
+  `xn--strae-oqa`, as typed); `""` on every other platform, where the value
+  itself is the address, and for a value with no `@`, which is no address), and a live
+  email handle is unique by it (`uq_handle_spelling_key`;
+  `ix_handle_spelling_key` serves the lookup of merged-away rows).
+  `HandleManager.find_identities`, and so `find_identity`, `upsert`,
+  `claim_control` and every compose, calendar and sync lookup, lands an email
+  address on the row owning its exact value, else on the live handle owning its
+  spelling key, else on the survivor of the oldest merged-away row owning it;
+  the handle keeps the spelling first written as its `value`, what a message to
+  it is addressed to. A save that would keep a second live handle of an address
+  (an insert, a history revert, a resource load, a rewrite behind an
+  `external_id`) is refused before it writes with
+  `angee.parties.managers.ValueOwned`, a `ValidationError` on `value`
+  (`Handle.value_owner`); `upsert` and `reidentify` land where that owner is.
+  `upsert` no longer writes a key on a hit, and behind a matched `external_id`
+  it no longer rewrites `value` for another letter case or domain spelling of
+  the row's own address (`Handle.is_spelling_of`). The person-matching key
+  (`Handle.normalize_value`, stored as `normalized_value`) finds and suggests a
+  person; a provider's alias (a Gmail dot or plus-tag) stays a handle of its
+  own, though that key still picks the handle an alias lands on at two sites
+  open for a ruling (a directory adoption's through-handle, a claimant's email
+  handle). Its outputs change only for an email value whose domain carries
+  surrounding whitespace (`a.b@ gmail.com` is now `ab@gmail.com`) and for the
+  domain spellings above. A person's merge of handles (`Handle.validate_merge`)
+  compares that key as the rule computes it from each value, so a row the key
+  repair has not reached compares as it will, and two phone handles whose
+  numbers the rule reads only as their digits (`Handle.is_fallback_key`:
+  `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
+  only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2. A consumer rule
+  bound to an email handle now meets that handle for mail from every letter
+  case and domain spelling of its address, and an account signing in with
+  another letter case of a contact's address takes that handle as its own, as
+  it already did for the exact spelling. `Handle.email_value` no longer decides
+  which handle an address lands on; it still decides the spelling a handle
+  that compose, a channel's sender or inbound mail creates first stores, and
+  the keys of `Message.reply_addresses`, and is removed with its callers in a
+  following change. `HandleManager.clean_identity` returns `None`; nothing read
+  the key it returned.
+  `renormalize_handles` folds each live email handle that spells the address
+  of an older one into it (`KeyRepair.folded`) and reports a fold the merge
+  refuses (`KeyRepair.refused`); its log lines are "Saved the keys of N
+  handle(s) again.", "Folded N handle(s) into the older handle of the same
+  address; each is kept as a redirect.", "N handle(s) spell an address another
+  handle owns and could not be folded; the log names each and why." and "The
+  keys of N handle(s) could not be saved; ...". **Upgrade:**
+  - A host whose own resource files seed two spellings of one email address
+    changes them first: that load is now refused and the provision stops.
+  - After compose, run `uv run --no-sync python manage.py makemigrations
+    parties` and commit it: it adds `spelling_key` with a database default of
+    `""` to the handle and its history table, the constraint and the index.
+  - Before provisioning, count what will fold, on the new code, in
+    `uv run --no-sync python manage.py shell` (it reads only `value`, so it
+    runs before the column exists); it is an upper bound, since a refused fold
+    cannot be predicted:
+
+    ```python
+    from collections import Counter
+    from django.apps import apps
+    Handle = apps.get_model("parties", "Handle")
+    live = Handle._base_manager.filter(platform="email", merged_into__isnull=True)
+    groups = Counter(Handle.spelling_key_of("email", value) for value in live.values_list("value", flat=True).iterator())
+    print(sum(count - 1 for count in groups.values() if count > 1), "handle(s) will fold at most")
+    ```
+
+  - Provision with services held. The repair saves every handle once
+    (`updated_at` stamped, one history version each) and folds each live
+    email handle that spells the address of an older one into it, kept as a
+    redirect. Afterwards there is one handle per address; messages and
+    recipients stay on the handle they used, so a held message keeps its
+    spelling; a contact's statements, calendar attendees and reactions on a
+    folded handle move to the survivor; where two contacts held two
+    spellings, one now holds the address and the same-person review proposes
+    the two; a rule that confers nothing on a merge survivor stops applying
+    to the folded handle; a two-way directory contact whose handle was folded
+    is written back with the survivor's spelling on its next push. A fold the
+    merge refuses (a seeded row, a row under an unfinished workflow run) is
+    logged once per provision, its row left live and unkeyed and still found
+    by its exact spelling.
+  - A host that loaded the workflows demo keeps its former pair of spellings
+    (`Directory-Contact@example.test` beside `directory-contact@example.test`;
+    the demo now seeds a pair of phone spellings instead): both rows stay in
+    the resource ledger, so the seeded-record merge guard refuses their fold,
+    and each provision logs one warning naming both handles and reports
+    `remaining` above zero. It ends when the resources owner's change for a
+    removed row's ledger entry lands; nothing here works around it.
+  - A step skipped: with no migration, every handle read and save fails, since
+    each selects the missing column, the provision's key repair included; only
+    the count above runs. Migrated but not provisioned, an exact spelling still
+    lands on its old row, but a new spelling of an old, unkeyed address makes a
+    second, keyed row of its own, which the next provision folds into the old
+    one.
+  - Rollback: deploy the older code; the column's database default admits its
+    inserts, which stay unkeyed until this code's next provision keys and
+    folds them. Leaving for good removes the column and the constraint with a
+    reviewed migration.
+  - No `rebac sync` and no SDL change.
+- `angee.messaging`: **The console reads where one may send a new message, which
+  messages were written here, and the recipient bound.**
+  - **New.** The channels filter `sendable`
+    (`channels(where: {sendable: {_eq: true}})`): the channels the reader may send
+    a new email on, their `reply` on a channel that can send email now.
+    `ChannelQuerySet.outbound_email_rule` is that condition (connected, on a
+    backend whose outbound email is configured), which `outbound_email` filters by.
+    The channel's sender is checked when a message is sent, not by the filter: a
+    listed channel whose configured sender is not an address refuses the message
+    under `channel`.
+  - **New.** `MessageType.is_locally_written` (`Message.is_locally_written`):
+    whether the message was written here rather than synced from its source, a
+    function of its status alone. An internal note is written here and has no
+    delivery: a reader showing delivery status also requires an outgoing
+    `direction`.
+  - **New.** The console root `message_recipient_limit`, the most addresses
+    `compose_message` takes, read with `compose` and an answer's `Reply-To`
+    bound (`Message.reply_envelope`) from `MessageManager.recipient_limit()`,
+    the one reader of `ANGEE_MESSAGING_MAX_RECIPIENTS`.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
+- `angee.parties`: **Changed behaviour.** A person's merge of handles
+  (`merge_records` on `parties/handle`, `Handle.merge`) admits two different
+  addresses only for a contact administrator, an effective member of
+  `parties/role:contact_admin` (platform administrators are). Every later message
+  to a merged handle's address goes to the kept one, so whoever had created two
+  handles (the person who first typed each address) could merge a contact into
+  their own address and receive other people's later mail to it. Anyone else
+  merging two different addresses is refused with a `ValidationError` that names
+  who can and says to merge their contacts instead, which moves no address.
+  Merging another spelling or alias of an address (the same platform and person-matching key)
+  is unchanged for whoever holds the merge's permissions, messages already
+  written keep their addresses, and the system's `fold` (`HandleManager.reidentify`)
+  is unchanged. A contact administrator can now complete a handle merge at all:
+  the merge wrote the redirect after resolving the merged handle's party, which
+  had cleared the party the administrator's write on that handle came through.
+  The redirect is now written first; the rows a merge ends in are unchanged, and
+  only the merged handle's history between differs. A contact administrator's
+  merge leaves the merged handle on no contact, so that administrator cannot
+  revert it: a platform administrator can, as can the handles' creator when they
+  may also write the contact. **Upgrade:** a person who
+  merged two addresses of one contact merges the contacts, or is granted the
+  contact administrator role.
+- `angee.base`: **Changed behaviour.** A refused write of a write-once field
+  (`ImmutableFieldsMixin`) is keyed by the field's name, as model validation and
+  `form.add_error` key a field: a relation changed through its attname is refused
+  under the relation as before (`recipient` for `recipient_id`), and any other
+  field under its own name. A plain field whose name ends in `_id` was keyed by
+  that name less the suffix, which names no field, so no form showed the refusal
+  beside it: `Handle.external_id` was refused under `external` and portfolio's
+  `Update.object_id` under `object`. **Upgrade:** a consumer that matched the old
+  key for a plain `..._id` field reads the field's own name.
+- `angee.parties`: **Changed behaviour.** A handle's ingestion keys, `platform`,
+  `value` and `external_id`, are written once (`Handle.immutable_fields`, through
+  the foundation's `ImmutableFieldsMixin`). A message reads its addresses from its
+  handles when it is sent, and whoever held `write` on a handle (the person who
+  first typed a contact's address holds it) could re-address it with a field
+  write: another person's held message to that contact was then sent to the new
+  address. A save that changes a key is now refused with the foundation's
+  write-once refusal, whoever saves it, system work included. Only the handle
+  owner's verbs change one: `HandleManager.upsert` rewrites `value` when a
+  source's `external_id` matched and the account behind it moved, and
+  `HandleManager.reidentify` rewrites or folds a handle; history's revert restores
+  earlier keys as they were. `upsert` no longer rewrites the value onto an address
+  another row holds (a spelling merged into the row the account id names), which
+  raised `IntegrityError` on every later message from that account: the call lands
+  on that row, which keeps its address. An `external_id` given as a number is
+  matched and stored as its text. Display fields stay writable as before. A resource
+  row that names another address under an xref a load already wrote is refused
+  (`ResourceLoadError`). **Upgrade:** a caller that set `platform`, `value` or
+  `external_id` on an existing handle and saved it lands the new address as its
+  own handle (`HandleManager.upsert`), or, as admitted system work, rewrites the
+  handle with `HandleManager.reidentify`; a seed gives a new address its own row.
+  No migration and no `rebac sync`.
+- `angee.messaging`: **The console composes a message and reads back its
+  delivery.**
+  - **New.** The console mutation `compose_message`, a keyed verb over
+    `Message.objects.compose` that answers a message or sends a new email.
+  - **New.** `MessageType.delivery_attempts` (`Message.delivery_attempts`) and
+    `MessageType.delivery_error` (`Message.delivery_error(permissions)`, read
+    only with `send_held`): what delivery made of a message. `Message.local_fact`
+    and `Message.local_metadata_annotation` read a local fact on a row and in SQL.
+  - **New.** `ChannelType.permissions`, answering `reply`.
+  - **Changed.** On SQLite, `delivery_actions` no longer reads a delivery conflict
+    whose stored provider id looks like JSON (`"0"`, `"null"`) as no conflict.
+  - **Upgrade.** Regenerate the console SDL and `@angee/gql`; no migration and no
+    `rebac sync`.
+- `angee.messaging`, `angee.parties`, `angee.posts`, `angee.intake`: **One owner
+  writes an outgoing message.**
+  - **New.** `Message.objects.compose(*, actor, ...)` writes a reply (`parent=`),
+    a new email on a channel (`channel=`), or a new email on a record's chatter
+    (`channel=` with `record=`): its row, parts, recipients, sender, thread,
+    idempotency and delivery hand-off, decided under the actor by `reply` on the
+    channel (and posting on the record) before anything is claimed or written.
+    A new message takes `to`, `cc` and `bcc` entries, each one recipient as
+    `Message.objects.clean_recipient(entry, *, key="to")` reads it: a bare
+    address read as itself or one explicit `Name <address>`, returned as
+    `(name, address)` exactly as `compose` lands it, or refused (`invalid`). An
+    entry a mail library would read as another address or as several (a
+    comment, a group, a list, trailing text), or whose name or address a mail
+    header would not carry as read (a NUL byte, which failed the write on
+    PostgreSQL after it began, a control character, or an encoded-word opener,
+    which a mail library decodes into another address or name), is refused,
+    never re-read. A caller
+    asks `clean_recipient` before expensive work. A message takes at most
+    `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
+    (default 50, the strictest common provider's per-message limit; each new
+    address costs a call about 34 statements) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
+    statements each); more is refused (`too_many`) under the argument that
+    crosses the bound, before anything is read. An answer is bound the same way
+    by the addresses its parent's `Reply-To` names: over the bound it is refused
+    under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
+    offset is refused (`naive_datetime`, as scheduling, calendar and workflows
+    refuse one) instead of being read in the server's zone. A new message also
+    takes a one-line `subject`,
+    `text`, `html` and readable `attachments`, and starts a thread of its own
+    through the new `ThreadManager.open_thread`, which `resolve` now shares.
+    `Message.require_reply(actor)` decides who may answer a message and returns
+    its channel; `Message.reply_envelope(*, actor=None, channel=None)` returns
+    whom an answer goes to (a `ReplyEnvelope`) or refuses, and
+    `Message.reply_error` is that refusal, without side effects.
+    `ThreadedModelMixin.require_post(*, actor=None)` is chatter's post gate,
+    which `compose` shares. `Channel.reply_permission` (`"reply"`) is the one
+    name of the channel permission to send, which `require_reply` and `compose`
+    decide. `HandleManager.clean_identity` validates a handle
+    identity without writing, `HandleManager.upsert(fill_only=...)` names display
+    fields it only fills while blank (a fill locks and reads the row again, so
+    it never overwrites a value another transaction has just written), and `Handle.email_value` is the lower-cased
+    form compose and inbound mail pass. `PartManager.attach_files` attaches
+    several files under one message lock. `HandleManager.find_identities` (and so
+    `find_identity`, `upsert` and every compose lookup) names the platform in each
+    arm of its one statement, so the `(platform, value)` key's index serves it; it
+    was a sequential scan on PostgreSQL for every upsert. Matching is unchanged.
+  - **Changed.** An inbound email that its own threading headers place on a
+    record's chatter (the customer's answer to a mail sent from the record) is
+    ingested as an `email`, no longer a `comment`, so `compose(parent=...)`
+    answers it by email; before, the answer was refused for want of a sender.
+    A stored message keeps the kind it was ingested with through every re-sync,
+    identical or edited, so replies received before the upgrade stay comments
+    and cannot be answered by email; new ones can. No data migration.
+    Anyone who has seen a chatter mail's Message-ID can answer onto the record,
+    so a message received on a record's chatter, email or comment, is one its
+    moderator may trash; mail sent from the record, system notes, and mail in a
+    mailbox conversation an earlier version merged into the record (a
+    colleague's own thread, still in the chatter's group) stay retained, that
+    last its owner's to remove, and that refusal is now a coded `ValidationError` (`retained`,
+    "Only comments and received messages can be removed.") where it was a bare
+    `ValueError`. Whether such mail should land on the record at all is open.
+  - **Changed.** A record's chatter thread is never folded with a mailbox thread.
+    The copy of a chatter mail (or of an answer to one) that reaches a
+    colleague's own connected mailbox still folds as a message, but the
+    colleague's thread stays theirs: it was merged into the chatter, dropped out
+    of their inbox, and took their later mail on that conversation onto the
+    record. Threads already folded this way are left as they are; a person
+    keeps them separate through the source-copy decision.
+  - **Removed.** `Message.objects.compose_reply`. Use
+    `compose(parent=..., text=..., actor=..., ...)`: `body=` is `text=`, `admit`
+    takes no argument, and an email reply takes no `sender`.
+  - **Superseded.** An outgoing message written by hand (its row, recipients and
+    parts, then `deliver()`) is superseded by `compose`, which is now its one
+    writer.
+  - **Changed.** `compose` runs as its actor: an elevated call is refused
+    (`RuntimeError`), as a workflow step body refuses one. An email reply is
+    sent from its channel's default sender, so a held or queued email reply on a
+    channel whose delivery is not configured, that is not connected, or whose
+    default sender is invalid is refused; a keyed retry still returns its
+    original. A reply to a message whose `Reply-To` names no address the handle
+    owner accepts is refused (`reply_to`) rather than sent to the sender, which
+    may be a relay; the sender an answer falls back to is checked the same way,
+    so one stored with an address the handle owner does not take (a control or
+    an invisible character in it) is refused (`parent`, `reply_unaddressed`)
+    instead of being written and failing at delivery. Idempotency keys claimed through `compose_reply` (scope
+    `messaging.reply:`) do not replay through `compose` (scope
+    `messaging.compose:`): a posts workflow reply retried across the upgrade
+    does not replay, and if its original was trashed or failed, which the
+    comment's answered check does not count, a second reply is written. A reply's
+    preview is 280 characters, like every message's, and chatter posts and edits
+    preview through the same rule as ingest. An HTML-only email is sent without a
+    text part; it was made by stripping the HTML's tags. An outgoing subject, typed
+    or derived from a conversation's title, has each control character and line
+    break written as a space and each RFC 2047 encoded-word opener broken (`= ?`),
+    so no mail library, client or provider decodes anything out of it: the subject
+    stored, sent and read back are one string (`angee.messaging.email.header_text`,
+    the one rule for text a mail header carries, which every display name the
+    email backend writes also takes, so a sender name inbound mail stored with a
+    literal encoded word no longer makes an answer to that sender fail); a typed
+    line break is still refused. An address with an internationalised domain,
+    typed or taken from inbound mail, is now delivered: the backend writes its
+    domain in ASCII (IDNA) form and the stored address keeps what was typed.
+    **Known limit:** an address whose local part is outside ASCII is still
+    admitted and written, and its delivery fails, as no transport here speaks
+    SMTPUTF8; the stored reason names the address and says so, where it said
+    "The email could not be rendered.". A rendering failure the backend states
+    itself (an attachment that is unavailable) keeps its own reason too. A channel's own sender handle is landed with no
+    creator, under a non-user attribution (`messaging/system:outgoing`): the
+    first person to compose on a channel no longer holds read, write and delete
+    on it, so cannot rename, re-address or delete the desk's sender. A recipient
+    a person types keeps that person as its creator, as the handle owner rules.
+    A sender handle created before the upgrade keeps the creator it was given; a
+    deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
+    is its message's, set by the model on insert (`Recipient.save`), which
+    refuses a different one. `Message.reply_addresses` keeps only what
+    `Handle.is_email_address` accepts, in the form `Handle.email_value` gives. A
+    channel's default sender lands on the handle its lower-cased address names.
+    A name typed with a recipient address fills only a handle that has none.
+    Inbound mail joins a thread by its subject only when the thread was grouped
+    by subject: a conversation a person composed is joined through its threading
+    headers alone. Intake asks a requester by email when their request has only
+    a `Reply-To`. A reviewer who may not reply on the request's channel is
+    refused with that permission refusal, as before, when the email is the only
+    way to ask; a requester who may post on the task is now asked on chatter
+    alone instead of the whole question being refused. Creating a
+    message part (`messaging/part#create`) requires `write` on its message or
+    the administrators (schema revision 28), and creating a message
+    (`messaging/message#create`) requires `write` on its channel or the
+    administrators (schema revision 29); every framework and consumer writer of
+    both runs as system work.
+  - **Upgrade:** `rebac sync` (provision runs it). No migration.
+- `@angee/ui`: A relation field can decline inline edit of its selected
+  record with `relationEdit: null` (a form's field, a dialog's field, an
+  authored line field; `edit={null}` on `RelationFieldWidget`, beside
+  `create={null}`); it is otherwise offered whenever the related resource has
+  editable fields. `SURFACE_RENDERS_FAILURE`, the call options of a surface
+  that shows a submission's failure itself, is exported.
+- `@angee/app`: The app's rule for retrying a failed read is exported as
+  `retryAppQuery` (three retries, for a failure a retry can fix; a refusal is
+  not retried). The workshop's shared runtime fixture passes it to its query
+  client, so a story about a refused read shows its error at once, where the
+  data library's default retried the refusal three times. The fixture's
+  other query defaults are still the data library's.
+- `@angee/ui`: **Changed API.** A record pane can name a field as the form
+  does. `RecordPanelContext` gains `fieldLabel(name)` beside `focusField`, the
+  label the form's save banner names a refused field by. `RecordIssues` gains
+  an optional `fieldLabel` prop: an issue that names a field is titled by the
+  label and the control that focuses the field is described by it, so two
+  reports with the same words under two fields read apart on screen and to a
+  screen reader. It also gains an optional `polite` prop, for issues about
+  edits not yet submitted: one polite live region that stays in the page with
+  no issues too, in place of an alert per danger issue. In the save banner's
+  field line, a field whose label is not text is named by its name, where the
+  line printed `[object Object]`. Code that builds a `RecordPanelContext` by
+  hand adds `fieldLabel`.
+- `@angee/ui`: **Changed API.** A keyboard user sees when a mail in
+  `MessageHtmlFrame` has focus. Focus inside the sandboxed frame matches
+  neither the frame's `:focus-visible` nor its wrapper's `:focus-within`, so
+  the page cannot draw a ring, and nothing on screen showed that a mail had
+  keyboard focus. The framed document draws it. Its body is a tab stop of its
+  own, whether or not the mail scrolls, so a mail with links gains one stop:
+  the mail itself, before its first link. While the body or anything in the
+  mail has keyboard focus, a ring fixed to the frame's edges stays as the
+  arrow, page, space and end keys scroll the mail, and stays beside a link's
+  own ring, also in a mail that removes its links' outline. The ring has three
+  tones, 2px each: the theme's `--border-focus` outside, then a black line,
+  then a white one, so one of them holds contrast on any mail, whatever it
+  paints and whatever the theme's color is (at least 4.6:1 on any grey). A
+  click on
+  the mail's text or on a link shows no ring until the next key press; a
+  click into a field of the mail shows it, as the field shows its own. The
+  ring is the root's own
+  `::after`, in an unnamed cascade layer, starting from `all: initial`, every
+  declaration important: a mail's CSS on `body`, `body::after` or `*::after`,
+  a transform, filter or containment on the body, and an important rule on
+  `html::after` at any specificity leave it in place. A mail that makes the
+  root itself a containing block for fixed boxes (on `html`: a transform or
+  one of its single properties, `perspective`, `will-change: transform`,
+  layout or paint containment, `content-visibility`; from a style sheet or
+  the mail's own `<html style>`) still detaches it: the ring then follows
+  the document, and its bottom edge scrolls out of view; a `clip-path` on
+  the root clips it, and a mail's own popover or modal dialog covers it. A
+  mail's own `html::after` is not shown while the frame has focus. The theme's
+  color is used only if the browser parses it as a color and its functions
+  are closed; otherwise the framed document's own accent. The framed document
+  carries the frame's title, which the accessibility tree gives it as its
+  name. The ring's color is read from the page when the document is
+  assembled: a theme, brand or light/dark switch reloads an open mail, which
+  returns to its top and shows no ring until the next Tab; an ordinary render
+  keeps it. A browser without `:has()` (before Chrome 105, Safari 15.4,
+  Firefox 121) draws no ring, as before this change; the ring needs nothing
+  newer.
+  `@angee/ui/lib/use-motion-tokens` is removed and
+  `@angee/ui/lib/use-root-tokens` is added: `useMotionTokens` lives there now,
+  beside `useRootTokens`, the one reader of the root's resolved tokens, which
+  keeps its record while no value changes. **Upgrade:** import
+  `useMotionTokens` from `@angee/ui/lib/use-root-tokens`.
+- `@angee/ui`: The toast region is named in the app's language. `ToastProvider`
+  passed no label to the toast library's viewport, so the region was always
+  the library's English default, "Notifications"; it now reads the `ui`
+  namespace's new `toast.region` key.
+- `@angee/ui`: A failed request of a verb bound with `useRecordActionMutation`,
+  or settled through `useActionResultMutation` or
+  `useRecordChromeActionMutation`, is told once. These hooks toast a failed
+  request themselves, and the data layer raised its own "Something went wrong"
+  beside it. They now turn the data layer's own error notice off for their
+  verb. `useActionOutcomeMutation`, which leaves the outcome to its caller, is
+  unchanged: a caller of it that shows the failure itself and does not turn
+  the notice off still tells a failed request twice.
+- `@angee/ui`: A number shown as a percentage or a progress bar holds `null`
+  when it holds nothing, where it held the empty text. `percent` and
+  `progressBar` join the number widgets (`NUMBER_WIDGETS`) in the one rule for
+  a form field's empty value (`emptyValueForField`) and in every reader of
+  that set, so they behave as `integer` and `float` do. Declared by one of
+  them alone, an untouched field reaches an action's `submit` and a
+  `MutationDialog`'s `parseValues` as `null` where it was `""`; a record
+  form's create leaves it out, and its edit sends a stored empty text, or a
+  member the record lacks, as `null`; the presence control treats it as a
+  number, with its own control and no "Set value". No control of theirs writes
+  the empty text. The number and date widget rows are read before the kinds,
+  so under these two widgets a `boolean`, `switch`, `object` or `array` kind
+  now holds `null`, as it already did under `integer` and `float`; a `string`
+  kind keeps `""` but its empty text is left out of a create and sent as
+  `null` on an edit. No declared descriptor has such a pair, and no declared
+  form changes on screen or in what it sends. Not changed: a progress bar
+  shows `0` while it holds `null`; the `boolean`, `booleanToggle` and
+  `booleanBadge` widgets with no kind hold `""` until a field's type reaches
+  its descriptor, and the `money` widget, which the money addon's fragment
+  registers, holds `""` until a widget can declare the kind of value it holds.
+  **Upgrade:** code that tested a field declared by `percent` or `progressBar`
+  alone for the empty text tests for `null`.
+- `@angee/ui`: A form no longer refuses its own seed. An optional field with a
+  bound whose empty value is `null` and whose declared type does not refuse
+  that `null` (a field declared by a number, date or time widget alone, or of
+  kind `any`) was seeded with it and then refused as "This field is
+  required.": on a record form's create and on its edit of a record that lacks
+  the field, in a `MutationDialog`, and for such a member of an object field.
+  The rule that judges a held value (`structuredFieldErrors`, at the field's
+  own path and each member's) now composes the seed rule: the `null` a form
+  gives a field that holds nothing is not held against it for holding the key.
+  A required field and a presence-required one answer for a `null` as before
+  (refused, unless the field may be null); a value outside its bound is
+  refused; a typed number that is not nullable is not seeded with `null` and
+  is unchanged; a list item that holds nothing is still refused. At a field's
+  own path no declared form has the shape; an untyped member of an object
+  field, which the server's form projection emits for a JSON field, has it
+  without a bound. Known limit: an edit of a
+  record that lacks such a field as a member of a JSON value sends the member
+  as `null`, as it already does without a bound, which a server member typed
+  as a plain number with a default refuses.
+- `@angee/refine`: A caller's write cancels a refetch that no enabled observer
+  watches. `invalidateAuthoredQueries` cancelled only reads with no data and
+  refetched only active reads, so a read that had data and was still
+  refetching after its last observer had left, or whose observers are all
+  disabled, committed its pre-write answer after the write and cleared the
+  invalid mark; returning within the stale time showed that answer with no
+  refetch. The refetch is now cancelled: the read keeps the data it had, stays
+  invalid and refetches when an enabled observer mounts. A refresh asked of an
+  on-demand read just before the write is dropped with it.
+- `@angee/ui`: A form section that holds only hidden fields shows nothing. A
+  `hidden` field keeps its value and renders no control, but a group whose
+  fields were all hidden still counted as having something to show: the sheet
+  drew its heading over an empty grid, and a pane group listed an empty pane.
+  It is now empty, as a section with no field is; its values are saved as
+  before.
+- `@angee/ui`: **Changed API.** A refused save that carries a reason no field
+  shows brings the person to the banner. A refusal naming a shown field and
+  also carrying a form-level reason focused the field and left the banner,
+  with the form-level reason, out of view. With a reason no field shows (a
+  form-level one, or one of a field the form does not display) the banner now
+  takes focus and also carries the line naming the refused fields, which it
+  showed only without a form-level reason; with field reasons only, the first
+  shown field takes focus, as before. `applyFormErrors` decides which, for a
+  surface that passes it `focus` and a `fieldSummary` (the record form,
+  `MutationDialog` and the typed-args action dialog). Its `focus` option,
+  added in this release as `true`, is now a function, the surface's way of
+  focusing its banner, given by the new `useRefusalBannerFocus`, exported with
+  `formErrorsFromForm`; the record form exposes the banner's props as
+  `saveBanner`. **Upgrade:** replace
+  `focus: true` with that hook's `focusBanner` and spread its `banner` on the
+  surface's `ErrorBanner`.
+- `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`, `angee.theme_fyltr`,
+  `angee.theme_ledger`: **Changed behaviour.**
   The default brand kit's colours dress the app at run time, on every page inside
-  it, signed in or not.
+  it, signed in or not, unless its theme declines them.
   - `@angee/app` gains the install-one manifest key `hostAppearance`, a
     `HostAppearanceSource` whose `useOptions(theme, build)` hook `createApp` calls once
     per render of its session frame; two providers fail composition, as two dashboard
@@ -85,6 +1022,14 @@ live in code docstrings.
     `CreateAppInput.appearance` takes none.
     Where the source's options rank: `docs/frontend/appearance.md`, "Host and user
     precedence".
+  - A customisable theme declines the source with
+    `createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`,
+    `@angee/ui`'s new optional `ThemeOptionsDefinition.acceptsHostAppearanceSource`
+    (default true; `defineTheme` refuses a non-boolean). `createApp` then asks the source
+    about no theme and no build options and wears none of its answer, as it wears none
+    for a theme without options, so the build's options for its own theme apply whole,
+    unheld. The flag is not in the options envelope: no options version changes. Fyltr
+    and Ledger decline; Default and Angee accept.
   - `angee.brandkit` is that source; its mapping is the brand kit README, "The app's
     colours". The ten colour names are declared once, `BrandKit.THEME_COLORS`.
   - Everyone, signed in or not, reads the default kit's ten colours, and nothing else
@@ -100,17 +1045,37 @@ live in code docstrings.
     has, the public root answers `null` with no error and the app wears the build's
     colours. Once the addon is provisioned a default kit always exists, so on a host with
     `angee.brandkit`: a project on the stock theme (the full profile's default) wears
-    the shipped Angee kit's colours; a project on another customisable theme, such as
-    Fyltr or Ledger, wears the kit's palette in place of its own; colours a build
-    states in `appearance_options` show only on a device's first visit, before the read
-    answers; and every app of a deployment with per-app themes wears the kit's palette,
-    locked apps too. Unchanged: the Angee theme under the shipped kit, fixed themes,
-    hosts without the addon, and a theme that ships its own default kit stating its own
-    colours. To keep other colours, edit the default kit in Settings > Brand kits.
+    the shipped Angee kit's colours; a project on another customisable theme that
+    accepts the source, as one that says nothing does, wears the kit's palette in place
+    of its own; on such a theme, colours a build states in `appearance_options` show
+    only on a device's first visit, before the read answers; and every app of a
+    deployment with per-app themes wears the kit's palette on its own theme when that
+    theme accepts the source, locked apps too. Unchanged: the Angee theme under the
+    shipped kit, fixed themes, hosts without the addon, a theme that ships its own
+    default kit stating its own colours, and the Fyltr and Ledger themes, which decline
+    the source: a project or app on either sends no read and wears its own palette, or,
+    on the build's own theme, the build's `appearance_options` whole. To keep other
+    colours, edit the default kit in Settings > Brand kits.
   - A full-product workshop answers none of the source's reads: `ComposedRuntimeFixture`
     (`@angee/storybook/testing`) leaves the composed addons' host appearance source out,
     because the workshop's toolbar is the host's appearance there; a story about the
     source passes `hostAppearanceSource`.
+
+- `@angee/ui`: **Changed behaviour.** A customised theme's link, and each tone's text
+  (`--brand-soft-text`, `--accent-soft-text` and the four status texts), read at 4.5:1
+  on their own fills and on every surface of their scheme (canvas, sheets, popover and
+  inset), in light and dark, wherever any colour can; where the surfaces pull opposite
+  ways and none can, the text is the colour that comes nearest. The link was worked out
+  against plain white and the dark ink and fell under that on a kit's sheets, most in
+  dark. Texts move toward the ink in hundredths, as the mail palette's do. A surface left
+  at its default counts as the theme's definition states it, else as its defaults derive
+  it, with a 1% margin; `ThemeOptionsDefinition.resolve(value, base?)` receives the
+  definition's own token layers from `resolveThemeOptions`. A text is worked out only
+  when its own input changes, so changing only surfaces keeps the theme's own link and
+  tone texts. A customisation may therefore show a darker link and tone text in light
+  and a lighter one in dark; a theme's own colours are unchanged. The theme runtime
+  feeds the theme catalogue's fingerprint, so each device drops its first-paint cache
+  once, on its first visit after the upgrade.
 
 - `@angee/ui`: The Links pane says it is empty when it is. A related group
   with neither rows nor a verb is left out, and the pane showed its empty
@@ -476,7 +1441,8 @@ live in code docstrings.
   record form's own rule is deleted. A lines editor's new cell keeps its own
   rule (`emptyCellValue`). First match wins, after a declared `format` (the
   entry above): an explicit `string` kind holds
-  `""` whatever its widget; the `integer` and `float` widgets and the date and
+  `""` whatever its widget; the number widgets (`integer`, `float`, and
+  since then `percent` and `progressBar`) and the date and
   time widgets hold `null`; the list widgets and a relation list `[]`; the
   `switch` widget `false`, the `object` widget `{}`, the `json` widget `[]`
   for an `array` kind, `null` for an untyped value and `{}` otherwise; then
@@ -505,9 +1471,9 @@ live in code docstrings.
   `string` kind with only its widget to tell it from text) seeds `""`, so a
   record form's edit that changed a sibling member sends `""` for it where it
   sent `null`; one that declares its format holds `null` (the entry above),
-  and no form declares such a member today. Not changed, and known: the other boolean widgets
-  (`boolean`, `booleanToggle`, `booleanBadge`) and number widgets (`percent`,
-  `progressBar`, `money`) with no kind still hold `""`. **Upgrade:** a
+  and no form declares such a member today. Not changed, and known: the
+  `boolean`, `booleanToggle`, `booleanBadge` and `money` widgets with no kind
+  still hold `""` (`percent` and `progressBar` have changed since). **Upgrade:** a
   `submit` or a `parseValues` that tested an untouched date, time or number
   field declared by its widget alone for the empty text tests for `null`, or
   `{}` for a `json` one; a test that pressed "Set value" on a number and
@@ -525,19 +1491,21 @@ live in code docstrings.
     `text_source`. `language` is an ISO 639 code as parties stores one
     (`LanguageCodeField`), any language parties knows, `zh` included.
     `variables` declares the values a row reads as dotted paths to descriptions,
-    at most 50 paths of at most 8 names, checked by `validate_variables`;
-    `sample` holds preview values. The addon renders nothing and ships no rows.
+    at most 50 paths of at most 8 names, a path of at most 200 characters and a
+    description of at most 1,000, checked by `validate_variables`;
+    `sample` holds preview values.
   - **Shipped defaults and overrides.** Addons ship rows in their `install`
     resources as baselines (`BaselineResource`), which only loads write.
     `MessageTemplate.objects.override(baseline)` starts the deployment's override,
     copying the baseline; deleting the override resets to the default, and
     reverting that delete brings it back as it was. `content_hash` fingerprints a
-    row's kind and what it renders, on every save; rows are written one at a
+    row's kind and what it renders as stored, on every save, a partial save
+    reading the hashed columns it omits under a lock; rows are written one at a
     time, so the querysets refuse `update()`, `bulk_update()` and `bulk_create()`.
     When a release changes a baseline, its override has an updated default until
     `MessageTemplate.objects.keep_override(override)` keeps its text. Each row
-    reports `is_effective`, `is_overridden` and `has_updated_default`, as fields
-    and as console filters.
+    reports `is_effective`, `is_overridden`, `overrides_default` and
+    `has_updated_default`, as fields and as console filters.
   - **Languages.** `effective_rows(kinds, keys=..., language=..., person=...)` and
     `effective(kind, key, ...)` pick the row a recipient reads: the language asked
     for or the person's languages, then the default language (`LANGUAGE_CODE`'s
@@ -549,11 +1517,43 @@ live in code docstrings.
     create, edit and delete the deployment's own rows and overrides and read
     every sample (`messaging_templates/message_template`). The console gets the
     `message_templates` resource and the `override_message_template` and
-    `keep_message_template_override` mutations. They refuse as the framework's
-    actions do: a signed-out caller gets the session's GraphQL error, a caller
-    who may not create or write the override a `PERMISSION_DENIED` GraphQL error,
-    and a row that is not a shipped default (`not_a_baseline`) or overrides none
-    (`no_baseline`) an in-band `ok: false`.
+    `keep_message_template_override` mutations. The resource's insert takes
+    `kind`, `key`, `language` and `name`: `MessageTemplate.objects.create_own`
+    decides `create` on the candidate before any work of its own (a keyed insert
+    is claimed first, as every factory insert is, and a refusal rolls the claim
+    back), refuses a shipped default's identity (`shipped_default`) and an
+    existing one, and seeds the row from its key's content: what that language
+    reads for the key today, else the key's row in another language; only a key
+    with no row starts from the kind's `defaults`.
+    Each row projects `permissions` (`delete`, `preview`, `write`),
+    `carries_message_fields` and, to a reader who may preview it, `backlinks`:
+    the rows naming its kind and key, a read for one record's page. Each verb
+    asks one predicate first (`MessageTemplate.override_refusal()`,
+    `keep_override_refusal()`), and a row projects its answers for the reader as
+    `can_override` and `can_keep_override`. The console's preview returns the
+    rendered `direction` (`MessageTemplateTextDirection`: `RTL` or `LTR`) for
+    the subject, preheader and plain text a page shows outside the mail's frame.
+    The mutations refuse as the framework's actions do: a signed-out caller gets
+    the session's GraphQL error,
+    a caller who may not create or write the override a `PERMISSION_DENIED`
+    GraphQL error, and a row that is not a shipped default (`not_a_baseline`) or
+    overrides none (`no_baseline`) an in-band `ok: false`.
+  - **Console.** The addon's first web fragment, `@angee/messaging-templates`,
+    adds **Message templates** to Settings for whoever holds
+    `messaging_templates.MessageTemplate#preview` (`MessageTemplatesPage`): one
+    library grouped by kind, each row opening in its registered form, the
+    presets `messaging_templates.default-updated` and
+    `messaging_templates.effective`, New over the four insertable fields,
+    Override and Keep override where the record's `can_override` and
+    `can_keep_override` admit the reader, Delete, a notice saying what the row
+    is, a Preview pane in the framework's sandboxed message frame with a brand
+    kit select, showing the saved row or, while the form holds unsaved edits,
+    those edits as Save would write them (what Save would refuse, titled so),
+    and a Backlinks group in the record's Links tab for whoever may preview
+    message templates.
+    `angee-messaging-templates` now requires `angee-web`. Upgrade: install the
+    stack's JS dependencies, which links the new fragment, then regenerate the
+    web codegen.
   - **New projects.** A project rendered from the web project template with the
     `full` addons profile lists `angee.messaging_templates` in its `settings.yaml`
     `INSTALLED_APPS`; the default profile does not. The `angee` meta-distribution
@@ -690,19 +1690,41 @@ live in code docstrings.
     drafts. Every signed-in actor reads kits; platform admins create, edit and
     delete them (`brandkit/brand_kit`).
   - **Font stacks** are a field, `FontStackField`, that checks every write
-    reaching the database (`save`, `bulk_create`, `bulk_update`, `update()`):
-    family names of letters, digits, spaces and hyphens, bare or single-quoted,
-    closed by an unquoted generic family. A bare family with a word that starts
-    with a digit, a lone hyphen or a hyphen and a digit, or a CSS-wide keyword is
-    refused. Double quotes are stored as single quotes.
+    reaching the database: a value written by `save`, `bulk_create` or
+    `update()`, of any type, is checked, and an expression (`F()`, `Value()`, a
+    function, and `bulk_update`, which writes through `Case`) is refused with a
+    `FieldError`, since the database computes its result past the check. It
+    admits family names of letters, digits, spaces and hyphens, bare or
+    single-quoted, closed by an unquoted generic family. A bare family with a
+    word that starts with a digit, a lone hyphen or a hyphen and a digit, or a
+    CSS-wide keyword is refused. Double quotes are stored as single quotes.
   - **Logos** are images storage's `FileManager.ingest_image` put on its image
     drive; `BrandKit.clean` refuses any other file when a logo changes. The
     console reads the logos and writes neither.
   - **Exactly one default kit.** Once any kit exists, writes through `save()` and
     `clean()` keep one: the first kit saved becomes the default, saving another
     kit as the default takes the flag from the previous one, and the default can
-    be neither unticked nor deleted, on any delete path. A conditional unique
-    constraint refuses a second default written past the save.
+    be neither unticked nor deleted, on any delete path. Changes of default made
+    at once take turns: every kit is locked, in key order
+    (`BrandKitManager.lock_default`), before any kit row by a save that can move
+    the default, every console write and changeset revert of a kit, every delete,
+    and a resource load that writes kits (once, before its first row), so the
+    second change waits and then takes the default from the first. A save that
+    marks a stored kit not the default rereads its flag under the kit's row lock,
+    so an edit cleaned before its kit became the default is refused, as `clean()`
+    refuses it, instead of leaving no default. A changeset revert restores the
+    kit that was the default before the changeset ahead of every other kit, so
+    reverting a change of default does not meet that refusal, unless the previous
+    default points at a row the same changeset deleted (a purged file it showed as
+    a logo or dark logo): the revert restores that row first, and another kit can
+    then go ahead of the previous default and be refused. Two writers take kit
+    rows without the lock: a file purge that clears the logo or dark logo of two
+    or more kits, which can deadlock with a change of default (one of the two
+    fails with a database error); and the
+    second of two first kits created at once into an empty table, which fails on
+    the conditional unique constraint with a database error (provisioning loads
+    the first kit, so a person does not reach it). The same constraint refuses a
+    second default written past the save.
     `BrandKit.objects.default()` returns it, or `None` before any kit exists,
     after a write past `save()` and `clean()`, and for an actor who reads no kit.
   - **The mail palette.** `BrandKit.mail_palette()` works out the colours a mail
@@ -1813,7 +2835,7 @@ live in code docstrings.
   passes the domain rule of Django's `EmailValidator`, and no longer than an
   address may be or the handle's value holds. Both spellings of an
   internationalised domain are one address: `Handle.normalize_value` reads a
-  domain's punycode labels (`xn--`) as Unicode in the comparison key, while
+  domain's punycode labels (`xn--`) as Unicode in the person-matching key, while
   `value` keeps what was typed. The rule for a domain is one function,
   `Handle.normalize_email_domain`, and the organization-domain suggestion
   reads the handle's domain and `Organization.domain` (stored as typed)
@@ -1840,7 +2862,7 @@ live in code docstrings.
   without case and the public id, the pointer aside); the verb reads it, and a
   consumer compares the references `standing_claims()` returns with its own
   the same way. No resource or permission change. Upgrade: a handle stores
-  the comparison key its rule gave when it was last saved, so a change of the
+  the key its rule gave when it was last saved, so a change of the
   rule leaves stored keys behind. The rule now has a version,
   `Handle.NORMALIZATION_VERSION`, to bump whenever `Handle.normalize_value` or
   `Handle.normalize_email_domain` returns something else (a test pins the
@@ -1864,14 +2886,14 @@ live in code docstrings.
   kept under heavy load (load average 75 to 87). The repair saves in batches
   of `HandleManager.REPAIR_LIMIT` (500) rows, each in its own transaction, so
   an interrupted provision keeps what it saved and the next one resumes. The
-  provision log prints "Saved the comparison key of N handle(s) again." A row
+  provision log prints "Saved the keys of N handle(s) again." A row
   whose save raises is rolled back alone, logged with its error, counted in
-  "The comparison key of N handle(s) could not be saved; ..." and tried again
+  "The keys of N handle(s) could not be saved; ..." and tried again
   by the next run, while the rest are saved. `manage.py renormalize_handles
   --limit N` saves a share instead, and only then prints "Stopped at the cap
   of N handle(s); M more await the next provision or renormalize_handles
   run". Once no row is behind, the repair is one indexed query per provision
-  and prints "Saved the comparison key of 0 handle(s) again." A handle stored
+  and prints "Saved the keys of 0 handle(s) again." A handle stored
   with a punycode-domain key is found by its Unicode spelling after that
   first provision. A row newer code stamped with a later version is selected
   too, so a rollback keys it again by the older rule. The PostgreSQL lane
@@ -1879,12 +2901,9 @@ live in code docstrings.
   (`tests/test_parties_handle_keys_concurrency.py`): a row another process
   deletes, and one it saves, after the repair selected its key and before
   the repair holds its lock.
-  Limits: two callers that meet two spellings of
-  one new address at once each make its row, and so its person, which the
-  pairing job then proposes; a handle is unique by its value as typed, not by
-  its comparison key, so writers that key on the exact value can still make
-  two rows of one address, which every lookup by the key reads together; a
-  number that is no valid international number is read as its digits. The
+  Limits: a number that is no valid international
+  number is read as its digits (an email address's letter case and domain
+  spelling are one handle since the spelling key, above). The
   domain codec is the standard library's, IDNA 2003: a punycode label that
   carries `ß`, `ς` or a joiner does not read back and stays as typed.
 - `angee.parties`: a merged-away party is no longer a row. The `people`,
@@ -2422,7 +3441,7 @@ live in code docstrings.
   handed none). `UserManager.sign_in_addresses(emails, *, key=None)` also
   compares by a caller's key, read among the person accounts at the given
   addresses' domains in the same one query; parties passes the handle's
-  normalized key, so an account address spelled the provider's other way, which
+  person-matching key, so an account address spelled the provider's other way, which
   neither the contact nor any handle uses, still counts. `Party.CLAIM_CONFIDENCE`
   names the confidence of a claim for review (0.4), and a test holds the
   schema's `stating_directory` threshold to `Party.REVIEW_CONFIDENCE`.
@@ -2683,7 +3702,7 @@ live in code docstrings.
   directory's owner is a platform admin, so `write` admitted everyone), no other
   live link of the directory names them, and no live link of a stream that writes
   back names them. A pull-only contacts page locks every spelling of its contacts'
-  addresses (by normalized value), the people they name and the parties its
+  addresses (by person-matching key), the people they name and the parties its
   links name before any record decides (`DirectoryBackend.prepare_page`), and
   each record checks admission again under those locks. The handle that found the
   person is the evidence of the directory's identity statement
@@ -2896,7 +3915,7 @@ live in code docstrings.
 - Parties proposes a same-person pair for every two live parties of one kind
   linked to one address (`PartyManager.reconcile_same_as`, over
   `same_person_links`). A party is linked when it holds a handle of that
-  normalized value or when a source that states its own record names one for it
+  person-matching key or when a source that states its own record names one for it
   in a standing statement, a claim below review confidence included; before,
   only two holders of two spellings were proposed, so one address claimed by a
   second source's party was never proposed. The linking sources are an

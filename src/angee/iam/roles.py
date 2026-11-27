@@ -32,7 +32,7 @@ from rebac.memberships import revoke as revoke_membership
 from rebac.models import active_relationship_model
 from rebac.models.relationship import RelationshipQuerySet, RelationshipRegistryQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
-from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION, ROLE_TYPE_SUFFIX, is_role_type
+from rebac.roles import ROLE_EFFECTIVE_MEMBER, ROLE_INCLUDES_RELATION, ROLE_RELATION, ROLE_TYPE_SUFFIX, is_role_type
 from rebac.schema import (
     Definition,
     Schema,
@@ -62,18 +62,35 @@ def platform_admin_role() -> ObjectRef | None:
     return ObjectRef.parse(role) if role else None
 
 
-def protected_account_holders() -> frozenset[str] | None:
-    """Return the user ids reaching ``iam/protected:main#member``; ``None`` when every user does.
+def platform_admin_holders() -> frozenset[str] | None:
+    """Return the user ids that are effective members of the platform-admin role; ``None`` when every user is.
 
-    REBAC's subject lookup follows every declared path — direct and group-held
-    grants, role hierarchies and live roster relations — so an elevated role is
-    declared once in Zed and its holders are never mirrored or re-derived here.
+    These are exactly the users ``subject_has_role`` admits to the role, whoever
+    the ambient actor is. Empty when no platform-admin role is configured.
+    """
+
+    role = platform_admin_role()
+    return _user_holders(role, ROLE_EFFECTIVE_MEMBER) if role is not None else frozenset()
+
+
+def protected_account_holders() -> frozenset[str] | None:
+    """Return the user ids reaching ``iam/protected:main#member``; ``None`` when every user does."""
+
+    return _user_holders(PROTECTED_ACCOUNTS, "member")
+
+
+def _user_holders(resource: ObjectRef, action: str) -> frozenset[str] | None:
+    """Return the user ids REBAC's subject lookup finds for ``resource#action``; ``None`` for the wildcard.
+
+    The lookup follows every declared path — direct and group-held grants, role
+    hierarchies and live roster relations — so an elevated role is declared once
+    in Zed and its holders are never mirrored or re-derived here.
     """
 
     holders: set[str] = set()
     for subject in rebac_backend().lookup_subjects(
-        resource=PROTECTED_ACCOUNTS,
-        action="member",
+        resource=resource,
+        action=action,
         subject_type=user_subject_type(),
     ):
         if subject.subject_id == "*":
@@ -89,7 +106,7 @@ def subject_has_role(subject: SubjectRef | None, role: ObjectRef) -> bool:
         rebac_backend()
         .check_access(
             subject=subject,
-            action="effective_member",
+            action=ROLE_EFFECTIVE_MEMBER,
             resource=role,
         )
         .allowed

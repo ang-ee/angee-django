@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { boundedGraphQLTransportError } from "@angee/refine";
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -10,6 +12,8 @@ import {
   createUiTestProviders,
 } from "./testing";
 import { Tooltip } from "./ui/tooltip";
+import type { KeyedMutationDialogProps } from "./views/form/MutationDialog";
+import { formSubmitError } from "./views/form/validation-errors";
 
 describe("shared UI mock contracts", () => {
   test("groups overrides over one imported UI module", async () => {
@@ -42,6 +46,27 @@ describe("MutationDialog test double", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit mutation dialog" }));
     await waitFor(() => expect(onSubmitted).toHaveBeenCalledExactlyOnceWith("saved", { name: "Ada" }));
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ name: "Ada" }, { errorNotification: false });
+    cleanup();
+  });
+
+  test.each([
+    ["a refusal", () => ({ status: "invalid" as const, issues: { fieldErrors: {}, formErrors: ["Taken"] } })],
+    ["a lost answer returned as a result", () => formSubmitError(boundedGraphQLTransportError(new TypeError("Failed to fetch")))],
+  ])("a keyed double sends one key per draft, as the dialog's key owner holds it: kept through %s, ended by an accepted answer", async (_name, failure) => {
+    const Dialog = createMutationDialogTestDouble({ values: { name: "Ada" } });
+    const keys: string[] = [];
+    const answers = [failure(), { status: "ok" as const, data: "saved" }, { status: "ok" as const, data: "again" }];
+    // A keyed dialog's props, as a keyed caller renders the double in its place.
+    const Keyed = Dialog as unknown as (props: KeyedMutationDialogProps<Record<string, unknown>>) => ReactElement | null;
+    render(<Keyed open title="Create" fields={[]} submitLabel="Create" parseValues={(values) => values}
+      idempotencyScope="dashboards.create-personal"
+      onSubmit={async (_values, _options, key) => { keys.push(key); return answers.shift()!; }} />);
+    for (let count = 1; count <= 3; count += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Submit mutation dialog" }));
+      await waitFor(() => expect(keys).toHaveLength(count));
+    }
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
     cleanup();
   });
 });

@@ -224,6 +224,18 @@ export interface AngeeApp {
 }
 
 /**
+ * Whether the app retries a failed read: TanStack's three retries, for a failure a retry can
+ * fix (`retryableQueryError`): a public GraphQL answer (a refusal, a permission, a conflict) is
+ * not retried, since a retry repeats it. A surface that builds its own query client, as the
+ * workshop's fixture does, passes this so its reads fail as the app's do.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function retryAppQuery(failureCount: number, error: unknown): boolean {
+  return failureCount < 3 && retryableQueryError(error);
+}
+
+/**
  * The app-owned react-query client config. createApp builds ONE `QueryClient`
  * from this and shares it with both `<Refine reactQuery.clientConfig>` and the
  * route gate's `beforeLoad`, so the auth gate and the in-app identity read hit
@@ -244,8 +256,7 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      // TanStack's three retries, for failures a retry can fix.
-      retry: (failureCount, error) => failureCount < 3 && retryableQueryError(error),
+      retry: retryAppQuery,
       placeholderData: keepPreviousData,
       staleTime: 30_000,
       gcTime: 600_000,
@@ -360,8 +371,12 @@ export function createApp(input: CreateAppInput): AngeeApp {
     ? input.appearance
     : { ...input.appearance, themeId: selection.theme, options: undefined };
   const themeLocked = selection.themeLocked === true;
-  // The host theme the host appearance source is asked about (docs/frontend/appearance.md, "Host and user precedence").
-  const sourceTheme = appearance?.themeId ? themeDefinitions.get(appearance.themeId) ?? null : null;
+  // The host theme the host appearance source is asked about, none when its options decline the source
+  // (docs/frontend/appearance.md, "Host and user precedence").
+  const hostTheme = appearance?.themeId ? themeDefinitions.get(appearance.themeId) ?? null : null;
+  const sourceTheme = hostTheme?.options?.acceptsHostAppearanceSource === false ? null : hostTheme;
+  // Asked about no theme, the source gets no build options, and the session frame wears none of its answer.
+  const sourceBuild = sourceTheme ? appearance?.options : undefined;
   // Fixed per app, so the session frame calls the same hooks on every render.
   const useHostAppearance = composed.hostAppearance?.useOptions ?? useBuildAppearance;
   // Optional links (`maybe`, record destinations) skip unavailable pages; authored links still build.
@@ -671,7 +686,10 @@ export function createApp(input: CreateAppInput): AngeeApp {
 
   /** The session frame: the only writer of the host appearance source's answer into the provider's host. */
   function HostAppearanceFrame({ children }: { children: ReactNode }): ReactNode {
-    const read = useHostAppearance(sourceTheme, appearance?.options);
+    const answer = useHostAppearance(sourceTheme, sourceBuild);
+    // No theme asked about, or one that takes no options: no answer can change what it wears, so the
+    // build's appearance stands whole and nothing is held, whatever the source answers.
+    const read = sourceTheme?.options ? answer : BUILD_APPEARANCE;
     const host = useMemo(() => read.options || read.pending
       ? { ...appearance, ...(read.options ? { options: read.options } : {}), ...(read.pending ? { pending: true } : {}) }
       : appearance, [read.options, read.pending]);

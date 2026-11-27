@@ -46,7 +46,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
   useActionResultRun: () => mocks.settle,
 }));
 
-import { HOME_PATH_PREFERENCE_KEY, ROUTE_SHORTCUTS_PREFERENCE_KEY, ToastProvider } from "@angee/ui";
+import { AppRuntimeProvider, HOME_PATH_PREFERENCE_KEY, ROUTE_SHORTCUTS_PREFERENCE_KEY, ToastProvider } from "@angee/ui";
 import { PersonalDashboardPage } from "./DashboardPage";
 
 let root: Root;
@@ -171,5 +171,32 @@ describe("dashboard trash follow-ups", () => {
     expect(mocks.patchPreferences).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(menu.disabled).toBe(false);
+  });
+});
+
+describe("duplicating a dashboard", () => {
+  test("is one draft: a retry after a lost answer sends the same key, so the server makes one copy", async () => {
+    const copied: DashboardSaveResult = {
+      persistedId: "dashboard-2", revision: 1, snapshot: { schemaVersion: 1, columns: 12, widgets: [] },
+      capabilities: { canEdit: true, canReset: true, canTrash: true },
+    };
+    vi.mocked(mocks.binding!.duplicate).mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce(copied);
+    // Settle as the shared owner does: run the work, report a failure, resolve nothing.
+    mocks.settle.mockImplementation(async (work: () => Promise<unknown>) => { try { return await work(); } catch { return undefined; } });
+    await React.act(async () => root.render(<AppRuntimeProvider runtime={{}}><ToastProvider><PersonalDashboardPage /></ToastProvider></AppRuntimeProvider>));
+    const duplicate = async () => {
+      const menu = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+      await React.act(async () => menu.click());
+      const item = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+        .find((entry) => entry.textContent?.includes("Duplicate"))!;
+      await React.act(async () => item.click());
+    };
+    await duplicate();
+    await vi.waitFor(() => expect(mocks.binding!.duplicate).toHaveBeenCalledOnce());
+    await duplicate();
+    await vi.waitFor(() => expect(mocks.binding!.duplicate).toHaveBeenCalledTimes(2));
+    const [first, retry] = vi.mocked(mocks.binding!.duplicate).mock.calls.map(([, input]) => input.idempotencyKey);
+    expect(first).toEqual(expect.any(String));
+    expect(retry).toBe(first);
   });
 });

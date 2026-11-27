@@ -39,7 +39,13 @@ and React share its token validation, cache protocol and root application.
 One installed addon may supply the host theme's options at run time, through the
 install-one `hostAppearance` manifest key
 ([`HostAppearanceSource`](../../packages/app/src/define-addon.ts)). `createApp` asks
-it about the host theme: the selected app's, else the build's, locked or not. The
+it about the host theme: the selected app's, else the build's, locked or not. A
+theme whose options decline the source (`acceptsHostAppearanceSource: false`, as
+Fyltr and Ledger state) is not put to it: the source is asked about no theme and no
+build options, and `createApp` wears none of its answer, as it wears none for a
+theme without options, so the source never holds the first paint or the boot cache
+for either, and a declining theme wears the build's options when it is the build's
+own theme, else its own defaults. The
 options it answers replace the build's options for that theme; when it answers
 none, the build's stand. The [brand kit](../../src/angee/brandkit/README.md#the-apps-colours)
 is that source. While the source's first read is on its way, the provider keeps
@@ -148,7 +154,13 @@ accepts bounded inputs for identity, page and panel surfaces, app-rail chrome,
 the four semantic status roles, typography, corners, control density, elevation
 and logo treatment. The generator derives semantic tokens for light and dark
 together, including readable foregrounds, borders, interaction states and the
-complete solid/soft/surface status matrix. Appearance stores the inputs in the
+complete solid/soft/surface status matrix. The link and each tone's text read at
+4.5:1 on their own fills and on every surface of their scheme (canvas, sheets,
+popover and inset) wherever any colour can, and come nearest it where none can. A
+surface an input leaves at its default counts as the theme's definition states it,
+else as the defaults derive it, with a 1% margin. A text is worked out only when its
+own input changes, so changing only surfaces keeps the theme's own link and tone
+texts. Appearance stores the inputs in the
 user's preference and rebuilds the token overrides whenever the generator
 changes.
 
@@ -207,6 +219,14 @@ defineThemeContribution({
   optionsEditor: ThemeCustomizationEditor,
 });
 ```
+
+A customizable theme takes the answer of the run-time host appearance source
+([host and user precedence](#host-and-user-precedence)) unless it declines it, as a
+theme whose palette is its identity does:
+`createThemeCustomizationOptions(defaults, { version, acceptsHostAppearanceSource: false })`.
+The flag belongs to the options definition, not to the options envelope, so it
+changes no options version and no saved customization; the build's stated
+options and a person's own still apply.
 
 ## Authoring a theme addon
 

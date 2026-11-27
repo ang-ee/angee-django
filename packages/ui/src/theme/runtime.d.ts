@@ -29,7 +29,24 @@ export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
 export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
 export interface ThemeOptionsEnvelope { version: number; value: unknown }
 export type ThemeOptionsCapability = "palette-customization";
-export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; capability?: ThemeOptionsCapability; parse(value: unknown): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
+export interface ThemeOptionsDefinition<TOptions> {
+  version: number;
+  defaults: TOptions;
+  capability?: ThemeOptionsCapability;
+  /**
+   * False declines the run-time host appearance source (`AddonManifest.hostAppearance`):
+   * `createApp` asks it about no theme for this one, so the source supplies none of its
+   * options. The build's stated options and a person's own still apply. Absent means true.
+   * It is part of the definition, not of the options envelope.
+   */
+  acceptsHostAppearanceSource?: boolean;
+  parse(value: unknown): TOptions;
+  /**
+   * The token layers `value` adds over the theme's own. `resolveThemeOptions` passes the definition's
+   * authored tokens as `base`, so a derivation can read the colours the theme itself paints.
+   */
+  resolve(value: TOptions, base?: ThemeTokenLayers): Partial<ThemeTokenLayers>;
+}
 export type ThemeCustomizationFont = "theme" | "system" | "inter" | "humanist" | "industrial" | "editorial" | "mono";
 export type ThemeCustomizationRadius = "theme" | "square" | "compact" | "standard" | "soft" | "round";
 export type ThemeCustomizationDensity = "theme" | "compact" | "balanced" | "comfortable" | "spacious";
@@ -54,6 +71,12 @@ export interface ThemeCustomization {
 }
 export interface ThemeCustomizationConfiguration {
   version?: number;
+  /**
+   * False declines the run-time host appearance source (`AddonManifest.hostAppearance`);
+   * the build's stated options still apply. Defaults to true
+   * (`ThemeOptionsDefinition.acceptsHostAppearanceSource`).
+   */
+  acceptsHostAppearanceSource?: boolean;
 }
 export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
 export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
