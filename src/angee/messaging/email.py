@@ -24,6 +24,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, EmailMultiAlternatives, mailers
 from django.core.mail.backends.base import BaseEmailBackend
+from django.core.validators import validate_email
 from django.db import DatabaseError, transaction
 from django.utils.encoding import force_str, punycode
 from django.views.decorators.debug import sensitive_variables
@@ -398,16 +399,33 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
         return True
 
 
+def _uncarried(address: str) -> str:
+    """What keeps the transports this backend writes for from carrying ``address``, or ``""`` when nothing does."""
+
+    local, _at, domain = address.rpartition("@")
+    if not local.isascii():
+        return "its part before the @ is outside ASCII"
+    try:
+        written = domain if domain.isascii() else punycode(domain)
+    except UnicodeError:
+        return "its domain is not a host name"
+    if written not in validate_email.domain_allowlist and not validate_email.validate_domain_part(written):
+        return "its domain is not a host name"
+    return ""
+
+
 def carries_address(address: str) -> bool:
     """Whether the transports this backend writes for can carry ``address``.
 
     Its part before the ``@`` must be ASCII: no transport here speaks SMTPUTF8.
-    An internationalised domain is carried, written in its ASCII (IDNA) form
-    (:func:`_mailbox`). :func:`require_carried` refuses what it does not carry.
+    Its domain must be a host name in the ASCII (IDNA) form :func:`_mailbox`
+    writes, as Django's ``EmailValidator`` reads a domain: an internationalised
+    domain is carried in that form, and one the IDNA codec cannot write, or
+    writes as no host name (a space at either end of it), is not.
+    :func:`require_carried` refuses what it does not carry.
     """
 
-    local, _at, _domain = address.rpartition("@")
-    return local.isascii()
+    return not _uncarried(address)
 
 
 def require_carried(address: str, *, key: str) -> None:
@@ -416,11 +434,12 @@ def require_carried(address: str, *, key: str) -> None:
     The one refusal for every address messaging writes for the transport: a
     sender before any mail is written (under ``channel``), a recipient of system
     mail (under its role), and a mailbox the delivery writes, whose failure says it.
+    Its words name which side cannot be carried.
     """
 
-    if not carries_address(address):
+    if reason := _uncarried(address):
         raise ValidationError({key: ValidationError(
-            "This mail transport cannot carry %(address)s: its part before the @ is outside ASCII.",
+            f"This mail transport cannot carry %(address)s: {reason}.",
             code="cannot_carry", params={"address": address},
         )})
 
@@ -535,7 +554,9 @@ def _mailbox(name: str, address: str) -> str:
     (IDNA) form, as Django writes one in the headers it builds, so every
     transport is given an address it can carry; the stored address keeps what
     was typed. A local part outside ASCII cannot be written, as no transport here
-    speaks SMTPUTF8: the delivery fails with that reason.
+    speaks SMTPUTF8, nor a domain that is no host name in its IDNA form
+    (:func:`carries_address`): the delivery fails with that reason, never with
+    the codec's error.
     """
 
     local, at, domain = address.rpartition("@")

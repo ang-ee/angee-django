@@ -42,14 +42,14 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_MAILER_BACKEND,
 )
-from angee.messaging.email import SystemChannelBackend, SystemMailer
+from angee.messaging.email import SystemChannelBackend, SystemMailer, carries_address
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
 from tests.conftest import Vendor, create_platform_admin, make_integration
 from tests.messaging_campaign import make_user
-from tests.test_messaging_compose import _merge_as_contact_administrator
+from tests.test_messaging_compose import PADDED_DOMAINS, _merge_as_contact_administrator
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -520,6 +520,28 @@ def test_a_system_mail_to_a_merged_handles_address_reads_only_its_redirect_more(
                 )
             counts[address] = min(counts.get(address, len(queries)), len(queries))
     assert counts["client@example.test"] - counts["mine@example.net"] == 2, counts
+
+
+@pytest.mark.parametrize("domain", PADDED_DOMAINS)
+def test_a_system_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_on_the_wire(
+    system_mailer: Any, domain: str,
+) -> None:
+    """The system recipient rule refuses what the transport cannot carry before anything is recorded; a space it
+    strips from the entry's end leaves the cleaned address, which is what is recorded and sent."""
+
+    entry, rows = f"kate@{domain}", _rows()
+    try:
+        message = Message.objects.compose_as_system(
+            reason="tests.messaging.system_mail.carry", to=[entry], subject="Hi", text="Hi.",
+        )
+    except ValidationError as refused:
+        assert [error.code for error in refused.error_dict["to"]] in (["invalid"], ["cannot_carry"])
+        assert _rows() == rows
+        assert mail.outbox == []
+        return
+    ((_handle, recorded),) = _given(message)
+    assert recorded == entry.strip() and carries_address(recorded)
+    assert _deliver(message).to == [recorded]
 
 
 def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_recorded_sender(

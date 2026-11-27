@@ -3630,8 +3630,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         cleaned it), when the transport can carry it as handed
         (``email.carries_address``), which the row records and the message is mailed
         at (``Recipient.envelope_address``); an address it cannot carry (its part
-        before the ``@`` outside ASCII) records nothing, and its delivery is refused
-        with that reason. It is empty for a recipient
+        before the ``@`` outside ASCII, or a domain no host name in its IDNA form)
+        records nothing, and its delivery is refused with that reason. It is empty for a recipient
         the caller did not hand as an address: one a reply inherits from its parent,
         which is answered as its handle stores it, and one known only as a handle.
         ``handle`` is where the address lands, the survivor of any merge; ``addressed

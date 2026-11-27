@@ -40,7 +40,7 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
-from angee.messaging.email import header_text
+from angee.messaging.email import carries_address, header_text
 from angee.messaging.managers import _Addressee, _preview
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Party, Recipient, Thread
@@ -1460,6 +1460,79 @@ def test_a_message_whose_channel_is_gone_is_refused_by_the_reader_for_an_address
     with system_context(reason="tests.messaging.compose.channel_gone"):
         stored = Message._base_manager.get(pk=message.pk)
     assert (stored.status, stored.local_fact("delivery_error")) == ("failed", "Integration configuration is invalid.")
+
+
+NON_ASCII_SPACES = tuple(chr(point) for point in range(0x80, 0x110000) if chr(point).isspace())
+PADDED_DOMAINS = tuple(
+    pytest.param(domain, id=f"U+{ord(space):04X}-{end}")
+    for space in NON_ASCII_SPACES
+    for end, domain in (("leading", f"{space}example.test"), ("trailing", f"example.test{space}"))
+)
+
+
+def test_the_transport_carries_an_internationalised_domain_and_the_default_senders_host() -> None:
+    """Its IDNA form is a host name, and ``localhost`` is one Django's validator admits."""
+
+    assert carries_address("kate@m\u00fcnchen.example") and carries_address("webmaster@localhost")
+    assert not carries_address("kate@example.test\u2003")
+
+
+def _not_sent_for_its_domain(message: Any) -> None:
+    sent = len(mail.outbox)
+    assert not deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+    assert len(mail.outbox) == sent
+    with system_context(reason="tests.messaging.compose.carry"):
+        stored = Message._base_manager.get(pk=message.pk)
+    assert stored.status == "failed"
+    assert stored.local_fact("delivery_error").endswith(
+        ": its domain is not a host name. Send to another address of this contact.",
+    )
+
+
+@pytest.mark.parametrize("domain", PADDED_DOMAINS)
+def test_a_persons_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_on_the_wire(
+    desk: Any, domain: str,
+) -> None:
+    """Every non-ASCII space at either end of a domain: the recipient rule refuses the entry, or strips the space at
+    its end and the mail goes to the address it cleaned; else the row records nothing and the delivery is refused with
+    the carry rule's reason. No codec error escapes."""
+
+    entry = f"kate@{domain}"
+    try:
+        message = Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner, queued=True)
+    except ValidationError as refused:
+        assert [error.code for error in refused.error_dict["to"]] == ["invalid"]
+        return
+    ((_handle, recorded),) = _rows_and_addresses(message)
+    if recorded:
+        assert recorded == entry.strip() and carries_address(recorded)
+        assert _delivered(message)["To"] == recorded
+        return
+    _not_sent_for_its_domain(message)
+
+
+@pytest.mark.parametrize("domain", PADDED_DOMAINS)
+def test_a_row_written_before_the_rule_to_a_padded_domain_is_refused_at_delivery(desk: Any, domain: str) -> None:
+    """A handle already holding a domain padded with a non-ASCII space (written before the rule, or by a sync): the
+    backend writes a value stripped at its ends, so a space at the domain's end leaves the address it pads, which is
+    carried; a space at its start makes the delivery refused with the carry rule's reason. Never the codec's error,
+    never a space on the wire."""
+
+    value = f"kate@{domain}"
+    with system_context(reason="tests.messaging.compose.carry"):
+        try:
+            padded = Handle.objects.upsert(platform="email", value=value)
+        except ValidationError:
+            pytest.skip("The handle owner refuses this value.")
+    assert padded.value == value
+    message = Message.objects.compose(channel=desk, to=["other@example.test"], text="Hi.", actor=desk.owner,
+                                      queued=True)
+    with system_context(reason="tests.messaging.compose.carry"):
+        Recipient._base_manager.filter(message=message).update(handle=padded, address="")
+    if carries_address(value.strip()):
+        assert _delivered(message)["To"] == value.strip()
+        return
+    _not_sent_for_its_domain(message)
 
 
 def test_a_persons_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(

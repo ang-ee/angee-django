@@ -1609,9 +1609,12 @@ live in code docstrings.
   this message no longer names the address it was written for.", so system mail
   is exact or not sent, and the release does not hand it off again; a person's
   row is mailed at the handle's value with a warning naming the row; a message
-  whose channel is gone is refused the same way. An address whose part before
-  the `@` is outside ASCII, which no transport here carries (`carries_address`),
-  records nothing, and its delivery is refused with that reason, as before.
+  whose channel is gone is refused the same way. An address no transport here
+  carries (`carries_address`: its part before the `@` outside ASCII, or a domain
+  that is no host name in its IDNA form, which it now also refuses, such as one
+  padded with a non-ASCII space) records nothing, and its delivery is refused
+  with that reason ("… its domain is not a host name."), never with the codec's
+  `UnicodeError`.
   `HandleManager.find_identity_owners`
   returns the row owning each identity before its merge redirect;
   `find_identities` is it resolved to each survivor. From is written as the
