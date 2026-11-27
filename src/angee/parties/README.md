@@ -363,7 +363,10 @@ computed from `str.lower`, never listed; a test pins today's two. An address is
 trimmed of ASCII whitespace only (`Handle.ADDRESS_WHITESPACE`): a value that
 begins with a non-ASCII space is no address, and its key keeps the space. The
 spelling key, the person-matching key and `Handle.is_spelling_of` read a local
-part only through `normalize_local_part`. A save that would keep a
+part only through `normalize_local_part`. The rule holds for an address as it
+reaches the handle owner: two ingest parsers lower-case an address before it does,
+the IMAP parser (`messaging_integrate_imap`'s `_parsed_address`, whose form every
+stored sync hash covers) and the iMessage bridge's parser (its `external_id`). A save that would keep a
 second live handle of an address is refused on `value` before it writes
 (`ValueOwned`, `Handle.value_owner`). A provider's alias (a Gmail dot or
 plus-tag) is a handle of its own, grouped with the others by the person-matching
