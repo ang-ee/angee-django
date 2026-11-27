@@ -75,6 +75,8 @@ from tests.test_messaging_system_mail import (
     LOCMEM,
     SENDER,
     FailingTransport,
+    _chained,
+    _delivery_logged,
     _failing,
     _install,
     _message_insert,
@@ -1428,7 +1430,8 @@ def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
 def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
     deliverable, iam_admin, settings, monkeypatch, caplog, django_capture_on_commit_callbacks,
 ):
-    """The worker's path: the transport fails, then recording it fails too; the report chains both."""
+    """The worker's path: the transport fails, then recording it fails too. The recording's failure leaves the task
+    alone, with nothing chained, the transport's error logged by its types alone, and no frame shows the link."""
 
     settings.DEBUG = False
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
@@ -1446,7 +1449,12 @@ def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
 
     with _failing(recording), caplog.at_level(logging.DEBUG), pytest.raises(DatabaseError) as failed:
         deliver_message(label, pk, key)
-    assert failure in _chain(failed.value)
+    assert failure not in _chain(failed.value)
+    assert [type(error) for error in _chained(failed.value)] == [DatabaseError]  # its suppressed context included
+    assert _delivery_logged(caplog) == [
+        "Recording a failed delivery failed (DatabaseError); the delivery had failed with "
+        "DeliveryUncertain (ConnectionError).",
+    ]
     assert _reported(failed.value, address=target.email) == ([], [])
     assert SECRET not in caplog.text
 

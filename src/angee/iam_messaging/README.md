@@ -180,9 +180,11 @@ points, so a token passed as a variable, as this addon's page passes it, is
 logged nowhere, but one written into the document itself is logged there.
 Django never filters an exception's own message: nothing this addon raises
 carries the link or the address, and no refusal of the render passes in the
-render's own words, so no answer, banner or log line carries the secret; a
-database's or a transport's error text is its own. Django's
-plain-text error report shows no local variables. The mail is stored on the
+render's own words, so no answer, banner or log line carries the secret. What
+remains is a database's own error text. A transport's never leaves the delivery
+task: when recording a failed delivery fails too, messaging raises that failure
+alone and logs the transport's error by its types. Django's plain-text error
+report shows no local variables. The mail is stored on the
 system channel, where the link lives until it signs in, expires or is retired:
 
 - the message's text and HTML parts, and the content-addressed text fragments
