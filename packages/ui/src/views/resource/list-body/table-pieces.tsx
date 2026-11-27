@@ -23,7 +23,7 @@ import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ListEmptyContent, ResourceTableHeaderVisibility, ResourceTableLayout } from "../resource-view-types";
 import type { ColumnDescriptor } from "../../page";
-import { alignOf, formatMeasure, groupMeasuresFromColumns, headerSort, measureValue } from "./cell-utils";
+import { alignOf, formatMeasure, groupMeasuresFromColumns, headerAriaSort, measureValue } from "./cell-utils";
 import { ListEmpty, ListSkeletonRows } from "./loading";
 import { LeadingSelectionCell, renderListRow } from "./rows";
 import { ALIGN_CLASS } from "./types";
@@ -469,14 +469,13 @@ export function ListHeaderCell<TRow extends Row>({
     : flexRender(header.column.columnDef.header, header.getContext());
   const showVisibleFields = withVisibleFields && visibleFields.length > 0;
   const developerTitle = useDeveloperFieldTitle();
-  const sort = headerSort(header.column, header.getContext().table);
   return (
     <TableHead
       sticky
       title={header.isPlaceholder ? undefined : developerTitle(header.column.id, resourceView.resource)}
       className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
       style={{ minWidth: header.column.columnDef.minSize }}
-      aria-sort={sort === "asc" ? "ascending" : sort === "desc" ? "descending" : "none"}
+      aria-sort={headerAriaSort(header.column, header.getContext().table)}
     >
       {showVisibleFields ? (
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">

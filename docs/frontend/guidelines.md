@@ -918,7 +918,24 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   memory. Either way a grouped list pages its **root groups**: the server surface
   by its root `_groups` read, the client row model by TanStack's top-level rows
   (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
-  open groups' records; an ungrouped list pages records. A level's `repeated`
+  open groups' records; an ungrouped list pages records. On both, each level's
+  groups follow their own axis: by label, then identity, the group with no value
+  last in both directions, in the direction the list's order holds for a key the
+  axis shares or for the field it buckets (a date's months, quarters and weeks
+  follow the date), else ascending (`GroupAxis.direction`, the one rule). The table
+  state hands TanStack each axis's key ascending, ahead of the list's own keys, and
+  the axis's column compares its groups in that direction (`GroupAxis.compareGroups`),
+  since the table would turn a missing value with a descending key; it sorts by it
+  even where the field's header offers no press, while the list stores, links and
+  saves its order unchanged. The server's groups read asks for the same direction
+  and the same keys (`ResourceQuery.toGroupRead`), its text in the database's
+  collation where the browser compares it naturally. A press on a column whose key an axis
+  shares turns that level's groups, ascending and descending, never removed, and
+  its sort button and arrow show their direction, while `aria-sort` stays on the
+  one header of the key the records follow (`headerAriaSort`); a press on any other column, and the pane's
+  Order select, orders the records inside the groups and keeps the axis keys the
+  order holds, and the date a bucket follows keeps its ordinary press, which
+  turns the buckets with it. A level's `repeated`
   ("Repeated values only") is a server group read option
   (`ResourceQuery.toGroupRead`): HAVING keeps groups of more than one record
   within its parent group and the read leaves out the records with no value, so

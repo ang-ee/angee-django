@@ -10,6 +10,58 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, `@angee/metadata`: **Changed contract.** A grouped list orders its
+  groups by what it groups by. A list grouped by status lists blocked, closed,
+  open, pending however its records are sorted; a list grouped by month lists
+  its months in date order, newest first when it is sorted by the date
+  descending; the group with no value comes last either way, and on two levels
+  the inner groups under it are ordered as under any other. The grouping
+  column's sort button and its arrow show which way the groups go, and pressing
+  it turns them, on a server-grouped list too, where it changed nothing a
+  person could see; pressing another column sorts the records inside the
+  groups and leaves the groups where they are. `aria-sort` stays on one header,
+  the key the records follow, as before (`headerAriaSort`, beside `headerSort`
+  in `list-body/cell-utils.tsx`): the grouping column's says "none". Before, a
+  list grouped in the browser sorted its groups by its whole sort order (by the
+  sum of a number column, by a group's first record, never by a month), so its
+  groups followed their own key only when the order led with it, and a server
+  list always asked for them ascending. Now one rule on the owner,
+  `GroupAxis.direction` (the direction the list's order holds for a key the
+  axis shares or for the field it buckets, else ascending), feeds both readers:
+  the table state hands TanStack each axis's key ascending, ahead of the list's
+  own keys, and the axis's column carries the direction in its comparator
+  (`GroupAxis.compareGroups` over each row's `GroupAxis.groupKey`, read once
+  per sort, its identity the table's cached grouping value;
+  `BuildColumnsOptions.directions`), label then identity, a missing
+  one last both ways and two of them tied, which TanStack's `sortUndefined`
+  cannot do (`"last"` never ties two missing values, so an inner level under
+  "No value" kept its first appearance, and a descending key turned a missing
+  label first); the server's groups read takes the direction
+  (`ResourceQuery.toGroupRead(group, filter, order)`; `GroupProjection.orderBy`
+  widens to `"ASC" | "DESC"`; `groupBy()` stays ascending unless asked). Both
+  ask the same order of keys; text compares in the list's natural order in the
+  browser and by the database's collation on the server. The list's order is
+  stored, linked and saved unchanged; the headers, the press and the Order
+  select read it from the table's `meta.sorting`, beside `meta.groupAxes`.
+  `pressedSorting` loses the level-join and keeps the held axis keys behind the
+  pressed key instead of ahead of it (`title:asc,status:asc`); a grouping
+  column's press is two-state and never removed, and its button keeps the
+  focus while the columns are built again for the turned groups (a header is a
+  stable component). A date's months, quarters and weeks follow the date they
+  bucket, while the date's own header keeps its sort and its three-state press,
+  since a bucket's records do not share it. A list grouped by a field no read
+  can sort by still orders its groups in the table: `buildColumns` sorts every
+  axis's column there and keeps its header's press as `meta.pressable`, which
+  only the sort button reads (`headerPresses`). Parties: a list's "Select all"
+  Merge accepts a list whose groups were turned descending; the dialog's cursor
+  (`groupCursor`, which replaces `cursorField`) pages a one-field order in
+  either direction whose nulls are placed last explicitly, past the last
+  listed key with `_gt` ascending and `_lt` descending, and its sets come in
+  the list's order. Not in this change: an absent `groupStack` or
+  `pageSize` in a saved view; the nexus inbox's own Order select; a client
+  list in an inherited scope ignoring its `order`; the empty group's two labels
+  ("No owner" from the server, "No value" in the browser).
+
 - `@angee/ui`: a refused save on a record form now brings the person to its
   first refused field even where the form did not show it. A field in a pane
   group other than the selected pane (with another pane group, a saved-record
@@ -115,19 +167,16 @@ live in code docstrings.
   when it is not the order's last, or on a column the order does not hold set
   that column alone, so a list grouped in the browser lost its grouping key and
   reordered its groups. Now `pressedSorting` (the `headerSort` owner in
-  `list-body/cell-utils.tsx`) keeps those keys ahead of the pressed column
-  (`status:asc,title:asc`) and, behind them, is the table's single-sort toggle
-  over the keys the rows follow, a tie-breaker still sorting in its first
-  direction; the groups keep their order on the server, and in the browser
-  wherever the list's order leads with the keys its groups share; a list grouped
-  in the browser by a field its order does not lead with still reorders its
-  groups on a press: by the pressed column where its order does not hold the
-  grouping key, and into the grouping key's own order where the order holds it
-  behind another key, since the press moves it ahead. The URL and a reload keep
-  the order. A grouping
-  column's press turns its key in place and drops the keys the rows follow, as
-  before; other grouping levels' keys now stay at their levels, and its key
-  turns back to ascending rather than being removed. `breaksTies` is no longer
+  `list-body/cell-utils.tsx`) keeps those keys behind the pressed column
+  (`title:asc,status:asc`) and, for the pressed column, is the table's single-sort
+  toggle over the keys the rows follow, a tie-breaker still sorting in its first
+  direction; the groups keep their order, in the browser and on the server,
+  since they follow their own axis whatever a press sets (the entry at the top
+  of this section), a grouping chosen in the toolbar included. The URL and a
+  reload keep the order. A grouping
+  column's press turns its groups, ascending and descending in turn, never
+  removing its key, and drops the keys the rows follow; other grouping levels'
+  keys stay. `breaksTies` is no longer
   exported from the module.
 
 - `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
@@ -155,16 +204,19 @@ live in code docstrings.
   by status and ordered by status then rank, a press on Rank turned it
   descending and the URL cut the order back to status alone: Rank showed "not
   sorted" and the order was lost on reload, on a shared link and in a saved
-  view. The URL's `sort` now holds every key as a comma list
-  (`sort=status:asc,rank:desc`); a one-key link reads as before, and a link
+  view. The URL's `sort` now holds every key as a comma list (an order of
+  status, then rank descending, is `sort=status:asc,rank:desc`); on that
+  grouped list a press on Rank now writes the pressed key first and the group
+  key behind it (`sort=rank:desc,status:asc`), and a reload reads both back. A
+  one-key link reads as before, and a link
   whose order cannot be read (an empty or three-part key, a field the resource
   cannot sort by, or one named twice) reads nothing and offers the reset. A
   saved view's `sort`, a shipped view's and `ResourceViewInitialState.sort` are
   one `{ field, dir }` or a list of them; a list is written only for several
   keys, so a one-key view is stored byte for byte as before, and a view saved
   over several keys shows active right after saving and restores them all. The
-  grouping keys stay in the stored order as the table holds it: in the browser
-  their direction orders the groups. The favorites document
+  grouping keys stay in the stored order where the list's order holds them, and
+  their direction orders the groups, in the browser and on the server. The favorites document
   (`resource-view.favorites`) is version 2: a version 1 document reads and is
   written as version 2 at its next change, and a tab on an earlier bundle reads
   a version 2 document as unknown once it receives it (a live update or a
@@ -252,23 +304,24 @@ live in code docstrings.
   kind and ordered by kind, key and language showed "Language, ascending" over
   rows not in language order, and the first press on that header sorted it
   descending. That header now shows "not sorted", and its first press sorts it
-  in its first direction as a fresh single-key order, decided from the
-  table's state when pressed. A key a group's records share shows no sort:
+  in its first direction as the only key the rows then follow, decided from the
+  list's live order when pressed. A key a group's records share shows its groups' direction
+  instead (the entry at the top of this section):
   the field grouped by its whole value (a `Date` by day included) and a
   grouped relation's members, which the new `GroupAxis.shares` in
   `@angee/metadata` answers; each list's table carries its group axes as
-  `meta.groupAxes`. A grouping column's press is the table's toggle, as
-  before: it turns the groups of a list grouped in the browser, and on a
-  server-grouped list it leaves the groups in place and asks for their records
-  in that column's order alone. The table's sorting still holds the whole
-  order: every read asks for each key and a list sorted in the browser keeps
-  its tie-breakers. A tie-breaker press drops the grouping key with the rest,
-  so groups made in the browser lose its order (the table orders them by the
-  pressed column's value on each group).
+  `meta.groupAxes`. A grouping column's press turns its groups, in the browser
+  and on the server, and asks for their records in that column's order alone.
+  The list's order still holds every key: every read asks for each key and a
+  list sorted in the browser keeps its tie-breakers. A tie-breaker press keeps
+  the grouping key behind the pressed one and drops the rest, and the groups
+  keep their order (the entry "one rule for every press").
   `ariaSortForColumn` is removed from
   `@angee/ui/views/resource-view-list-body`; a custom header renders its cells
-  with `ListHeaderCell` from the same entry, which sets `aria-sort` (on a table
-  of your own, set `meta.groupAxes` for it). `@angee/ui` augments TanStack's
+  with `ListHeaderCell` from the same entry, which sets `aria-sort` on the one
+  header of the key the rows follow, "none" on a grouping column, whose sort
+  button shows its groups' direction (on a table of your own, set
+  `meta.groupAxes` for it). `@angee/ui` augments TanStack's
   `TableMeta` with the optional `groupAxes`: a program that passes `meta` to a
   table of its own declares its keys by augmenting `TableMeta` too.
 - `@angee/ui`: A relation field's `relationEdit: null`, and a related row held
@@ -1862,16 +1915,16 @@ live in code docstrings.
   revisions and loads the install tier.
 - `angee.parties`: the batch dialog lists every group a list's "Select all N"
   matched by key, not by offset. It forwards the list's own groups read as the
-  list sent it, order included (`AllMatchingGroups.read.orderBy`, always the
-  group's own key, ascending, nulls last), and each next page is that read with
+  list sent it, order included (`AllMatchingGroups.read.orderBy`, the group's
+  own key, nulls last, in the list's direction), and each next page is that read with
   its `where` narrowed to the groups past the last listed key, so a group added
   or removed while the list is read neither repeats nor skips another. The
   listing ends on a short page, not on the list's count, and says so when the
   number of groups it listed differs from that count. The reader takes the named
   `AllMatching` types from `@angee/ui` and refuses an order of more than the
-  grouped field, which has no one-field cursor, and an order with nulls first or
-  descending (one rule, `cursorField`, shared by the reader and the dialog). A
-  page that ends on a key no `_gt` can step past (null, or not text) ends the
+  grouped field, which has no one-field cursor, and an order with nulls first
+  (one rule, `groupCursor`, shared by the reader and the dialog). A
+  page that ends on a key no cursor can step past (null, or not text) ends the
   listing rather than starting it again from the first page. A paged dialog says
   how far it has read ("Loaded N of M …", with the loading indicator) from its
   first render until every page is listed and previewed, and every dialog uses a
