@@ -40,11 +40,12 @@ const { Provider, clearClients } = createUiTestProviders({ resources: [resource]
   queryClientConfig: { defaultOptions: { queries: { retry: false } } } });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ replyHold = null, connectable = false, create = false }: {
-  replyHold?: number | null; connectable?: boolean; create?: boolean;
+function fixture({ replyHold = null, connectable = false, create = false, retired = false }: {
+  replyHold?: number | null; connectable?: boolean; create?: boolean; retired?: boolean;
 } = {}) {
   const row = {
-    id: "feed", display_name: "Public discussion", backend_class: "FEED", feed_backend_class: "MANUAL", reply_hold: replyHold,
+    id: "feed", display_name: "Public discussion", backend_class: "FEED", feed_backend_class: retired ? null : "MANUAL",
+    reply_hold: replyHold,
     external_id: "account", config: {}, sync_progress: {}, credential_status: "valid",
     can_connect: connectable, is_reconnect_required: false, discovery_ready: true, discovery_pending: false,
     permissions: ["read", "write"],
@@ -55,9 +56,16 @@ function fixture({ replyHold = null, connectable = false, create = false }: {
     }
     return { data: row };
   });
-  const custom = vi.fn(async (_request: { meta?: Record<string, unknown> }) => ({ data: { connect_integration: {
-    attached: true, authorize_url: "", error: null, mode: "redirect", state: "", redirect_uri: "",
-  } } }));
+  const custom = vi.fn(async (request: { meta?: Record<string, unknown> }) => {
+    const variables = (request.meta?.gqlVariables ?? {}) as Record<string, unknown>;
+    // The repair read: what choosing each feed implementation sets on this feed, the config it carries over.
+    if (variables.record != null) return { data: { impl_choices: [
+      { key: "manual", category: "", defaults: { config: { quota_limit: 10000 } }, config_schema: null },
+    ] } };
+    return { data: { connect_integration: {
+      attached: true, authorize_url: "", error: null, mode: "redirect", state: "", redirect_uri: "",
+    } } };
+  });
   const update = vi.fn(async ({ variables }: { variables: Record<string, unknown> }) => ({ data: { ...row, ...variables } }));
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/feeds/feed"] }) });
   render(<Provider dataProvider={{ getOne, custom, update }}><RouterContextProvider router={router}>
@@ -107,6 +115,19 @@ test("the feed's backend is offered on create and locked on a stored feed whose 
   // Registered keys offer no repair, so neither selector's record read is ever made.
   const asked = stored.custom.mock.calls.map(([request]) => (request?.meta?.gqlVariables ?? {}) as Record<string, unknown>);
   expect(asked.filter((variables) => variables.record != null)).toEqual([]);
+});
+
+test("a feed whose own implementation is retired is repaired by its selector alone: the feeds update writes no config", async () => {
+  const f = fixture({ retired: true });
+  const control = await screen.findByRole("combobox", { name: "Backend" });
+  await waitFor(() => expect(control.getAttribute("aria-busy")).not.toBe("true"));
+  fireEvent.click(control);
+  const option = await screen.findByRole("option", { name: "Manual" });
+  fireEvent.pointerDown(option, { pointerType: "mouse" });
+  fireEvent.click(option);
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect(f.update.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ variables: { feed_backend_class: "MANUAL" } }));
 });
 
 test("a dirty feed keeps Connect visible but disabled", async () => {
