@@ -330,19 +330,42 @@ const PLAN_REFUSALS = {
   summary: "Say what the launch ships.",
 } as const;
 type PlanRefusal = keyof typeof PLAN_REFUSALS;
+/** What a save can be refused for beside its field: the first step's label, or a reason no field shows. */
+const PLAN_BESIDE = {
+  nothing: { fieldErrors: {}, formErrors: [] },
+  step: { fieldErrors: { "steps.0.label": ["Say who freezes the branch."] }, formErrors: [] },
+  form: { fieldErrors: {}, formErrors: ["The launch is on hold."] },
+} as const;
+type PlanBeside = keyof typeof PLAN_BESIDE;
+interface PlanRefusalArgs {
+  /** The field refused, or `step` for the first step's label alone. */
+  refused: PlanRefusal | "step";
+  beside?: PlanBeside;
+}
 
 /**
  * The plan opens on its Budget pane; its own submit refuses every save for the field `refused`
  * names, with that field's reason and no other. Edit Summary and press Save: by default Venue,
  * whose pane is not selected, is refused, so the Venue pane is selected and its field takes focus,
  * marked invalid with its reason under it. The banner names the field and does not take focus.
+ * With `refused` set to `step` the first step's label is refused: the Steps pane is selected and
+ * that cell takes focus. `beside` adds a second reason to the same refusal: `step` refuses the
+ * first step as well, and the field still takes focus, in its own pane, since the form's fields
+ * come before its steps; `form` adds a reason no field shows, so the banner takes focus and the
+ * selected pane stays, whatever else was refused.
  */
-export const RefusedSaveRevealsItsField: StoryObj<{ refused: PlanRefusal }> = {
-  args: { refused: "venue" },
-  argTypes: { refused: { control: "inline-radio", options: Object.keys(PLAN_REFUSALS) } },
-  render: ({ refused }) => (
+export const RefusedSaveRevealsItsField: StoryObj<PlanRefusalArgs> = {
+  args: { refused: "venue", beside: "nothing" },
+  argTypes: {
+    refused: { control: "inline-radio", options: [...Object.keys(PLAN_REFUSALS), "step"] },
+    beside: { control: "inline-radio", options: Object.keys(PLAN_BESIDE) },
+  },
+  render: ({ refused, beside = "nothing" }) => (
     <FormView resource={planResource.modelLabel} id={planRecord.id} defaultRecordTab="budget" linesTabLabel="Steps"
-      submit={async () => invalidFormSubmit({ fieldErrors: { [refused]: [PLAN_REFUSALS[refused]] }, formErrors: [] })}>
+      submit={async () => invalidFormSubmit({
+        fieldErrors: { ...(refused === "step" ? PLAN_BESIDE.step.fieldErrors : { [refused]: [PLAN_REFUSALS[refused]] }), ...PLAN_BESIDE[beside].fieldErrors },
+        formErrors: [...PLAN_BESIDE[beside].formErrors],
+      })}>
       <Field name="title" label="Title" widget="text" title />
       <Group label="Overview"><Field name="summary" label="Summary" widget="text" /></Group>
       <Group label="Risks" collapsible defaultOpen={false}><Field name="risk" label="Risk notes" widget="text" /></Group>
@@ -353,9 +376,9 @@ export const RefusedSaveRevealsItsField: StoryObj<{ refused: PlanRefusal }> = {
 };
 
 /** The same plan with Risk notes refused: Save opens the collapsed Risks section, Risk notes takes focus, and the Budget pane stays. */
-export const RefusedSaveOpensItsSection: StoryObj<{ refused: PlanRefusal }> = {
+export const RefusedSaveOpensItsSection: StoryObj<PlanRefusalArgs> = {
   ...RefusedSaveRevealsItsField,
-  args: { refused: "risk" },
+  args: { refused: "risk", beside: "nothing" },
 };
 
 export const RecordSectionHeading: Story = {

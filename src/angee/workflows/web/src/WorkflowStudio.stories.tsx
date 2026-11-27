@@ -10,6 +10,8 @@ import { runSubjectFixture, workflowResourceFixture } from "./testing";
 export default { title: "Workflows/Studio", parameters: { angeeOwnRuntime: true, layout: "fullscreen" }, excludeStories: ["StudioStory"] };
 export const Draft = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} /> };
 export const Conflict = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} conflict /> };
+/** Change the draft (Auto-layout) and press Save draft: the save is refused for the entry step's threshold, the banner says so and takes focus. */
+export const SaveRefused = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} saveInvalid /> };
 export const LocatedIssues = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} invalid /> };
 export const UnrenderedIssues = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} unrenderedIssues /> };
 export const ReadOnly = { render: (_args: unknown, { globals }: { globals: Record<string, unknown> }) => <StudioStory appearance={storyAppearance(globals)} readOnly /> };

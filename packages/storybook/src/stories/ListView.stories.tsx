@@ -141,6 +141,39 @@ const SERVER_TASK_GROUPS = `query ServerTaskGroups($group_by: [ServerTaskGroupBy
   totalCount: server_tasks_groups_count(group_by: $group_by, where: $where, having: $having)
 }`;
 
+// Ten errands, two of them without a due date, ordered in the browser by their date, latest first, then title. Read in
+// this order, their months come March, January, April, February.
+const errands = [
+  { id: "errand-1", title: "Renew the lease", due: "2026-03-12" },
+  { id: "errand-2", title: "Book the venue", due: "2026-01-20" },
+  { id: "errand-3", title: "Order the badges", due: "2026-04-02" },
+  { id: "errand-4", title: "Pay the deposit", due: "2026-02-14" },
+  { id: "errand-5", title: "Collect the keys", due: null },
+  { id: "errand-6", title: "Print the menus", due: "2026-03-28" },
+  { id: "errand-7", title: "Send the invoices", due: "2026-01-05" },
+  { id: "errand-8", title: "Hire the band", due: "2026-04-18" },
+  { id: "errand-9", title: "Water the plants", due: null },
+  { id: "errand-10", title: "Archive the receipts", due: "2026-02-27" },
+];
+const errandFields = { id: { scalar: "ID" }, title: { scalar: "String" }, due: { scalar: "Date" } } as const;
+const errandQuery = ResourceQuery.forRows({ fields: errandFields }).contract;
+const errandResource = testDataResource("notes.Errand", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "errands", aggregate: "errands_aggregate" }, typeNames: { filter: "ErrandFilter", order: "ErrandOrder" },
+  fields: Object.entries(errandFields).map(([name, { scalar }]) => ({ name, kind: "scalar", scalar, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: { ...errandQuery, sort: { ...errandQuery.sort, default: [{ field: "due", direction: "DESC" as const }, { field: "title", direction: "ASC" as const }] } },
+});
+
+// The server's tasks held in the browser under a resource that declares no order, so no key orders them: they are
+// read open ones first, then closed, then the two with no status.
+const unorderedTaskResource = testDataResource("notes.UnorderedTask", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "unordered_tasks", aggregate: "unordered_tasks_aggregate" }, typeNames: { filter: "UnorderedTaskFilter", order: "UnorderedTaskOrder" },
+  fields: taskResource.fields,
+  query: { ...taskQuery, sort: { ...taskQuery.sort, default: [] } },
+});
+
 const storySchemas = storySchema({
   notes: () => rows,
   notes_aggregate: () => ({ aggregate: { count: rows.length } }),
@@ -149,6 +182,10 @@ const storySchemas = storySchema({
   chores: () => chores,
   chores_aggregate: () => ({ aggregate: { count: chores.length } }),
   ...resourceSnapshotOperations([serverTaskResource], { "notes.ServerTask": serverTasks }),
+  errands: () => errands,
+  errands_aggregate: () => ({ aggregate: { count: errands.length } }),
+  unordered_tasks: () => serverTasks,
+  unordered_tasks_aggregate: () => ({ aggregate: { count: serverTasks.length } }),
 }, { resources: [testDataResource("notes.Note", {
   schemaName: "public",
   roots: { list: "notes", aggregate: "notes_aggregate" },
@@ -157,7 +194,7 @@ const storySchemas = storySchema({
     ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
     ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
   ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
-}), taskResource, choreResource, serverTaskResource] });
+}), taskResource, choreResource, serverTaskResource, errandResource, unorderedTaskResource] });
 
 const meta = {
   title: "Views/ListView",
@@ -252,6 +289,46 @@ export const GroupedOnTheServer: Story = {
   render: () => (
     <div className="max-w-3xl">
       <ListView resource="notes.ServerTask" defaultGroup={{ field: "status" }} columns={[
+        { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
+      ]} />
+    </div>
+  ),
+};
+
+/**
+ * Ten errands grouped by month in the browser and ordered by their date, latest first, then title. The months follow
+ * the date: April, March, February, January, newest first, though the errands are read with March's first, and the two
+ * errands without a date come last, under "No value". A month holds many dates, so its errands share none and there
+ * is no grouping column: the Due header shows the date's own sort, descending, with its `aria-sort`, and Title, which
+ * only breaks ties, shows not sorted. Open April: its errands are latest first, Hire the band before Order the badges.
+ * Press Due's sort button: the months and their errands go oldest first, January to April, "No value" still last;
+ * press it again for newest first. A third press clears the date's key: the months go ascending, as with no key held,
+ * and their errands keep the order they were read in.
+ */
+export const GroupedByMonth: Story = {
+  name: "Grouped By Month",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.Errand" defaultGroup={{ field: "due", granularity: "month" }} columns={[
+        { field: "due", header: "Due" }, { field: "title", header: "Title" },
+      ]} />
+    </div>
+  ),
+};
+
+/**
+ * The server story's tasks, two with no status, held in the browser under a resource that declares no order, grouped
+ * by status. With no key held the groups list ascending by their status, closed before open, though the open tasks are
+ * read first, and the tasks without one come last, under "No value". The Status header shows ascending, the direction
+ * groups go in with no key, Rank and Title show not sorted, and no header's `aria-sort` says a direction. Open a
+ * group: its tasks keep the order they were read in. Press Status's sort button: its first press writes the status key
+ * descending, open before closed, "No value" still last; press it again to turn them back.
+ */
+export const GroupedWithNoOrder: Story = {
+  name: "Grouped With No Order",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.UnorderedTask" defaultGroup={{ field: "status" }} columns={[
         { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
       ]} />
     </div>

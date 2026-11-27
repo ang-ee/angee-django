@@ -68,6 +68,7 @@ const REFUSED_SUBMIT_STORIES = ["MutationDialog", "ActionTypedArguments", "Actio
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
   "./ListView.stories.tsx PaneWithOrder", "./ListView.stories.tsx GroupedBehindAnotherKey", "./ListView.stories.tsx GroupedOnTheServer",
+  "./ListView.stories.tsx GroupedByMonth", "./ListView.stories.tsx GroupedWithNoOrder",
   ...REFUSED_SUBMIT_STORIES.map((name) => `./RefusedSubmit.stories.tsx ${name}`),
 ]);
 /** The stories not rendered here, each with why. */
@@ -295,6 +296,54 @@ test("Views/ListView / Grouped On The Server asks for its groups in its grouping
   fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
   await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
   expect([sort("Status"), ariaSorted()]).toEqual(["ascending", ["Rank ascending"]]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+const ERRANDS = /^(Renew the lease|Book the venue|Order the badges|Pay the deposit|Collect the keys|Print the menus|Send the invoices|Hire the band|Water the plants|Archive the receipts)$/;
+/** A browser list's groups whose toggles' names match `name`, by the label each shows, without its count. */
+const browserGroups = (name: RegExp) => screen.queryAllByRole("button", { name }).map((button) => button.querySelector(".truncate")?.textContent);
+
+test("Views/ListView / Grouped By Month lists its months by their date, newest first, the errands without one last, and Due turns them", async () => {
+  const said = consoleMessages();
+  render(<listView.GroupedByMonth />);
+  const months = () => browserGroups(/^((January|February|March|April) 2026|No value)/);
+  await waitFor(() => expect(months()).toEqual(["April 2026", "March 2026", "February 2026", "January 2026", "No value"]));
+  // A month's errands share no date: Due shows the date's own sort and its aria-sort, and no column groups them.
+  expect([["Due", "Title"].map(sort), ariaSorted()]).toEqual([["descending", "none"], ["Due descending"]]);
+  const shownErrands = () => screen.queryAllByText(ERRANDS).map((cell) => cell.textContent);
+  fireEvent.click(screen.getByRole("button", { name: /^April 2026/ }));
+  await waitFor(() => expect(shownErrands()).toEqual(["Hire the band", "Order the badges"]));
+  // The date's own press turns the months, and their errands with them. Each press is decided from the order the list
+  // last rendered, so each waits for the months the one before turned.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Due / }));
+  await waitFor(() => expect(months()).toEqual(["January 2026", "February 2026", "March 2026", "April 2026", "No value"]));
+  expect([["Due", "Title"].map(sort), ariaSorted(), shownErrands()])
+    .toEqual([["ascending", "none"], ["Due ascending"], ["Order the badges", "Hire the band"]]);
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Due / }));
+  await waitFor(() => expect(months()).toEqual(["April 2026", "March 2026", "February 2026", "January 2026", "No value"]));
+  expect([["Due", "Title"].map(sort), ariaSorted(), shownErrands()])
+    .toEqual([["descending", "none"], ["Due descending"], ["Hire the band", "Order the badges"]]);
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/ListView / Grouped With No Order lists its groups ascending with no key held, the tasks without a status last, and Status writes its key", async () => {
+  const said = consoleMessages();
+  render(<listView.GroupedWithNoOrder />);
+  const groups = () => browserGroups(/^(closed|open|No value)/);
+  await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
+  // No key is held: the grouping column shows its groups ascending, and no other header shows a sort or says one.
+  expect([["Status", "Rank", "Title"].map(sort), ariaSorted()]).toEqual([["ascending", "none", "none"], []]);
+  fireEvent.click(screen.getByRole("button", { name: /^open/ }));
+  await waitFor(() => expect(screen.queryAllByText(TASKS).map((cell) => cell.textContent)).toEqual(["Draft the brief", "Book the room", "Collect quotes"]));
+  // Its first press writes the status key descending; the second waits for the groups the first turned.
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["open", "closed", "No value"]));
+  expect([sort("Status"), ariaSorted()]).toEqual(["descending", []]);
+  fireEvent.click(screen.getByRole("button", { name: /^Sort Status / }));
+  await waitFor(() => expect(groups()).toEqual(["closed", "open", "No value"]));
+  expect([sort("Status"), ariaSorted()]).toEqual(["ascending", []]);
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
   expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
