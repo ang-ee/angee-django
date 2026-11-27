@@ -3,7 +3,7 @@
 ``Organization.domain_key`` is ``Handle.normalize_email_domain(domain)``, the rule a handle's keys read: every save
 of the domain writes it, ``Organization.domain_filter`` finds an organization by any spelling of its domain the rule
 joins, history versions it beside the domain, and the provision repair
-(``PartyManager.renormalize_organization_domains``) keys what a save did not.
+(``OrganizationManager.renormalize_domains``) keys what a save did not.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Directory, Organization, Party
 from angee.parties.backends import ParsedOrganization
-from angee.parties.managers import KeyRepair
+from angee.parties.managers import KeyRepair, KeyRepairOutcome, repair_keys
 from angee.provenance.context import changeset
 from tests.conftest import create_platform_admin, create_user, current_stream, make_integration
 
@@ -147,7 +147,7 @@ def test_a_domain_a_directory_states_is_keyed_as_it_lands(source: SimpleNamespac
 
 def _repair() -> KeyRepair:
     with system_context(reason="tests.parties.organization_domains.repair"):
-        return Party.objects.renormalize_organization_domains()
+        return Organization.objects.renormalize_domains()
 
 
 def test_the_repair_keys_organizations_stored_before_the_key_and_a_second_run_writes_nothing(owner: Any) -> None:
@@ -214,6 +214,16 @@ def test_an_organization_whose_save_raises_is_counted_and_every_other_one_is_key
     assert failure.getMessage() == f"The keys of organization {stored[1].pk} could not be saved again."
     assert [_stored(row)[1] for row in stored] == ["row0.strasse.example", "", "row2.strasse.example"]
     assert _repair() == KeyRepair(saved=1)
+
+
+def test_a_capped_walk_over_candidates_is_refused_before_it_reads() -> None:
+    """A cap counts the rows behind; candidates with a stale check would make ``remaining`` count every row."""
+
+    with pytest.raises(ValueError, match="capped key repair"):
+        repair_keys(
+            Organization._base_manager.order_by("pk"), lambda row: KeyRepairOutcome.CURRENT,
+            reason="tests.parties.organization_domains", limit=1, read=("domain",), stale=lambda domain: True,
+        )
 
 
 def test_every_provision_keys_the_organizations_behind_and_the_command_says_how_many(owner: Any) -> None:

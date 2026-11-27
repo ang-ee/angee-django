@@ -81,6 +81,7 @@ from angee.parties.managers import (
     DirectoryManager,
     FolderManager,
     HandleManager,
+    OrganizationManager,
     PartyManager,
     PartyStatementQuerySet,
     RelationshipManager,
@@ -852,13 +853,15 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         sqid_prefix="ogs_",
     )
 
+    objects = OrganizationManager()
+
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
     domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", db_index=True, editable=False)
     """``domain`` in the domain-spelling rule's one spelling (``Handle.normalize_email_domain``); ``""`` if none.
 
     What :meth:`domain_filter` compares. Written by :meth:`save` from ``domain``, so history versions it beside the
-    domain, as a handle's keys; the provision repair (``PartyManager.renormalize_organization_domains``) saves again a
+    domain, as a handle's keys; the provision repair (``OrganizationManager.renormalize_domains``) saves again a
     row a save did not key.
     """
 

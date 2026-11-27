@@ -18,10 +18,10 @@ class Command(BaseCommand):
     )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        """Dispatch to the Party manager and report how many organizations it keyed and how many it could not."""
+        """Dispatch to the Organization manager and report how many organizations it keyed and how many it could not."""
 
         del args, options
-        repair = apps.get_model("parties", "Party").objects.renormalize_organization_domains()
+        repair = apps.get_model("parties", "Organization").objects.renormalize_domains()
         self.stdout.write(self.style.SUCCESS(f"Saved the domain key of {repair.saved} organization(s) again."))
         if repair.failed:
             self.stderr.write(

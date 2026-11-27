@@ -159,9 +159,11 @@ class _StatementQuerySet[T: Statement](models.QuerySet[T]):
         )
 
     def confirmed(self) -> Self:
-        """The applied statements a person confirmed: the stance ``Statement.is_confirmed`` reads, as one filter.
+        """The applied statements (:meth:`applied`: current, asserted, applied) whose stance is a confirmation.
 
-        Both read ``Statement.CONFIRMED_STANCE``, so a row and a query cannot disagree on what a confirmation is.
+        The stance is ``Statement.CONFIRMED_STANCE``, a person's or a seed's preferred statement with a
+        value, which ``Statement.is_confirmed`` checks of a row; that property checks no status, so a
+        superseded confirmation is one as a row and is not here.
         """
 
         return self.applied().filter(**self.model.CONFIRMED_STANCE)
@@ -1140,24 +1142,13 @@ class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
         """
 
         manager = self.statements_for(aspect)
-        return manager.set(
-            aspect=aspect,
-            values=values,
-            rank=manager.model.StatementRank.PREFERRED,
-            **members,
-        )
+        return manager.set(aspect=aspect, values=values, **manager.model.CONFIRMED_STANCE, **members)
 
     def dismiss_statement(self, *, aspect: str, **members: Any) -> Any:
         """Write the acting person's preferred no-value statement of ``aspect`` on this subject."""
 
         manager = self.statements_for(aspect)
-        return manager.set(
-            aspect=aspect,
-            values={},
-            rank=manager.model.StatementRank.PREFERRED,
-            snak=manager.model.StatementSnak.NO_VALUE,
-            **members,
-        )
+        return manager.set(aspect=aspect, values={}, **manager.model.DISMISSED_STANCE, **members)
 
     def apply_pair(self, *, aspect: str, other: Any, statement: Any | None) -> None:
         raise ImproperlyConfigured("Pair aspects require the endpoint's apply_pair hook.")
@@ -1261,9 +1252,19 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
         DEPRECATED = "deprecated"
 
     CONFIRMED_STANCE: ClassVar[Mapping[str, str]] = {"rank": StatementRank.PREFERRED, "snak": StatementSnak.VALUE}
-    """A person's confirmation, column by column: what :attr:`is_confirmed` asks of a row.
+    """A confirmation's stance, column by column: a preferred statement with a value.
 
-    ``confirmed()`` filters a query by the same mapping, so the property and the scope cannot drift apart.
+    Only a person or a seed source asserts a preferred statement (``stance_constraint``). The verb
+    ``confirm_statement`` writes it, :attr:`is_confirmed` checks a row's stance alone, and
+    ``confirmed()`` keeps the applied statements with it, so all three read this one mapping.
+    ``is_confirmed`` checks no status: a confirmation another stance superseded is still one as a
+    row and is absent from ``confirmed()``, on purpose.
+    """
+    DISMISSED_STANCE: ClassVar[Mapping[str, str]] = {"rank": StatementRank.PREFERRED, "snak": StatementSnak.NO_VALUE}
+    """A dismissal's stance, column by column: a preferred statement asserting no value.
+
+    The verb ``dismiss_statement`` writes it and :attr:`is_dismissed` checks a row's stance alone; a
+    query for dismissals filters by this mapping and the status it needs.
     """
 
     history = StatementHistory(inherit=True)
@@ -1470,7 +1471,7 @@ class Statement(MergeContractMixin, HistoryMixin, ChangesetHistory, SqidMixin, T
 
     @property
     def is_dismissed(self) -> bool:
-        return self.rank == self.StatementRank.PREFERRED and self.snak == self.StatementSnak.NO_VALUE
+        return all(getattr(self, name) == value for name, value in self.DISMISSED_STANCE.items())
 
     def member_values(self) -> dict[str, Any]:
         """This stance's member identity, as the subject verbs take it."""

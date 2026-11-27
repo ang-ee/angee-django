@@ -1,8 +1,8 @@
-"""Which parties a person confirmed on an address: every confirmation, not only the party the address resolves to.
+"""Which parties are confirmed on an address: every confirmation, not only the party the address resolves to.
 
-``PartyStatementQuerySet.confirmed`` is the applied statements a person confirmed, the stance
-``Statement.is_confirmed`` reads; ``PartyQuerySet.confirmed_on(handles)`` is the canonical parties confirmed on
-any of the handles, in one query.
+``StatementQuerySet.confirmed`` is the applied statements whose stance is a confirmation (``CONFIRMED_STANCE``, a
+person's or a seed's preferred statement with a value); ``PartyQuerySet.confirmed_on(handles)`` is the canonical
+parties confirmed on any of the handles, in one query.
 """
 
 from __future__ import annotations
@@ -12,10 +12,19 @@ from typing import Any
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 import tests.test_parties_circles  # noqa: F401 -- register the fixture model graph before database setup
 from angee.messaging.testing.models import Handle, Party
+from angee.provenance.testing.models import Seed
 from tests.conftest import create_platform_admin, create_user
 
 pytestmark = pytest.mark.django_db
@@ -135,3 +144,71 @@ def test_the_read_is_one_statement_whatever_the_number_of_handles(admin: Any, co
             assert list(Party.objects.confirmed_on(rows).values_list("pk", flat=True)) == [party.pk]
 
     assert len(queries) == 1
+
+
+def test_a_withdrawn_confirmation_is_one_as_a_row_and_is_not_in_the_scope(admin: Any) -> None:
+    """``is_confirmed`` checks the stance alone; ``confirmed()`` keeps only applied statements. On purpose."""
+
+    handle = _handle(admin, "changed-mind@example.test")
+    party = _party(admin, "Changed mind")
+    _confirm(admin, party, handle)
+    with system_context(reason="tests.parties.confirmed_on"):
+        assert party.statements.withdraw(admin) == 1
+        (confirmation,) = Party.objects.handle_statements().filter(subject=party, handle=handle)
+        assert confirmation.is_confirmed and confirmation.status == confirmation.StatementStatus.WITHDRAWN
+        assert not Party.objects.handle_statements().confirmed().filter(subject=party).exists()
+    assert _confirmed_on(handle) == []
+
+
+def test_the_dismissal_stance_is_one_mapping_for_the_property_and_a_query(admin: Any) -> None:
+    """``DISMISSED_STANCE`` is what ``is_dismissed`` checks and what a query for dismissals filters by."""
+
+    handles = [_handle(admin, f"dismissal-{index}@example.test") for index in range(3)]
+    party = _party(admin, "Dismissals")
+    _confirm(admin, party, handles[0])
+    with actor_context(admin):
+        party.with_actor(admin).dismiss_statement(aspect="handle", handle=handles[1])
+    with system_context(reason="tests.parties.confirmed_on"):
+        Party.objects.assert_handle(party, handles[2], asserted_by=admin)
+        statements = Party.objects.handle_statements().filter(subject=party)
+        stance = statements.model.DISMISSED_STANCE
+        assert set(statements.filter(**stance).values_list("pk", flat=True)) == {
+            row.pk for row in statements if row.is_dismissed
+        }
+        assert statements.filter(**stance).count() == 1
+
+
+def test_a_seeds_preferred_statement_confirms_and_a_holder_a_seed_row_names_is_stated_as_before(admin: Any) -> None:
+    """A seed may confirm, as a person may; a seeded row's holder is a normal claim unless the row carries its flag.
+
+    Each answer is the one the handle's resolved link gave before (``HandleQuerySet.confirmed``).
+    """
+
+    with system_context(reason="tests.parties.confirmed_on"):
+        seed = Seed._base_manager.create(key="tests.parties.confirmed_on.seed")
+    # A seed states parties' facts as parties' own rules do: a member of its statement-source role.
+    write_relationships([
+        RelationshipTuple(ObjectRef("provenance/role", "parties_statement_source"), "member", to_subject_ref(seed)),
+    ])
+    confirmed_by_seed, named, named_and_flagged = (
+        _handle(admin, value) for value in ("seeded@example.test", "named@example.test", "flagged@example.test")
+    )
+    party = _party(admin, "Seeded")
+    with system_context(reason="tests.parties.confirmed_on"):
+        party.statements.set(
+            aspect="handle", handle=confirmed_by_seed, values={}, asserted_by=seed,
+            **Party.objects.handle_statements().model.CONFIRMED_STANCE,
+        )
+        Handle._base_manager.filter(pk=named.pk).update(party=party)
+        Handle._base_manager.filter(pk=named_and_flagged.pk).update(party=party, party_link_confirmed=True)
+        loaded = list(Handle._base_manager.filter(pk__in=[named.pk, named_and_flagged.pk]).order_by("pk"))
+        Handle.after_resource_load(loaded, tier="demo", source="tests.parties.confirmed_on")
+        before = {
+            handle.pk: Handle.objects.confirmed("email", handle.value).filter(pk=handle.pk).exists()
+            for handle in (confirmed_by_seed, named, named_and_flagged)
+        }
+
+    assert before == {confirmed_by_seed.pk: True, named.pk: False, named_and_flagged.pk: True}
+    assert [_confirmed_on(handle) == [party.pk] for handle in (confirmed_by_seed, named, named_and_flagged)] == [
+        True, False, True,
+    ]

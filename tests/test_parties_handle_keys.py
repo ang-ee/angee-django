@@ -440,7 +440,7 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
     1: (_VERSION_1_VALUES, _DOMAINS),
     2: (
         # The person-matching key: version 1's outputs, but for a domain with surrounding whitespace, which is now
-        # read through the domain rule before the Gmail check, and the spellings IDNA 2003 sends as one domain.
+        # read through the domain-spelling rule before the Gmail check, and the spellings IDNA 2003 sends as one domain.
         {
             **_VERSION_1_VALUES,
             ("email", "a.b@ gmail.com"): "ab@gmail.com",

@@ -38,7 +38,7 @@ class PartiesConfig(AppConfig):
         one resumes. With no row behind, it costs one indexed query.
         ``renormalize_organization_domains`` writes again each organization's
         domain key that is not its domain under the domain-spelling rule
-        (``PartyManager.renormalize_organization_domains``), through the same
+        (``OrganizationManager.renormalize_domains``), through the same
         walk: it reads every organization's domain in batches and saves only a row
         whose key differs.
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
