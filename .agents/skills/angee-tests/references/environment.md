@@ -32,6 +32,16 @@ builds its schemas lazily on its first observable write.
 - **Run every changed test module standalone.** A full suite's file order can
   leak concrete test models into the shared registry and mask a missing
   registration; a broad run does not replace the direct module run.
+- **A public manager or queryset method is an inventory edit where its addon has
+  one.** [`tests/test_workflows_surface.py`](../../../../tests/test_workflows_surface.py)
+  is the one such inventory: its expected tables pin the public Python surface
+  of `workflows`, `decisions` and `extraction`, their manager and queryset verbs
+  included; the other `test_workflows_*_surface.py` modules test reads, not
+  names. A change that adds, renames or removes such a method runs it and
+  edits the expected table in the same commit as the method. When it fails, read
+  the differing items pytest names: its full diff compares the two dicts line by
+  line in their own key order, so an unchanged block listed in another order
+  prints as removed and again as added.
 - **Temporary app registries can wire shared signals.** Django's `isolate_apps`
   runs app ready hooks. Tests including auth restore the sign-in stamp through
   [IAM's signal owner](../../../../src/angee/iam/signals.py), as the

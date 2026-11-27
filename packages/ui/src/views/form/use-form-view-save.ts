@@ -55,20 +55,20 @@ import {
   formWritablePaths,
   hiddenDraftPaths,
   hiddenResetWrites,
-  isFieldControlVisible,
   missingDraftValues,
   mutationData,
   pathWritable,
   recordToValues,
   resolveField,
   seedPreset,
+  shownFields,
   visibleFields,
   type FormValues,
   type LinesSeed,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
-  applyFormErrors, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalBannerFocus, type FormSubmitResult,
+  applyFormErrors, formErrorsFromForm, formSubmitError, formSubmitOutcome, markMemberErrors, savedFormSubmitResult, serverErrorsFromForm, useRefusalFocus, type FormSubmitResult,
 } from "./validation-errors";
 import { useUnsavedChangesNavigationGuard, type UnsavedChangesMove } from "./use-unsaved-changes-navigation-guard";
 import { useFormHistory, type FormHistory } from "./use-form-history";
@@ -218,7 +218,7 @@ export interface FormViewSaveSurface {
   /** The form-level messages of the last refused or failed save, each its own entry; empty when there is none. */
   saveErrors: readonly string[];
   /** Spread on the banner that renders `saveErrors`: a refused save brings the person to it or to its first refused field. */
-  saveBanner: ReturnType<typeof useRefusalBannerFocus>["banner"];
+  saveBanner: ReturnType<typeof useRefusalFocus>["banner"];
   saveConflict: boolean;
   /**
    * The last create was refused because an earlier attempt from this form already wrote a record
@@ -584,7 +584,9 @@ export function useFormViewSave({
   }, [lineDraftDirty, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveErrors = formErrorsFromForm(form.formState.errors);
-  const { banner: saveBanner, focusBanner: focusSaveBanner } = useRefusalBannerFocus(saveErrors);
+  // The record form never locks its fields: a refusal's focus lands once the answer renders, on
+  // the form library's timer.
+  const { banner: saveBanner, focus: focusSaveRefusal } = useRefusalFocus(saveErrors, { form });
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
   const saveKeyConflict = form.formState.errors.root?.server?.type === "creationKeyConflict";
   const clearServerFieldError = React.useCallback((name: string) => clearErrors(name), [clearErrors]);
@@ -715,14 +717,14 @@ export function useFormViewSave({
     // record does not display declares, one the save cannot write and one the record redacts
     // among them.
     const values = form.getValues();
-    const shown = visibleFields(checkFields, values).filter((field) => isFieldControlVisible(field, values));
+    const shown = shownFields(checkFields, values);
     return applyFormErrors(form, result, {
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
-      focus: focusSaveBanner,
+      focus: focusSaveRefusal,
     }) ? null : result;
-  }, [checkFields, fieldByName, focusSaveBanner, form, linesField, t]);
+  }, [checkFields, fieldByName, focusSaveRefusal, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;

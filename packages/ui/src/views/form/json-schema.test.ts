@@ -37,7 +37,6 @@ describe("JSON Schema forms", () => {
       ],
     }, defaultWidgets);
     expect(args.defaultValues).toEqual({ kind: "count", count: 2 });
-    expect(args.fieldNames).toEqual(["kind", "count", "acknowledge"]);
     if (typeof args.fields !== "function") throw new Error("Expected dynamic fields");
     const fields = args.fields({ kind: "approve" });
     expect(fields.map((field) => field.name)).toEqual(["kind", "acknowledge"]);

@@ -69,6 +69,16 @@ class WorkflowDefinitionResource(AngeeResource):
     """Delegate declaration persistence to the workflow's save/publish owner."""
 
     publish = fields.Field(column_name="publish", readonly=True, default=True, widget=widgets.BooleanWidget())
+    never_create_only = {
+        "draft": (
+            "draft is installed and published on every changed row, so it is never create_only: under "
+            "create_only a changed row would publish the draft staff hold."
+        ),
+        "publish": (
+            "publish applies on every changed row, so it is never create_only: under create_only a changed "
+            "row would publish, whatever the entry declares."
+        ),
+    }
 
     def _extensions_for(self, key: str) -> tuple[SourcedWorkflowExtension, ...]:
         """Return this load's contributions, retaining the published set for a narrow load."""
@@ -121,7 +131,11 @@ class WorkflowDefinitionResource(AngeeResource):
 
 
 class TriggerResource(AngeeResource):
-    """Install declarations disabled; enabling grants the workflow principal."""
+    """Install declarations disabled; enabling grants the workflow principal.
+
+    A re-applied row keeps the trigger's activation unless it changes the rule
+    (``Trigger.changes_rule_of``), which disables it with its reason.
+    """
 
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
         """Treat activation as operator state, never declaration input."""
@@ -129,7 +143,15 @@ class TriggerResource(AngeeResource):
         super().before_import_row(row, **kwargs)
 
     def before_save_instance(self, instance: Any, row: Mapping[str, Any], **kwargs: Any) -> None:
-        """Clear activation even when replacing a previously enabled declaration."""
-        instance.enabled = False
-        instance.disabled_reason = ""
+        """Install a new declaration disabled; keep a re-applied one's activation unless its rule changes.
+
+        The stored row is read under ``TriggerManager.lock_stored``, the locks ``Trigger.save``
+        and the operator's verbs take, so an enable or disable finishes first or waits; a row
+        the load leaves unchanged is never locked.
+        """
+        stored = None if instance._state.adding else type(instance).objects.lock_stored(instance)
+        if stored is not None and not instance.changes_rule_of(stored):
+            instance.enabled, instance.disabled_reason = stored.enabled, stored.disabled_reason
+        else:
+            instance.enabled, instance.disabled_reason = False, ""
         super().before_save_instance(instance, row, **kwargs)

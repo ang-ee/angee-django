@@ -10,6 +10,302 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`, parties, IAM: a refused field now takes and keeps the focus its
+  refusal brings, on the record form and in every dialog, except a refused
+  member, a record form's rows field refused as a whole, and the controls left
+  as they are below. The `ownerCell` and
+  `progressBar` widgets, the parties fragment's registered party picker, the
+  IAM subject control and the group member field now hand the form their
+  control (`controlRef`); a refusal of any of them focused nothing and the
+  banner took focus. The group member field also marks its picker invalid. The
+  party picker widget is now the form field's control only: it no longer wraps
+  itself in a second field with its own label, which also left its trigger
+  unmarked when the field was refused, and it passes on the field's control
+  props; it is named as the framework's relation widgets are, by a group's
+  label, else the field's text label, else "Party" (so a label that is not
+  text and labels no group is not its name yet, for this widget as for
+  `many2one`). `PartyPicker` itself, for
+  a page outside a form, keeps its field and label. `useRefusalFocus` counts
+  focus anywhere inside a field shown invalid, so a composite field refused as
+  a whole (its first member focused) and an absent value (its "Set value"
+  button) keep it. Left as they are: the platform source dialog's repository
+  field (`RepositoryPicker` takes no ref for its search input) and the storage
+  mount dialog's source browser (no single control to focus), each needing
+  more than a forwarded ref; integrate's account picker
+  (`ConnectWithAccountAction`) and the `statusbar` and `visibility` widgets,
+  which hand the form no focus target either; and a refused member of a rows,
+  object or list field.
+- `@angee/ui`: **Changed contract.** A refusal's focus reaches the refused
+  field whatever control draws it. In a `MutationDialog` and an
+  `ActionFormDialog`, typed or schema-driven, a refused select, combobox, date,
+  time, tag input, relation picker or calendar picker took no focus and the
+  banner took it, because the form library was asked to focus the field from
+  inside the submit, while the dialog's fields are locked (a disabled trigger,
+  a read view in place of the editor, or the disabled fieldset that holds every
+  field of a schema-driven or definition `ActionFormDialog`, which a browser
+  does not focus into). Now
+  `useRefusalFocus` alone decides field or banner and waits: it takes the form
+  and a `ready` flag (`useRefusalFocus(messages, { form, ready })`), waits until
+  the surface reports its controls ready, then asks the form's own deferred
+  `setFocus` for the field, and gives the banner focus only when the field took
+  none; not asked, the banner takes focus once for a list, never again for the
+  same list still showing. `applyFormErrors` hands it the field
+  (`focus(field)`) instead of passing `shouldFocus`, and `formErrorsFromForm`
+  reads one error object as one list. The dialogs still lock their fields
+  while they submit; the record form, which never locks them, focuses where it
+  did. `recordFocusCalls` (`@angee/ui/testing`) records each `focus()` call with
+  whether its target could take focus by what the test DOM shows (disabled, in
+  a disabled fieldset outside its first legend, inside `[hidden]`, `[inert]` or
+  a closed `details`, computed `display: none`, `visibility: hidden` or
+  `collapse`, not
+  focusable at all; a host hidden by an app stylesheet is a browser's to
+  judge), and the tests skill now says a focus assertion on a
+  control inside a disabled fieldset, a non-editable editor or a hidden host is
+  not proven by the test DOM (the measured table is in the skill's web
+  pitfalls). Not in this change: a refused member of a rows, object or list
+  field, a markdown editor holding text (its source is hidden while it
+  previews), and the controls that hand the form no focus target, five of
+  which the entry above gives one.
+
+- `angee.graphql`: **Changed behaviour.** An unexpected GraphQL error is one log
+  record, `AngeeSchema`'s own (class, response path and frames), and no record the
+  schema writes quotes the request. Strawberry's logger also wrote each such error
+  to `strawberry.execution`, and printing a `GraphQLError` quotes the document at
+  its location, so a secret written inline (`redeemSignInLink(token: "…")` instead
+  of a `$token` variable) reached the application log with any mutation that
+  failed. `AngeeSchema.process_errors` replaces Strawberry's logging instead of
+  extending it; refusals, document validation and request coercion errors stay
+  unlogged, and variables are never logged. A resolver that raises a
+  `GraphQLError` already carrying a `path` now meets the same sanitizer as one
+  without: it is logged once, and the client gets `INTERNAL` and the generic
+  message unless its code is an expected one, where its message and exception
+  value used to reach the client and only Strawberry's record logged it.
+  graphql-core's own field errors, such as a non-null field resolved to `None`, are
+  not that case: graphql-core wraps the `TypeError` it raises, so the client got
+  `INTERNAL` and the generic message before and still does, and only their second
+  record, which quoted the request, is gone. `GraphQLConfig`'s own
+  `ignore_logger("strawberry.execution")` is deleted: the schema writes nothing
+  there, and Sentry's Strawberry integration module, which GraphQL's autoconfig
+  imports to disable it, ignores that logger on import.
+  **Upgrade:** nothing, unless a log pipeline read `strawberry.execution` for
+  GraphQL failures; it reads `angee.graphql.schema`.
+
+- `angee.workflows`: **Changed behaviour.** A trigger row a resource load re-applies
+  without a change to the trigger's rule keeps its state: enabled or disabled, its
+  reason, the workflow principal's grant, its schedule cursor and its pending
+  occurrences. It was disabled, with an empty reason, its grant released and its
+  pending occurrences skipped. A rule change still disables it, with "Trigger
+  configuration changed; enable it again."; a new row still installs disabled. The
+  rule's fields are named once, `Trigger.rule_fields`, and `Trigger.changes_rule_of`
+  compares them, for `Trigger.clean` and the adapter. The adapter reads the activation
+  it keeps through `TriggerManager.lock_stored`, the trigger's committed row under its
+  workflow's lock, then its own: the one place that order is written, which
+  `Trigger.save`, `enable`, `disable` and `revoke_grant` now call too. An operator's
+  enable or disable and the load serialize; a row the load leaves unchanged is never
+  locked. The workflows
+  README names the open gap: a changed workflow row installs
+  its declared `draft` over a draft staff saved, whatever `publish` says.
+  **Upgrade:** at the next load a re-applied trigger an operator enabled stays
+  enabled; nothing migrates.
+- `angee.provenance`: **Changed behaviour.** A record's Activity history no longer
+  offers a revert the verb refuses for a later change to a row the changeset wrote, or
+  for an earlier state no longer recorded: `ModelHistory.revert_blockers` is the one
+  rule, asked by `HistoryMixin.revertable_changesets` (so `can_revert`) for a whole page
+  in one statement per touched table, two where a merge can originate, and
+  by the verb under its row locks. Both read a row's earlier versions through the
+  historical queryset's `versions_of` and `dated_versions_of` (an MTI descendant's,
+  dated), the builders the verb fetches the restored state with and the history page's
+  deltas read, and a merge's unchanged survivor through `ModelHistory.merge_survivors`.
+  `revert_changeset` first refuses a changeset whose complete write boundary is not
+  the record's, with its message as before, then answers with the verb's refusal in
+  band, now worded for a person and naming no model label or primary
+  key: "A later change to this record prevents this revert." (code `later_change`) or
+  "The state before this change is no longer recorded, so it cannot be reverted."
+  (code `earlier_state_unavailable`); the label and changeset go to the
+  `angee.provenance.contrib.angee.history` logger. The list still offers a revert the
+  verb refuses for its other reasons: a row the reader may not revert, a statement's
+  own write check, a missing retained row or MTI parent, restoration order.
+  **Deliberate cost, for the capability that the list offers only reverts the verb
+  performs:** a history page costs more per touched table, one statement, two for a
+  table whose lineage holds a mergeable model, the same at any page size. A party's page
+  (party and statement tables) goes from 29 statements to 32 at 1 and at 25 entries
+  (`test_history_page_query_count_does_not_grow_per_entry`); a project's page whose
+  changesets each edit the project and a line goes from 18 to 20
+  (`test_a_document_history_page_costs_the_same_at_any_size_for_the_tables_it_touches`).
+  **Removed:** `Changeset.revertable(record, actor=...)`, which only forwarded to the
+  record. **Upgrade:** call `changeset.pk in record.revertable_changesets((changeset,),
+  actor=...)`; code matching the old messages ("a later write prevents revert", "the
+  pre-boundary state is unavailable") matches the codes instead.
+- `angee.resources`, `angee.webforms`, `angee.workflows`: **Changed contract.** A
+  resource adapter names, in `AngeeResource.never_create_only`, the columns whose
+  omission its owner verb does not treat as keeping what is stored (it publishes the
+  stored value or applies a default instead), each with why; a subclass adds to its
+  parents'. The load refuses an entry listing one under `create_only`, by field or
+  column name, before any row of that entry, and rolls back, as for any entry
+  configuration error. Web forms' refusal of
+  `publish` moved there with its message. A workflow entry may no longer list `draft`
+  or `publish`: under `create_only: [draft]` a changed row (a rename, or the entry
+  newly gaining it) published the draft staff held, with no publisher, so a run as
+  the workflow principal was admitted on staff's content, and a stored draft that
+  could not be published failed every load; under `create_only: [publish]` a changed
+  row published although the entry declared `publish: false`. **Upgrade:** remove
+  `draft` and `publish` from a workflow entry's `create_only`; no shipped entry lists
+  either.
+- `@angee/ui`: **Changed API.** A list resolves its group axes once:
+  `buildColumns` takes them as `BuildColumnsOptions.axes` from the table state
+  (`useResourceViewTableState`), which also gives them to the table's grouping
+  and its headers, instead of resolving `groupStack` a second time from the
+  same inputs. Nothing a list renders or reads changes.
+
+- `@angee/ui`: **Changed API.** A pane list's Order select shows what the
+  headers show and chooses through the header's press rule. It read the first
+  key of the list's state, so a grouped list's select checked the grouping key
+  and an inherited order checked nothing, and a choice set its column alone.
+  `listOrderChoice` (beside `pressedSorting` in `list-body/cell-utils.tsx`,
+  exported with `ListOrderChoice` from `@angee/ui/views/resource-view-list-body`)
+  gives it the first key the rows follow, chooses through `pressedSorting` with
+  the chosen direction on the column the header presses, offers only columns
+  their header can sort whose key no group shares, and changes nothing when the
+  choice is what it shows. `ResourceToolbarProps.sorting` and `onSortingChange`
+  are replaced by `order` (`order={listOrderChoice(table)}`), which the list
+  view's and the collection tree's panes feed from their table.
+
+- `@angee/ui`: one rule for every press on a list header: it never drops the
+  keys a group of the list shares that the order holds. A press on a
+  tie-breaker, on the shown key
+  when it is not the order's last, or on a column the order does not hold set
+  that column alone, so a list grouped in the browser lost its grouping key and
+  reordered its groups. Now `pressedSorting` (the `headerSort` owner in
+  `list-body/cell-utils.tsx`) keeps those keys ahead of the pressed column
+  (`status:asc,title:asc`) and, behind them, is the table's single-sort toggle
+  over the keys the rows follow, a tie-breaker still sorting in its first
+  direction; the groups keep their order on the server, and in the browser
+  wherever the list's order leads with the keys its groups share; a list grouped
+  in the browser by a field its order does not lead with still reorders its
+  groups on a press: by the pressed column where its order does not hold the
+  grouping key, and into the grouping key's own order where the order holds it
+  behind another key, since the press moves it ahead. The URL and a reload keep
+  the order. A grouping
+  column's press turns its key in place and drops the keys the rows follow, as
+  before; other grouping levels' keys now stay at their levels, and its key
+  turns back to ascending rather than being removed. `breaksTies` is no longer
+  exported from the module.
+
+- `@angee/ui`: a saved or shipped view with no `sort` of its own keeps the
+  order the list declares, and only an explicit `sort: null` clears it.
+  Applying such a view cleared the order, opening the same shipped view as a
+  route default kept it, and the view showed active under any order. Now
+  applying it sets the order the collection declares under the view's preset
+  (`inheritedResourceViewSorting`: the shipped view's own `sort`, else the
+  list's declared order), opening its preset gives the same, and it shows
+  active only while the list holds that order (`inheritedSorting` on the view
+  context, read by the search model's active items), so a view of the
+  inherited order and an unordered one are never active together. A view saved
+  while the list's view holds no order of its own stores no `sort` and keeps
+  inheriting; a list mounted by `ListView` or `ResourceList` seeds its declared
+  order, so a view saved there stores it; one saved over a cleared order stores
+  `null`. Upgrade, no code needed: a shipped
+  view without a `sort`, picked in the switcher, keeps the list's declared
+  order; a view saved from a cleared order stores `sort: null`; a view without
+  a `sort` is active only on the inherited order; and a view saved before this
+  change from a cleared list now restores the declared order (clear the order
+  and save it again to keep it unordered).
+
+- `@angee/ui`: **Changed contract.** A list keeps its whole sort order in the
+  URL and in a saved view. Both kept only the first key, so on a list grouped
+  by status and ordered by status then rank, a press on Rank turned it
+  descending and the URL cut the order back to status alone: Rank showed "not
+  sorted" and the order was lost on reload, on a shared link and in a saved
+  view. The URL's `sort` now holds every key as a comma list
+  (`sort=status:asc,rank:desc`); a one-key link reads as before, and a link
+  whose order cannot be read (an empty or three-part key, a field the resource
+  cannot sort by, or one named twice) reads nothing and offers the reset. A
+  saved view's `sort`, a shipped view's and `ResourceViewInitialState.sort` are
+  one `{ field, dir }` or a list of them; a list is written only for several
+  keys, so a one-key view is stored byte for byte as before, and a view saved
+  over several keys shows active right after saving and restores them all. The
+  grouping keys stay in the stored order as the table holds it: in the browser
+  their direction orders the groups. The favorites document
+  (`resource-view.favorites`) is version 2: a version 1 document reads and is
+  written as version 2 at its next change, and a tab on an earlier bundle reads
+  a version 2 document as unknown once it receives it (a live update or a
+  reload), so it then shows no saved views and writes none rather than dropping
+  a view whose order it cannot read.
+
+- `@angee/ui`: **Changed contract.** An action or mutation dialog the server
+  refuses says each reason once, where the reason is (a `content` editor's
+  reason excepted). The server joins every reason into the outcome's message (a
+  refused target's message is the verb's summary), and the dialog showed that
+  message on its banner beside the reasons it joins. Now, in a `MutationDialog`
+  fed an action
+  outcome and in an `ActionFormDialog`, typed or schema-driven:
+  a refusal of one field shows its sentence under the field only and the banner
+  names the field ("Please fix the highlighted fields: To.") without repeating
+  it. Focus goes to that field (with several, the first in the dialog's order;
+  the entry "A refusal's focus reaches the refused field" says how it gets
+  there). A refusal of a field and a reason
+  about the whole action shows that
+  reason on the banner, without the `__all__:` prefix it carried, beside the
+  line naming the field, and the banner takes focus; a reason about the whole
+  action alone shows once; a refused
+  target shows its reason ("You are not allowed to modify this task.") instead
+  of the verb's summary ("Send failed."); a refusal that carries only a
+  message, a domain refusal in band included, still shows that message. A
+  reason under a field the dialog does not render (a hidden field, a field its
+  `showWhen` hides for the values, a field of another schema branch than the
+  one chosen) shows on the banner once, as `key: reason`; before, an
+  `ActionFormDialog` bound it to the field nobody saw, so only the server's
+  joined message told it, and a `MutationDialog` said it twice. A reason under
+  a name only an `ActionFormDialog`'s `content` editor holds shows under that
+  editor and on the banner. A row's direct submit (`useDescriptorRowActions`
+  with `valuesFromRow`) refused for its fields only toasts under the verb's
+  label, not its id (the id still stands in when the label is not text). The
+  adapter, `actionOutcomeSubmitResult`, keeps field
+  reasons under their keys,
+  moves the `__all__` reasons to the form level as they are, and uses the
+  message only when the outcome carries no reason, the rule `runActionResult`
+  applies; `ActionFormDialog` tells the binder the fields it renders when the
+  answer lands. `ActionFormDefinition.fieldNames` is removed and
+  `jsonSchemaActionArgs` no longer returns it; `UseActionFormOptions.fieldNames`
+  also takes a function of the form's values. Unchanged: a record form's save
+  refusal, which the server already splits into field and form reasons and
+  which never passes through the adapter, and the record bar's toast for a
+  refused verb, titled by the verb's label, whose body is the outcome's
+  reasons, or its message when it carries none.
+  Not in this change: focus reaching a field that is disabled or replaced while
+  the submit runs, which is the entry "A refusal's focus reaches the refused
+  field"; where a field's control still
+  takes no focus (a member of a rows, object or list field, say) the banner
+  takes it, and it names the field but no longer repeats its reason.
+  Nor inline action forms that claim no field (`useActionForm`'s empty
+  default), whose banner still repeats a field's reason as `key: reason`, nor a
+  raised domain error reading "Request failed." or its code.
+- `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
+  Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
+  `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
+  the one composed `box-shadow` holds the ring beside the element's own
+  `shadow-*` elevation: a focused pill tab, pressed segmented toggle, drawer
+  rail tab, toast, block-card link, interactive card or collection card frame
+  keeps its elevation and shows the ring. In forced-colours mode, where the
+  browser drops every `box-shadow` and in the last release no control that
+  draws the ring showed focus (controls with their own outline or border, such
+  as the calendar's buttons, did), every control that draws the ring shows a
+  2px outline in the system's colour; the outline is declared for that mode
+  only. An open tab panel shows the ring on keyboard focus. The ring's colour,
+  width and offset are the theme's `--ring` and `--ring-danger`, unchanged.
+  An elevation token is a shadow, never `none`: a layer that is not a shadow
+  voids the composed `box-shadow`, ring included, so "no elevation" is
+  `0 0 #0000` (Ledger and the flat elevation choice). The theme contract
+  (`theme/runtime.mjs`) holds elevations, `--ring` and `--ring-danger` to fixed
+  shadow forms with one exported judge, `isShadowList`, which the theme matrix
+  test also uses, and the composer refuses a theme stylesheet whose text
+  declares an `--elevation-*` property, names one in `@property`, or holds a backslash.
+  `shadow-none` clears an element's own shadow, never the ring: a ring is
+  removed with `ring-0` and `outline-none` under a selector that outranks the
+  ring's state variant, as the form's editable fields do for an input,
+  textarea or button directly inside them and the data-attribute read-only
+  path does. The public token-name list (`@angee/ui/tokens`) leaves out
+  Tailwind's own `--tw-*` variables, so it is unchanged.
 - `angee.iam`: **Changed behaviour.** `angee.iam.permissions.is_platform_admin(user)`
   answers for `user`. It checked the ambient REBAC actor instead, so asking about
   someone else returned the current actor's answer, and asking outside any actor
@@ -937,14 +1233,16 @@ live in code docstrings.
   form-level one, or one of a field the form does not display) the banner now
   takes focus and also carries the line naming the refused fields, which it
   showed only without a form-level reason; with field reasons only, the first
-  shown field takes focus, as before. `applyFormErrors` decides which, for a
+  shown field takes focus. `applyFormErrors` decides which, for a
   surface that passes it `focus` and a `fieldSummary` (the record form,
   `MutationDialog` and the typed-args action dialog). Its `focus` option,
   added in this release as `true`, is now a function, the surface's way of
-  focusing its banner, given by the new `useRefusalBannerFocus`, exported with
+  bringing the person to the first refused field or to its banner: the `focus`
+  of the new `useRefusalFocus(messages, { form, ready })`, exported with
   `formErrorsFromForm`; the record form exposes the banner's props as
   `saveBanner`. **Upgrade:** replace
-  `focus: true` with that hook's `focusBanner` and spread its `banner` on the
+  `focus: true` with that hook's `focus`, given the surface's form (and
+  `ready: false` while its controls are locked), and spread its `banner` on the
   surface's `ErrorBanner`.
 - `angee.brandkit`, `@angee/app`, `@angee/ui`, `angee.appearance`, `angee.theme_fyltr`,
   `angee.theme_ledger`: **Changed behaviour.**
@@ -1102,12 +1400,12 @@ live in code docstrings.
   record's sheet scrolled down to the field being edited, the banner at its
   top was out of view, and focus fell to the page because Save was disabled
   while it ran. The answer now moves focus to the first shown field it names,
-  in the form's order (`applyFormErrors` takes `focus`, through the form
-  library's `shouldFocus`; the record form's save passes it); a refusal that
+  in the form's order (`applyFormErrors` takes `focus`; the record form's
+  save passes it); a refusal that
   names no shown field focuses the banner; and Save stays focusable while a
   save runs (`aria-disabled`). The form's own required check already behaved
-  so. Not changed: a dialog's refusal, and an owner that projects issues while
-  the person edits elsewhere, move no focus. **Upgrade:** a test that expected
+  so. Not changed: an owner that projects issues while the person edits
+  elsewhere moves no focus. **Upgrade:** a test that expected
   a pending Save to carry `disabled` finds `aria-disabled="true"`.
 - `@angee/ui`: **Changed API.** A refusal's form-level messages stay several.
   `applyFormErrors` (`validation-errors.ts`) joined the form-level messages

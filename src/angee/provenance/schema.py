@@ -379,13 +379,9 @@ class RecordHistory:
         grouped: defaultdict[Any, list[_Version]] = defaultdict(list)
         for table, predicate in self.scopes.items():
             key = table._meta.pk.attname
-            historical = get_history_manager_for_model(table).model
             predecessor = (
-                historical._base_manager.filter(
-                    **{key: models.OuterRef(key)},
-                    history_id__lt=models.OuterRef("history_id"),
-                )
-                .order_by("-history_id")
+                get_history_manager_for_model(table)
+                .versions_of(models.OuterRef(key), before=models.OuterRef("history_id"))
                 .values("history_id")[:1]
             )
             rows = (
@@ -682,7 +678,8 @@ class HistoryMutation:
             tracked.history_revert_permission,
         )
         target = require_instance_for_id(Changeset, changeset, queryset=Changeset._base_manager.all())
-        if not target.revertable(record, actor=current_actor()):
+        # The boundary refusal answers first; the verb then refuses a later change or a lost earlier state in band.
+        if target.pk not in record.admitted_reverts((target,)):
             raise ValidationError("This changeset must be reverted from the owner of its complete write boundary.")
         reverted = target.revert()
         return ActionResult(ok=True, message="Changeset reverted.", id=PublicID(public_id_of(reverted)))

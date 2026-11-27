@@ -12,6 +12,7 @@ import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
 import { defaultResourceOrder, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
+import { querySortFromSorting } from "../model/state";
 import type { ListRecordFacts, ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
@@ -213,10 +214,11 @@ export function useResourceViewTableState<TRow extends Row>({
   handleSortingChange: OnChangeFn<SortingState>;
   handleRowSelectionChange: (updater: Parameters<OnChangeFn<RowSelectionState>>[0], table: Table<TRow>) => void;
 } {
+  const groupAxes = React.useMemo(() => tableGroupAxes(groupStack, modelMetadata, columns, query), [groupStack, modelMetadata, columns, query]);
   const tableColumns = React.useMemo(
     () =>
-      buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
-    [columns, groupStack, modelMetadata, clientOperations, query],
+      buildColumns(columns, { axes: groupAxes, metadata: modelMetadata, clientOperations, query }),
+    [columns, groupAxes, modelMetadata, clientOperations, query],
   );
   const columnVisibility = React.useMemo(() => ({
     ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
@@ -245,11 +247,10 @@ export function useResourceViewTableState<TRow extends Row>({
   // The whole order, which a browser-sorted surface sorts its rows by; a header shows only the
   // key the rows visibly follow (`headerSort`).
   const sorting = React.useMemo<SortingState>(() => {
-    const declared = resourceView.state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" }));
+    const declared = resourceView.state.sorting && querySortFromSorting(resourceView.state.sorting);
     return (query ?? queryForColumns(columns, modelMetadata, groupStack)).sortFrom(declared ?? sortOrder)
       .map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
   }, [query, columns, modelMetadata, groupStack, resourceView.state.sorting, sortOrder]);
-  const groupAxes = React.useMemo(() => tableGroupAxes(groupStack, modelMetadata, columns, query), [groupStack, modelMetadata, columns, query]);
   const grouping = React.useMemo(() => groupAxes.map((axis) => axis.id), [groupAxes]);
   const meta = React.useMemo<TableMeta<TRow>>(() => ({ groupAxes }), [groupAxes]);
   const rowSelection = resourceView.state.rowSelection;

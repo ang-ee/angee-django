@@ -15,9 +15,10 @@ required check already does:
 - Save stays focusable while a save runs (`aria-disabled`, with `aria-busy`),
   so the keyboard user who pressed it keeps their place.
 
-`applyFormErrors` takes `focus: true` for the first of these, through the form
-library's own `shouldFocus`; the record form's save passes it. A dialog, and an
-owner that projects issues while the person edits elsewhere, do not.
+`applyFormErrors` takes `focus` for the first two of these, the `focus` of
+`useRefusalFocus` (this release's notes on a refusal's focus give its shape);
+the record form's save passes it. An owner that projects issues while the
+person edits elsewhere does not.
 
 Upgrade: a test that expected Save to carry `disabled` while a save is pending
 finds `aria-disabled="true"`; a test that reads `document.activeElement` after

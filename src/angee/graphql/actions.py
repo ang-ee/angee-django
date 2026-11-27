@@ -93,9 +93,11 @@ class ActionResult:
         names the form binds to, and ``NON_FIELD_ERRORS`` (or any key that matches
         no argument) surfaces at form level. Other exceptions and validation errors
         with only non-field messages leave the map empty. ``DomainError`` and
-        ``ValidationError`` codes are preserved when defined. All validation
-        messages supply the banner, regardless of their keys. Target preflights
-        and other exceptions keep the generic summary.
+        ``ValidationError`` codes are preserved when defined. ``message`` joins
+        every validation message, and a settle toast is titled by it; a form that
+        binds ``validation_errors``, and the record bar's toast, show each reason
+        from the map and read ``message`` only when the map carries none. Target
+        preflights and other exceptions keep the generic summary.
         """
 
         validation_errors = (

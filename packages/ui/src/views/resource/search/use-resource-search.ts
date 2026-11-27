@@ -21,7 +21,7 @@ export function useResourceSearch({ resourceView, catalog, groupStack = resource
 }: UseResourceSearchInput): ResourceSearch {
   const t = useUiT();
   return React.useMemo<ResourceSearch>(() => {
-    const active = activeItems({ ...resourceView.state, groupStack }, catalog, t);
+    const active = activeItems({ ...resourceView.state, groupStack }, catalog, t, resourceView.inheritedSorting);
     const setGroupStack = (stack: readonly GroupSpec[]) => {
       if (groupingEnabled) resourceView.setGroupStack(maxGroupDepth === undefined ? stack : stack.slice(-Math.max(1, maxGroupDepth)));
     };

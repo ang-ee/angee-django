@@ -54,13 +54,11 @@ let outcome = { ok: true, message: "Event rescheduled." };
 
 function renderPage(): void {
   // The record routes and the action's invalidation resolve models through the schema's resource metadata.
-  const schema = {
-    ...storySchema({
-      calendars: () => CALENDARS,
-      reschedule_event: () => outcome,
-    }, (request) => requests.push(request)).public!,
-    metadata: { angee: { resources: [testDataResource("calendar.CalendarEvent"), testDataResource("calendar.Calendar")] } },
-  };
+  const schemas = storySchema({
+    calendars: () => CALENDARS,
+    reschedule_event: () => outcome,
+  }, { schema: "console", onRequest: (request) => requests.push(request),
+    resources: [testDataResource("calendar.CalendarEvent"), testDataResource("calendar.Calendar")] });
   const containers = containersFromChildren([{ address: OCCURRENCE_SOURCES }], {
     [OCCURRENCE_SOURCES]: {
       "projects-calendar.due-tasks": {
@@ -76,7 +74,7 @@ function renderPage(): void {
   render(
     <RoutedRuntimeFixture
       activeSchema="console"
-      schemas={{ console: schema }}
+      schemas={schemas}
       collectionPath="/calendar"
       resourceName="calendar.CalendarEvent"
       resourceLabel="Calendar"

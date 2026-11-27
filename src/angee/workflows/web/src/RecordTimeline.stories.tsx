@@ -45,7 +45,7 @@ export function TimelineStory({ appearance, state = "decision", collapsed = fals
       current = timelineFixture("decision");
       return { ok: true, id: "wsr_review", message: "Retry requested.", validation_errors: {} };
     };
-    const fixture = storySchema({
+    return storySchema({
       decide: () => { current = timelineFixture("clean"); return { ok: true, id: "dcn_review", message: "Answer recorded.", validation_errors: {} }; },
       cancel_workflow_run: () => { current = timelineFixture("stopped"); return { ok: true, id: "wfr_review", message: "Run stopped." }; },
       retry_step: retry,
@@ -53,8 +53,7 @@ export function TimelineStory({ appearance, state = "decision", collapsed = fals
       record_timeline: () => ({ ...current, has_runs: current.records.some((entry) => entry.runs.length > 0) }),
       user_by_pk: () => ({ id: "usr_river", display_name: "River" }),
       notes_by_pk: () => ({ id: "nte_7", revision: 1, display_name: current.open_decision_count ? "Review notes" : "Reviewed notes", body: "A record to check.", permissions: ["write"] }),
-    }, onRequest).public!;
-    return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] } } } };
+    }, { schema: "console", onRequest, resources: [resource, decisionResourceFixture, decisionLinkFixture, decisionUserFixture, runResourceFixture, stepRunResourceFixture, attemptResourceFixture, recordResourceFixture, watchResourceFixture] });
   }, [state, duplicateRisk, data, onRequest]);
   return <RoutedRuntimeFixture appearance={appearance} activeSchema="console" schemas={schemas} initialEntry="/notes/nte_7" collectionPath="/notes" resourceLabel="Notes" runtime={runtime} operationDocuments={{ console: operationDocuments }}>
     <RecordFieldMarksProvider><ChatterProvider defaultCollapsed={collapsed}><TimelineLayout set={state === "set"} /></ChatterProvider></RecordFieldMarksProvider>

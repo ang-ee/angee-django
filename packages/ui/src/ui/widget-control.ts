@@ -22,13 +22,15 @@ export const WIDGET_CONTROL_READONLY_CLASS =
   "border-transparent bg-transparent shadow-none opacity-100 cursor-default hover:border-transparent focus:border-transparent focus-within:border-transparent focus-visible:border-transparent data-[popup-open]:border-transparent disabled:border-transparent disabled:bg-transparent disabled:opacity-100 data-[disabled]:border-transparent data-[disabled]:bg-transparent data-[disabled]:opacity-100";
 
 export const WIDGET_CONTROL_DATA_READONLY_CLASS =
-  "data-[readonly]:border-transparent data-[readonly]:bg-transparent data-[readonly]:shadow-none data-[readonly]:opacity-100 data-[readonly]:cursor-default data-[readonly]:hover:border-transparent data-[readonly]:focus:border-transparent data-[readonly]:focus-within:border-transparent data-[readonly]:focus-visible:border-transparent";
+  "data-[readonly]:border-transparent data-[readonly]:bg-transparent data-[readonly]:shadow-none data-[readonly]:ring-0 data-[readonly]:outline-none data-[readonly]:opacity-100 data-[readonly]:cursor-default data-[readonly]:hover:border-transparent data-[readonly]:focus:border-transparent data-[readonly]:focus-within:border-transparent data-[readonly]:focus-visible:border-transparent";
 
 /**
  * L0 — the focusable / disablable interactive element.
  *
  * `focus` selects which pseudo carries the focus ring; `disabled` selects the
  * dimming mechanism (native `:disabled` pseudo vs base-ui `data-[disabled]`).
+ * The bare `outline-none` hides the browser's outline; the ring utility under
+ * the chosen pseudo outranks it, so forced colours still paint its outline.
  */
 export const interactiveSurfaceVariants = tv({
   base: "outline-none transition-colors",

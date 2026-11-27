@@ -11,10 +11,12 @@ import {
   bootstrapAppearance,
   createThemeCustomizationOptions,
   defineTheme,
+  isShadowList,
   readAppearancePayload,
   resolveAppearance,
   resolveThemeOptions,
   serializableThemeMetadata,
+  THEME_ELEVATION_PRESETS,
   type AppearanceBootstrapPayload,
   THEME_TOKEN_NAMES,
   type ThemeCustomization,
@@ -41,6 +43,27 @@ const accepted = [
   ["motion duration", "--dur-fast", "120ms"],
   ["motion easing", "--ease", "cubic-bezier(0.2, 0.6, 0.2, 1)"],
   ["motion easing y overshoot", "--ease", "cubic-bezier(0, -0.4, 1, 1.4)"],
+  // One row per shadow form the contract accepts.
+  ["elevation of no shadow", "--elevation-xs", "0 0 #0000"],
+  ["elevation in a three-digit hex", "--elevation-xs", "0 1px 2px #000"],
+  ["elevation in a six-digit hex", "--elevation-sm", "0 1px 2px #000000"],
+  ["two-layer elevation in rem and em", "--elevation-sm", "0 0.0625rem 0.125rem #0000000f, 0 1em 1em #0000000a"],
+  ["elevation in transparent", "--elevation-md", "0 0 2px transparent"],
+  ["elevation in currentcolor", "--elevation-md", "0 0 2px currentcolor"],
+  ["elevation in rgb() with an alpha", "--elevation-lg", "0 4px 12px rgb(0 0 0 / 0.2)"],
+  ["elevation in rgb() with a percentage alpha", "--elevation-lg", "0 4px 12px rgb(0 0 0 / 20%)"],
+  ["elevation in rgba() with commas", "--elevation-lg", "0 4px 12px rgba(0, 0, 0, 0.1)"],
+  ["elevation in rgb() from a colour", "--elevation-sm", "0 1px 2px rgb(from #111827 r g b / 0.06)"],
+  ["elevation in rgb() from a hex", "--elevation-sm", "0 1px 2px rgb(from #11141a r g b / 0.06)"],
+  ["elevation in color-mix()", "--elevation-md", "0 2px 4px color-mix(in oklch, #000000 20%, transparent)"],
+  ["elevation with the colour first", "--elevation-md", "#0000001f 0 2px 4px"],
+  ["inset elevation", "--elevation-popover", "inset 0 1px 2px rgb(0 0 0 / 0.2)"],
+  ["elevation inset last", "--elevation-popover", "0 1px 2px -1px #000 inset"],
+  ["elevation in upper-case units", "--elevation-xs", "0 1PX 1PX #0000000a"],
+  ["ring of a derived brand", "--ring", "0 0 0 3px #fff59d4d"],
+  ["ring in rgb()", "--ring", "0 0 0 3px rgb(231 176 8 / 30%)"],
+  ["ring mixed from a colour", "--ring", "0 0 0 3px color-mix(in oklab, #5b5bd6 30%, transparent)"],
+  ["danger ring in srgb", "--ring-danger", "0 0 0 3px color-mix(in srgb, #dc2626 30%, transparent)"],
 ] as const satisfies readonly (readonly [string, ThemeTokenName, string])[];
 
 const rejected = [
@@ -50,6 +73,42 @@ const rejected = [
   ["motion duration", "--dur-fast", "1001ms"],
   ["motion easing", "--ease", "cubic-bezier(0.2, nope, 0.2, 1)"],
   ["motion easing x control", "--ease", "cubic-bezier(-0.1, 0.6, 1.1, 1)"],
+  // An elevation is composed into one box-shadow with the focus ring: a layer that is not a shadow
+  // voids the ring too.
+  ["elevation of none", "--elevation-xs", "none"],
+  ["elevation of NONE", "--elevation-popover", "NONE"],
+  ["elevation with a none layer", "--elevation-sm", "0 1px 2px #0000000f, none"],
+  ["elevation of a CSS-wide keyword", "--elevation-lg", "initial"],
+  ["elevation of 0", "--elevation-xs", "0"],
+  ["elevation of transparent", "--elevation-xs", "transparent"],
+  ["elevation of a colour alone", "--elevation-sm", "red"],
+  ["elevation with a named colour", "--elevation-sm", "0 1px 2px black"],
+  ["elevation of unitless lengths", "--elevation-md", "1 1 #0000"],
+  ["elevation of a negative blur", "--elevation-md", "0 0 -1px #000"],
+  ["elevation of a colour between lengths", "--elevation-lg", "0 #000 0"],
+  ["elevation of inset alone", "--elevation-popover", "inset"],
+  ["elevation inset twice", "--elevation-popover", "inset 0 1px #000 inset"],
+  ["elevation of none with lengths", "--elevation-xs", "none 0 0"],
+  ["elevation with a trailing comma", "--elevation-sm", "0 0 #0000,"],
+  ["elevation of a bare var()", "--elevation-sm", "var(--elevation-md)"],
+  ["elevation with a no-break space between its lengths", "--elevation-xs", "0\u00a00 #0000"],
+  ["elevation that starts with a no-break space", "--elevation-xs", "\u00a00 0 #0000"],
+  ["ring with a no-break space before its colour", "--ring", "0 0 0 3px\u00a0#5b5bd64d"],
+  ["elevation in rgb() from a var()", "--elevation-sm", "0 1px 2px rgb(from var(--n-900) r g b / 0.06)"],
+  ["ring mixed from a var()", "--ring", "0 0 0 3px color-mix(in oklab, var(--brand) 30%, transparent)"],
+  // Outside the forms, whatever a browser would make of it.
+  ["elevation with an rgb() alpha missing its slash", "--elevation-sm", "0 1px 2px rgb(0 0 0 0.1)"],
+  ["elevation in hsl()", "--elevation-sm", "0 0 hsl(0 0 0 0)"],
+  ["elevation in an rgb() of a word", "--elevation-sm", "0 0 rgb(nope)"],
+  ["elevation in an rgb() of a var()", "--elevation-sm", "0 0 rgb(var(--nope))"],
+  ["elevation with calc() of a colour", "--elevation-md", "0 0 calc(1px + red) #000"],
+  ["elevation with calc() of a var()", "--elevation-md", "0 0 calc(var(--nope)) #000"],
+  ["elevation closing a parenthesis it never opened", "--elevation-md", "0 0 calc(1px)), none)"],
+  ["elevation closing an rgb() twice", "--elevation-md", "0 0 rgb(0 0 0)), none)"],
+  ["elevation with calc()", "--elevation-md", "0 calc(1px + 1px) 4px #00000014"],
+  ["elevation in vw", "--elevation-lg", "0 1vw 2px #000"],
+  ["ring in a named colour", "--ring", "0 0 0 3px black"],
+  ["danger ring of none", "--ring-danger", "none"],
 ] as const satisfies readonly (readonly [string, ThemeTokenName, string])[];
 
 function themeWithToken(name: ThemeTokenName, value: string): ThemeDefinition {
@@ -78,6 +137,59 @@ describe("theme token layers", () => {
 
   test.each(rejected)("rejects an invalid %s", (_kind, name, value) => {
     expect(() => defineTheme(themeWithToken(name, value))).toThrow(TypeError);
+  });
+
+  test("the flat elevation of a customization resolves through the contract to shadows, never none", () => {
+    const options = createThemeCustomizationOptions({
+      brand: "#2563eb", accent: "#0d9488", neutral: "#6b7280", canvas: "#f7f8fa", surface: "#ffffff",
+      rail: "#11141a", success: "#16a34a", warning: "#d97706", danger: "#dc2626", info: "#0284c7",
+      font: "theme", radius: "theme", density: "theme", elevation: "theme", logo: "theme",
+    });
+    const definition = defineTheme({ ...themeWithToken("--brand", "#2563eb"), options });
+    const { tokens } = resolveThemeOptions(definition, { version: options.version, value: { ...options.defaults, elevation: "flat" } });
+    for (const scheme of ["light", "dark"] as const) {
+      expect(tokens[scheme]["--elevation-xs"]).toBe("0 0 #0000");
+      expect(tokens[scheme]["--elevation-sm"]).toBe("0 0 #0000");
+    }
+  });
+});
+
+// Brand kits the repository's tests use, by name: Angee (`brandkit/resources/install/010_brandkit.brandkit.yaml`),
+// Orchard, Harbour, Sandstone and Pale (`brandkit/web/src/views/brand-kits.test-support.ts`), Clay
+// (`brandkit/web/src/appearance.test.ts`, `tests/test_brandkit.py`). No near-black kit is among them:
+// the black, white and mid-grey brands `tests/test_brandkit.py` holds the mail palette to stand in.
+const ORCHARD = { brand: "#3f7d20", accent: "#c2410c", neutral: "#6b665c", canvas: "#f7f5ee", surface: "#fffdf7", rail: "#1f2a1a", success: "#15803d", warning: "#b45309", danger: "#b91c1c", info: "#0e7490" };
+const KITS = {
+  Angee: { brand: "#e7b008", accent: "#6366f1", neutral: "#71717a", canvas: "#fafaf9", surface: "#ffffff", rail: "#09090b", success: "#22c55e", warning: "#eab308", danger: "#dc2626", info: "#4f46e5" },
+  Orchard: ORCHARD,
+  Harbour: { brand: "#1d4ed8", accent: "#0891b2", neutral: "#64748b", canvas: "#f1f5f9", surface: "#fbfdff", rail: "#0b1f3a", success: "#047857", warning: "#a16207", danger: "#be123c", info: "#4338ca" },
+  Sandstone: { brand: "#fde047", accent: "#0d9488", neutral: "#71717a", canvas: "#ffffff", surface: "#8a8580", rail: "#292524", success: "#16a34a", warning: "#d97706", danger: "#dc2626", info: "#2563eb" },
+  Pale: { ...ORCHARD, brand: "#fff59d" },
+  Clay: { brand: "#c2410c", accent: "#0f766e", neutral: "#78716c", canvas: "#fafaf8", surface: "#fffbeb", rail: "#292524", success: "#15803d", warning: "#b45309", danger: "#b91c1c", info: "#1d4ed8" },
+  "Black brand": { ...ORCHARD, brand: "#000000", danger: "#000000" },
+  "White brand": { ...ORCHARD, brand: "#ffffff", danger: "#ffffff" },
+  "Mid-grey brand": { ...ORCHARD, brand: "#777777" },
+};
+
+describe("what the runtime derives for a kit or a person passes the runtime's own contract", () => {
+  const options = createThemeCustomizationOptions({
+    brand: "#2563eb", accent: "#0d9488", neutral: "#6b7280", canvas: "#f7f8fa", surface: "#ffffff",
+    rail: "#11141a", success: "#16a34a", warning: "#d97706", danger: "#ef4444", info: "#0284c7",
+    font: "theme", radius: "theme", density: "theme", elevation: "theme", logo: "theme",
+  });
+  const definition = defineTheme({ ...themeWithToken("--brand", "#2563eb"), options });
+  test.each(Object.entries(KITS))("the %s kit, as a brand kit and as a person's customization in every elevation", (_kit, colors) => {
+    const choices = [{ ...options.defaults, ...colors }, ...THEME_ELEVATION_PRESETS.map((elevation) => ({ ...options.defaults, brand: colors.brand, danger: colors.danger, elevation }))];
+    for (const value of choices) {
+      // resolveThemeOptions checks every resolved token against the contract and throws on one outside it.
+      const { tokens } = resolveThemeOptions(definition, { version: options.version, value });
+      for (const scheme of ["light", "dark"] as const) {
+        for (const name of ["--ring", "--ring-danger"] as const) expect(isShadowList(tokens[scheme][name] ?? "")).toBe(true);
+        for (const name of ["--elevation-xs", "--elevation-sm", "--elevation-md", "--elevation-lg", "--elevation-popover"] as const) {
+          if (value.elevation !== "theme") expect(isShadowList(tokens[scheme][name] ?? "")).toBe(true);
+        }
+      }
+    }
   });
 });
 

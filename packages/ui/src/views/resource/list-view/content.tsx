@@ -14,6 +14,7 @@ import { DeletePreviewDialog } from "../../tree/DeletePreviewDialog";
 import { type GroupedResourceViewSurface, type ResourceViewSurface } from "../resource-view-surface";
 import { GroupedListBody } from "../GroupedList";
 import { FlatListBody, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures, type FlatListBodyProps, type GroupMeasure } from "../resource-view-list-body";
+import { listOrderChoice } from "../list-body/cell-utils";
 import { ResourceListFrame } from "../ResourceListFrame";
 import { listChromeState, type AllMatching, type BoardCardSpec, type CardActionContext, type ListEmptyContent, type ListViewProps } from "../resource-view-types";
 import { DeclaredBoardCardBody, DefaultBoardCardBody } from "../board/cards";
@@ -305,7 +306,7 @@ export function ListViewContent<TRow extends Row = Row>({
     pane,
     sortOptions: resolvedColumns.flatMap((column) => column.field && column.sortable !== false
       ? [{ value: column.field, label: typeof column.header === "string" ? column.header : column.field }] : []),
-    sorting: resourceView.state.sorting, onSortingChange: resourceView.setSorting,
+    order: listOrderChoice(table),
     search, chrome: resolvedChrome, wrap: toolbarWrap, actions: toolbarActions,
     utilityActions: contributedUtilities, availableViews, pager: surface.list,
     view: resourceView.state.view, searchDeclaration, modelMetadata,

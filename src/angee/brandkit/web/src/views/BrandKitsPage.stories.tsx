@@ -42,8 +42,9 @@ export function BrandKitStory({ appearance, open, refuseFontStack = false, onReq
   onRequest?: (request: GraphQLWireRequest) => void;
 }) {
   const schemas = useMemo(() => {
-    const fixture = storySchema(brandKitWire([ANGEE, SANDSTONE], { refuseFontStack }).operations, onRequest).public!;
-    return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [brandKitResource] } } } };
+    // The page's appearance reads the public schema; its records, the console.
+    const { operations } = brandKitWire([ANGEE, SANDSTONE], { refuseFontStack });
+    return { ...storySchema(operations, { onRequest }), ...storySchema(operations, { schema: "console", resources: [brandKitResource], onRequest }) };
   }, [refuseFontStack, onRequest]);
   const initialEntry = open
     ? ROUTE_HREF("brandkit.kits.record", { id: open === "new" ? REFINE_CREATE_ID : KITS[open].id })

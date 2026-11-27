@@ -4,6 +4,7 @@ import {
   RelationFieldWidget,
   relationSelectedOption,
   relationValueId,
+  widgetLabel,
   type RelationFieldWidgetProps,
   type WidgetDefinition,
   type WidgetRenderProps,
@@ -18,10 +19,18 @@ export interface PartyPickerProps extends Pick<RelationFieldWidgetProps, "edit" 
   readOnly?: boolean;
 }
 
-function PartyPickerWidget({ value, onChange, onCommit, readOnly, field }: WidgetRenderProps<unknown>): React.ReactElement {
-  return <PartyPicker value={relationValueId(value)} selectedOption={relationSelectedOption(value, PARTY.labelField)}
-    edit={field?.relationEdit}
-    label={field?.label} readOnly={readOnly} onChange={(next) => { onChange?.(next); onCommit?.(); }} />;
+/**
+ * The registered widget is a form field's control: the field around it owns the label and the
+ * invalid state. It is named as the framework's relation widgets are (`widgetLabel`): by the
+ * label a group's control props point at (`aria-labelledby`), else by the field's text label,
+ * else "Party".
+ */
+function PartyPickerWidget({ value, onChange, onCommit, readOnly, field, controlRef }: WidgetRenderProps<unknown>): React.ReactElement {
+  const t = usePartiesT();
+  return <RelationFieldWidget relation={PARTY} value={relationValueId(value)} selectedOption={relationSelectedOption(value, PARTY.labelField)}
+    edit={field?.relationEdit} readOnly={readOnly} controlRef={controlRef} controlProps={field?.controlProps}
+    aria-labelledby={field?.controlProps?.["aria-labelledby"]} aria-label={widgetLabel(field, t("partyPicker.label"))}
+    onChange={(next) => { onChange?.(next); onCommit?.(); }} />;
 }
 
 export const partyPickerWidget = {
