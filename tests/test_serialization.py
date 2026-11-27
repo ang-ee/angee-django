@@ -8,6 +8,7 @@ import inspect
 import json
 import math
 import sys
+import threading
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +16,7 @@ import pytest
 
 from angee.base.serialization import (
     MAX_JSON_DEPTH,
+    MAX_JSON_DOCUMENT_DEPTH,
     MAX_JSON_MEMBERS,
     canonical_json,
     canonical_json_sha256,
@@ -178,9 +180,50 @@ def test_json_bounds_are_measured_without_recursion() -> None:
     assert measured == [None, f"nests deeper than {MAX_JSON_DEPTH} levels", None]
 
 
-def test_decode_json_refuses_a_document_past_the_decoders_stack_as_malformed() -> None:
-    levels = 200_000
+def test_decode_json_refuses_a_document_past_the_document_bound_as_malformed() -> None:
+    at_bound = json.dumps(nested(MAX_JSON_DOCUMENT_DEPTH))
 
     assert decode_json('{"a": [1]}') == {"a": [1]}
-    with pytest.raises(json.JSONDecodeError):
-        decode_json("[" * levels + "]" * levels)
+    assert decode_json(at_bound) == nested(MAX_JSON_DOCUMENT_DEPTH)
+    assert decode_json(at_bound.encode()) == nested(MAX_JSON_DOCUMENT_DEPTH)
+    with pytest.raises(json.JSONDecodeError) as refused:
+        decode_json(json.dumps({"a": nested(MAX_JSON_DOCUMENT_DEPTH)}))
+    assert refused.value.msg == f"JSON nests deeper than {MAX_JSON_DOCUMENT_DEPTH} levels"
+
+
+def test_the_document_bound_admits_a_value_at_the_value_bound_in_the_deepest_envelope() -> None:
+    """A graphql-transport-ws message carrying a nested insert's line field at ``MAX_JSON_DEPTH`` decodes."""
+
+    line = {"object": {"lines": {"data": [{"config": nested(MAX_JSON_DEPTH)}]}}}
+    message = {"id": "1", "type": "subscribe", "payload": {"query": "mutation", "variables": line}}
+
+    assert decode_json(json.dumps(message)) == message
+
+
+def test_decode_json_refuses_a_document_too_deep_for_the_decoders_stack_as_malformed() -> None:
+    """On a thread whose stack cannot hold the nesting, the decoder's ``RecursionError`` is malformed JSON.
+
+    CPython 3.14 bounds its decoder by the running thread's own stack, so
+    100,000 levels fail inside a 256 KiB thread on every machine, while a
+    larger stack may decode them and leave the refusal to the document bound.
+    """
+
+    raised: list[BaseException] = []
+
+    def decode() -> None:
+        try:
+            decode_json("[" * 100_000 + "]" * 100_000)
+        except BaseException as error:
+            raised.append(error)
+
+    previous = threading.stack_size(256 * 1024)
+    try:
+        thread = threading.Thread(target=decode)
+        thread.start()
+    finally:
+        threading.stack_size(previous)
+    thread.join()
+
+    assert [type(error) for error in raised] == [json.JSONDecodeError]
+    assert isinstance(raised[0], json.JSONDecodeError)
+    assert raised[0].msg == "JSON nests too deeply to decode"

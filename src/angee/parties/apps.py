@@ -26,12 +26,16 @@ class PartiesConfig(AppConfig):
         """Repair handle keys and holders, directory owners' contact read and party creation times on every provision.
 
         They run after the resources load. ``renormalize_handles`` saves again
-        every comparison key computed under another version of the handle's
-        normalization rule (``Handle.NORMALIZATION_VERSION``): the whole backlog,
-        since a row with a stale key is missed by the lookups that read keys. It
-        saves in batches of ``HandleManager.REPAIR_LIMIT`` rows, each its own
-        transaction, so an interrupted provision keeps what it saved and the
-        next one resumes. With no row behind, it costs one indexed query.
+        every handle's keys (its spelling key and person-matching key) computed
+        under another version of the handle's normalization rule
+        (``Handle.NORMALIZATION_VERSION``): the whole backlog, since a row with a
+        stale key is missed by the lookups that read keys. A live email handle
+        that spells the address of another is folded into the older of the two
+        and kept as a redirect, each fold in a transaction of its own; a fold the
+        merge refuses is logged and left for the next provision. It saves in
+        batches of ``HandleManager.REPAIR_LIMIT`` rows, each its own transaction,
+        so an interrupted provision keeps what it saved and the next one resumes.
+        With no row behind, it costs one indexed query.
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
         trashed, confirmed or contested one as it is and re-resolves stale ones,
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the

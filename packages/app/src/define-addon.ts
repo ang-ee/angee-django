@@ -173,7 +173,10 @@ export interface HostAppearanceSource {
   /**
    * A React hook `createApp` calls once per render of its session frame, above every
    * layout, the same way on every render. `theme` is the host theme `createApp` asks
-   * about, or null; `build` is the build's options for that theme, or undefined.
+   * about, or null: there is none, or its options decline the source
+   * (`acceptsHostAppearanceSource: false`). For null, or a theme without options, `createApp`
+   * wears none of the answer, options or `pending`; a source should send no read. `build` is
+   * the build's options for that theme, or undefined.
    */
   useOptions(theme: ThemeDefinition<unknown> | null, build: ThemeOptionsEnvelope | undefined): HostAppearanceRead;
 }

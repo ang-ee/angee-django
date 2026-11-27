@@ -16,9 +16,11 @@ same path the ``marketplace sync`` command and integrate's ``refresh_source`` us
 from __future__ import annotations
 
 import importlib
+import logging
 from pathlib import Path
 from typing import Any
 
+import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from rebac import system_context
@@ -157,8 +159,14 @@ def test_add_source_denies_a_non_admin(
         assert not Source.objects.filter(kind="addon").exists()
 
 
-def test_grouping_addons_by_a_category_no_longer_offered_is_refused_publicly_in_words(db: None) -> None:
-    """An ordinary choices column answers as an implementation key does: public words naming the column."""
+def test_grouping_addons_by_a_category_no_longer_offered_is_refused_publicly_in_words(
+    db: None, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An ordinary choices column answers as an implementation key does: public words naming the column.
+
+    It is a refusal, so it leaves no log record: the library's message, which names the stored value, and the
+    request's variables read to name the column reach no record.
+    """
 
     del db
     admin = _platform_admin("vanished-category-grouper")
@@ -166,10 +174,15 @@ def test_grouping_addons_by_a_category_no_longer_offered_is_refused_publicly_in_
         addon = Addon.objects.create(name="example.vanished", distribution="example-vanished")
     store_column(Addon, addon.pk, "category", "vanished")
 
-    result = execute_schema(
-        _schema(), "{ platform_addons_groups(group_by: [{field: CATEGORY}]) { aggregate { count } } }", {}, user=admin,
-    )
+    with caplog.at_level(logging.DEBUG):
+        caplog.clear()
+        result = execute_schema(
+            _schema(), "query($by: [platformAddonsgroupbyspec!]!) { platform_addons_groups(group_by: $by) "
+            "{ aggregate { count } } }", {"by": [{"field": "CATEGORY"}]}, user=admin,
+        )
 
+    assert [record for record in caplog.records if record.name.startswith(("angee", "strawberry"))] == []
+    assert "vanished" not in caplog.text
     assert result.data is None
     assert [(error.message, error.extensions) for error in result.errors or []] == [(
         "A record holds a category that is no longer offered, "

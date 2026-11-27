@@ -113,28 +113,47 @@ def test_a_holder_that_is_no_live_person_leaves_the_claims_to_answer(owner: Any)
     """An organization's or a trashed person's address names its one claimant; two claimants name nobody.
 
     That is how a person minted earlier for such an address is found again. A
-    live person holding another spelling of it holds the address.
+    live person holding an alias of it (a Gmail dot, a handle of its own) holds the address.
     """
 
     company = Organization.objects.create(display_name="Example Ltd", created_by=owner)
-    handle = _holds(company, "info@example.com", owner)
+    handle = _holds(company, "info.example@gmail.com", owner)
     assert handle.party_id == company.pk
     ada, grace = _person(owner, "Ada Example"), _person(owner, "Grace Example")
-    _holds(ada, "info@example.com", owner, confidence=0.4)
+    _holds(ada, "info.example@gmail.com", owner, confidence=0.4)
     trashed = _person(owner, "Trashed Example")
     old = _holds(trashed, "old@example.com", owner)
     trashed.trash(reason="Removed by its holder")
     _holds(ada, "old@example.com", owner, confidence=0.4)
 
-    assert _answer("info@example.com", "old@example.com") == [
-        ("info@example.com", ada.pk, EmailBasis.CLAIM, handle.pk),
+    assert _answer("info.example@gmail.com", "old@example.com") == [
+        ("info.example@gmail.com", ada.pk, EmailBasis.CLAIM, handle.pk),
         ("old@example.com", ada.pk, EmailBasis.CLAIM, old.pk),
     ]
-    _holds(grace, "info@example.com", owner, confidence=0.4)
-    assert _answer("info@example.com") == []
-    spelling = _holds(grace, "INFO@example.com", owner)
+    _holds(grace, "info.example@gmail.com", owner, confidence=0.4)
+    assert _answer("info.example@gmail.com") == []
+    spelling = _holds(grace, "infoexample@gmail.com", owner)
     assert spelling.pk != handle.pk and spelling.party_id == grace.pk
-    assert _answer("info@example.com") == [("info@example.com", grace.pk, EmailBasis.HELD, spelling.pk)]
+    assert _answer("info.example@gmail.com") == [("info.example@gmail.com", grace.pk, EmailBasis.HELD, spelling.pk)]
+
+
+def test_a_live_person_stating_another_letter_case_of_an_organizations_address_takes_its_one_handle(
+    owner: Any,
+) -> None:
+    """Another letter case is the organization's own handle: the person's statement lands on that row.
+
+    Who answers is then who holds that row, the winner of its statements by
+    ``PartyStatement.sort_key`` (here the person's, stated later at the same rank and confidence), as for the exact
+    spelling.
+    """
+
+    company = Organization.objects.create(display_name="Example Ltd", created_by=owner)
+    handle = _holds(company, "info@example.com", owner)
+    grace = _person(owner, "Grace Example")
+    landed = _holds(grace, "INFO@example.com", owner)
+
+    assert landed.pk == handle.pk and landed.value == "info@example.com"
+    assert _answer("info@example.com") == [("info@example.com", grace.pk, EmailBasis.HELD, handle.pk)]
 
 
 def test_the_answer_keeps_the_callers_preference_order_and_reads_any_batch_in_bounded_queries(owner: Any) -> None:

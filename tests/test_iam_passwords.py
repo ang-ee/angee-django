@@ -1,4 +1,4 @@
-"""Self-service password changes and the administrative account verb."""
+"""Self-service password changes and the administrative account action."""
 
 import pytest
 from axes.models import AccessAttempt
@@ -8,16 +8,13 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.password_validation import MinimumLengthValidator, get_default_password_validators
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.utils import timezone
-from rebac import PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, actor_context, system_context
 
 from angee.graphql.testing.documents import execute_schema, graphql_request, result_data
 from angee.graphql.view_as import ViewAs
 from angee.iam.auth import ONE_ATTEMPT_MESSAGE
 from angee.iam.autoconfig import SETTINGS as IAM_SETTINGS
-from angee.iam.models import SignInLinkSpent, UserAccountAction
 from tests.conftest import create_platform_admin
-from tests.iam_models import SignInLink
 from tests.test_iam_account_actions import _actions, _manager
 from tests.test_iam_graphql import _schema
 
@@ -234,7 +231,7 @@ def test_set_password_refuses_non_user_subjects_in_both_permission_and_eligibili
         stored = User._base_manager.get(pk=target.pk)
         assert (stored.password, stored.account_revision) == (before.password, before.account_revision)
         assert "set_password" not in target.account_actions_for(subject)
-    for action in UserAccountAction.values:
+    for action in User.account_actions():
         if action != "set_password":
             assert protected.account_action_error(action, subject) == protected.account_action_error(action, None)
             assert "protected" in protected.account_action_error(action, subject)
@@ -287,31 +284,22 @@ def test_set_password_logs_only_committed_public_attribution(password_user, capl
     assert User._base_manager.get(pk=target.pk).password == stored.password
 
 
-def test_set_password_ends_target_sessions_and_retires_sign_in_links(password_user, caplog):
+def test_set_password_ends_target_sessions(password_user, caplog):
     admin = create_platform_admin("session-password-admin", password=CURRENT)
     requests = [graphql_request(user, session=True) for user in (admin, password_user, password_user)]
     with system_context(reason="test.password.sessions"):
         for request in requests:
             login(request, request.user, backend="angee.iam.auth.ModelBackend")
             request.session.save()
-        with transaction.atomic():
-            locked = User.objects.lock_if_supported().get(pk=password_user.pk)
-            link, token = SignInLink.objects.issue(locked, actor=to_subject_ref(admin))
-            link.sent_at = timezone.now()
-            link.save(update_fields=["sent_at"])
-            assert link.account_hash == SignInLink.account_digest(locked)
+    revision = User._base_manager.get(pk=password_user.pk).account_revision
     result = result_data(execute_schema(_schema("console"), SET, {
-        "id": password_user.public_id, "password": NEW, "revision": locked.account_revision,
+        "id": password_user.public_id, "password": NEW, "revision": revision,
     }, request=requests[0]))
     assert result["set_user_password"]["ok"]
     with system_context(reason="test.password.sessions.read"):
         assert get_user(requests[0]).pk == admin.pk
         assert all(not get_user(request).is_authenticated for request in requests[1:])
-        stored = User._base_manager.get(pk=password_user.pk)
-        assert link.account_hash != SignInLink.account_digest(stored)
-        with pytest.raises(SignInLinkSpent):
-            SignInLink.objects.redeem(token)
-    assert all(secret not in str(result) + caplog.text for secret in (NEW, token))
+    assert NEW not in str(result) + caplog.text
 
 
 @pytest.mark.parametrize("protected", [False, True])

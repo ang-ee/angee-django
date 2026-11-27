@@ -138,7 +138,7 @@ def test_report_target_is_write_once(reportable: dict[str, Any]) -> None:
         report.target = moved_to
         with pytest.raises(ValidationError) as refused:
             report.save()
-    assert set(refused.value.message_dict) == {"object"}
+    assert set(refused.value.message_dict) == {"object_id"}
     assert Update._base_manager.get(pk=report.pk).object_id == reportable["initiative"].pk
 
 

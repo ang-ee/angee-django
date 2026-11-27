@@ -179,9 +179,8 @@ def test_a_refused_submission_names_what_it_refuses_and_keeps_nothing(
     assert kept(form) == []
 
 
-def test_answers_nested_past_the_json_bound_are_refused_before_the_schema_compares_them() -> None:
-    """Two deep answers to a checkbox question would recurse through the schema's ``uniqueItems`` comparison."""
-
+@pytest.fixture
+def colours() -> Any:
     with system_context(reason="webforms tests setup"):
         made = Form.objects.create(name="Colours")
         version = FormVersion.objects.create(
@@ -192,16 +191,36 @@ def test_answers_nested_past_the_json_bound_are_refused_before_the_schema_compar
         )
         version.publish()
         FormAlias.objects.create(form=made, slug="colours", language="en")
-    deep: Any = "red"
-    for _ in range(1_000):
-        deep = [deep]
+    return made
 
-    response = submit(envelope(answers={"colours": [deep, deep]}), alias="colours")
+
+def deep_answers(levels: int) -> dict[str, Any]:
+    """Two answers to the colours question, each ``"red"`` inside ``levels`` arrays."""
+
+    deep: Any = "red"
+    for _ in range(levels):
+        deep = [deep]
+    return {"colours": [deep, deep]}
+
+
+def test_answers_nested_past_the_json_bound_are_refused_before_the_schema_compares_them(colours: Any) -> None:
+    """Deep answers to a checkbox question are refused before the schema's ``uniqueItems`` comparison walks them."""
+
+    response = submit(envelope(answers=deep_answers(MAX_JSON_DEPTH)), alias="colours")
 
     body = json.loads(response.content)
     assert (response.status_code, body["error"]) == (400, "invalid_submission")
     assert body["fields"] == {"__all__": [f"The value nests deeper than {MAX_JSON_DEPTH} levels."]}
-    assert kept(made) == []
+    assert kept(colours) == []
+
+
+def test_a_submission_nested_past_the_document_bound_is_refused_before_its_answers_are_read(colours: Any) -> None:
+    response = submit(envelope(answers=deep_answers(1_000)), alias="colours")
+
+    assert (response.status_code, json.loads(response.content)) == (
+        400, {"error": "invalid_request", "message": "Request body must be a valid UTF-8 JSON object."},
+    )
+    assert kept(colours) == []
 
 
 def test_answers_to_a_version_the_form_no_longer_serves_are_told_to_reload(form: Any) -> None:

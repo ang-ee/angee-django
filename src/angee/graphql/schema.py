@@ -220,45 +220,48 @@ class AngeeSchema(strawberry.Schema):
         errors: list[GraphQLError],
         execution_context: ExecutionContext | None = None,
     ) -> None:
-        """Attach GraphQL error codes before Strawberry logs errors."""
+        """Attach GraphQL error codes; the sanitizer logs each unexpected error once.
 
-        errors_to_log: list[GraphQLError] = []
+        Strawberry's own ``process_errors`` is replaced, not extended: it logs the
+        ``GraphQLError`` itself, and printing one quotes the request's text at the
+        error's location, so a value written inline in the document (a token, a
+        password) would reach the log. No record quotes the request or its
+        variables; refusals are not logged. The request's variables are read only
+        to name the column of a refused grouped read (:meth:`_grouped_choice_columns`).
+        """
+
         variables = execution_context.variables if execution_context is not None else None
         for error in errors:
-            refusal = (
-                classify_error(error.original_error).expected
-                or (error.extensions or {}).get("code") in _EXPECTED_ERROR_CODES
-                or isinstance(error.original_error, ChoicesValueNotInEnumError)
-            )
             if error.path is None and (error.original_error is None or isinstance(error.original_error, GraphQLError)):
                 # graphql-core's document validation and request coercion errors
                 # can echo submitted values, including inline literals.
-                # Preserve them for the client without passing them to logging.
+                # They reach the client as they are and are not logged.
                 if isinstance(error.original_error, GraphQLError):
                     error.extensions = {"code": (error.extensions or {}).get("code", "BAD_USER_INPUT")}
                 continue
             self._apply_rebac_code(error)
             self._apply_validation_error(error)
             self._sanitize_unexpected_error(error, variables)
-            if not refusal:
-                errors_to_log.append(error)
-        super().process_errors(errors_to_log, execution_context)
 
     def _sanitize_unexpected_error(self, error: GraphQLError, variables: Mapping[str, Any] | None = None) -> None:
         """Keep resolver implementation details out of public GraphQL errors.
 
-        A grouped read the grouping library refuses because a row holds a value outside a column's
-        choices (``ChoicesValueNotInEnumError``) is a public refusal in Angee's words, naming the
-        column from the request (:meth:`_grouped_choice_columns`): for every choices column, an
-        implementation key its registry no longer names being the first case. The library's own
-        message, which names the stored value, goes to the operator's log.
+        An error that is no refusal is logged here, once, as its class, response
+        path and frames; an error raised already located is its own original.
+        A grouped read the grouping library refuses because a row holds a value
+        outside a column's choices (``ChoicesValueNotInEnumError``) is a refusal:
+        answered publicly in Angee's words, naming the column from the request
+        (:meth:`_grouped_choice_columns`), and not logged. The library's message,
+        which names the stored value, reaches neither the client nor a record;
+        an operator finds such rows with ``check --database`` (``angee.E052``) and
+        sees them marked "Not registered" in the console.
         """
 
-        original = error.original_error
-        if original is None or isinstance(original, MissingActorError | PermissionDenied):
+        # graphql-core passes a raised error that carries a path through unwrapped.
+        original = error if error.original_error is None else error.original_error
+        if isinstance(original, MissingActorError | PermissionDenied):
             return
         if isinstance(original, ChoicesValueNotInEnumError):
-            logger.warning("Grouped read refused at path %s: %s", error.path, original)
             error.message = self._group_key_refusal(self._grouped_choice_columns(error, variables))
             error.extensions = {"code": "BAD_USER_INPUT"}
             error.original_error = None
@@ -294,9 +297,9 @@ class AngeeSchema(strawberry.Schema):
         )
         error.message = classification.message
         error.extensions = {"code": "INTERNAL"}
-        # Strawberry logs ``original_error`` with its traceback. Detach it after
-        # recording its class, path and frames so secrets in exception values do
-        # not merely move from the response into ordinary application logs.
+        # The error travels on in the execution result to views, extensions and
+        # whatever they log. Detach the original after recording its class, path
+        # and frames so secrets in exception values do not travel with it.
         error.original_error = None
 
     @staticmethod

@@ -8720,7 +8720,7 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useRefusalBannerFocus",
+    "name": "useRefusalFocus",
     "source": "packages/ui/src/views/form/validation-errors.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
