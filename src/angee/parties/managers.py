@@ -19,7 +19,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import StrEnum
@@ -448,15 +448,21 @@ def repair_keys(
     stale: Callable[..., bool] | None = None,
     deferred: Callable[[Any], KeyRepairOutcome] | None = None,
 ) -> KeyRepair:
-    """Save again, row by row, the rows whose save-derived keys are not their rule's; say what the run did.
+    """Write again, row by row, the rows whose save-derived keys are not their rule's; say what the run did.
 
     The walk every key repair shares. ``rows`` are the candidates, ordered by
     key; when ``stale`` is given, the columns ``read`` names are read with each
     key and only a row ``stale(*values)`` holds for is taken. They are taken in
     key batches of at most :data:`REPAIR_BATCH` (within the database's
     parameter budget), each batch in one transaction, each row re-read under its
-    row lock (``row_lock_queryset``) and handed to ``resave`` in a savepoint of
-    its own, as the named system work ``reason``. A handler says what it did
+    row lock and handed to ``resave`` in a savepoint of its own, as the named
+    system work ``reason``, entered when the first row needs it: a run with
+    nothing stale writes nothing, not even the elevation's audit row. The lock is
+    PostgreSQL's ``FOR NO KEY UPDATE`` (``row_lock_queryset(no_key=True)``): a
+    key repair writes no column another row's foreign key references (no primary
+    key, no column under a full unique index), so a writer inserting a row that
+    references a locked one (an address of a locked party) does not wait on the
+    batch. A handler says what it did
     (:class:`KeyRepairOutcome`); a ``DEFERRED`` row is handed by key to
     ``deferred`` once its batch commits, which answers the same way. A row whose
     handler raises is rolled back to its savepoint, logged with its traceback and
@@ -475,6 +481,8 @@ def repair_keys(
     name = rows.model._meta.model_name
     saved = failed = folded = refused = 0
     last: Any = None
+    elevated = False
+    elevation = ExitStack()
 
     def tally(outcome: KeyRepairOutcome) -> None:
         nonlocal saved, folded, refused
@@ -482,7 +490,7 @@ def repair_keys(
         folded += outcome == KeyRepairOutcome.FOLDED
         refused += outcome == KeyRepairOutcome.REFUSED
 
-    with system_context(reason=reason):
+    with elevation:
         while limit is None or saved < limit:
             reach = size if limit is None else min(size, limit - saved)
             batch = rows if last is None else rows.filter(pk__gt=last)
@@ -494,9 +502,14 @@ def repair_keys(
                 return KeyRepair(saved, failed, failed + refused, folded=folded, refused=refused)
             last = read_rows[-1][0]
             keys = [row[0] for row in read_rows if stale is None or stale(*row[1:])]
+            if not keys:
+                continue
+            if not elevated:
+                elevation.enter_context(system_context(reason=reason))
+                elevated = True
             later: list[Any] = []
             with transaction.atomic():
-                for row in row_lock_queryset(rows.model).filter(pk__in=keys).order_by("pk") if keys else ():
+                for row in row_lock_queryset(rows.model, no_key=True).filter(pk__in=keys).order_by("pk"):
                     try:
                         with transaction.atomic():
                             outcome = resave(row)
@@ -1069,17 +1082,17 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         rows whose version is not the rule's, of every platform, by the version's
         index: an earlier one, 0 for a row stored before the rule had a version, or
         a later one that newer code wrote before a rollback. Each is read again
-        under its lock and saved through the handle's own save, which derives the
-        keys and writes the key columns together, so a row whose keys are already
-        what the rule gives has them written again unchanged beside its version and
-        leaves the selection. ``value`` is never written, ``updated_at`` is stamped
-        as every save of an audited row stamps it, and the row's history records
-        the save as any other.
+        under its lock and its key columns alone are written as the handle derives
+        them (``Handle.derived_keys``, what its save writes), with the version, so
+        a row whose keys are already what the rule gives has them written again
+        unchanged and leaves the selection. A repair is no edit: ``value`` is never
+        written and ``updated_at`` stays as it was; a queryset update records one
+        version in the row's history, in the run's changeset.
 
         A live email handle whose spelling key another live handle owns is one
-        address with it, and the handle's save refuses to key it
-        (``Handle.value_owner``, ``ValueOwned``): the row is rolled back to its
-        savepoint and deferred. After its batch commits, each deferred row is taken
+        address with it, which the handle's save refuses to key
+        (``Handle.value_owner``, ``ValueOwned``): the repair asks the same owner
+        first and defers the row. After its batch commits, each deferred row is taken
         in a transaction of its own, so no transaction holds a batch's locks while
         it takes another row's and its parties'. The row and the owner are locked
         in the identity order (``PartyManager.lock_identity_rows``: handles, their
@@ -1122,11 +1135,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         def key(handle: Any) -> KeyRepairOutcome:
             if handle.normalized_version == version:
                 return KeyRepairOutcome.CURRENT
-            try:
-                # The handle's save writes every key column beside the version.
-                handle.save(update_fields=["normalized_version"])
-            except ValueOwned:
+            if handle.value_owner() is not None:
                 return KeyRepairOutcome.DEFERRED
+            self._write_keys(handle)
             return KeyRepairOutcome.SAVED
 
         return repair_keys(behind, key, reason="parties.handle.renormalize", limit=limit, deferred=self._key_spelling)
@@ -1158,7 +1169,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 if getattr(owner, "pk", None) != getattr(candidate, "pk", None):
                     continue
                 if owner is None:
-                    row.save(update_fields=["normalized_version"])
+                    self._write_keys(row)
                     return KeyRepairOutcome.SAVED
                 survivor, other = sorted((row, handles[owner.pk]), key=_age)
                 try:
@@ -1170,8 +1181,13 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                     )
                     return KeyRepairOutcome.REFUSED
                 # The fold read both rows afresh and refreshed only the survivor: read this row again before keying it.
-                self.model._base_manager.get(pk=pk).save(update_fields=["normalized_version"])
+                self._write_keys(self.model._base_manager.get(pk=pk))
                 return KeyRepairOutcome.FOLDED
+
+    def _write_keys(self, handle: Any) -> None:
+        """Write ``handle``'s key columns alone, as it derives them (``Handle.derived_keys``): no edit, one version."""
+
+        self.model._base_manager.filter(pk=handle.pk).update(**handle.derived_keys())
 
     def fill_avatar(self, report: AvatarReport) -> bool:
         """Set the avatar a source reports on its handle; return whether it changed.
@@ -5121,20 +5137,25 @@ class OrganizationManager[OrganizationT: Organization](PartyManager[Organization
         :func:`repair_keys`, which the handle key repair shares; this repair's own
         part is the selection, a full scan of these organizations' domains and keys,
         since ``domain`` is written as often as any field and no version marks a
-        stale key. A row whose key differs is read again under its lock and saved
-        as its most derived concrete row (a company as a company, so its own
-        history records the version), whose save writes the key from the domain it
-        holds now. A save that raises is rolled back, logged and counted in
-        ``failed``. Named system work. Idempotent: a second run reads every batch
-        and saves nothing.
+        stale key: a queryset ``update`` of the domain leaves no other trace, so
+        every provision reads the whole table. A row whose key differs is read
+        again under its lock and its key alone is written from the domain it holds
+        now, by a queryset update of its most derived concrete row (a company as a
+        company), which records one version in that row's own history, in the run's
+        changeset. A repair is no edit: ``updated_at``, which orders organization
+        lists, stays as it was. A write that raises is rolled back, logged and
+        counted in ``failed``. Named system work, entered only when a row is stale.
+        Idempotent: a second run reads every batch and writes nothing.
         """
 
         normalize = apps.get_model("parties", "Handle").normalize_email_domain
 
         def key(organization: Any) -> KeyRepairOutcome:
-            if normalize(organization.domain) == organization.domain_key:
+            domain_key = normalize(organization.domain)
+            if domain_key == organization.domain_key:
                 return KeyRepairOutcome.CURRENT
-            most_derived_concrete(organization).save(update_fields=["domain_key"])
+            row = most_derived_concrete(organization)
+            type(row)._base_manager.filter(pk=row.pk).update(domain_key=domain_key)
             return KeyRepairOutcome.SAVED
 
         return repair_keys(

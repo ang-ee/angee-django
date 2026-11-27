@@ -25,7 +25,7 @@ class PartiesConfig(AppConfig):
     def compose_provision(self, context: ProvisionContext) -> None:
         """Repair handle and organization-domain keys, holders, owners' contact read and party times on every provision.
 
-        They run after the resources load. ``renormalize_handles`` saves again
+        They run after the resources load. ``renormalize_handles`` writes again
         every handle's keys (its spelling key and person-matching key) computed
         under another version of the handle's normalization rule
         (``Handle.NORMALIZATION_VERSION``): the whole backlog, since a row with a
@@ -39,8 +39,10 @@ class PartiesConfig(AppConfig):
         ``renormalize_organization_domains`` writes again each organization's
         domain key that is not its domain under the domain-spelling rule
         (``OrganizationManager.renormalize_domains``), through the same
-        walk: it reads every organization's domain in batches and saves only a row
-        whose key differs.
+        walk: it reads every organization's domain in batches and writes the key of
+        only a row whose key differs. Both write their key columns alone (one
+        history version, no ``updated_at``), and a run with nothing stale writes
+        nothing.
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
         trashed, confirmed or contested one as it is and re-resolves stale ones,
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the

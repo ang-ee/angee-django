@@ -19,7 +19,6 @@ from django.apps import apps
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
 from django.db import connection
-from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from django_compose.provision import ProvisionContext
 from rebac import actor_context, system_context
@@ -28,6 +27,7 @@ import tests.test_parties_circles  # noqa: F401 -- register the fixture model gr
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.messaging.testing.models import Directory, Organization, Party
+from angee.parties import managers
 from angee.parties.backends import ParsedOrganization
 from angee.parties.managers import KeyRepair, KeyRepairOutcome, repair_keys
 from angee.provenance.context import changeset
@@ -150,8 +150,24 @@ def _repair() -> KeyRepair:
         return Organization.objects.renormalize_domains()
 
 
+def _writes(queries: CaptureQueriesContext) -> list[str]:
+    statements = [query["sql"] for query in queries]
+    return [sql for sql in statements if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+
+
+def _listed() -> list[tuple[Any, Any]]:
+    """The organizations in their list order (the model's ``-updated_at`` first), with their ``updated_at``."""
+
+    with system_context(reason="tests.parties.organization_domains"):
+        return list(Organization._base_manager.values_list("pk", "updated_at"))
+
+
 def test_the_repair_keys_organizations_stored_before_the_key_and_a_second_run_writes_nothing(owner: Any) -> None:
-    """The state a migration leaves (an empty key), and a domain a queryset update wrote, are keyed in one run."""
+    """The state a migration leaves (an empty key), and a domain a queryset update wrote, are keyed in one run.
+
+    A repair is no edit: it writes the key alone, with one version, so no ``updated_at`` and no list order moves.
+    A run that finds nothing stale writes nothing at all, not even its elevation's audit row.
+    """
 
     stored = [_organization(owner, domain, name=f"Org {index}") for index, domain in enumerate(
         ("straße.example", NFD, "xn--bcher-kva.example", FULL_WIDTH, "plain.example"),
@@ -163,19 +179,52 @@ def test_the_repair_keys_organizations_stored_before_the_key_and_a_second_run_wr
         Organization._base_manager.filter(pk=stored[4].pk).update(domain="other.example")
         versions = _versions(stored)
     assert _found("strasse.example") == set()
+    listed = _listed()
 
     assert _repair() == KeyRepair(saved=5)
+
+    assert _listed() == listed
 
     assert _found("strasse.example") == {stored[0].pk}
     assert _found("bücher.example") == {stored[1].pk, stored[2].pk}
     assert _found("example.test") == {stored[3].pk}
     assert _found("other.example") == {stored[4].pk}
     assert _versions(stored) == versions + 5, "each row the repair keys is saved once, with a version"
-    table = connection.ops.quote_name(Organization._meta.db_table)
     with CaptureQueriesContext(connection) as queries:
-        assert _repair() == KeyRepair(saved=0)
-    assert [query["sql"] for query in queries if table in query["sql"] and not query["sql"].startswith("SELECT")] == []
+        # As a provision calls it: the run's own elevation is all the context it needs.
+        assert Organization.objects.renormalize_domains() == KeyRepair(saved=0)
+    assert _writes(queries) == []
     assert _versions(stored) == versions + 5
+
+
+def test_a_domain_that_would_read_longer_than_a_domain_name_is_kept_as_typed_by_the_save_and_the_repair(
+    owner: Any,
+) -> None:
+    """A name of ligatures reads past ``Handle.DOMAIN_NAME_LIMIT`` (251 characters typed would read as 3,107): the
+    rule keeps it as typed, so its key fits the column on every database, saved or repaired."""
+
+    ligatures = ".".join(["ﷺﷺ"] * 84)
+    organization = _organization(owner, ligatures)
+    assert _stored(organization) == (ligatures, ligatures)
+    with system_context(reason="tests.parties.organization_domains"):
+        Organization._base_manager.filter(pk=organization.pk).update(domain_key="")
+
+    assert _repair() == KeyRepair(saved=1)
+    assert _stored(organization) == (ligatures, ligatures)
+    assert _found(ligatures) == {organization.pk}
+
+
+def test_a_save_of_the_key_alone_keys_the_domain_the_row_stores(owner: Any) -> None:
+    """A partial save naming the key without the domain never keys a domain changed in memory and not saved."""
+
+    organization = _organization(owner, "straße.example")
+    with system_context(reason="tests.parties.organization_domains"):
+        row = Organization._base_manager.get(pk=organization.pk)
+        row.domain = "bücher.example"
+        row.save(update_fields=["domain_key"])
+
+    assert _stored(organization) == ("straße.example", "strasse.example")
+    assert _found("bücher.example") == set()
 
 
 def test_the_repair_works_in_batches_and_takes_every_batch(owner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,8 +239,8 @@ def test_the_repair_works_in_batches_and_takes_every_batch(owner: Any, monkeypat
     assert [_stored(row)[1] for row in stored] == [f"ab{index}.strasse.example" for index in range(5)]
 
 
-def test_an_organization_whose_save_raises_is_counted_and_every_other_one_is_keyed(
-    owner: Any, caplog: pytest.LogCaptureFixture,
+def test_an_organization_whose_key_write_raises_is_counted_and_every_other_one_is_keyed(
+    owner: Any, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One row never stops the backlog: it is rolled back, logged and counted, and the next run takes it."""
 
@@ -199,17 +248,17 @@ def test_an_organization_whose_save_raises_is_counted_and_every_other_one_is_key
     with system_context(reason="tests.parties.organization_domains"):
         Organization._base_manager.filter(pk__in=[row.pk for row in stored]).update(domain_key="")
 
-    def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
-        del sender, kwargs
-        if instance.pk == stored[1].pk:
-            raise RuntimeError("This row cannot be saved.")
+    derived = managers.most_derived_concrete
 
-    pre_save.connect(refuse)
-    try:
-        with caplog.at_level(logging.ERROR, logger="angee.parties.managers"):
-            assert _repair() == KeyRepair(saved=2, failed=1, remaining=1)
-    finally:
-        pre_save.disconnect(refuse)
+    def refuse(row: Any) -> Any:
+        if row.pk == stored[1].pk:
+            raise RuntimeError("This row cannot be saved.")
+        return derived(row)
+
+    with monkeypatch.context() as patched, caplog.at_level(logging.ERROR, logger="angee.parties.managers"):
+        # The key write's own step, under the row's lock and in its savepoint.
+        patched.setattr(managers, "most_derived_concrete", refuse)
+        assert _repair() == KeyRepair(saved=2, failed=1, remaining=1)
     (failure,) = caplog.records
     assert failure.getMessage() == f"The keys of organization {stored[1].pk} could not be saved again."
     assert [_stored(row)[1] for row in stored] == ["row0.strasse.example", "", "row2.strasse.example"]

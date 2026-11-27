@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from io import StringIO
 from typing import Any
+from unittest import mock
 
 import pytest
 from django.apps import apps
@@ -18,7 +19,6 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
 from django.db import IntegrityError, connection, transaction
-from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
 from django_compose.provision import ProvisionContext
@@ -74,24 +74,21 @@ def _behind() -> int:
 
 @contextmanager
 def _unsaveable(handle: Any) -> Iterator[None]:
-    """While it lasts, a save of ``handle`` raises; a second attempt at it fails the test instead of spinning."""
+    """While it lasts, writing ``handle``'s keys raises; a second attempt at it fails the test instead of spinning."""
 
     attempts: list[Any] = []
+    derive = Handle.derived_keys
 
-    def refuse(sender: Any, instance: Any, **kwargs: Any) -> None:
-        del sender, kwargs
-        if instance.pk != handle.pk:
-            return
+    def refuse(row: Any) -> dict[str, Any]:
+        if row.pk != handle.pk:
+            return derive(row)
         if attempts:
             pytest.fail("One run attempted the same row twice.")
-        attempts.append(instance.pk)
+        attempts.append(row.pk)
         raise RuntimeError("This row cannot be saved.")
 
-    pre_save.connect(refuse, sender=Handle)
-    try:
+    with mock.patch.object(Handle, "derived_keys", refuse):
         yield
-    finally:
-        pre_save.disconnect(refuse, sender=Handle)
 
 
 def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -> None:
@@ -126,8 +123,17 @@ def test_every_write_of_the_key_writes_the_rules_version_beside_it(owner: Any) -
             Handle.objects.upsert(platform="email", value="fay@example.test", **{name: current})
 
 
+def _writes(queries: CaptureQueriesContext) -> list[str]:
+    statements = [query["sql"] for query in queries]
+    return [sql for sql in statements if sql.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))]
+
+
 def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spelling_after_one_run(owner: Any) -> None:
-    """A row stored before the rule had a version is selected: its key is saved again, its value stays as typed."""
+    """A row stored before the rule had a version is selected: its key is saved again, its value stays as typed.
+
+    A repair is no edit: the keys are written alone, with one version, and ``updated_at`` stays; a run with nothing
+    behind writes nothing at all, not even its elevation's audit row.
+    """
 
     with system_context(reason="tests.parties.handle_keys"):
         ada = Person.objects.create(display_name="Ada Example", created_by=owner)
@@ -135,6 +141,7 @@ def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spel
         Party.objects.assert_handle(ada, held, asserted_by=owner)
     stale = _stored_with(owner, "ada@xn--bcher-kva.example", "ada@xn--bcher-kva.example")
     _key, _version, value, versions = _row(stale)
+    updated_at = Handle._base_manager.values_list("updated_at", flat=True).get(pk=stale.pk)
 
     def found() -> list[tuple[Any, EmailBasis]]:
         with system_context(reason="tests.parties.handle_keys"):
@@ -147,8 +154,26 @@ def test_a_handle_stored_with_a_punycode_domain_key_is_found_by_its_unicode_spel
 
     assert found() == [(ada.pk, EmailBasis.HELD)]
     assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
-    assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
+    assert Handle._base_manager.values_list("updated_at", flat=True).get(pk=stale.pk) == updated_at
+    with CaptureQueriesContext(connection) as queries:
+        assert Handle.objects.renormalize_handles() == KeyRepair(saved=0)
+    assert _writes(queries) == []
     assert _row(stale) == ("ada@bücher.example", Handle.NORMALIZATION_VERSION, value, versions + 1)
+
+
+def test_an_address_whose_domain_would_read_longer_than_a_domain_name_keeps_it_as_typed(owner: Any) -> None:
+    """A name of ligatures reads past ``Handle.DOMAIN_NAME_LIMIT``: the rule keeps it as typed, so both keys fit
+    their columns on every database, as the handle saves and as the repair writes them."""
+
+    ligatures = ".".join(["ﷺﷺ"] * 84)
+    with system_context(reason="tests.parties.handle_keys"):
+        handle = Handle.objects.upsert(platform="email", value=f"Ada@{ligatures}", created_by_id=owner.pk)
+    stored = Handle._base_manager.get(pk=handle.pk)
+    assert (stored.spelling_key, stored.normalized_value) == (f"ada@{ligatures}", f"ada@{ligatures}")
+
+    behind = _stored_with(owner, f"bob@{ligatures}", "behind")
+    assert Handle.objects.renormalize_handles() == KeyRepair(saved=1)
+    assert _keyed(behind) == (f"bob@{ligatures}", Handle.NORMALIZATION_VERSION)
 
 
 def test_a_run_given_a_cap_stops_at_it_and_the_next_run_takes_the_rest(owner: Any) -> None:
@@ -268,7 +293,7 @@ def test_a_run_without_a_cap_saves_batch_after_batch_until_no_row_is_behind(owne
     assert _behind() == 0
 
 
-def test_a_row_whose_save_raises_is_counted_and_left_behind_while_every_other_row_is_saved(
+def test_a_row_whose_key_write_raises_is_counted_and_left_behind_while_every_other_row_is_saved(
     owner: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """One row never stops the backlog and is never selected again in the run; the next run takes it."""
@@ -294,7 +319,7 @@ def test_a_row_whose_save_raises_is_counted_and_left_behind_while_every_other_ro
     assert _keyed(refused) == ("ada-2@bücher.example", Handle.NORMALIZATION_VERSION)
 
 
-def test_a_capped_run_passes_a_row_whose_save_raises_and_still_saves_its_share(
+def test_a_capped_run_passes_a_row_whose_key_write_raises_and_still_saves_its_share(
     owner: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The cap counts saved rows, so a row that cannot be saved neither uses it up nor holds the run on itself."""
@@ -436,6 +461,13 @@ _IDNA_2003: dict[str, str] = {
     "straße.example": "strasse.example",
 }
 
+# A ligature reads as many letters: U+FDFA as 18. A name of 84 labels of two (251 characters typed) would read as 3,107.
+_LIGATURES = ".".join(["ﷺﷺ"] * 84)
+_LONGER_THAN_A_DOMAIN: dict[str, str] = {
+    "ﷺ.example": "صلى الله عليه وسلم.example",
+    _LIGATURES: _LIGATURES,
+}
+
 NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
     1: (_VERSION_1_VALUES, _DOMAINS),
     2: (
@@ -473,6 +505,18 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
         },
     ),
 }
+# Version 3: version 2's outputs, but a name that would read longer than a domain name can be stays as typed.
+NORMALIZATION_SAMPLE[3] = (
+    {
+        **NORMALIZATION_SAMPLE[2][0],
+        **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
+    },
+    {**NORMALIZATION_SAMPLE[2][1], **_LONGER_THAN_A_DOMAIN},
+    {
+        **NORMALIZATION_SAMPLE[2][2],
+        **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
+    },
+)
 """What the normalization rule returns for a fixed sample, by ``Handle.NORMALIZATION_VERSION``.
 
 The first mapping is ``Handle.normalize_value`` by ``(platform, value)``, with every

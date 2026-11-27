@@ -857,12 +857,12 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
 
     legal_name = models.TextField(blank=True, default="")
     domain = models.CharField(max_length=255, blank=True, default="", db_index=True)
-    domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", db_index=True, editable=False)
+    domain_key = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
     """``domain`` in the domain-spelling rule's one spelling (``Handle.normalize_email_domain``); ``""`` if none.
 
-    What :meth:`domain_filter` compares. Written by :meth:`save` from ``domain``, so history versions it beside the
-    domain, as a handle's keys; the provision repair (``OrganizationManager.renormalize_domains``) saves again a
-    row a save did not key.
+    What :meth:`domain_filter` compares, through its one index (``Meta.indexes``). Written by :meth:`save` from
+    ``domain``, so history versions it beside the domain, as a handle's keys; the provision repair
+    (``OrganizationManager.renormalize_domains``) writes it alone on a row a save did not key.
     """
 
     class Meta:
@@ -871,6 +871,10 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         abstract = True
         ordering = ("-updated_at", "display_name", "sqid")
         rebac_resource_type = "parties/organization"
+        indexes = (
+            # One btree for domain_filter's equality: a field's db_index adds a pattern-ops twin and history copies.
+            models.Index(fields=("domain_key",), name="%(app_label)s_org_domain_key"),
+        )
 
     @classmethod
     def domain_filter(cls, domain: str) -> models.Q:
@@ -885,18 +889,24 @@ class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party
         return models.Q(domain_key=key) if key else models.Q(pk__in=[])
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist the organization with :attr:`domain_key` computed from ``domain`` whenever the domain is written.
+        """Persist the organization with :attr:`domain_key` computed from the domain it stores.
 
-        An insert, a full save, and a partial save naming ``domain`` or the key compute the key and write it beside
-        the domain; a partial save of other fields leaves it, and a history revert restoring the domain keys it again.
-        A queryset ``update`` writes no key: the provision repair keys what it left.
+        An insert, a full save, and a partial save naming ``domain`` compute the key from ``domain`` and write it
+        beside it; a history revert restoring the domain keys it again. A partial save naming the key without the
+        domain writes the key of the domain the row stores, read first, never of one changed in memory and not
+        saved. A partial save of other fields leaves the key. The bulk paths write no key: a queryset ``update``
+        of the domain and ``bulk_update`` naming it leave the key as it was until the provision repair keys it
+        (``bulk_create`` cannot insert an organization, a multi-table child).
         """
 
         update_fields = kwargs.get("update_fields")
-        if update_fields is None or {"domain", "domain_key"}.intersection(update_fields):
+        if update_fields is None or "domain" in update_fields:
             self.domain_key = Handle.normalize_email_domain(self.domain)
             if update_fields is not None and "domain_key" not in update_fields:
                 kwargs["update_fields"] = [*update_fields, "domain_key"]
+        elif "domain_key" in update_fields:
+            stored = type(self)._base_manager.filter(pk=self.pk).values_list("domain", flat=True).first()
+            self.domain_key = Handle.normalize_email_domain(self.domain if stored is None else stored)
         super().save(*args, **kwargs)
 
 
@@ -1076,7 +1086,7 @@ class Handle(
     ACCOUNT_PLATFORMS: ClassVar[tuple[str, ...]] = ("email", "phone")
     """Platforms whose value is itself an account's address: an email address, a phone number."""
 
-    NORMALIZATION_VERSION: ClassVar[int] = 2
+    NORMALIZATION_VERSION: ClassVar[int] = 3
     """The version of the normalization rule; bump it whenever the rule returns something else.
 
     The rule is :meth:`spelling_key_of`, :meth:`normalize_value` and
@@ -1237,21 +1247,35 @@ class Handle(
         spellings IDNA 2003 sends as one domain are one (NFD and NFC, full-width
         letters, ``ß`` and ``ss``). A label the codec cannot read or write, such as
         ``xn--strae-oqa`` (IDNA 2008's ``straße``, a domain of its own), stays as
-        typed.
+        typed. So does a whole name whose spelling would be longer than a domain name
+        can be (:attr:`DOMAIN_NAME_LIMIT`): a label never reads longer than its
+        punycode, so such a name could not be sent as a domain, and a name of
+        ligatures that each read as many letters (U+FDFA reads as 18) would
+        otherwise outgrow the columns its keys are stored in.
 
         Handle keys are stored from it: changing what this returns means bumping
         :attr:`NORMALIZATION_VERSION`. An organization's key needs no version: its
         provision repair compares every row with this rule as it is.
         """
 
+        name = (domain or "").strip().lower()
         labels = []
-        for label in (domain or "").strip().lower().split("."):
+        for label in name.split("."):
             try:
                 label = label.encode("idna").decode("idna")
             except UnicodeError:
                 pass
             labels.append(label)
-        return ".".join(labels)
+        spelled = ".".join(labels)
+        return name if len(spelled) > Handle.DOMAIN_NAME_LIMIT else spelled
+
+    # Django hard-codes it in django/core/validators.py, URLValidator.__call__ (len(hostname) > 253): RFC 1034 3.1.
+    DOMAIN_NAME_LIMIT: ClassVar[int] = 253
+    """The longest a domain name may be, in characters (RFC 1034 section 3.1), as Django's ``URLValidator`` bounds it.
+
+    255 octets on the wire, less the length byte and the root's trailing dot. :meth:`normalize_email_domain`
+    keeps as typed a name whose spelling would be longer.
+    """
 
     # Django hard-codes it in django/core/validators.py, EmailValidator.__call__ (len(value) > 320): RFC 3696 section 3.
     EMAIL_ADDRESS_LIMIT: ClassVar[int] = 320
@@ -1323,12 +1347,24 @@ class Handle(
                 params={"owner": public_id_of(owner)},
             )})
         if self._state.adding or keyed:
-            self.spelling_key = self.spelling_key_of(self.platform, self.value)
-            self.normalized_value = self.normalize_value(self.platform, self.value)
-            self.normalized_version = self.NORMALIZATION_VERSION
+            for name, value in self.derived_keys().items():
+                setattr(self, name, value)
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, *(name for name in key_fields if name not in update_fields)]
         super().save(*args, **kwargs)
+
+    def derived_keys(self) -> dict[str, Any]:
+        """The key columns this row's ``platform`` and ``value`` give under the rule as it is, with its version.
+
+        :meth:`save` writes them together; the key repair (``HandleManager.renormalize_handles``) writes them
+        alone, as they are here.
+        """
+
+        return {
+            "spelling_key": self.spelling_key_of(self.platform, self.value),
+            "normalized_value": self.normalize_value(self.platform, self.value),
+            "normalized_version": self.NORMALIZATION_VERSION,
+        }
 
     def value_owner(self) -> Handle | None:
         """Return the other live email handle owning the spelling key of this row's address, or ``None``.
