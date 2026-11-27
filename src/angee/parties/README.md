@@ -360,7 +360,20 @@ domain (IDNA 2003, as Django's `punycode` writes it): a punycode label and its
 Unicode, NFD and NFC, full-width letters and their ASCII, `ß` and `ss`. A label
 the standard library's `idna` codec cannot read or write stays as typed, so
 `xn--strae-oqa` (IDNA 2008's spelling of `straße`) is a domain of its own. A
-value with no `@` is no address and has no spelling key. A save that would keep a
+value with no `@` is no address and has no spelling key. A local part is
+lower-cased character by character (`Handle.normalize_local_part`), but a
+non-ASCII character whose lower case would be ASCII or of another length is kept
+as typed, so that no non-ASCII character turns into another mailbox's ASCII
+letter: the Kelvin sign is no `k`, so its address is never `kate@`'s handle, and
+`İ` stays `İ`, while `JOSÉ@` and `josé@` are one handle. The kept characters are
+computed from `str.lower`, never listed; a test pins today's two. An address is
+trimmed of ASCII whitespace only (`Handle.ADDRESS_WHITESPACE`): a value that
+begins with a non-ASCII space is no address, and its key keeps the space. The
+spelling key, the person-matching key and `Handle.is_spelling_of` read a local
+part only through `normalize_local_part`. The rule holds for an address as it
+reaches the handle owner: two ingest parsers lower-case an address before it does,
+the IMAP parser (`messaging_integrate_imap`'s `_parsed_address`, whose form every
+stored sync hash covers) and the iMessage bridge's parser (its `external_id`). A save that would keep a
 second live handle of an address is refused on `value` before it writes
 (`ValueOwned`, `Handle.value_owner`). A provider's alias (a Gmail dot or
 plus-tag) is a handle of its own, grouped with the others by the person-matching
@@ -369,21 +382,69 @@ looked up; that key still picks the handle an alias lands on at two sites open
 for a ruling, a directory adoption's through-handle and a claimant's email handle
 (`PartyManager.claimant_as_system`). On other platforms, a spelling is a
 handle, as before. That is
-one rule, `Handle.normalize_email_domain`, for whoever compares a domain. The
-organization-domain suggestion (`PartyManager.suggest_for`) reads it on both
-sides, but `Organization.domain` is stored as typed, so it first finds
-organizations whose domain is the handle's in the rule's spelling, its punycode,
-or the address's own spelling, ASCII letter case aside: from `ada@bücher.example`
-or `ada@xn--bcher-kva.example` it finds `bücher.example` and
-`xn--bcher-kva.example`, and from `ada@straße.example` it finds `straße.example`
-and `strasse.example`. It does not find an organization typed in another
-spelling the rule joins (`straße.example` from `ada@strasse.example`, an NFD or
-full-width spelling from the plain one), since organizations store no domain
-key. A handle stores
+one rule, the domain-spelling rule `Handle.normalize_email_domain`, wherever
+parties matches an identity by a domain: a handle's keys, an address's domain
+(`Handle.domain_of`), the email handles at a domain (`HandleQuerySet.at_domain`)
+and an organization's domain key. A name that would read longer than a domain
+name can be (`Handle.DOMAIN_NAME_LIMIT`, 253 characters, RFC 1034's bound as
+Django's `URLValidator` applies it) is no domain the codec could send: the rule
+keeps it as typed, so a name of ligatures that each read as many letters never
+outgrows the 512-character key columns. Accounts and sign-in allowlists compare
+domains for other intents, under their own owners. An
+organization keeps its domain as typed and, beside it, its domain key
+(`Organization.domain_key`): the domain in the rule's spelling, written by the
+organization's save whenever the domain is, and `""` for no domain; a save
+naming the key without the domain keys the domain the row stores, never one
+changed in memory and not saved. Several
+organizations may share one. `Organization.domain_filter(domain)` finds the
+organizations whose domain is `domain` in any spelling the rule joins, by that
+key's one index (a btree in `Meta.indexes`, none on history): from `bücher.example` it finds one typed `xn--bcher-kva.example`,
+`BÜCHER.example` or in NFD, and from `strasse.example` one typed
+`straße.example`. Matching by domain goes through the key: the organization-domain
+suggestion (`PartyManager.suggest_for`) asks `domain_filter`, and suggests one
+matching organization at 0.4 and each of several at 0.3, all below review, so none
+decides and every one goes to review, in primary-key order. The `organizations`
+resource's filter, sort and group axes are on the typed text, `Organization.domain`,
+so a list filtered by domain compares it as typed. History
+versions the key beside the domain, as a handle's keys, and a revert restoring a
+domain keys it again. The bulk paths write no key: a queryset `update` of the
+domain and a `bulk_update` naming it leave the key as it was, and the
+`renormalize_organization_domains` repair
+(`OrganizationManager.renormalize_domains`), which every provision runs,
+reads every organization's domain and key in batches and writes the key alone,
+under its row lock and on its most derived row (a company in its own history),
+of each one whose key is not the rule's, so a row stored before the column
+existed, a domain an `update` wrote and a changed rule all reach the key without
+a rule version. Reading the whole table at every provision is what catches a
+queryset `update` of the domain, which leaves no other trace: about 2.5 seconds
+for 50,000 keyed organizations (measured by the Django review on PostgreSQL 17,
+100 batch reads). Keying costs about 14 statements a row: an upgrade keys every
+organization with a domain once (5,000 rows took 446 seconds on a machine under
+load 44 to 51). A host that provisions before it has authored the migration
+adding the column fails on the missing column.
+
+Both key repairs walk through `repair_keys` (batches of `REPAIR_BATCH`, a
+savepoint per row: a row whose write raises is logged and counted, and the rest
+are written); the handle repair selects by its version's index, the organization
+repair by a full scan, since `domain` is written like any field. A repair is no
+edit: each writes its key columns alone, by a queryset update that records one
+version of the row in the run's changeset, so `updated_at` (which orders lists)
+stays as it was. A queryset update sends no `post_save`: a repaired handle key (the
+person-matching key is a field of the handle's GraphQL type) reaches an open list
+or subscription when it refetches. A row with no history yet gets a baseline
+version first, in its own changeset, as well as the repair's. A run that finds
+nothing stale writes nothing, not even its system elevation's audit row. The row lock is PostgreSQL's `FOR NO KEY UPDATE`:
+neither repair writes a column another row's foreign key references (the
+organization repair writes `domain_key`, which no index makes unique; the handle
+repair writes `spelling_key`, `normalized_value` and `normalized_version`,
+whose only unique index, `uq_handle_spelling_key`, is partial and so no foreign
+key's target), so a writer adding a row that references a locked one (an
+address of a locked party) does not wait on the batch. A handle stores
 the keys its rule gave when it was last saved (`spelling_key`,
 `normalized_value`) and, beside them, the version the rule had then
 (`normalized_version`; 0 for a row stored before the rule had one). The
-handle's save is the one writer of the keys and writes them together. The rules
+handle derives the keys in one place (`Handle.derived_keys`): its save writes
+them together, and so does the key repair, alone. The rules
 `Handle` owns (`value_owner`, `is_spelling_of`, `validate_merge`) compute a row's
 own keys from its value, so a row the key repair has not reached decides as it
 will; `PartyManager`'s readers of the person-matching key (the twins
@@ -396,17 +457,18 @@ sample beside the number, so an output that changes under one number fails.
 The `renormalize_handles` repair (`HandleManager.renormalize_handles`), which
 every provision runs (`PartiesConfig.compose_provision`), selects the handles
 of every platform whose version is not the rule's, by that column's index, and
-saves each again through the handle's own save, under its row lock: an earlier
-version, 0, or a later one that newer code wrote before a rollback. A row
-whose keys are already what the rule gives has them written again unchanged
-beside its version, and leaves the selection. With no row behind, the repair is
+writes each one's keys again as the handle derives them (`Handle.derived_keys`,
+what its save writes), under its row lock: an earlier version, 0, or a later
+one that newer code wrote before a rollback. A row whose keys are already what
+the rule gives has them written again unchanged beside its version, and leaves
+the selection. With no row behind, the repair is
 that one indexed query. A run takes the whole backlog, because a row left with a
 stale key is one the lookups that read keys miss, and a writer that misses it
-makes a second row. It saves in batches of `HandleManager.REPAIR_LIMIT` (500)
-rows, each in its own transaction, so an interrupted provision keeps what it
+makes a second row. It saves in batches of `REPAIR_BATCH` (500) rows
+(`repair_keys`), each in its own transaction, so an interrupted provision keeps what it
 saved and the next one resumes. Every batch starts after the last key the run
 selected, so a run selects no row twice and ends: a row deleted or already
-saved by another process is passed, and a row whose save raises is rolled
+saved by another process is passed, and a row whose write raises is rolled
 back alone, logged, counted ("The keys of N handle(s) could not be saved;
 ...") and left for the next run while the rest are saved. A live email handle
 that spells the address of another live one (two rows an earlier rule kept
@@ -459,6 +521,21 @@ rule about which of its records may name a claimed address composes that read,
 and compares the references it returns with its own by the record each names
 (`EvidenceReference.named_record`: the label without case and the public id,
 the pointer aside), as the verb does.
+
+Which parties are confirmed on an address is one read,
+[PartyQuerySet.confirmed_on(handles)](managers.py): every party with an applied
+confirmation on any of the handles (`StatementQuerySet.confirmed`: a person's or a
+seed's preferred statement with a value, `Statement.CONFIRMED_STANCE`), and each
+handle's own confirmed party, not only the party a handle resolves to, which is
+whoever confirmed last. It reads the confirmations structurally in one query; the
+caller passes handles it may read and calls it on parties scoped as it needs. A
+consumer that must not route an address two parties hold to one of them asks it.
+Three reads say "confirmed" and answer different questions:
+`StatementQuerySet.confirmed()` is statements (which stances are applied
+confirmations), `PartyQuerySet.confirmed_on(handles)` is parties (who is confirmed
+on these handles), and `HandleQuerySet.confirmed(platform, value)` is handles (an
+address's handles, by the person-matching key, whose resolved party link is
+confirmed).
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization
