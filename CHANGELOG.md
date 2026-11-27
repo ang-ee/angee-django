@@ -46,8 +46,8 @@ live in code docstrings.
 - `angee.parties`: **Changed behaviour.** An email handle is one address whatever
   its letter case or domain spelling. A handle has a spelling key,
   `Handle.spelling_key` (`Handle.spelling_key_of(platform, value)`: an email
-  address trimmed and lower-cased, not case-folded, its domain in the one
-  spelling the email backend sends it in, so a punycode label and its Unicode,
+  address trimmed and lower-cased, not case-folded, its domain in one Unicode
+  spelling of those the email backend sends as one, so a punycode label and its Unicode,
   NFD and NFC, full-width letters and their ASCII, and `ß` and `ss` are one
   domain (`Handle.normalize_email_domain` takes each label through the
   standard library's IDNA 2003 codec and keeps one it cannot read, such as
@@ -144,27 +144,55 @@ live in code docstrings.
     folds them. Leaving for good removes the column and the constraint with a
     reviewed migration.
   - No `rebac sync` and no SDL change.
-- `angee.parties`: **New field and lookup; changed behaviour.** An organization
-  has a domain key, `Organization.domain_key`: its domain in the one spelling the
-  domain rule gives (`Handle.normalize_email_domain`, the rule a handle's keys
-  read), written by the organization's save whenever the domain is, `""` for no
-  domain, indexed, and versioned in history beside the domain. `Organization.domain_filter(domain)`
-  is a `Q` for the organizations whose domain is `domain` in any spelling the rule
-  joins; several may share one. The organization-domain suggestion
-  (`PartyManager.suggest_for`) reads it, so an organization typed `straße.example`
-  is suggested for `ada@strasse.example`, and one typed in NFD, in full-width
-  letters or as `BÜCHER.example` for the plain spelling, on both databases; its
-  pre-filter by the rule's spelling, its punycode and the address's own spelling
-  is removed. A new provision repair, `renormalize_organization_domains`
-  (`PartyManager.renormalize_organization_domains`, also a command), writes the
-  key of every organization whose stored key is not its domain's under the rule,
-  reading every row in batches and saving each such row again under its lock. A consumer that compared `Organization.domain`
-  (`domain__iexact`) asks `Organization.domain_filter` instead. **Upgrade:** run
-  `makemigrations` and commit it: an `AddField` of `domain_key` on
-  `organization` and on `historicalorganization`, and on the history model of
-  any host model inheriting `Organization`, each with a database default of `""`
-  and an index; no table rewrite on PostgreSQL. Provision then keys every
-  organization.
+- `angee.parties`, `angee.provenance`: **New field and reads; changed behaviour.**
+  - **An organization's domain key.** `Organization.domain_key` is its domain in
+    the one spelling the domain-spelling rule gives (`Handle.normalize_email_domain`,
+    the rule a handle's keys read), written by the organization's save whenever
+    the domain is, `""` for no domain, indexed, and versioned in history beside
+    the domain. `Organization.domain_filter(domain)` is a `Q` for the
+    organizations whose domain is `domain` in any spelling the rule joins;
+    several may share one. The organization-domain suggestion
+    (`PartyManager.suggest_for`) reads it, so an organization typed
+    `straße.example` is suggested for `ada@strasse.example`, and one typed in
+    NFD, in full-width letters or as `BÜCHER.example` for the plain spelling, on
+    both databases; its pre-filter by the rule's spelling, its punycode and the
+    address's own spelling is removed. A consumer that compared
+    `Organization.domain` (`domain__iexact`) asks `Organization.domain_filter`.
+  - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,
+    value)` is an email address's domain in the rule's spelling (`""` off email
+    or with no `@`); `HandleQuerySet.at_domain(domain)` is the email handles at a
+    domain in any spelling. A consumer that split a stored key at its `@` asks them.
+  - **Who a person confirmed on an address.** `StatementQuerySet.confirmed()` is the
+    applied statements a person confirmed, from `Statement.CONFIRMED_STANCE`, the
+    one statement of the stance `Statement.is_confirmed` reads.
+    `PartyQuerySet.confirmed_on(handles)` is the canonical parties confirmed on
+    any of the handles: every confirmation, not only the party a handle
+    resolves to, plus each handle's own confirmed party, in one query. It reads
+    the confirmations structurally; the caller passes handles it may read and
+    calls it on parties scoped as it needs.
+  - **One walk for the key repairs.** `repair_keys` takes a key repair's rows in
+    batches of `REPAIR_BATCH` (500), one transaction each, re-reads each under its
+    row lock and saves it in a savepoint of its own: a row whose save raises is
+    rolled back, logged and counted in `failed`, and the rest are saved.
+    `renormalize_handles` walks through it as before; `HandleManager.REPAIR_LIMIT`
+    is now only the holder repair's default cap. The new provision repair
+    `renormalize_organization_domains` (`PartyManager.renormalize_organization_domains`,
+    also a command) walks through it too, reading every organization's domain and
+    key and saving, as its most derived row, each one whose key is not its
+    domain's; it returns a `KeyRepair`.
+  - **Upgrade:** run `makemigrations` and commit it: an `AddField` of
+    `domain_key` on `organization` and on `historicalorganization`, and on the
+    history model of any host model inheriting `Organization` with history,
+    each with a database default of `""` and an index. On PostgreSQL the column
+    is added without a table rewrite, and each index is a plain `CREATE INDEX`,
+    which blocks writes to its table while it builds. Between the migration and
+    the next provision every existing organization's key is `""`, so neither the
+    suggestion nor a consumer's `domain_filter` finds an organization by domain;
+    provision keys them all, writing one history version per organization it
+    keys. No `rebac sync` and no SDL change: the key is in no GraphQL type.
+    **Rollback:** older code runs beside the column (its database default fills
+    an insert); a host leaving this code for good removes the column and its
+    indexes with a reviewed migration.
 - `angee.messaging`: **The console reads where one may send a new message, which
   messages were written here, and the recipient bound.**
   - **New.** The channels filter `sendable`

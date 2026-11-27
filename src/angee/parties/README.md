@@ -362,7 +362,11 @@ looked up; that key still picks the handle an alias lands on at two sites open
 for a ruling, a directory adoption's through-handle and a claimant's email handle
 (`PartyManager.claimant_as_system`). On other platforms, a spelling is a
 handle, as before. That is
-one rule, `Handle.normalize_email_domain`, for whoever compares a domain. An
+one rule, the domain-spelling rule `Handle.normalize_email_domain`, wherever
+parties matches an identity by a domain: a handle's keys, an address's domain
+(`Handle.domain_of`), the email handles at a domain (`HandleQuerySet.at_domain`)
+and an organization's domain key. Accounts and sign-in allowlists compare
+domains for other intents, under their own owners. An
 organization keeps its domain as typed and, beside it, its domain key
 (`Organization.domain_key`): the domain in the rule's spelling, written by the
 organization's save whenever the domain is, and `""` for no domain. Several
@@ -377,9 +381,13 @@ domain keys it again. A queryset `update` writes no key: the
 `renormalize_organization_domains` repair
 (`PartyManager.renormalize_organization_domains`), which every provision runs,
 reads every organization's domain and key in batches and saves again, under its
-row lock, each one whose key is not the rule's, so a row stored before the column
-existed, a domain an `update` wrote and a changed rule all reach the key without
-a rule version. A handle stores
+row lock and as its most derived row (a company in its own history), each one
+whose key is not the rule's, so a row stored before the column existed, a domain
+an `update` wrote and a changed rule all reach the key without a rule version.
+Both key repairs walk through `repair_keys` (batches of `REPAIR_BATCH`, a
+savepoint per row: a row whose save raises is logged and counted, and the rest
+are saved); the handle repair selects by its version's index, the organization
+repair by a full scan, since `domain` is written like any field. A handle stores
 the keys its rule gave when it was last saved (`spelling_key`,
 `normalized_value`) and, beside them, the version the rule had then
 (`normalized_version`; 0 for a row stored before the rule had one). The
@@ -459,6 +467,16 @@ rule about which of its records may name a claimed address composes that read,
 and compares the references it returns with its own by the record each names
 (`EvidenceReference.named_record`: the label without case and the public id,
 the pointer aside), as the verb does.
+
+Which parties a person confirmed on an address is one read,
+[PartyQuerySet.confirmed_on(handles)](managers.py): every party with a
+confirmation on any of the handles (`PartyStatementQuerySet.confirmed`, the
+applied statements whose stance `Statement.is_confirmed` reads, both from
+`Statement.CONFIRMED_STANCE`), and each handle's own confirmed party, not only the
+party a handle resolves to, which is whoever confirmed last. It reads the
+confirmations structurally in one query; the caller passes handles it may read
+and calls it on parties scoped as it needs. A consumer that must not route an
+address two parties hold to one of them asks it.
 
 [PartyManager.ingest_organization](managers.py) lands a `ParsedOrganization`
 from a directory stream the same way: it binds the link, mints an Organization

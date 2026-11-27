@@ -161,7 +161,11 @@ Use these owners instead of maintaining another contract in an addon:
   reconcile/load flows, and writes that begin from a model class. QuerySets own
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
-  promote it to a model or manager method.
+  promote it to a model or manager method. A predicate several managers or a
+  relation path must compose (the base manager, an unaudited read, a join from
+  another model) is a model classmethod returning a `Q`, named `*_filter`, and
+  the scopes call it: [`Handle.spellings_filter`](../../src/angee/parties/models.py),
+  `Handle.identifies_account_filter(prefix)`, `Organization.domain_filter`.
 - **Database routing:** Angee runs on one database, Django's `default`. It
   selects no database per operation, and the base system check `angee.E050`
   requires only the `default` alias in `DATABASES` and refuses any
@@ -587,9 +591,13 @@ Use these owners instead of maintaining another contract in an addon:
   [tags](../../src/angee/tags/schema.py) do; they do not infer them from type fields.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
-- **Derived columns have two drift classes and two owners.** Signals own instance
-  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
-  `bulk_create` and queryset `update` paths, where signals do not run.
+- **Derived columns have two drift classes and two owners.** A column derived
+  from the row's own columns (a key) is written by the model's `save`, beside the
+  columns it derives from, whenever a save names them; a column derived from other
+  rows (a count, a denormalized reference) is kept by signals on instance
+  saves/deletes, cascades, and queryset deletes. Idempotent repair passes own the
+  `bulk_create` and queryset `update` paths, where neither runs
+  ([`repair_keys`](../../src/angee/parties/managers.py) for parties' keys).
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with
