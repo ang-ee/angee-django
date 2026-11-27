@@ -725,13 +725,20 @@ def _leaks(error: BaseException) -> list[tuple[str, str, str]]:
     ]
 
 
+@pytest.mark.parametrize("refused", ["not JSON", "a string over the limit"])
 @pytest.mark.parametrize("entry", ["send_as_system", "render"])
-def test_an_exception_inside_the_render_reports_no_value_of_the_mail(system_channel: Any, entry: str) -> None:
-    """A value the render refuses half-way (no JSON holds an ``object()``), raised with the credential beside it."""
+def test_an_exception_inside_the_render_reports_no_value_of_the_mail(
+    system_channel: Any, entry: str, refused: str,
+) -> None:
+    """A value the render refuses half-way, raised with the credential beside it: before the values are JSON (no
+    JSON holds an ``object()``), and after, when the walk's own frames hold the JSON text and its data, which the
+    caller's mark of ``values`` alone would not hide."""
 
     del system_channel
     row = _mail("[Sign in]({{ link }})", LINKED)
-    values = {"link": SECRET, "unwritable": object()}
+    values: dict[str, Any] = {"link": SECRET, "unwritable": object()}
+    if refused != "not JSON":
+        values = {"link": SECRET, "long": "x" * 10_001}
     with pytest.raises(ValidationError) as raised:
         if entry == "render":
             with system_context(reason="tests.messaging_templates.send.render"):
