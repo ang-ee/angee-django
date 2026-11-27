@@ -28,7 +28,10 @@ not hold it. Its header's `aria-sort` says "none", as an unsorted header's does:
 `aria-sort` on one header at a time, and on a grouped list that is the header of the key the
 records follow, which keeps it as before. A press on any other column, and a choice in the pane's
 Order select, orders the records inside the groups and keeps the axis keys the order holds, now
-behind the pressed key (`title:asc,status:asc`, where it was `status:asc,title:asc`); a press on a
+behind the pressed key (`title:asc,status:asc`, where it was `status:asc,title:asc`). It does not
+keep the date a level of months, quarters or weeks follows, which is a key the records order by and
+no key the level shares: on a list grouped by month it turns the months back to ascending, as it
+did before; keeping that date is a later change. A press on a
 grouping column leaves the records' order alone: its key leads and every other key the order
 holds stays behind it, in their order, the records' and another level's, so the records inside
 the groups keep their order and the header of the key they follow keeps its `aria-sort`
