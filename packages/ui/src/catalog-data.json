@@ -4802,6 +4802,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "THEME_ELEVATION_PRESETS",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": "token",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "THEME_ID_PATTERN",
     "source": "packages/ui/src/theme/runtime.d.ts",
     "kind": null,
@@ -6587,6 +6595,15 @@
     "source": "packages/ui/src/views/resource/model/capabilities.ts",
     "kind": null,
     "reason": "Codec and transport infrastructure: translates runtime data and addresses.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "isShadowList",
+    "source": "packages/ui/src/theme/runtime.d.ts",
+    "kind": null,
+    "reason": "Schema infrastructure: validates serialized runtime contracts.",
     "status": "stable",
     "storyId": null
   },
@@ -8703,7 +8720,7 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useRefusalBannerFocus",
+    "name": "useRefusalFocus",
     "source": "packages/ui/src/views/form/validation-errors.ts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",

@@ -102,7 +102,7 @@ design-system shape that declares intent and composes owners.
    }
    ```
 
-   `routed` hands record open/create/close to the `$id` child. `presetIds`, `search`, `createAction`, `emptyContent`, `defaultGroups` go on `List`; `recordSmartButtons`, `contextFields` on `ResourceList`. `form={tagForm}` is the resource's registered form: author it with `angee-forms`, never inside the page.
+   `routed` hands record open/create/close to the `$id` child. `presetIds`, `search`, `emptyContent`, `defaultGroups` go on `List`; `createAction`, `recordSmartButtons`, `contextFields` on `ResourceList` (`ResourceListProps` in `packages/ui/src/views/resource/resource-list/public.tsx`). `form={tagForm}` is the resource's registered form: author it with `angee-forms`, never inside the page.
    **Owner rule:** pages own no table mechanics, route params, cache or loading/error surfaces ([routes and pages stay thin](../../../docs/frontend/guidelines.md#rules)).
 
 6. **Read and write beyond CRUD through typed documents.** The file name picks the schema: `documents.ts`/`documents.console.ts` → console, `documents.public.ts` → public.

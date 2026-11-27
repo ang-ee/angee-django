@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import pickle
+import subprocess
+import sys
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Annotated, Literal
@@ -280,6 +284,81 @@ def test_registry_enum_identity_tracks_keys_and_preserves_names() -> None:
         assert expanded is not enum
         assert expanded.choices == [("base", "base"), ("refined", "refined")]
     assert impl_choices_enum(_EnumImpl) is enum
+
+
+@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
+def test_an_implementation_key_pickles_as_its_own_member() -> None:
+    """A runtime-built enum has no module name to pickle by, yet a key and a query filtering on it pickle."""
+
+    member = ImplClassField(_EnumImpl).to_python("base")
+    assert pickle.loads(pickle.dumps(member)) is member
+    query = VcsBridge.objects.filter(backend_class="stub").query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
+
+
+def test_an_implementation_key_unpickles_as_the_member_it_was_after_its_mapping_changed() -> None:
+    """Unpickling reads no settings: a key keeps its member, and the field over the new mapping accepts it."""
+
+    with override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"}):
+        member = ImplClassField(_EnumImpl).to_python("base")
+    with override_settings(
+        ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl", "refined": "tests.test_impl._EnumRefinedImpl"}
+    ):
+        field = ImplClassField(_EnumImpl)
+        current = field.to_python("base")
+        unpickled = pickle.loads(pickle.dumps(member))
+        assert current is not member
+        assert unpickled is member
+        assert field.to_python(unpickled) is current
+
+
+def test_a_row_holding_an_implementation_key_pickles() -> None:
+    """A loaded row holds its key as the member, and the row pickles with it."""
+
+    field = VcsBridge._meta.get_field("backend_class")
+    member = field.from_db_value("stub", None, None)
+    assert pickle.loads(pickle.dumps(VcsBridge(backend_class=member))).backend_class is member
+
+
+def test_an_implementation_key_unpickles_in_a_process_without_settings() -> None:
+    """Another interpreter, with no settings and no enum built yet, restores the key."""
+
+    member = VcsBridge._meta.get_field("backend_class").from_db_value("stub", None, None)
+    probe = (
+        "import pickle, sys\n"
+        "from django.conf import settings\n"
+        "key = pickle.loads(sys.stdin.buffer.read())\n"
+        "assert not settings.configured\n"
+        "print(type(key).__name__, key.value, key.label)\n"
+    )
+    env = {name: value for name, value in os.environ.items() if name != "DJANGO_SETTINGS_MODULE"}
+    result = subprocess.run(
+        [sys.executable, "-c", probe], input=pickle.dumps(member), capture_output=True, env=env, check=True
+    )
+    assert result.stdout.decode().split() == [type(member).__name__, "stub", "stub"]
+
+
+_IMPL_SELECTORS = sorted(
+    f"{model._meta.label}.{field.name}"
+    for model in apps.get_models()
+    for field in model._meta.concrete_fields
+    if isinstance(field, ImplClassField)
+)
+
+
+@pytest.mark.parametrize("selector", _IMPL_SELECTORS)
+def test_a_query_on_every_key_of_an_installed_selector_pickles(selector: str) -> None:
+    """A query on all of an installed selector's keys pickles back to the same SQL.
+
+    It compares SQL only, so it proves every selector's keys reduce at all; the
+    tests above pin what a key unpickles as.
+    """
+
+    label, name = selector.rsplit(".", 1)
+    model = apps.get_model(label)
+    keys = [member.value for member in model._meta.get_field(name).choices_enum]
+    query = model._base_manager.filter(**{f"{name}__in": keys}).query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
 
 
 @override_settings(ANGEE_STORAGE_BACKEND_CLASSES={"local": "angee.storage.backends.LocalBackend"})

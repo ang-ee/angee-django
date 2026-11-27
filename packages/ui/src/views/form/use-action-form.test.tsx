@@ -55,13 +55,32 @@ describe("useActionForm", () => {
     });
 
     expect(ok).toBe(false);
-    // Every in-band error is available for a field to bind; the form-level message
-    // carries the outcome message plus the key no field claimed.
+    // Every in-band error is available for a field to bind; the form-level messages are
+    // the refusal's form-level reason, then the key no field claimed.
     expect(result.current.fieldErrors).toEqual({
       count: ["Too big."],
       _root: ["Server down."],
     });
     expect(result.current.formErrors).toEqual(["Fix it.", "_root: Server down."]);
+  });
+
+  test("fields that follow the values are read with the form's values when the answer lands: a reason of a field not shown then folds into the form error", async () => {
+    const submit = vi.fn().mockResolvedValue({
+      status: "invalid", issues: { fieldErrors: { token: ["Expired."] }, formErrors: [] },
+    });
+    const fieldNames = (values: { mode: string }) => values.mode === "note" ? ["mode", "token"] : ["mode"];
+    const { result } = renderHook(
+      () => useActionForm<{ mode: string }>({ submit, defaultValues: { mode: "email" }, fieldNames }),
+      { wrapper },
+    );
+
+    await act(async () => { await result.current.run(); });
+    expect(result.current.formErrors).toEqual(["token: Expired."]);
+
+    act(() => result.current.form.setValue("mode", "note"));
+    await act(async () => { await result.current.run(); });
+    expect(result.current.formErrors).toEqual([]);
+    expect(result.current.fieldErrors).toEqual({ token: ["Expired."] });
   });
 
   test("clearFieldError removes one field's bound messages", async () => {

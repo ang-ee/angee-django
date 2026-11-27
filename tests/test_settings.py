@@ -181,10 +181,27 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
-        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTHENTICATION_BACKENDS"][0] == "axes.backends.AxesStandaloneBackend"
     assert "rebac.W001" in settings["SILENCED_SYSTEM_CHECKS"]
+
+
+def test_only_a_host_with_emailed_sign_in_links_authenticates_them(tmp_path: Path) -> None:
+    """IAM alone has no link backend; the link addon appends its own after IAM's axes and ModelBackend."""
+
+    iam_only = _compose(tmp_path / "iam")
+    assert "angee.iam_messaging" not in iam_only["INSTALLED_APPS"]
+    assert not any("SignInLink" in backend for backend in iam_only["AUTHENTICATION_BACKENDS"])
+    assert not any(name.startswith("ANGEE_IAM_MESSAGING_") for name in iam_only)
+
+    linked: dict[str, Any] = {"INSTALLED_APPS": ("angee.iam_messaging",)}
+    _configure(linked, tmp_path / "linked")
+    backends = list(linked["AUTHENTICATION_BACKENDS"])
+    assert backends.index("axes.backends.AxesStandaloneBackend") < backends.index("angee.iam.auth.ModelBackend")
+    assert backends[-1] == "angee.iam_messaging.auth.SignInLinkBackend"
+    assert (linked["ANGEE_IAM_MESSAGING_SIGN_IN_LINK_TTL"], linked["ANGEE_IAM_MESSAGING_SIGN_IN_LINK_COOLDOWN"]) == (
+        259_200, 60,
+    )
 
 
 
@@ -253,7 +270,6 @@ def test_auth_user_model_comes_from_iam_autoconfig(
     assert SETTINGS["AUTHENTICATION_BACKENDS:append"] == [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
-        "angee.iam.auth.SignInLinkBackend",
     ]
     assert settings["AUTH_USER_MODEL"] == "iam.User"
 

@@ -94,7 +94,10 @@ def observe_email_identity(message: Any) -> None:
     An RFC Message-ID names one email wherever it is received; chat and provider
     ids are account-local and never compared. The rule asserts the message pair
     and the thread pair; applying each statement folds the copy into its oldest
-    occurrence unless a person keeps them separate.
+    occurrence unless a person keeps them separate. A record's chatter thread is
+    never one of a thread pair: its readers are the record's, so folding a
+    mailbox's thread into it would take that thread out of its owner's inbox and
+    put their later mail on the record. Only the message pair is asserted then.
     """
 
     message_model = apps.get_model("messaging", "Message")
@@ -121,7 +124,11 @@ def observe_email_identity(message: Any) -> None:
     with changeset(fresh=True, activity="system", change_reason=SOURCE_IDENTITY_RULE, origin=source):
         for copy in copies:
             evidence = [EvidenceReference.of(row) for row in sorted((message, copy), key=lambda row: row.pk)]
-            for left, right in ((message, copy), (message.thread, copy.thread)):
+            pairs: list[tuple[Any, Any]] = [(message, copy)]
+            own, theirs = message.thread, copy.thread
+            if own is not None and theirs is not None and not (own.is_record_attached() or theirs.is_record_attached()):
+                pairs.append((own, theirs))
+            for left, right in pairs:
                 if left is None or right is None or left.pk == right.pk:
                     continue
                 pair = type(left).same_as.for_pair(left.with_actor(actor), right)

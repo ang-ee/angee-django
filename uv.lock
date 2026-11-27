@@ -30,6 +30,7 @@ members = [
     "angee-graphql",
     "angee-iam",
     "angee-iam-integrate-oidc",
+    "angee-iam-messaging",
     "angee-intake",
     "angee-integrate",
     "angee-integrate-github",
@@ -159,6 +160,7 @@ dependencies = [
     { name = "angee-graphql" },
     { name = "angee-iam" },
     { name = "angee-iam-integrate-oidc" },
+    { name = "angee-iam-messaging" },
     { name = "angee-intake" },
     { name = "angee-integrate" },
     { name = "angee-integrate-github" },
@@ -240,6 +242,7 @@ dev = [
     { name = "example-notes" },
     { name = "example-theme" },
     { name = "faker" },
+    { name = "html5lib" },
     { name = "hypothesis" },
     { name = "import-linter" },
     { name = "psycopg", extra = ["binary", "pool"] },
@@ -275,6 +278,7 @@ requires-dist = [
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-iam-integrate-oidc", editable = "src/angee/iam_integrate_oidc" },
+    { name = "angee-iam-messaging", editable = "src/angee/iam_messaging" },
     { name = "angee-intake", editable = "src/angee/intake" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
     { name = "angee-integrate-github", editable = "src/angee/integrate_github" },
@@ -353,6 +357,7 @@ dev = [
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
+    { name = "html5lib", specifier = ">=1.1,<2" },
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "import-linter", specifier = ">=2.1" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -909,6 +914,27 @@ requires-dist = [
 ]
 
 [[package]]
+name = "angee-iam-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/iam_messaging" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
+]
+
+[[package]]
 name = "angee-intake"
 version = "3.0.0"
 source = { editable = "src/angee/intake" }
@@ -1248,21 +1274,27 @@ version = "3.0.0"
 source = { editable = "src/angee/messaging_templates" }
 dependencies = [
     { name = "angee-base" },
+    { name = "angee-brandkit" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
     { name = "angee-parties" },
     { name = "angee-provenance" },
     { name = "angee-resources" },
+    { name = "angee-web" },
+    { name = "markdown-it-py" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-brandkit", editable = "src/angee/brandkit" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "markdown-it-py", specifier = ">=4.2,<5" },
 ]
 
 [[package]]
@@ -3525,6 +3557,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "html5lib"
+version = "1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+    { name = "webencodings" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/b6/b55c3f49042f1df3dcd422b7f224f939892ee94f22abcf503a9b7339eaf2/html5lib-1.1.tar.gz", hash = "sha256:b2e5b40261e20f354d198eae92afc10d750afb487ed5e50f9c4eaf07c184146f", size = 272215, upload-time = "2020-06-22T23:32:38.834Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/dd/a834df6482147d48e225a49515aabc28974ad5a4ca3215c18a882565b028/html5lib-1.1-py2.py3-none-any.whl", hash = "sha256:0d78f8fde1c230e99fe37986a60526d7049ed4bf8a9fadbad5f00e22e58e041d", size = 112173, upload-time = "2020-06-22T23:32:36.781Z" },
 ]
 
 [[package]]
@@ -6037,6 +6082,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1d/7a/eb316761ec35664ea5174709a68bbd3389de60d4a1ebab8808bfc264ed67/webcolors-25.10.0.tar.gz", hash = "sha256:62abae86504f66d0f6364c2a8520de4a0c47b80c03fc3a5f1815fedbef7c19bf", size = 53491, upload-time = "2025-10-31T07:51:03.977Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/cc/e097523dd85c9cf5d354f78310927f1656c422bd7b2613b2db3e3f9a0f2c/webcolors-25.10.0-py3-none-any.whl", hash = "sha256:032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d", size = 14905, upload-time = "2025-10-31T07:51:01.778Z" },
+]
+
+[[package]]
+name = "webencodings"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/a0/8fd707bcb776a7be556bad06a2ea5fb9bd519df78ef8e26f70ccf0f38bff/webencodings-0.6.1.tar.gz", hash = "sha256:565f9ad031c702dae404e27a099e3e09186a3ab1b9520f06d215502b651fd910", size = 15001, upload-time = "2026-08-15T14:22:57.549Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/c6/040cbc72480d789a5f40d63fb484d3106554c4dfa2d2b70ad5022057750f/webencodings-0.6.1-py3-none-any.whl", hash = "sha256:7fab6269c8bf237c657876b52058ccb182e861518d1c695c1a9aaa8c1c105d5b", size = 8745, upload-time = "2026-08-15T14:22:56.31Z" },
 ]
 
 [[package]]

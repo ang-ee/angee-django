@@ -1,5 +1,6 @@
 import { Filter } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
+import type { SortingState } from "@tanstack/react-table";
 import type { FilterClauseOperator } from "../../../toolbars/FilterClauseEditor";
 import type { ResourceViewState } from "../resource-view-model";
 import { resourceViewFavoriteIsActive } from "../model/favorites";
@@ -8,8 +9,12 @@ import { fieldLabel } from "../model-metadata-defaults";
 import type { SearchActiveItem, SearchCatalog } from "./types";
 import type { UiTranslate } from "../../../i18n";
 
-/** One projection owns activity for every search presentation. */
-export function activeItems(state: ResourceViewState, catalog: SearchCatalog, t?: UiTranslate): readonly SearchActiveItem[] {
+/**
+ * One projection owns activity for every search presentation. `inheritedSorting` is the
+ * order a saved view without a sort of its own keeps (`ResourceViewContextValue.inheritedSorting`).
+ */
+export function activeItems(state: ResourceViewState, catalog: SearchCatalog, t?: UiTranslate,
+  inheritedSorting?: SortingState): readonly SearchActiveItem[] {
   const filter = Filter.from(state.filter);
   const items: SearchActiveItem[] = [];
   const claimed = new Set<string>();
@@ -60,7 +65,7 @@ export function activeItems(state: ResourceViewState, catalog: SearchCatalog, t?
     items.push({ id: `group:${index}`, kind: "group", index, level, label: axis?.label ?? fieldLabel(level.field, undefined) });
   });
   for (const favorite of catalog.favorites) {
-    if (resourceViewFavoriteIsActive(favorite, state)) {
+    if (resourceViewFavoriteIsActive(favorite, state, inheritedSorting)) {
       items.push({ id: `favorite:${favorite.id}`, kind: "favorite", label: favorite.label });
     }
   }

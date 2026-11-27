@@ -487,19 +487,18 @@ function framedRingColor(color: string): string {
  * `::after`, which no mail CSS on `body` or its pseudo-elements reaches. The rule sits in an
  * unnamed cascade layer, whose important declarations outrank every unlayered one of the
  * mail, and starts from `all: initial`, so nothing the mail sets on the pseudo-element stays.
- * The outer edge is `color` made opaque; the inner edge the white or black that contrasts
- * with it (white below OKLCH lightness 0.59), so one edge holds 3:1 on a white mail and on a
- * near-black one. Before it, a black and a white line hold where relative color syntax is
- * missing and both relative declarations are dropped.
+ * The ring has three tones, 2px each: `color` outside, then a black line, then a white one.
+ * Whatever the mail paints behind it and whatever `color` is, the black or the white line
+ * holds contrast against it (at least 4.6:1 on any grey), so the ring needs nothing of the
+ * theme's color but to show it.
  */
 function focusRingStyle(color: string): string {
   return "body:focus-visible{outline:none!important}"
     + "@layer{html:is(:focus-visible,:has(:focus-visible))::after{all:initial!important;content:\"\"!important;"
     + "position:fixed!important;top:0!important;right:0!important;bottom:0!important;left:0!important;"
     + "z-index:2147483647!important;pointer-events:none!important;"
-    + `border:2px solid ${color}!important;border-color:oklch(from ${color} l c h / 1)!important;`
-    + "box-shadow:inset 0 0 0 2px #000,inset 0 0 0 4px #fff!important;"
-    + `box-shadow:inset 0 0 0 2px oklch(from ${color} clamp(0,(0.59 - l)*1000,1) 0 0 / 1)!important}}`;
+    + `border:2px solid ${color}!important;`
+    + "box-shadow:inset 0 0 0 2px #000,inset 0 0 0 4px #fff!important}}";
 }
 
 /** A same-origin path, an http(s) URL, an image data URL or a blob URL; anything else is dropped. */

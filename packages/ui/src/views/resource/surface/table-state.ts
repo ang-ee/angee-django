@@ -1,17 +1,18 @@
 import * as React from "react";
 import { type QueryFilter, type ResourceQuery, type ModelMetadata, type Row } from "@angee/metadata";
 import { stableKey } from "@angee/refine";
-import { functionalUpdate, type ColumnDef, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type VisibilityState } from "@tanstack/react-table";
+import { functionalUpdate, type ColumnDef, type GroupingState, type OnChangeFn, type PaginationState, type RowSelectionState, type SortingState, type Table, type TableMeta, type VisibilityState } from "@tanstack/react-table";
 import { filterForResourceTextSearch, queryForColumns } from "../resource-query";
 import { errorFromUnknown } from "../../../data/errors";
 import type { ResourceViewContextValue } from "../resource-view-context";
 import { useArchiveScopeFilter } from "./archive-scope";
 import { Filter, type ResourceListOrder, type ResourceViewGroup } from "../resource-view-model";
-import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-body";
+import { buildColumns, tableGroupAxes, withQueryOnlyColumnsHidden } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
-import { defaultResourceOrder, groupingStateFromResourceGroups, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
+import { defaultResourceOrder, leafTableRows, requestedFieldPaths } from "../resource-view-codecs";
+import { querySortFromSorting } from "../model/state";
 import type { ListRecordFacts, ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
@@ -205,16 +206,19 @@ export function useResourceViewTableState<TRow extends Row>({
   setColumnVisibility: OnChangeFn<VisibilityState>;
   pagination: PaginationState;
   sorting: SortingState;
-  grouping: ReturnType<typeof groupingStateFromResourceGroups>;
+  grouping: GroupingState;
+  /** The table's `meta`, which each list surface sets (resource, presentation, grouped): the list's group axes, read by its headers. */
+  meta: TableMeta<TRow>;
   rowSelection: RowSelectionState;
   handlePaginationChange: OnChangeFn<PaginationState>;
   handleSortingChange: OnChangeFn<SortingState>;
   handleRowSelectionChange: (updater: Parameters<OnChangeFn<RowSelectionState>>[0], table: Table<TRow>) => void;
 } {
+  const groupAxes = React.useMemo(() => tableGroupAxes(groupStack, modelMetadata, columns, query), [groupStack, modelMetadata, columns, query]);
   const tableColumns = React.useMemo(
     () =>
-      buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
-    [columns, groupStack, modelMetadata, clientOperations, query],
+      buildColumns(columns, { axes: groupAxes, metadata: modelMetadata, clientOperations, query }),
+    [columns, groupAxes, modelMetadata, clientOperations, query],
   );
   const columnVisibility = React.useMemo(() => ({
     ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
@@ -240,12 +244,15 @@ export function useResourceViewTableState<TRow extends Row>({
   React.useEffect(() => {
     if (pagination !== statePagination) resourceView.setPagination(pagination);
   }, [pagination, resourceView.setPagination, statePagination]);
+  // The whole order, which a browser-sorted surface sorts its rows by; a header shows only the
+  // key the rows visibly follow (`headerSort`).
   const sorting = React.useMemo<SortingState>(() => {
-    const declared = resourceView.state.sorting?.map(({ id, desc }) => ({ field: id, direction: desc ? "DESC" : "ASC" }));
+    const declared = resourceView.state.sorting && querySortFromSorting(resourceView.state.sorting);
     return (query ?? queryForColumns(columns, modelMetadata, groupStack)).sortFrom(declared ?? sortOrder)
       .map(({ field, direction }) => ({ id: field, desc: direction === "DESC" }));
   }, [query, columns, modelMetadata, groupStack, resourceView.state.sorting, sortOrder]);
-  const grouping = React.useMemo(() => groupingStateFromResourceGroups(groupStack, modelMetadata, columns, query), [groupStack, modelMetadata, columns, query]);
+  const grouping = React.useMemo(() => groupAxes.map((axis) => axis.id), [groupAxes]);
+  const meta = React.useMemo<TableMeta<TRow>>(() => ({ groupAxes }), [groupAxes]);
   const rowSelection = resourceView.state.rowSelection;
   const handlePaginationChange = React.useCallback<OnChangeFn<PaginationState>>(
     (updater) => {
@@ -276,6 +283,7 @@ export function useResourceViewTableState<TRow extends Row>({
     pagination,
     sorting,
     grouping,
+    meta,
     rowSelection,
     handlePaginationChange,
     handleSortingChange,

@@ -328,7 +328,7 @@ function createProjectSchemas() {
   let tasks = initialTasks.map((task) => ({ ...task }));
   const values = (args: Record<string, unknown>) => recordValue(args.object) ?? recordValue(args._set) ?? {};
   const detail = (args: Record<string, unknown>) => tasks.find((task) => task.id === stringValue(args.id)) ?? tasks[0];
-  const schemas = storySchema({
+  return storySchema({
     projects: () => [project],
     projects_aggregate: () => ({ aggregate: { count: 1 } }),
     projects_by_pk: () => project,
@@ -344,9 +344,9 @@ function createProjectSchemas() {
     },
     users: () => users,
     users_aggregate: () => ({ aggregate: { count: users.length } }),
-  });
-  schemas.public = { ...schemas.public!, metadata };
-  return schemas;
+    // A record's lead reads the user it names for its label.
+    users_by_pk: (args) => users.find((user) => user.id === stringValue(args.id)),
+  }, { resources: metadata.angee.resources });
 }
 
 function taskWithValues(task: TaskRow, values: Record<string, unknown>): TaskRow {

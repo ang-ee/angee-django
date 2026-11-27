@@ -98,6 +98,65 @@ export function createUiTestProviders<T extends RefineTestDataProvider = Pick<Re
 }
 
 
+/** One `focus()` call `recordFocusCalls` saw: its target, and the test DOM's best word on whether it took focus. */
+export interface RecordedFocusCall {
+  target: HTMLElement;
+  /**
+   * Whether the target could take focus at that moment, by what the test DOM shows (see
+   * `recordFocusCalls`). happy-dom focuses several of the targets this refuses.
+   */
+  takesFocus: boolean;
+}
+
+/**
+ * Record every `focus()` call until `restore`, each with `takesFocus`: false for a target that is
+ * not in the document; is disabled; is a form control inside a disabled fieldset, outside that
+ * fieldset's first legend; sits inside `[hidden]`, `[inert]` or a closed `details` (outside its
+ * summary); has, or has an ancestor with, a computed `display: none`, or is computed
+ * `visibility: hidden` or `collapse`; or is not focusable at all (no native focusability, no
+ * `tabindex`, not editable, as a `contenteditable="false"` element without `tabindex` and a
+ * `summary` that is not the first of a `details` are not). happy-dom focuses most of these, and
+ * it computes styles only from inline styles and `<style>` elements it holds: a host hidden by an
+ * app stylesheet, which these tests do not load, is a browser's to judge. So are a target in a
+ * shadow tree (the walk stops at the shadow root) and a media element with controls, which a
+ * browser focuses and this refuses.
+ * @kind null
+ * @reason Test infrastructure: the DOM's focus calls, for a rendered test.
+ */
+export function recordFocusCalls(): { calls: RecordedFocusCall[]; restore: () => void } {
+  const calls: RecordedFocusCall[] = [];
+  const focus = HTMLElement.prototype.focus;
+  const focusable = (element: HTMLElement): boolean => {
+    const editable = element.getAttribute("contenteditable");
+    if (element.hasAttribute("tabindex") || editable === "" || editable === "true" || editable === "plaintext-only") return true;
+    if (element.tagName === "INPUT") return element.getAttribute("type") !== "hidden";
+    if (/^(A|AREA)$/.test(element.tagName)) return element.hasAttribute("href");
+    if (element.tagName === "SUMMARY") {
+      const details = element.parentElement;
+      return details?.tagName === "DETAILS" && [...details.children].find((child) => child.tagName === "SUMMARY") === element;
+    }
+    return /^(BUTTON|SELECT|TEXTAREA|IFRAME)$/.test(element.tagName);
+  };
+  const takesFocus = (element: HTMLElement): boolean => {
+    if (!element.isConnected || (element as HTMLButtonElement).disabled || !focusable(element)) return false;
+    if (/^(hidden|collapse)$/.test(getComputedStyle(element).visibility)) return false;
+    const formControl = /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(element.tagName);
+    for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || getComputedStyle(node).display === "none") return false;
+      const parent = node.parentElement;
+      const first = (tag: string) => parent && [...parent.children].find((child) => child.tagName === tag) === node;
+      if (formControl && parent?.tagName === "FIELDSET" && parent.hasAttribute("disabled") && !first("LEGEND")) return false;
+      if (parent?.tagName === "DETAILS" && !parent.hasAttribute("open") && !first("SUMMARY")) return false;
+    }
+    return true;
+  };
+  HTMLElement.prototype.focus = function recorded(this: HTMLElement, options?: FocusOptions) {
+    calls.push({ target: this, takesFocus: takesFocus(this) });
+    focus.call(this, options);
+  };
+  return { calls, restore: () => { HTMLElement.prototype.focus = focus; } };
+}
+
 export interface UiRouteTestDoubleOptions {
   routeHref?: (route: string, parameters?: Record<string, unknown>) => string;
   recordHref?: (model: string, id: string) => string | undefined;

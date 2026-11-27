@@ -16,7 +16,7 @@ from referencing import Registry
 from referencing.jsonschema import UnknownDialect
 
 from angee.base.schemas.references import LocalSchemaReferences, schema_nodes
-from angee.base.serialization import canonical_json
+from angee.base.serialization import canonical_json, json_bound_violation
 
 HEX_COLOR_VALIDATOR = RegexValidator(r"^#[0-9a-fA-F]{6}$", "Enter a colour as #rrggbb.")
 """The one colour form a colour column stores and the colour chooser writes."""
@@ -135,7 +135,14 @@ def validator(schema: dict[str, Any] | bool) -> Draft202012Validator:
 
 
 def validate(schema: dict[str, Any] | bool | Draft202012Validator, value: Any) -> None:
-    """Raise one Django validation error containing the native ordered messages."""
+    """Raise one Django validation error containing the native ordered messages.
+
+    A value past a JSON bound (``json_bound_violation``) is refused before the
+    validator walks it, as ``validation_issues`` refuses it.
+    """
+    violation = json_bound_violation(value)
+    if violation:
+        raise ValidationError([f"The value {violation}."])
     checked = schema if isinstance(schema, Draft202012Validator) else validator(schema)
     errors = [f"{error.json_path}: {error.message}" for error in checked.iter_errors(value)]
     if errors:
@@ -151,7 +158,12 @@ def validation_issues(
     With defaults enabled, missing object properties receive copied defaults
     before assertions at every node, independent of serialized keyword order.
     The supplied value is mutated; callers retaining raw input must copy it.
+    A value past a JSON bound (``json_bound_violation``) is refused before any
+    validator walks it.
     """
+    violation = json_bound_violation(value)
+    if violation:
+        return {"__all__": [f"The value {violation}."]}
     try:
         canonical_json(value)
     except (ValueError, TypeError):

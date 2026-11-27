@@ -305,7 +305,7 @@ describe("ActionFormDialog", () => {
       { name: "hidden", label: "Hidden", required: true, hidden: true },
     ] as const;
     renderDialog({ id: "collect", label: "Collect", submit, args: {
-      fields: dynamic ? () => fields : fields, fieldNames: ["name", "retained", "hidden"],
+      fields: dynamic ? () => fields : fields,
       defaultValues: { name: "" }, resolver,
     } });
     const button = screen.getByRole<HTMLButtonElement>("button", { name: "Collect" });
@@ -1205,21 +1205,25 @@ describe("ActionFormDialog", () => {
   });
 
   test.each([
-    ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field", "Review refused.", "banner"],
-    ["a refusal of a field only brings the person to that field, or to the banner naming it while the fields are held", "", "field"],
-  ] as const)("%s", async (_name, message, focused) => {
-    const submit = vi.fn(async () => ({ ok: false, message, validationErrors: { date: ["Too early."] } }));
+    // As the server answers: its message joins every reason, the non-field one under `__all__`.
+    ["a refusal with a reason no field shows brings the person to the banner, which also names the refused field",
+      { message: "Too early.; The period is closed.", validationErrors: { date: ["Too early."], __all__: ["The period is closed."] } }, "banner"],
+    ["a refusal of a field only brings the person to that field",
+      { message: "Too early.", validationErrors: { date: ["Too early."] } }, "field"],
+  ] as const)("%s", async (_name, refusal, focused) => {
+    const submit = vi.fn(async () => ({ ok: false, ...refusal }));
     renderDialog(registerReviewAction(submit));
     await screen.findByText("DOC-1");
     await pickCollection("Secondary Collection");
     fireEvent.click(screen.getByRole("button", { name: "Register review" }));
-    await screen.findByText("Too early.");
+    // The field's reason is said once, under the field, whatever else the refusal carries.
+    expect(await screen.findAllByText("Too early.")).toHaveLength(1);
     const date = screen.getByRole("textbox", { name: "Date" });
     if (focused === "field") {
-      // The field takes focus; were it disabled at the answer, the banner naming it would.
-      await waitFor(() => expect([date, date.closest("[role='dialog']")?.querySelector("[tabindex='-1']")]).toContain(document.activeElement));
+      // Asked once the dialog has stopped submitting, when its fields take focus again.
+      await waitFor(() => expect(document.activeElement).toBe(date));
     } else {
-      const banner = (await screen.findByText("Review refused.")).closest("[tabindex='-1']");
+      const banner = (await screen.findByText("The period is closed.")).closest("[tabindex='-1']");
       await waitFor(() => expect(document.activeElement).toBe(banner));
       expect(banner?.textContent).toContain("Date");
     }
@@ -1253,6 +1257,133 @@ describe("ActionFormDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
     expect(submit.mock.calls[0]?.[0]).toMatchObject({ documentIds: ["doc-2"] });
   });
+});
+
+describe("an action's refusal, as the server answers it, says each reason once and lands where the reason is", () => {
+  // The server's `message` joins every reason (`ActionResult.from_error`); non-field ones sit under
+  // `__all__`, and a refused target's message is the verb's summary.
+  const TO = "Enter one email address.";
+  const SUBJECT = "Write a subject.";
+  const CHANNEL = "The channel cannot send now.";
+  const TOKEN = "The token has expired.";
+  const DENIED = "You are not allowed to modify this task.";
+  const textFields = [{ name: "to", label: "To", widget: "text" }, { name: "subject", label: "Subject", widget: "text" }];
+  const branched = {
+    type: "object", discriminator: { propertyName: "mode" }, required: ["mode"],
+    properties: { mode: { type: "string", enum: ["email", "note"], widget: "text", label: "Mode" } },
+    oneOf: [
+      { properties: { mode: { const: "email" }, to: { type: "string", label: "To" }, subject: { type: "string", label: "Subject" } } },
+      { properties: { mode: { const: "note" }, token: { type: "string", label: "Token" } } },
+    ],
+  };
+  type Dialog = (submit: ActionDescriptor["submit"]) => ActionDescriptor;
+  const typed: Dialog = (submit) => ({ id: "send", label: "Send", submit, args: textFields.map((field) => ({ ...field, optional: true })) });
+  const schema: Dialog = (submit) => ({ id: "send", label: "Send", submit,
+    args: jsonSchemaActionArgs(branched, defaultWidgets, { initialValues: { mode: "email", to: "ana", subject: "" } }) });
+  const definition: Dialog = (submit) => ({ id: "send", label: "Send", submit, args: {
+    fields: [...textFields, { name: "token", label: "Token", hidden: true }], defaultValues: { to: "ana", subject: "", token: "t" },
+  } });
+  const answering = (refusal: { message: string; validationErrors: Record<string, string[]> }) => vi.fn(async () => ({ ok: false, ...refusal }));
+  async function send() {
+    const button = screen.getByRole<HTMLButtonElement>("button", { name: "Send" });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    // A real click puts focus on the button; the dialog opened with it on its first field, so
+    // without this a row that expects focus there passes with nothing moving it.
+    button.focus();
+    fireEvent.click(button);
+  }
+  async function refuse(dialog: Dialog, refusal: { message: string; validationErrors: Record<string, string[]> }) {
+    renderDialog(dialog(answering(refusal)));
+    await send();
+  }
+  const banner = () => screen.getByRole("dialog", { name: "Send" }).querySelector<HTMLElement>("[role='alert']");
+  /** The banner's lines: one message is its body, several a list. */
+  const bannerLines = () => {
+    const node = banner();
+    const items = [...node?.querySelectorAll("li") ?? []];
+    return items.length ? items.map((item) => item.textContent) : node ? [node.textContent] : [];
+  };
+
+  // Focus goes to the refused field on every kind: it is asked once the dialog has stopped
+  // submitting, so the fieldset a schema or definition dialog disables while the submit runs is
+  // enabled again. The test DOM would focus into a disabled fieldset all the same (a browser does
+  // not), so the proof that the call is made on a control that takes focus is
+  // `validation-errors.focus.test.tsx`, which records each call's target at that moment.
+  describe.each([
+    ["typed arguments", typed],
+    ["a schema's arguments", schema],
+    ["a definition's fields", definition],
+  ] as const)("on a dialog of %s", (_kind, dialog) => {
+    const expectFocusOn = (field: HTMLElement) => expect(document.activeElement).toBe(field);
+
+    test("one refused field: its reason once, under it; the banner names the field without repeating it, and focus is on the field", async () => {
+      await refuse(dialog, { message: TO, validationErrors: { to: [TO] } });
+      expect(await screen.findAllByText(TO)).toHaveLength(1);
+      const to = screen.getByRole("textbox", { name: "To" });
+      expect(to.getAttribute("aria-invalid")).toBe("true");
+      expect(to.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText(TO).id);
+      expect(bannerLines()).toEqual(["Please fix the highlighted fields: To."]);
+      await waitFor(() => expectFocusOn(to));
+    });
+
+    test("two refused fields: focus on the first in the dialog's order, not the server's", async () => {
+      await refuse(dialog, { message: `${SUBJECT}; ${TO}`, validationErrors: { subject: [SUBJECT], to: [TO] } });
+      expect(await screen.findAllByText(TO)).toHaveLength(1);
+      expect(screen.getAllByText(SUBJECT)).toHaveLength(1);
+      await waitFor(() => expectFocusOn(screen.getByRole("textbox", { name: "To" })));
+    });
+
+    test("a refused field and a non-field reason: that reason on the banner, beside the line naming the field, and focus on the banner", async () => {
+      await refuse(dialog, { message: `${TO}; ${CHANNEL}`, validationErrors: { to: [TO], __all__: [CHANNEL] } });
+      expect(await screen.findAllByText(TO)).toHaveLength(1);
+      expect(bannerLines()).toEqual([CHANNEL, "Please fix the highlighted fields: To."]);
+      await waitFor(() => expect(document.activeElement).toBe(banner()));
+    });
+
+    test("a refused target: its reason on the banner, not the verb's summary", async () => {
+      await refuse(dialog, { message: "Send failed.", validationErrors: { __all__: [DENIED] } });
+      expect(await screen.findByText(DENIED)).toBeTruthy();
+      expect(bannerLines()).toEqual([DENIED]);
+      expect(screen.queryByText("Send failed.", { exact: false })).toBeNull();
+    });
+  });
+
+  test("a schema branch the person switched to before the submit: a reason under its field shows once, under that field", async () => {
+    renderDialog(schema(answering({ message: TOKEN, validationErrors: { token: [TOKEN] } })));
+    fireEvent.change(screen.getByRole("textbox", { name: "Mode" }), { target: { value: "note" } });
+    await send();
+    expect(await screen.findAllByText(TOKEN)).toHaveLength(1);
+    expect(screen.getAllByText(TOKEN, { exact: false })).toHaveLength(1);
+    const token = screen.getByRole("textbox", { name: "Token" });
+    expect(token.getAttribute("aria-describedby")?.split(" ")).toContain(screen.getByText(TOKEN).id);
+    expect(bannerLines()).toEqual(["Please fix the highlighted fields: Token."]);
+  });
+
+  test("a field the person's edit hid (its showWhen) is not one the dialog renders: its reason shows once on the banner, by its key", async () => {
+    const DETAIL = "Describe the change.";
+    renderDialog({ id: "send", label: "Send", submit: answering({ message: DETAIL, validationErrors: { detail: [DETAIL] } }), args: {
+      defaultValues: { kind: "more", detail: "x" },
+      fields: [
+        { name: "kind", label: "Kind", widget: "text" },
+        { name: "detail", label: "Detail", widget: "text", showWhen: (values) => values.kind === "more" },
+      ],
+    } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Kind" }), { target: { value: "less" } });
+    await send();
+    await waitFor(() => expect(bannerLines()).toEqual([`detail: ${DETAIL}`]));
+    expect(screen.getAllByText(DETAIL, { exact: false })).toHaveLength(1);
+    await waitFor(() => expect(document.activeElement).toBe(banner()));
+  });
+
+  test.each([["an inactive schema branch", schema], ["a hidden field", definition]] as const)(
+    "a reason under %s, which the dialog does not render, shows once on the banner, by its key, and the banner takes focus",
+    async (_case, dialog) => {
+      await refuse(dialog, { message: TOKEN, validationErrors: { token: [TOKEN] } });
+      await waitFor(() => expect(bannerLines()).toEqual([`token: ${TOKEN}`]));
+      expect(screen.getAllByText(TOKEN, { exact: false })).toHaveLength(1);
+      await waitFor(() => expect(document.activeElement).toBe(banner()));
+    },
+  );
 });
 
 describe("an object argument's member messages", () => {

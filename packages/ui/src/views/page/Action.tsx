@@ -62,9 +62,11 @@ export interface ActionFormDefinition {
   size?: DialogSize;
   defaultValues?: Record<string, unknown>;
   resolver?: Resolver<Record<string, unknown>>;
-  /** All possible fields, including inactive branches, for server issue binding. */
-  fieldNames?: readonly string[];
-  /** Consumer editors rendered inside the same React Hook Form provider. */
+  /**
+   * Consumer editors rendered inside the same React Hook Form provider. The dialog binds a refusal's
+   * reasons to the `fields` it renders; a reason under a name only these editors hold also shows
+   * on its banner.
+   */
   content?: ReactNode;
 }
 
@@ -104,8 +106,11 @@ export interface ActionScalarArg extends ActionArgBase {
   fromContext?: (context: ActionFormContext) => unknown;
 }
 
-/** A single relation-picker arg naming the target resource its options list. */
-export interface ActionRelationArg extends ActionArgBase {
+/**
+ * A single relation-picker arg naming the target resource its options list. It may decline
+ * the picker's inline edit of the selected record with the descriptor's own `relationEdit: null`.
+ */
+export interface ActionRelationArg extends ActionArgBase, Pick<FieldDescriptor, "relationEdit"> {
   argKind: "relation";
   /** Seed the saved relation from the invoking record when the dialog opens. */
   fromContext?: (context: ActionFormContext) => unknown;

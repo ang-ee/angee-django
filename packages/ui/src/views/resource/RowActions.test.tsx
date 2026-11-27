@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { AppRuntimeProvider } from "../../runtime";
 import type { TypedDocumentNode } from "@angee/refine";
@@ -41,6 +41,7 @@ import {
   type RowActionDeclaration,
   type RowActionPendingPolicy,
 } from "./RowActions";
+import { actionOutcomeSubmitResult } from "../form/validation-errors";
 
 interface TestRow extends Record<string, unknown> {
   id: string;
@@ -63,6 +64,17 @@ const ROWS: readonly TestRow[] = [
 ];
 
 describe("declared row actions", () => {
+  test("a row's direct submit refused for its fields only toasts under the verb's label, with the reasons", async () => {
+    const reason = "Choose someone on the roster.";
+    const { result } = renderHook(() => useDescriptorRowActions([{
+      id: "remove-responder", label: "Remove",
+      submit: async () => actionOutcomeSubmitResult({ ok: false, message: reason, validationErrors: { responder: [reason] } }),
+    }], { valuesFromRow: () => ({ responder: "person-1" }) }));
+    const remove = result.current.rowActions[0]!;
+    if (remove.kind !== "page") throw new Error("A descriptor row action is a page action.");
+    await act(async () => { await remove.onSelect({ id: "row-1" }); });
+    expect(mocks.danger).toHaveBeenCalledExactlyOnceWith({ title: "Remove", description: reason });
+  });
   test("descriptor permissions omit verbs the row does not grant", () => {
     const { result } = renderHook(() => useDescriptorRowActions([{ id: "approve", label: "Approve", permission: "write" }]));
     const action = result.current.rowActions[0]!;

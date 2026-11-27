@@ -1,15 +1,17 @@
 """Brand kits: theme-named colours, the font-stack field, one default kit, the mail palette and who may do what.
 
 Kits are deployment configuration: setup rows are written under ``system_context``
-and console writes run as a platform admin; every signed-in actor reads kits. The
-shipped Angee kit's values come from its install-tier file, so every kit here
-starts from the Angee brand and changes only what a test is about.
+and console writes run as a platform admin; every signed-in actor reads kits, and
+everyone reads the default kit's colours on the public schema. The shipped Angee
+kit's values come from its install-tier file, so every kit here starts from the
+Angee brand and changes only what a test is about.
 """
 
 from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +19,14 @@ import pytest
 import yaml
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldError, ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
+from django.db.models import F, Value
+from django.db.models.functions import Concat
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.utils.translation import gettext_lazy
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from rebac import (
@@ -32,7 +38,9 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.models import PermissionAuditEvent, active_relationship_model
 from rebac.testing import assert_decisions
+from strawberry.types import get_object_definition
 
 from angee.base.build import extension_source_map
 from angee.base.fields.text import ColorField
@@ -53,8 +61,10 @@ from angee.brandkit.models import (
     contrast_ratio,
     mix_colors,
 )
+from angee.brandkit.models import BrandKit as SourceBrandKit
 from angee.brandkit.testing.models import BrandKit
 from angee.graphql.testing.documents import execute_schema, result_data
+from angee.provenance.context import changeset
 from angee.resources.testing.models import Resource
 from tests.conftest import File, addon_schema, create_platform_admin, create_user
 from tests.decision_table import seat_cells
@@ -96,18 +106,28 @@ def _schema() -> Any:
     return addon_schema(brandkit_schema.schemas, "console")
 
 
+def _public_schema() -> Any:
+    return addon_schema(brandkit_schema.schemas, "public")
+
+
 # ---------- one vocabulary with the theme runtime ----------
 
 
 def test_kit_colours_are_the_theme_customisation_hex_inputs() -> None:
-    """The kit's colour columns and the theme runtime's hex inputs are one vocabulary, and its inks are the theme's."""
+    """``THEME_COLORS`` is the addon's own colour columns and the theme runtime's hex inputs, in its order.
+
+    A colour column the addon adds fails here until someone decides whether it is a theme
+    input; a column a consumer adds by extending the kit is not the addon's own, so it never
+    joins ``THEME_COLORS`` or the public type built from it.
+    """
 
     runtime = THEME_RUNTIME.read_text()
-    hex_inputs = set(re.findall(r'normalizedHex\(value\.(\w+), "\1"\)', runtime))
-    colours = {field.name for field in BrandKit._meta.concrete_fields if isinstance(field, ColorField)}
-    assert hex_inputs
-    assert colours == hex_inputs
-    assert {str(seed) for seed in MailSeed} <= colours
+    hex_inputs = tuple(re.findall(r'normalizedHex\(value\.(\w+), "\1"\)', runtime))
+    own_colours = {field.name for field in SourceBrandKit._meta.fields if isinstance(field, ColorField)}
+    assert len(hex_inputs) == 10
+    assert SourceBrandKit.THEME_COLORS == hex_inputs
+    assert own_colours == set(hex_inputs)
+    assert {str(seed) for seed in MailSeed} <= own_colours
 
     readable_text = re.search(
         r'function readableText\(background\) \{\s*return contrastRatio\("(#[0-9a-f]{6})", background\) >= '
@@ -228,7 +248,7 @@ def test_a_long_run_of_spaces_is_refused_in_linear_time() -> None:
 
 
 def test_every_write_that_reaches_the_database_checks_the_font_stack(db: None) -> None:
-    """``save``, ``bulk_create``, ``bulk_update`` and ``QuerySet.update`` refuse a stack the field does not admit."""
+    """``save``, ``bulk_create`` and ``QuerySet.update`` refuse a stack the field does not admit, of any type."""
 
     del db
     kit = _kit("Checked")
@@ -239,12 +259,64 @@ def test_every_write_that_reaches_the_database_checks_the_font_stack(db: None) -
             BrandKit.objects.bulk_create([BrandKit(**{**ANGEE, "name": "Bulk", "font_body": "Inter"})])
         with pytest.raises(ValidationError), transaction.atomic():
             BrandKit.objects.filter(pk=kit.pk).update(font_heading="a;b")
-        stored = BrandKit.objects.get(pk=kit.pk)
-        stored.font_body = "inherit, serif"
-        with pytest.raises(ValidationError), transaction.atomic():
-            BrandKit.objects.bulk_update([stored], ["font_body"])
+        with override_settings(SIMPLE_HISTORY_ENABLED=False), pytest.raises(ValidationError), transaction.atomic():
+            BrandKit.objects.filter(pk=kit.pk).update(font_heading=gettext_lazy("serif; color: red"))
         BrandKit.objects.filter(pk=kit.pk).update(font_heading='"Helvetica Neue", sans-serif')
         assert BrandKit.objects.get(pk=kit.pk).font_heading == "'Helvetica Neue', sans-serif"
+
+
+def _save_expression(rows: Any, kit: Any) -> None:
+    del rows
+    kit.font_body = Value("serif; color: red")
+    kit.save()
+
+
+def _bulk_update(value: Any) -> Callable[[Any, Any], None]:
+    def write(rows: Any, kit: Any) -> None:
+        del rows
+        kit.font_body = value
+        BrandKit.objects.bulk_update([kit], ["font_body"])
+
+    return write
+
+
+@pytest.mark.parametrize(
+    ("write", "history"),
+    [
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Value('"Inter", sans-serif')), True,
+            id="update-value-keeping-double-quotes",
+        ),
+        pytest.param(lambda rows, kit: rows.update(font_body=Value("serif; color: red")), True, id="update-value"),
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Value("serif; color: red")), False,
+            id="update-value-without-history",
+        ),
+        pytest.param(lambda rows, kit: rows.update(font_body=F("font_heading")), False, id="update-column"),
+        pytest.param(
+            lambda rows, kit: rows.update(font_body=Concat("font_heading", Value("; color: red"))), False,
+            id="update-function",
+        ),
+        pytest.param(_save_expression, False, id="save"),
+        pytest.param(_bulk_update(Value("serif; color: red")), False, id="bulk-update-expression"),
+        pytest.param(_bulk_update("Georgia, serif"), False, id="bulk-update"),
+    ],
+)
+def test_an_expression_write_of_a_font_stack_is_refused_whatever_it_would_store(
+    write: Callable[[Any, Any], None], history: bool, db: None,
+) -> None:
+    """The database computes an expression's result past the field's check, so the field refuses the expression.
+
+    That holds with history capture on or off, and for ``bulk_update``, which writes
+    every value through a ``Case`` expression.
+    """
+
+    del db
+    kit = _kit("Checked")
+    with override_settings(SIMPLE_HISTORY_ENABLED=history), system_context(reason="tests.brandkit.orm"):
+        with pytest.raises(FieldError, match="font_body"), transaction.atomic():
+            write(BrandKit.objects.filter(pk=kit.pk), BrandKit.objects.get(pk=kit.pk))
+        assert BrandKit._base_manager.values_list("font_body", flat=True).get(pk=kit.pk) == ANGEE["font_body"]
 
 
 def test_a_kit_refuses_a_bad_colour_and_a_bad_font_stack(db: None) -> None:
@@ -333,6 +405,52 @@ def test_a_save_that_does_not_set_the_default_leaves_it(db: None) -> None:
     assert _default_names() == ["Still default"]
 
 
+def test_the_kits_lock_is_one_statement_each_writer_that_needs_it_takes_once(db: None) -> None:
+    """The lock is :meth:`lock_default`'s one statement, and each writer takes it as often as it needs it.
+
+    A save takes it when it can move the default and not otherwise; the console
+    takes it before its subject, whatever the kit, and once more when its save moves
+    the default; a resource load that writes kits takes it once.
+    """
+
+    del db
+    admin = create_platform_admin("brandkit-lock-counter")
+    with CaptureQueriesContext(connection) as lock:
+        BrandKit.objects.lock_default()
+    (lock_statement,) = [query["sql"] for query in lock.captured_queries]
+
+    def locks(write: Callable[[], object]) -> int:
+        with CaptureQueriesContext(connection) as captured:
+            write()
+        return [query["sql"] for query in captured.captured_queries].count(lock_statement)
+
+    def save(kit: Any) -> Callable[[], object]:
+        def write() -> None:
+            with system_context(reason="tests.brandkit.lock"):
+                kit.save()
+
+        return write
+
+    def console(kit: Any, values: dict[str, Any]) -> Callable[[], object]:
+        variables = {"id": public_id_of(kit), "set": values}
+        return lambda: result_data(execute_schema(_schema(), _UPDATE_KIT, variables, user=admin))
+
+    first = BrandKit(**{**ANGEE, "name": "First"})
+    assert locks(save(first)) == 1  # the first kit takes the default
+    second = BrandKit(**{**ANGEE, "name": "Second"})
+    assert locks(save(second)) == 0  # a kit saved beside the default
+    second.accent = "#0e7490"
+    assert locks(save(second)) == 0  # an edit of a kit that is not the default
+    second.is_default = True
+    assert locks(save(second)) == 1  # a change of default
+    second.name = "Second, renamed"
+    assert locks(save(second)) == 1  # an edit of the default kit, which keeps it
+    assert locks(console(first, {"accent": "#0e7490"})) == 1  # a console edit of a kit that is not the default
+    assert locks(console(first, {"is_default": True})) == 2  # a console change of default
+    shipped = apps.get_app_config("brandkit")
+    assert locks(lambda: Resource.objects.load_addons((shipped,), tiers=[Resource.Tier.INSTALL])) == 1
+
+
 def test_the_constraint_refuses_a_second_default_written_past_the_save(db: None) -> None:
     del db
     _kit("First")
@@ -349,6 +467,57 @@ def test_the_default_cannot_be_unticked(db: None) -> None:
         with pytest.raises(ValidationError) as refused:
             default.full_clean()
     assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
+
+
+def test_a_save_of_a_kit_read_before_it_became_the_default_cannot_untick_it(db: None) -> None:
+    """``save`` rereads the stored flag under the row lock and refuses as ``clean`` does; saving other columns goes."""
+
+    del db
+    _kit("Default")
+    kit = _kit("Kit")
+    with system_context(reason="tests.brandkit.untick"):
+        stale = BrandKit.objects.get(pk=kit.pk)
+        promoted = BrandKit.objects.get(pk=kit.pk)
+        promoted.is_default = True
+        promoted.save()
+        stale.voice = "Edited."
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stale.save()
+        stale.save(update_fields=["voice"])
+    assert refused.value.message_dict == {"is_default": [DEFAULT_UNTICK_MESSAGE]}
+    assert _default_names() == ["Kit"]
+
+
+def test_a_revert_of_an_edit_and_a_change_of_default_in_one_changeset_restores_both(
+    db: None, django_capture_on_commit_callbacks: Any,
+) -> None:
+    """The revert restores the kit that regains the default first, so restoring the other kit unticks nothing.
+
+    One changeset edits a kit and then makes it the default. Its first version comes
+    first in the changeset, so restored first it would be marked not the default
+    while it still is, which a save refuses.
+    """
+
+    del db
+    admin = create_platform_admin("brandkit-reverter")
+    _kit("Default")
+    kit = _kit("Kit")
+    with system_context(reason="tests.brandkit.revert"), django_capture_on_commit_callbacks(execute=True):
+        with changeset(fresh=True):
+            edited = BrandKit.objects.get(pk=kit.pk)
+            edited.voice = "Edited."
+            edited.save()
+            edited.is_default = True
+            edited.save()
+    assert _default_names() == ["Kit"]
+    snapshots: Any = BrandKit.history  # django-simple-history's manager, which the policy object stands in for
+    with system_context(reason="tests.brandkit.revert"):
+        boundary = snapshots.filter(id=kit.pk).order_by("-history_id").first().changeset
+    with actor_context(admin), django_capture_on_commit_callbacks(execute=True):
+        boundary.with_actor(admin).revert()
+    assert _default_names() == ["Default"]
+    with system_context(reason="tests.brandkit.read"):
+        assert BrandKit.objects.get(pk=kit.pk).voice == ANGEE["voice"]
 
 
 def test_the_default_cannot_be_deleted_on_any_delete_path(db: None) -> None:
@@ -518,7 +687,7 @@ def test_a_brand_colour_no_ink_reads_on_takes_black_text_and_no_warning() -> Non
 
 
 def test_the_policy_decides_every_brand_kit_permission(db: None) -> None:
-    """Every signed-in actor reads kits; only a platform admin creates, edits or deletes one."""
+    """Every signed-in actor reads kits and everyone the default kit's colours; only a platform admin manages kits."""
 
     del db
     seats = {
@@ -526,21 +695,57 @@ def test_the_policy_decides_every_brand_kit_permission(db: None) -> None:
         "admin": create_platform_admin("brandkit-policy-admin"),
         "anonymous": AnonymousUser(),
     }
-    kit = _kit("Policy")
+    default = _kit("Policy")
+    other = _kit("Other")
     cells = seat_cells(
         seats.__getitem__,
-        (kit, "read", "admin member", "anonymous"),
-        (kit, "create", "admin", "member anonymous"),
-        (kit, "write", "admin", "member anonymous"),
-        (kit, "delete", "admin", "member anonymous"),
+        (default, "read", "admin member", "anonymous"),
+        (other, "read", "admin member", "anonymous"),
+        (default, "read_colors", "admin member anonymous", ""),
+        (other, "read_colors", "admin member", "anonymous"),
+        (default, "create", "admin", "member anonymous"),
+        (default, "write", "admin", "member anonymous"),
+        (default, "delete", "admin", "member anonymous"),
     )
-    assert_decisions(checks=cells, accessible=((seats["member"], "read", BrandKit, (kit,)),))
+    assert_decisions(checks=cells, accessible=(
+        (seats["anonymous"], "read", BrandKit, ()),
+        (seats["anonymous"], "read_colors", BrandKit, (default,)),
+    ))
+    # The queryset is the enforcement point; the library's `accessible` also lists the filtered
+    # constant's `default` sentinel to an actor who reads every kit, which no queryset returns.
+    assert set(BrandKit.objects.with_actor(seats["member"])) == {default, other}
+    assert list(BrandKit.objects.with_actor(seats["anonymous"])) == []
+    assert list(BrandKit.objects.with_actor(seats["anonymous"]).with_action("read_colors")) == [default]
+
+
+def test_the_colour_disclosure_follows_the_default_column_and_writes_no_tuple(db: None) -> None:
+    """Making another kit the default moves the anonymous colour read with it; no relationship row backs it."""
+
+    del db
+    anonymous = AnonymousUser()
+    first = _kit("First")
+    second = _kit("Second")
+    assert_decisions(checks=seat_cells(
+        {"anonymous": anonymous}.__getitem__,
+        (first, "read_colors", "anonymous", ""),
+        (second, "read_colors", "", "anonymous"),
+    ))
+
+    with system_context(reason="tests.brandkit.default"):
+        second.is_default = True
+        second.save()
+    assert _default_names() == ["Second"]
+    assert_decisions(checks=seat_cells(
+        {"anonymous": anonymous}.__getitem__,
+        (first, "read_colors", "", "anonymous"),
+        (second, "read_colors", "anonymous", ""),
+    ))
+    assert not active_relationship_model().objects.filter(resource_type="brandkit/brand_kit").exists()
 
 
 # ---------- the console ----------
 
 
-_DEFAULT_KIT = "{ default_brand_kit { name is_default brand contrast_warnings { seed scheme role } } }"
 _INSERT_KIT = """
 mutation($object: brand_kits_insert_input!) {
   insert_brand_kits_one(object: $object) { name is_default info contrast_warnings { seed scheme role } }
@@ -557,19 +762,24 @@ def _console_kit(**values: Any) -> dict[str, Any]:
     return {**ANGEE, **values}
 
 
-def test_a_member_reads_the_default_kit_and_an_anonymous_caller_reads_none(db: None) -> None:
+def _sdl_fields(schema: Any, kind: str, name: str) -> set[str]:
+    """The field names of one type or input in a schema's SDL."""
+
+    found = re.search(rf"^{kind} {name} [^{{]*\{{(.*?)^\}}", str(schema), re.MULTILINE | re.DOTALL)
+    assert found is not None, f"no {kind} {name}"
+    return set(re.findall(r"^\s+(\w+)\s*[(:]", found.group(1), re.MULTILINE))
+
+
+def test_an_anonymous_caller_reads_no_kit_on_the_console(db: None) -> None:
+    """The console's kit reads stay signed-in: the colour disclosure opens nothing there."""
+
     del db
-    member = create_user("brandkit-reader")
+    assert not {"default_brand_kit", "default_brand_kit_colors"} & _sdl_fields(_schema(), "type", "Query")
     _kit("Angee")
     _kit("Other")
-
-    read = result_data(execute_schema(_schema(), _DEFAULT_KIT, user=member))
-    assert read["default_brand_kit"] == {
-        "name": "Angee", "is_default": True, "brand": "#e7b008", "contrast_warnings": [],
-    }
-    anonymous = execute_schema(_schema(), _DEFAULT_KIT, user=AnonymousUser())
-    assert anonymous.errors is None
-    assert anonymous.data == {"default_brand_kit": None}
+    listed = execute_schema(_schema(), "{ brand_kits { id } }", user=AnonymousUser())
+    assert listed.errors is None
+    assert listed.data == {"brand_kits": []}
 
 
 def test_an_admin_writes_a_kit_a_member_and_an_anonymous_caller_cannot(db: None) -> None:
@@ -624,18 +834,26 @@ def test_the_console_updates_a_kit_but_neither_unticks_nor_deletes_the_default(d
 def test_the_console_reads_the_logos_and_cannot_write_them() -> None:
     """The logos are on the kit's type and absent from every input: no console root writes them."""
 
-    sdl = str(_schema())
-
-    def block(kind: str, name: str) -> str:
-        found = re.search(rf"^{kind} {name} [^{{]*\{{(.*?)^\}}", sdl, re.MULTILINE | re.DOTALL)
-        assert found is not None, f"no {kind} {name}"
-        return found.group(1)
-
+    schema = _schema()
     for name in ("brand_kits_insert_input", "brand_kits_set_input"):
-        fields = set(re.findall(r"^\s+(\w+):", block("input", name), re.MULTILINE))
+        fields = _sdl_fields(schema, "input", name)
         assert "font_body" in fields
         assert not {"logo", "logo_dark"} & fields
-    assert {"logo", "logo_dark"} <= set(re.findall(r"^\s+(\w+)", block("type", "BrandKitType"), re.MULTILINE))
+    assert {"logo", "logo_dark"} <= _sdl_fields(schema, "type", "BrandKitType")
+
+
+def test_the_console_type_lists_the_theme_colours_right_after_is_default() -> None:
+    """``BrandKitType``'s colours are ``THEME_COLORS``, in order, after ``is_default``.
+
+    The resource metadata keeps the type's field order, and tools that summarise a resource
+    take its first fields, so the order is part of what an agent reads of a kit.
+    """
+
+    names = [field.name for field in get_object_definition(brandkit_schema.BrandKitType, strict=True).fields]
+    colours = tuple(name for name in names if name in SourceBrandKit.THEME_COLORS)
+    start = names.index("is_default") + 1
+    assert colours == SourceBrandKit.THEME_COLORS
+    assert tuple(names[start : start + len(colours)]) == colours
 
 
 @pytest.mark.usefixtures("image_drive")
@@ -664,6 +882,97 @@ def test_listing_kits_with_logos_costs_the_same_at_one_and_at_twenty_five_rows(d
     for index in range(1, 25):
         add(index)
     assert statements(25) == one
+
+
+# ---------- the public schema ----------
+
+
+THEME_COLORS = SourceBrandKit.THEME_COLORS
+_DEFAULT_COLORS = f"{{ default_brand_kit_colors {{ {' '.join(THEME_COLORS)} }} }}"
+
+CLAY: dict[str, Any] = {
+    "brand": "#c2410c", "accent": "#0f766e", "neutral": "#78716c", "canvas": "#fafaf8", "surface": "#fffbeb",
+    "rail": "#292524", "success": "#15803d", "warning": "#b45309", "danger": "#b91c1c", "info": "#1d4ed8",
+}
+"""A kit whose ten colours all differ from the Angee kit's; the web fragment's mapping tests use the same."""
+
+
+def test_everyone_reads_the_default_kits_colours_and_no_kit_reads_as_none(db: None) -> None:
+    del db
+    member = create_user("brandkit-colour-member")
+    for user in (member, AnonymousUser()):
+        empty = execute_schema(_public_schema(), _DEFAULT_COLORS, user=user)
+        assert empty.errors is None
+        assert empty.data == {"default_brand_kit_colors": None}
+
+    _kit("Clay", **CLAY)
+    _kit("Angee")
+    for user in (member, AnonymousUser()):
+        read = result_data(execute_schema(_public_schema(), _DEFAULT_COLORS, user=user))
+        assert read["default_brand_kit_colors"] == CLAY
+
+
+def test_the_colour_read_is_the_disclosure_and_never_a_bypass(db: None) -> None:
+    """No bypass, no audit row: the public read decides under ``read_colors``, where a ``sudo()`` read is audited."""
+
+    del db
+    _kit("Clay", **CLAY)
+    _kit("Angee")
+    for user in (create_user("brandkit-colour-audit"), AnonymousUser()):
+        audited = PermissionAuditEvent.objects.count()
+        read = result_data(execute_schema(_public_schema(), _DEFAULT_COLORS, user=user))
+        assert read["default_brand_kit_colors"] == CLAY
+        assert PermissionAuditEvent.objects.count() == audited
+
+    audited = PermissionAuditEvent.objects.count()
+    with actor_context(AnonymousUser()):
+        assert BrandKit.objects.sudo(reason="tests.brandkit.bypass").default() is not None
+    assert PermissionAuditEvent.objects.count() == audited + 1
+
+
+def test_the_public_projection_is_the_theme_inputs_and_nothing_more(db: None) -> None:
+    """Only the ten colours of the default kit: no id, name, font, logo, footer, voice or other kit."""
+
+    del db
+    schema = _public_schema()
+    # The built schema, extensions included: a type extension prints apart from the type in SDL.
+    built = schema._schema
+    assert set(built.type_map["BrandKitColors"].fields) == set(THEME_COLORS)
+    assert {name for name in built.query_type.fields if "brand" in name} == {"default_brand_kit_colors"}
+
+    _kit("Angee")
+    for field in ("id", "name", "font_body", "logo", "voice", "is_default"):
+        refused = execute_schema(schema, f"{{ default_brand_kit_colors {{ {field} }} }}", user=AnonymousUser())
+        assert refused.errors
+        assert refused.errors[0].message == f"Cannot query field '{field}' on type 'BrandKitColors'."
+
+
+def test_reading_the_default_kits_colours_costs_the_same_at_one_and_at_twenty_five_kits(db: None) -> None:
+    """The same statements at 1 and 25 kits, and the kit's row read selects its id and the ten colours alone."""
+
+    del db
+    schema = _public_schema()
+    seats = {"member": create_user("brandkit-colour-counter"), "anonymous": AnonymousUser()}
+    table = BrandKit._meta.db_table
+
+    def statements() -> dict[str, int]:
+        counts = {}
+        for seat, user in seats.items():
+            execute_schema(schema, _DEFAULT_COLORS, user=user)
+            with CaptureQueriesContext(connection) as captured:
+                read = result_data(execute_schema(schema, _DEFAULT_COLORS, user=user))
+            assert read["default_brand_kit_colors"] == {name: ANGEE[name] for name in THEME_COLORS}
+            [kit_read] = [query["sql"] for query in captured.captured_queries if f'FROM "{table}"' in query["sql"]]
+            selected = set(re.findall(rf'"{table}"\."(\w+)"', kit_read.split(f' FROM "{table}"', 1)[0]))
+            assert selected == {"id", *THEME_COLORS}
+            counts[seat] = len(captured)
+        return counts
+
+    _kit("Kit 0")
+    one = statements()
+    for index in range(1, 25):
+        _kit(f"Kit {index}", **CLAY)
+    assert statements() == one
 
 
 # ---------- the shipped kit ----------

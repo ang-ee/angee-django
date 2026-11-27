@@ -22,7 +22,16 @@ import {
 
 export const RESOURCE_VIEW_FAVORITES_PREFERENCES_KEY =
   "resource-view.favorites";
-export const RESOURCE_VIEW_FAVORITES_VERSION = 1;
+/**
+ * The favorites document's version, the one every write records. Version 2 lets a saved
+ * view's `sort` hold the whole order as a list. A version 1 document still reads, and its
+ * next write records version 2. A client that reads only version 1 takes a version 2
+ * document for an unknown one: it shows no saved views and writes none, so it never drops
+ * a view whose order it cannot read.
+ */
+export const RESOURCE_VIEW_FAVORITES_VERSION = 2;
+/** The versions this reader reads: version 1's views are version 2's with one key each. */
+const READABLE_FAVORITES_VERSIONS = [1, RESOURCE_VIEW_FAVORITES_VERSION] as const;
 
 const EMPTY_FAVORITES: readonly ResourceViewFavorite[] = [];
 
@@ -54,7 +63,7 @@ const FavoritesVersionEnvelopeSchema = v.object({
 });
 
 const ResourceViewFavoritesPreferencesSchema = v.object({
-  version: v.literal(RESOURCE_VIEW_FAVORITES_VERSION),
+  version: v.picklist(READABLE_FAVORITES_VERSIONS),
   models: v.record(v.string(), v.unknown()),
 });
 
@@ -177,8 +186,8 @@ function appendResourceViewFavorite(
 /**
  * The stored favorites document, discriminated by version: an unknown version
  * reads empty and write-unavailable (never overwrite a future document); a
- * version-matched document reads writable with malformed favorites dropped
- * per model.
+ * readable one reads writable, as the current version, with malformed favorites
+ * dropped per model.
  */
 export function readResourceViewFavoritesSlice(
   preferences: RuntimeUserPreferences,
@@ -189,13 +198,13 @@ export function readResourceViewFavoritesSlice(
   if (
     envelope.success
     && envelope.output.version !== undefined
-    && envelope.output.version !== RESOURCE_VIEW_FAVORITES_VERSION
+    && !(READABLE_FAVORITES_VERSIONS as readonly unknown[]).includes(envelope.output.version)
   ) {
     return LOCKED_FAVORITES_SLICE;
   }
   const document = v.safeParse(ResourceViewFavoritesPreferencesSchema, raw);
   if (!document.success) return EMPTY_FAVORITES_SLICE;
-  // A version-matched document never loses siblings to one bad entry: each
+  // A readable document never loses siblings to one bad entry: each
   // model's list drops only its malformed favorites, so the next save cannot wipe healthy models.
   const models: Record<string, readonly ResourceViewFavorite[]> = {};
   for (const [model, favorites] of Object.entries(document.output.models)) {

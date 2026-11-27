@@ -81,7 +81,7 @@ pending write and typed values.
   stale revision keeps its banner and its reload. Both form dialogs bring the
   person to a refusal, as the record form does: `MutationDialog` and the
   typed-args action dialog pass `applyFormErrors` their banner's focus
-  (`useRefusalBannerFocus`) and a line naming the refused fields
+  (`useRefusalFocus`) and a line naming the refused fields
   (`fieldValidationSummary`); `useActionForm` takes `fieldSummary` and returns
   `banner` to spread on its `ErrorBanner`.
 - `@angee/refine`: `errorFromAuthoredEnvelope` (and so `useAuthoredMutation`'s

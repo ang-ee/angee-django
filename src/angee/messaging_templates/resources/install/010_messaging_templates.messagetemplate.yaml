@@ -1,0 +1,58 @@
+# Message template parts: wording rows include, written in Markdown. They load first,
+# since the blocks and the layout that may include them are walked when they save.
+- xref: part.greeting.en
+  kind: part
+  key: greeting
+  language: en
+  name: Greeting
+  description: How an email opens; it falls back when the first name is unknown.
+  format: markdown
+  source: 'Hi {{ person.first_name|default:"there" }},'
+  variables:
+    person.first_name: The recipient's first name; may be empty.
+  sample:
+    person:
+      first_name: Ana
+- xref: part.greeting.es
+  kind: part
+  key: greeting
+  language: es
+  name: Greeting
+  description: How an email opens; it leaves the name out when the first name is unknown.
+  format: markdown
+  source: 'Hola{% if person.first_name %} {{ person.first_name }}{% endif %},'
+  variables:
+    person.first_name: The recipient's first name; may be empty.
+  sample:
+    person:
+      first_name: Ana
+- xref: part.ignore_notice.en
+  kind: part
+  key: ignore_notice
+  language: en
+  name: Ignore notice
+  description: The line that closes mail a person may not have asked for.
+  format: markdown
+  source: If you did not expect this email, you can ignore it.
+  variables: {}
+  sample: {}
+- xref: part.ignore_notice.es
+  kind: part
+  key: ignore_notice
+  language: es
+  name: Ignore notice
+  description: The line that closes mail a person may not have asked for.
+  format: markdown
+  source: Si no esperabas este correo, puedes ignorarlo.
+  variables: {}
+  sample: {}
+- xref: part.signature.en
+  kind: part
+  key: signature
+  language: en
+  name: Signature
+  description: How an email signs off, in the brand's name.
+  format: markdown
+  source: 'The {{ brand.name }} team'
+  variables: {}
+  sample: {}

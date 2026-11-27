@@ -640,7 +640,7 @@ def test_merging_a_handle_keeps_its_correspondence_and_collapses_facts_the_kept_
             sender=alias,
             created_by=owner,
         )
-        recipient = Recipient._base_manager.create(message=message, thread=thread, handle=alias, role="to")
+        recipient = Recipient._base_manager.create(message=message, handle=alias, role="to")
         for handle in (alias, phone):
             Reaction._base_manager.create(message=message, handle=handle, reaction="👍")
         moved_reaction = Reaction._base_manager.create(message=message, handle=alias, reaction="❤️")
@@ -870,8 +870,10 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
         assert handle.normalized_value == "alice@gmail.com"
         assert Handle._meta.get_field("normalized_value").db_index is True
 
-        handle.value = " Alice.Smith+work@googlemail.com "
-        handle.save(update_fields=["value"])
+        # The value is write-once: the handle owner's rewrite changes it, and the key follows.
+        Handle.objects.reidentify(
+            handle, expected_value="  A.Lice+News@GMail.Com  ", value=" Alice.Smith+work@googlemail.com ",
+        )
 
     handle.refresh_from_db()
     assert handle.normalized_value == "alicesmith@googlemail.com"
@@ -888,9 +890,10 @@ def test_handle_persists_normalized_value_on_create_and_value_update(db: None) -
     ],
 )
 def test_handle_compares_an_email_domain_in_one_spelling(value: str, key: str) -> None:
-    """Both spellings of an internationalised domain are one comparison key; the value itself is never rewritten."""
+    """Both spellings of an internationalised domain are one address, by both keys; the value is never rewritten."""
 
     assert Handle.normalize_value(Handle.Platform.EMAIL, value) == key
+    assert Handle.spelling_key_of(Handle.Platform.EMAIL, value) == key
 
 
 @pytest.mark.parametrize(
@@ -1068,6 +1071,22 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
         pytest.param("bob@bücher.example", "xn--bcher-kva.example", id="handle-unicode-organization-punycode"),
         pytest.param("bob@xn--bcher-kva.example", "Bücher.example", id="handle-punycode-organization-unicode"),
         pytest.param("bob@xn--bcher-kva.example", "XN--BCHER-KVA.example", id="handle-punycode-organization-punycode"),
+        # IDNA 2003 sends straße as strasse: the rule's spelling is ASCII, so an organization typed as the address
+        # spells its domain is found by that spelling.
+        pytest.param("bob@straße.example", "straße.example", id="handle-sharp-s-organization-sharp-s"),
+        pytest.param("bob@straße.example", "Strasse.example", id="handle-sharp-s-organization-ss"),
+        pytest.param("bob@bu\u0308cher.example", "bu\u0308cher.example", id="handle-nfd-organization-nfd"),
+        pytest.param("bob@bu\u0308cher.example", "bücher.example", id="handle-nfd-organization-nfc"),
+        pytest.param("bob@\uff45xample.test", "\uff45xample.test", id="handle-full-width-organization-full-width"),
+        pytest.param("bob@\uff45xample.test", "example.test", id="handle-full-width-organization-ascii"),
+        pytest.param(
+            "bob@strasse.example", "straße.example", id="handle-ss-organization-sharp-s",
+            marks=pytest.mark.xfail(
+                strict=True, raises=AssertionError,
+                reason="Organizations store no rule-derived domain key: one typed in a spelling the rule joins but "
+                "neither the rule's, its punycode nor the address's own is not found.",
+            ),
+        ),
     ],
 )
 def test_suggest_for_org_domain_reads_both_spellings_of_an_internationalised_domain(

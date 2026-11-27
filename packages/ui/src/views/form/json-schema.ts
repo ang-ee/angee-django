@@ -138,6 +138,5 @@ export function jsonSchemaActionArgs(
       markMemberErrors(result.errors, shown);
       return result;
     },
-    fieldNames: [...new Set([...rootFields, ...[...branches.values()].flat()].map((field) => field.name))],
   };
 }
