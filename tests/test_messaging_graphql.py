@@ -182,7 +182,8 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
     assert channel.roots.detail_name == "channels_by_pk"
     assert channel.roots.create_name is None
     # Connect owns channel creation. Updates include the operator label, spaces'
-    # team and intake's configuration; the generated preview forecasts the purge.
+    # team and intake's configuration, and the create-only selector the model's
+    # save lets change only as a repair; the generated preview forecasts the purge.
     assert channel.roots.update_name == "update_channels_by_pk"
     assert channel.update_fields == (
         "display_name",
@@ -190,6 +191,7 @@ def test_console_resource_metadata_declares_thread_and_channel_surfaces() -> Non
         "intake_queue",
         "intake_field_map",
         "intake_requester_domains",
+        "backend_class",
     )
     assert channel.roots.delete_name == "delete_channels_by_pk"
     assert channel.roots.delete_preview_name == "channels_delete"

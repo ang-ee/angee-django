@@ -31,6 +31,7 @@ import { DescriptorPresenceControl } from "./descriptor-presence-control";
 import { DATE_TIME_WIDGETS } from "./field-values";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
 import type { RelationFieldInfo } from "../resource/model-metadata-defaults";
+import { isUnregisteredImplementationField } from "../resource/implementation-fields";
 import { RelationFieldWidget } from "../relation/RelationFieldWidget";
 import { RelationMultiFieldWidget } from "../relation/RelationMultiFieldWidget";
 import { relationSelectedOption } from "../relation/relation-options";
@@ -54,7 +55,10 @@ import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
-import { RecordFieldMarkControl } from "./record-field-marks";
+import {
+  RecordFieldMarkControl, UnregisteredImplementationExplanation, UnregisteredImplementationField, explainsBeside,
+  useUnregisteredImplementationExplanation,
+} from "./record-field-marks";
 import { createLabelForResource } from "../resource/utils/labels";
 
 // The wrapper draws the field's focus ring (`focus-within:focus-ring`). A focused input, textarea or
@@ -517,6 +521,9 @@ function BoundFormField({
   const values = useWatch({ control: surface.form.control });
   const value = get(values, field.name);
   const readOnly = surface.fieldReadOnly(field);
+  const repair = surface.repairState(field);
+  const unregistered = isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, field.name, value);
+  // A pending repair's control shows `loading`; a refused one's explanation gives the server's words.
   const relation = surface.relationByField.get(field.name);
   const relationList = surface.relationListByField.get(field.name);
   const currentRelationId = relationValueId(value);
@@ -534,9 +541,11 @@ function BoundFormField({
       control={surface.form.control}
       name={field.name}
       render={({ field: controller, fieldState }) => (
-        <BoundFieldRow
+        <UnregisteredImplementationField field={field.name} marked={unregistered} readOnly={readOnly}
+          once={repair.repairing} refusal={repair.refusal}><BoundFieldRow
           controlRef={controller.ref}
           field={field}
+          loading={repair.loading}
           rail={rail}
           relation={relation}
           relationList={relationList}
@@ -557,7 +566,7 @@ function BoundFormField({
             controller.onChange(next);
             surface.afterFieldChange(field, next);
           }}
-        />
+        /></UnregisteredImplementationField>
       )}
     />
   );
@@ -731,6 +740,7 @@ function BoundFieldRow({
   row,
   readOnly,
   restricted = false,
+  loading = false,
   errors,
   serverMessages,
   onChange,
@@ -738,6 +748,8 @@ function BoundFieldRow({
   controlRef,
 }: {
   field: FieldDescriptor;
+  /** The control's own pending state (a repair's answer, or its save, is pending). */
+  loading?: boolean;
   rail?: boolean;
   relation?: RelationFieldInfo;
   relationList?: RelationFieldInfo;
@@ -762,12 +774,15 @@ function BoundFieldRow({
     : messages;
   const descriptionId = field.description ? `${controlId}-description` : undefined;
   const errorId = displayedMessages.length ? `${controlId}-error` : undefined;
+  const explanation = useUnregisteredImplementationExplanation(field.name);
   const controlProps = {
     id: controlId,
-    "aria-describedby": [descriptionId, errorId].filter(Boolean).join(" ") || undefined,
+    "aria-describedby": [descriptionId, explanation && explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
+      .filter(Boolean).join(" ") || undefined,
     "aria-invalid": displayedMessages.length > 0 || undefined,
     "aria-required": field.required && !effectiveReadOnly || undefined,
     ...(composite ? { "aria-labelledby": `${controlId}-label` } : {}),
+    ...(loading ? { loading: true } : {}),
   };
   return (
     <FieldRoot
@@ -832,6 +847,7 @@ function BoundFieldRow({
         )}
         </DescriptorPresenceControl>
       </div> : null}
+      <UnregisteredImplementationExplanation explanation={explanation} messages={displayedMessages} />
       <FieldFooter description={field.description} errors={displayedMessages} descriptionId={descriptionId} errorId={errorId} />
     </FieldRoot>
   );

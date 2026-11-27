@@ -17,14 +17,15 @@ import importlib
 import logging
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx2
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connection
+from django.db import connection, transaction
+from django.db.models import QuerySet
 from django.db.models.signals import post_save
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -32,6 +33,7 @@ from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
 from rebac import PermissionDenied, actor_context, system_context
 
+from angee.base.fields import create_only_selectors
 from angee.base.models.identity import public_id_for
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
@@ -45,6 +47,7 @@ from angee.integrate.schema import integration_action_guard
 from angee.integrate.states import StreamDirection, StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
+from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.messaging.testing.models import Channel
 from tests import (
     test_agents_graphql,  # noqa: F401 -- register the concrete relation graph
@@ -66,6 +69,7 @@ from tests.conftest import (
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.integrate_fixtures import ConnectionBridge
 from tests.stream_adapters import failure_state
+from tests.tables import store_column
 from tests.test_agents import InferenceModel, InferenceProvider
 
 User = get_user_model()
@@ -1640,6 +1644,566 @@ def test_update_vcs_bridge_lifecycle_accepts_the_lowercase_value(
     with system_context(reason="test.integrate.lifecycle.verify"):
         bridge.refresh_from_db()
         assert str(bridge.lifecycle) == "disconnected"
+
+
+def test_an_implementation_key_the_registry_no_longer_names_reads_null_in_a_list_and_a_record(db: None) -> None:
+    """The column reads nullable: a retired key reads null with no error, a registered one its member as before."""
+
+    del db
+    admin = _platform_admin("retired-key-admin")
+    retired = make_integration("retired-key", model=VcsBridge, backend_class="stub")
+    kept = make_integration("kept-key", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, retired.pk, "backend_class", "retired")
+    schema = _schema()
+
+    listed = _data(execute_schema(schema, "{ vcs_bridges { id backend_class } }", user=admin))["vcs_bridges"]
+    record = _data(
+        execute_schema(
+            schema,
+            "query($id: String!) { vcs_bridges_by_pk(id: $id) { backend_class } }",
+            {"id": _public_id(retired)},
+            user=admin,
+        )
+    )["vcs_bridges_by_pk"]
+    found = _data(
+        execute_schema(schema, '{ vcs_bridges(where: {backend_class: {_eq: "retired"}}) { id } }', user=admin)
+    )["vcs_bridges"]
+
+    assert {row["id"]: row["backend_class"] for row in listed} == {_public_id(retired): None, _public_id(kept): "STUB"}
+    assert record == {"backend_class": None}
+    assert found == [{"id": _public_id(retired)}]
+    assert "  backend_class: VcsBackendImpl\n" in schema.as_str()
+
+
+def test_grouping_by_a_column_whose_key_is_retired_is_refused_publicly_in_words_naming_the_column(
+    db: None, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The grouping library refuses such a group key; the answer names the column, is public and is not retried.
+
+    The refusal is not logged: no logger records it, so neither the stored value nor the request's
+    variables reach a log.
+    """
+
+    del db
+    admin = _platform_admin("retired-key-grouper")
+    bridge = make_integration("retired-key-groups", model=VcsBridge, backend_class="stub")
+    make_integration("registered-key-groups", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    literal = "{ vcs_bridges_groups(group_by: [{field: BACKEND_CLASS}]) { aggregate { count } } }"
+    variable = """
+        query($groupBy: [vcsBridgesgroupbyspec!]!) { vcs_bridges_groups(group_by: $groupBy) { aggregate { count } } }
+    """
+
+    for document, variables in ((literal, {}), (variable, {"groupBy": [{"field": "BACKEND_CLASS"}]})):
+        with caplog.at_level(logging.DEBUG):
+            caplog.clear()
+            result = execute_schema(_schema(), document, variables, user=admin)
+        assert caplog.records == []
+        assert "retired" not in caplog.text and "BACKEND_CLASS" not in caplog.text
+        assert result.data is None
+        assert [(error.message, error.extensions) for error in result.errors or []] == [(
+            "A record holds an implementation that is not registered, "
+            "so this list cannot be grouped by backend class until that is resolved.",
+            {"code": "BAD_USER_INPUT"},
+        )]
+    other = _data(execute_schema(
+        _schema(), "{ vcs_bridges_groups(group_by: [{field: LIFECYCLE}]) { aggregate { count } } }", {}, user=admin,
+    ))
+    assert sum(group["aggregate"]["count"] for group in other["vcs_bridges_groups"]) >= 2
+
+
+def test_editing_a_row_whose_implementation_key_is_retired_saves_and_keeps_the_key(db: None) -> None:
+    """The generic update saves a rename and keeps the key the row holds; choosing an unregistered one is refused."""
+
+    del db
+    admin = _platform_admin("retired-key-editor")
+    bridge = make_integration("retired-key-edit", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    update = """
+        mutation($id: String!, $set: vcs_bridges_set_input!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: $set) { display_name backend_class }
+        }
+    """
+
+    target = _public_id(bridge)
+    renamed = _data(execute_schema(_schema(), update, {"id": target, "set": {"display_name": "Renamed"}}, user=admin))
+    chosen = execute_schema(_schema(), update, {"id": target, "set": {"backend_class": "also-retired"}}, user=admin)
+
+    assert renamed["update_vcs_bridges_by_pk"] == {"display_name": "Renamed", "backend_class": None}
+    assert chosen.errors is not None and chosen.errors[0].extensions == {
+        "code": "VALIDATION",
+        "validationErrors": {"backend_class": ["Value 'also-retired' is not a valid choice."]},
+        "formErrors": [],
+    }
+    stored = VcsBridge._base_manager.get(pk=bridge.pk)
+    assert (stored.display_name, stored.backend_class) == ("Renamed", "retired")
+
+
+def test_a_writer_repairs_a_bridge_s_retired_key_once_and_a_person_who_may_not_write_is_refused(db: None) -> None:
+    """The update mutation carries the repair: the registered key saves for a writer, and only once."""
+
+    del db
+    admin = _platform_admin("retired-key-repairer")
+    outsider = User.objects.create_user(username="retired-key-outsider", email="outsider@example.com")
+    bridge = make_integration("retired-key-repair", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    update = """
+        mutation($id: String!, $set: vcs_bridges_set_input!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: $set) { backend_class }
+        }
+    """
+    target = {"id": _public_id(bridge), "set": {"backend_class": "stub"}}
+
+    refused = execute_schema(_schema(), update, target, user=outsider)
+    assert refused.errors is not None
+    assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "retired"
+    repaired = _data(execute_schema(_schema(), update, target, user=admin))
+    again = execute_schema(_schema(), update, {**target, "set": {"backend_class": "local"}}, user=admin)
+
+    assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "stub"
+    assert repaired["update_vcs_bridges_by_pk"] == {"backend_class": "STUB"}
+    assert again.errors is not None and again.errors[0].extensions["validationErrors"] == {
+        "backend_class": ["Implementation selection is create-only."],
+    }
+
+
+def test_every_update_input_carries_its_model_s_create_only_selectors_and_the_metadata_names_them() -> None:
+    """The resource layer derives it once: an update carries each create-only selector, published create-only
+    only where the resource writes it, with the creatable and updatable the server enforces; a read-only
+    exposure, as the public schema's directories, publishes ``False``."""
+
+    from django.apps import apps
+
+    labels = {model._meta.label for model in apps.get_models()}
+    published: dict[str, dict[tuple[str, str], tuple[bool, bool]]] = {}
+    schemas = GraphQLSchemas.from_discovery()
+    for schema_name in ("console", "public"):
+        schema = schemas.build(schema_name)
+        published[schema_name] = {}
+        for resource in schema._schema.extensions["angee"]["resources"]:
+            if resource["modelLabel"] not in labels:
+                continue  # a resource over a projection (``iam.Role``) names no model
+            model = apps.get_model(resource["modelLabel"])
+            selectors = create_only_selectors(model)
+            for field in resource["fields"]:
+                writes = field["creatable"] or field["updatable"]
+                assert field["createOnly"] is (field["name"] in selectors and writes), (resource["modelLabel"], field)
+                if field["createOnly"]:
+                    published[schema_name][(resource["modelLabel"], field["name"])] = (
+                        field["creatable"], field["updatable"],
+                    )
+                    if resource["roots"]["update"]:
+                        set_input = schema._schema.get_type(f"{resource['roots']['list']}_set_input")
+                        assert field["name"] in resource["updateFields"] and field["name"] in set_input.fields
+
+    # (creatable, updatable) where the console writes a create-only selector.
+    assert published["console"] == {
+        ("agents.InferenceProvider", "backend_class"): (True, True),
+        ("integrate_vcs.VcsBridge", "backend_class"): (True, True),
+        ("knowledge_integrate_notion.NotionConnection", "backend_class"): (False, True),
+        ("messaging.Channel", "backend_class"): (False, True),
+        ("posts.Feed", "backend_class"): (False, True),
+        ("posts.Feed", "feed_backend_class"): (True, True),
+    }
+    # The public schema only reads selectors (the directories' `backend_class`): none is create-only there.
+    assert published["public"] == {}
+
+
+_REPAIR_CHOICES = """
+    query($record: ID!) { vcs_bridges_repair_choices(id: $record, field: "backend_class") { key defaults } }
+"""
+
+
+def test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is_refused_as_the_write_is(
+    db: None,
+) -> None:
+    """The bridges' repair read: each choice's defaults are the config it carries over; a non-admin is refused."""
+
+    del db
+    admin = _platform_admin("repair-choices-admin")
+    plain = User.objects.create_user(username="repair-choices-plain", email="repair-plain@example.com")
+    bridge = make_integration("repair-choices", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    with system_context(reason="test.repair.choices"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team", "retired_option": True})
+    record = {"record": _public_id(bridge)}
+
+    choices = {choice["key"]: choice["defaults"] for choice in _data(
+        execute_schema(_schema(), _REPAIR_CHOICES, record, user=admin))["vcs_bridges_repair_choices"]}
+    assert choices["local"] == {"config": LocalVCSBackend.carried_config({"local_root": "/srv/team"})}
+    assert choices["stub"] == {"config": {"local_root": "/srv/team", "retired_option": True}}
+
+    assert execute_schema(_schema(), _REPAIR_CHOICES, record, user=plain).errors is not None
+    unknown = execute_schema(_schema(), _REPAIR_CHOICES, {"record": "vcs_unknown"}, user=admin)
+    assert unknown.errors is not None and "backend_class" not in str(unknown.errors[0].extensions)
+    registered = make_integration("repair-choices-registered", model=VcsBridge, backend_class="local")
+    refused = execute_schema(_schema(), _REPAIR_CHOICES, {"record": _public_id(registered)}, user=admin)
+    assert refused.errors is not None and refused.errors[0].extensions["validationErrors"] == {
+        "backend_class": ["Implementation selection is create-only."],
+    }
+
+
+@pytest.mark.parametrize(("app_label", "model_name", "root"), [
+    ("integrate_vcs", "VcsBridge", "vcs_bridges"),
+    ("agents", "InferenceProvider", "inference_providers"),
+])
+def test_an_administrator_only_resource_admits_its_insert_and_update_by_its_own_permission_classes(
+    db: None, app_label: str, model_name: str, root: str,
+) -> None:
+    """The resource's ``write_permission_classes`` ask before its write backend: its owner may not write it."""
+
+    from django.apps import apps
+
+    del db
+    row = make_integration(f"admits-{root}", model=apps.get_model(app_label, model_name))
+    admin = _platform_admin(f"admits-{root}-admin")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    update = f"""
+        mutation($id: String!, $set: {root}_set_input!) {{
+          update_{root}_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ id }}
+        }}
+    """
+    insert = f"""
+        mutation($object: {root}_insert_input!) {{ insert_{root}_one(object: $object) {{ id }} }}
+    """
+    asked = {"id": _public_id(row), "set": {"name" if model_name == "InferenceProvider" else "display_name": "Renamed"}}
+
+    by_owner = execute_schema(schema, update, asked, user=row.owner)
+    inserted = execute_schema(schema, insert, {"object": {"vendor": _public_id(row.vendor)}}, user=row.owner)
+    by_admin = execute_schema(schema, update, asked, user=admin)
+
+    for refused in (by_owner, inserted):
+        assert refused.errors is not None and refused.errors[0].message == "Platform admin permission required."
+    assert by_admin.errors is None, by_admin.errors
+
+
+# Every selector resource of the framework's hosts: the six with an update root and a repair read, then the
+# three without (no update root, so no read in any schema).
+_REPAIR_READS = (
+    ("agents", "InferenceProvider", "backend_class", "inference_providers"),
+    ("integrate_vcs", "VcsBridge", "backend_class", "vcs_bridges"),
+    ("knowledge_integrate_notion", "NotionConnection", "backend_class", "notion_connections"),
+    ("messaging", "Channel", "backend_class", "channels"),
+    ("posts", "Feed", "backend_class", "feeds"),
+    ("posts", "Feed", "feed_backend_class", "feeds"),
+)
+_NO_UPDATE_ROOT = (
+    ("calendar", "CalendarSource", "calendar_sources"),
+    ("parties", "Directory", "directories"),
+    ("storage_integrate", "Mount", "mounts"),
+)
+_NOT_ADMITTED = ("PERMISSION_DENIED", "This actor may not choose an implementation.")
+_ADMIN_REQUIRED = ("PERMISSION_DENIED", "Platform admin permission required.")
+# The resources whose own write_permission_classes admit only administrators: asked before the update's resolver,
+# so a non-administrator's update is refused in their words before the admission is asked.
+_ADMINISTRATOR_WRITES = frozenset({"inference_providers", "vcs_bridges"})
+# Who may choose the class when creating, through the console: its insert takes the selector, and the create's
+# own gate (the resource's permission classes, or REBAC's create) admits administrators only; or the insert does
+# not take it (a connect flow chooses it), or there is no insert root.
+_CHOSEN_ON_CREATE = {
+    ("inference_providers", "backend_class"): "administrators",
+    ("vcs_bridges", "backend_class"): "administrators",
+    ("notion_connections", "backend_class"): "not by the insert",
+    ("channels", "backend_class"): "no insert root",
+    ("feeds", "backend_class"): "not by the insert",
+    ("feeds", "feed_backend_class"): "administrators",
+}
+
+
+def _admit_every_signed_in_user(user: Any) -> bool:
+    """A test host's choices admission that admits everyone signed in, so the update's own gate decides."""
+
+    return user is not None
+
+
+def _outcome(result: Any) -> tuple[str, str] | str:
+    """``"ok"``, or the first error's code and words."""
+
+    if not result.errors:
+        return "ok"
+    return (result.errors[0].extensions or {}).get("code", ""), result.errors[0].message
+
+
+@pytest.mark.parametrize(("app_label", "model_name", "selector", "root"), _REPAIR_READS)
+@pytest.mark.parametrize("admission", ["iam", "open"])
+def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admits(
+    db: None, settings: Any, app_label: str, model_name: str, selector: str, root: str, admission: str,
+) -> None:
+    """Four actors, each on its own retired row: the read, the repair update and an insert choosing the class.
+
+    Where the create flow's admission admits the actor (IAM's administrators; every signed-in person under an
+    open admission), the read answers exactly as the update does, in the update's words. Where it does not,
+    both are refused: the read by the admission, and the update, which names the selector, by the same
+    admission, or first by the resource's own administrator-only write permission classes. Write on the record
+    grants no choice of class the create flow does not. The insert shows who may choose a class when creating.
+    """
+
+    from django.apps import apps
+    from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
+
+    del db
+    if admission == "open":
+        settings.ANGEE_IMPL_CHOICES_ADMISSION = f"{__name__}._admit_every_signed_in_user"
+    model = apps.get_model(app_label, model_name)
+    field = model._meta.get_field(selector)
+    registered = field.registered_keys()[0]
+    schema = GraphQLSchemas.from_discovery().build("console")
+    read = f"query($id: ID!, $field: String!) {{ {root}_repair_choices(id: $id, field: $field) {{ key }} }}"
+    update = f"""
+        mutation($id: String!, $set: {root}_set_input!) {{
+          update_{root}_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ id }}
+        }}
+    """
+    insert = f"mutation($object: {root}_insert_input!) {{ insert_{root}_one(object: $object) {{ id }} }}"
+    insert_fields = schema._schema.get_type(f"{root}_insert_input")
+    insert_fields = insert_fields.fields if insert_fields is not None else {}
+
+    def chooses_on_create(row: Any, actor: Any) -> str:
+        """Whether the console's insert lets ``actor`` choose the class: its create's gate, not the row's validation."""
+
+        if f"insert_{root}_one" not in schema._schema.get_type("Mutation").fields:
+            return "no insert root"
+        if selector not in insert_fields:
+            return "not by the insert"
+        values = {selector: registered.upper()}
+        if "vendor" in insert_fields:
+            values["vendor"] = _public_id(row.vendor)
+        result = execute_schema(schema, insert, {"object": values}, user=actor)
+        return "refused" if result.errors and result.errors[0].extensions["code"] == "PERMISSION_DENIED" else "admitted"
+
+    def side_by_side(actor_kind: str) -> tuple[Any, Any, str]:
+        slug = f"agree-{root[:12]}-{selector[:4]}-{admission}-{actor_kind}".replace("_", "-")
+        row = make_integration(slug, model=model)
+        store_column(field.model, row.pk, field.column, "retired")
+        actor = {
+            "admin": lambda: _platform_admin(f"{slug}-admin"),
+            "owner": lambda: row.owner,
+            "reader": lambda: User.objects.create_user(username=f"{slug}-reader", email=f"{slug}-r@example.com"),
+            "stranger": lambda: User.objects.create_user(username=f"{slug}-stranger", email=f"{slug}-s@example.com"),
+        }[actor_kind]()
+        if actor_kind == "reader":
+            # Read on these rows derives from the nearest row declaring a reader: the row, or its parent.
+            holders = [row, *(getattr(row, link.name) for link in model._meta.parents.values())]
+            with system_context(reason="test.repair.agree.reader"):
+                for holder in holders:
+                    try:
+                        write_relationships([RelationshipTuple(
+                            resource=to_object_ref(holder), relation="reader", subject=to_subject_ref(actor),
+                        )])
+                        break
+                    except ValueError:
+                        continue
+        target = _public_id(row)
+        by_read = _outcome(execute_schema(schema, read, {"id": target, "field": selector}, user=actor))
+        by_update = _outcome(execute_schema(
+            schema, update, {"id": target, "set": {selector: registered.upper()}}, user=actor,
+        ))
+        return by_read, by_update, chooses_on_create(row, actor)
+
+    on_create = _CHOSEN_ON_CREATE[(root, selector)]
+    for actor_kind in ("admin", "owner", "reader", "stranger"):
+        by_read, by_update, by_insert = side_by_side(actor_kind)
+        if admission == "open" or actor_kind == "admin":
+            assert by_read == by_update, (actor_kind, by_read, by_update)
+        else:
+            assert by_read == _NOT_ADMITTED, (actor_kind, by_read)
+            assert by_update == (_ADMIN_REQUIRED if root in _ADMINISTRATOR_WRITES else _NOT_ADMITTED), (
+                actor_kind, by_update,
+            )
+        if on_create == "administrators":
+            assert by_insert == ("admitted" if actor_kind == "admin" else "refused"), (actor_kind, by_insert)
+        else:
+            assert by_insert == on_create, (actor_kind, by_insert)
+
+
+@pytest.mark.parametrize("implementation", ["base", "integration"])
+def test_authorize_update_called_alone_takes_no_row_lock_and_writes_nothing(db: None, implementation: str) -> None:
+    """The update's own decision, which the repair read asks before anything is written: no lock, no write.
+
+    Both implementations, the base backend's (feeds) and the integration's (VCS bridges). The statement
+    capture finds a ``FOR UPDATE`` on PostgreSQL; on SQLite, which takes no row locks, the guard on
+    ``select_for_update`` finds the same intent.
+    """
+
+    from angee.graphql.data.hasura import AngeeHasuraWriteBackend
+    from angee.graphql.testing.documents import graphql_request
+    from angee.integrate.schema import IntegrationWriteBackend
+    from tests.conftest import Feed
+
+    del db
+    model, backend = {
+        "base": (Feed, AngeeHasuraWriteBackend), "integration": (VcsBridge, IntegrationWriteBackend),
+    }[implementation]
+    row = make_integration(f"no-lock-{implementation}", model=model)
+    info = SimpleNamespace(context=SimpleNamespace(request=graphql_request(row.owner)))
+    locked = AssertionError("authorize_update asked for a row lock")
+    with (
+        actor_context(row.owner),
+        patch.object(QuerySet, "select_for_update", autospec=True, side_effect=locked),
+        CaptureQueriesContext(connection) as queries,
+    ):
+        assert backend(model).authorize_update(info, _public_id(row)).pk == row.pk
+
+    statements = [query["sql"].upper() for query in queries.captured_queries]
+    assert statements
+    assert [sql for sql in statements if "FOR UPDATE" in sql or "FOR NO KEY UPDATE" in sql] == []
+    assert [sql for sql in statements if sql.lstrip().startswith(("INSERT", "UPDATE", "DELETE"))] == []
+
+
+_ADMISSIONS_ASKED: list[Any] = []
+
+
+def _admit_and_count(user: Any) -> bool:
+    """A test host's choices admission that admits everyone and records whom it was asked about."""
+
+    _ADMISSIONS_ASKED.append(user)
+    return True
+
+
+def test_an_update_asks_the_choices_admission_only_when_it_names_a_create_only_selector(
+    db: None, settings: Any,
+) -> None:
+    """The owner's ordinary update asks nothing more; the same owner's update naming the selector asks once."""
+
+    del db
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = f"{__name__}._admit_and_count"
+    channel = make_integration("asks-only-selector", model=Channel)
+    store_column(Channel, channel.pk, "backend_class", "retired")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    update = """
+        mutation($id: String!, $set: channels_set_input!) {
+          update_channels_by_pk(pk_columns: {id: $id}, _set: $set) { id }
+        }
+    """
+    key = Channel._meta.get_field("backend_class").registered_keys()[0].upper()
+    _ADMISSIONS_ASKED.clear()
+
+    target = _public_id(channel)
+    renamed = execute_schema(schema, update, {"id": target, "set": {"display_name": "Renamed"}}, user=channel.owner)
+    assert _outcome(renamed) == "ok" and _ADMISSIONS_ASKED == []
+    repaired = execute_schema(schema, update, {"id": target, "set": {"backend_class": key}}, user=channel.owner)
+    assert _outcome(repaired) == "ok" and _ADMISSIONS_ASKED == [channel.owner]
+
+
+@pytest.mark.parametrize(("app_label", "model_name", "root"), _NO_UPDATE_ROOT)
+def test_a_selector_resource_without_an_update_root_has_no_repair_read_in_any_schema(
+    app_label: str, model_name: str, root: str,
+) -> None:
+    """No update root, so no read: in no schema of the host, the public one included."""
+
+    schemas = GraphQLSchemas.from_discovery()
+    for name in sorted(schemas.names()):
+        sdl = schemas.build(name).as_str()
+        assert f"{root}_repair_choices" not in sdl, (name, root)
+        assert f"update_{root}_by_pk" not in sdl, (name, root)
+
+
+def test_the_six_repair_reads_are_the_console_s_and_its_metadata_names_each_beside_its_update() -> None:
+    """The generated read is ``<res>_repair_choices(id: ID!, field: String!): [ImplChoice!]!`` in the console only."""
+
+    schemas = GraphQLSchemas.from_discovery()
+    console = schemas.build("console").as_str()
+    for root in sorted({root for *_, root in _REPAIR_READS}):
+        assert f"  {root}_repair_choices(id: ID!, field: String!): [ImplChoice!]!\n" in console
+    assert "  impl_choices(model: String!, field: String!): [ImplChoice!]!\n" in console
+    named = {
+        resource.model_label: (resource.roots.repair_choices_name, resource.roots.update_name)
+        for resource in schemas.resources("console") if resource.roots.repair_choices_name
+    }
+    assert named == {
+        f"{app}.{model}": (f"{root}_repair_choices", f"update_{root}_by_pk") for app, model, _, root in _REPAIR_READS
+    }
+    for name in sorted(set(schemas.names()) - {"console"}):
+        assert "_repair_choices" not in schemas.build(name).as_str(), name
+
+
+def test_a_schema_that_would_expose_a_repair_read_without_its_update_root_fails_composition() -> None:
+    """The bridges' query type taken without their mutation: composition refuses, naming the resource."""
+
+    addon = SchemaAddon({"console": {
+        **{key: tuple(integrate_vcs_schema.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS},
+        "mutation": (),
+    }})
+    base = [
+        SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})
+        for module in (iam_schema, integrate_schema)
+    ]
+    with pytest.raises(ImproperlyConfigured) as refused:
+        GraphQLSchemas([*base, addon]).build("console")
+    assert "integrate_vcs.VcsBridge" in str(refused.value) and "vcs_bridges_repair_choices" in str(refused.value)
+
+
+def test_the_choices_admission_is_closed_without_its_hook_and_checked_as_an_optional_single_hook(
+    db: None, settings: Any,
+) -> None:
+    """No hook set: nobody is admitted beyond a model's own policy, and the check finds nothing to refuse."""
+
+    from angee.graphql.checks import check_impl_choices_admission
+
+    del db
+    admin = _platform_admin("admission-closed-admin")
+    bridge = make_integration("admission-closed", model=VcsBridge)
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    choices = 'query { impl_choices(model: "integrate_vcs.VcsBridge", field: "backend_class") { key } }'
+
+    assert _outcome(execute_schema(schema, choices, {}, user=admin)) == "ok"
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = ""
+    assert check_impl_choices_admission() == []
+    assert _outcome(execute_schema(schema, choices, {}, user=admin)) == _NOT_ADMITTED
+    repair = execute_schema(schema, _REPAIR_CHOICES, {"record": _public_id(bridge)}, user=admin)
+    assert _outcome(repair) == _NOT_ADMITTED
+    settings.ANGEE_IMPL_CHOICES_ADMISSION = "angee.iam.permissions.no_such_check"
+    assert [message.id for message in check_impl_choices_admission()] == ["angee.E033"]
+
+
+@pytest.mark.parametrize("name", ["display_name", "lifecycle", "no_such_field"])
+def test_a_repair_read_of_a_name_that_is_not_a_create_only_selector_is_a_plain_refusal(db: None, name: str) -> None:
+    """A name the resource's update does not carry as a create-only selector refuses in the write's family."""
+
+    del db
+    admin = _platform_admin(f"no-repair-{name}".replace("_", "-"))
+    bridge = make_integration(f"no-repair-{name}".replace("_", "-"), model=VcsBridge)
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    result = execute_schema(GraphQLSchemas.from_discovery().build("console"), """
+        query($id: ID!, $field: String!) { vcs_bridges_repair_choices(id: $id, field: $field) { key } }
+    """, {"id": _public_id(bridge), "field": name}, user=admin)
+
+    assert result.errors is not None and result.errors[0].extensions["code"] != "INTERNAL"
+    assert result.errors[0].extensions["validationErrors"] == {name: [f"integrate_vcs.VcsBridge.{name} has no repair."]}
+
+
+def test_the_read_offers_a_bridge_s_repair_exactly_when_the_update_allows_it(db: None) -> None:
+    """The contract a form reads: the key reads null exactly while its record read and its update are allowed."""
+
+    del db
+    admin = _platform_admin("repair-agreement-admin")
+    bridge = make_integration("repair-agreement", model=VcsBridge, backend_class="stub")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    read = "query($id: String!) { vcs_bridges_by_pk(id: $id) { backend_class } }"
+    update = """
+        mutation($id: String!, $set: vcs_bridges_set_input!) {
+          update_vcs_bridges_by_pk(pk_columns: {id: $id}, _set: $set) { backend_class }
+        }
+    """
+    target = {"id": _public_id(bridge)}
+
+    def state(key: str) -> tuple[bool, bool, bool]:
+        """(the key reads null, the record read answers, the update is allowed), the update rolled back."""
+
+        stored = _data(execute_schema(_schema(), read, target, user=admin))["vcs_bridges_by_pk"]["backend_class"]
+        offered = execute_schema(_schema(), _REPAIR_CHOICES, {"record": target["id"]}, user=admin).errors is None
+        with transaction.atomic():
+            allowed = execute_schema(_schema(), update, {**target, "set": {"backend_class": key}}, user=admin)
+            transaction.set_rollback(True)
+        return stored is None, offered, allowed.errors is None
+
+    assert state("local") == (True, True, True)
+    _data(execute_schema(_schema(), update, {**target, "set": {"backend_class": "local"}}, user=admin))
+    assert state("stub") == (False, False, False)
+    registered = make_integration("repair-agreement-registered", model=VcsBridge, backend_class="local")
+    target = {"id": _public_id(registered)}
+    assert state("stub") == (False, False, False)
 
 
 def test_update_vcs_bridge_transfers_its_owner_and_keeps_the_patched_values(db: None) -> None:

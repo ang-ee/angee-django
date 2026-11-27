@@ -37,3 +37,19 @@ def model_tables(test_models: tuple[type[models.Model], ...]) -> Iterator[None]:
             with connection.schema_editor() as editor:
                 for model in reversed(missing):
                     editor.delete_model(model)
+
+
+def store_column(model: type[models.Model], pk: object, field_name: str, value: object) -> None:
+    """Write ``value`` into one row's column past its field, as an earlier release stored it.
+
+    A test of what a field reads back from storage it would refuse to write now
+    (a retired implementation key, say) sets the column with this raw update.
+    """
+
+    quote = connection.ops.quote_name
+    column = quote(model._meta.get_field(field_name).column)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE {quote(model._meta.db_table)} SET {column} = %s WHERE {quote(model._meta.pk.column)} = %s",
+            [value, pk],
+        )

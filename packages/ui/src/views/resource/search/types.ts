@@ -18,6 +18,8 @@ export interface SearchFacet {
   field: string;
   label: ReactNode;
   options: readonly SearchFacetOption[];
+  /** Why this facet's options could not be read; shown above the options it still holds. */
+  error?: string;
   source: "relation" | "scalar" | "declared";
   /** Preserve an authored Facet's grouping opt-out or alternate group axis. */
   group?: GroupSpec | false;

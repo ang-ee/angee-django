@@ -1255,7 +1255,7 @@ test("stale revision transport retains only a valid current revision for explici
 describe("retryableQueryError", () => {
   const answer = (code: string) => ({ message: "The requested record was not found.", extensions: { code } });
 
-  test.each(["VALIDATION", "PERMISSION_DENIED", "UNAUTHENTICATED", "STALE_REVISION"])(
+  test.each(["VALIDATION", "BAD_USER_INPUT", "PERMISSION_DENIED", "UNAUTHENTICATED", "STALE_REVISION"])(
     "a %s answer is not retried, from graphql-request or urql",
     (code) => {
       expect(retryableQueryError({ response: { status: 200, errors: [answer(code)] } })).toBe(false);
@@ -1267,6 +1267,7 @@ describe("retryableQueryError", () => {
     expect(retryableQueryError(new TypeError("Failed to fetch"))).toBe(true);
     expect(retryableQueryError({ response: { status: 502, errors: [] } })).toBe(true);
     expect(retryableQueryError({ graphQLErrors: [answer("INTERNAL_SERVER_ERROR")] })).toBe(true);
+    expect(retryableQueryError({ response: { status: 200, errors: [answer("INTERNAL")] } })).toBe(true);
   });
 });
 

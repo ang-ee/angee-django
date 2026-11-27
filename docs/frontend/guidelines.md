@@ -2571,6 +2571,44 @@ submit and upload paths. The app resets actor-bound queries on enter and exit;
 change subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
 
+A record form's draft is made against one record, its edit basis: the save
+sends its revision and the mode lock reads it. While the form holds no edits it
+is the record shown, in the same render; an accepted save moves it to the
+record written. A re-read keeps the draft and what was said about it: a server
+refusal stays under its field until the person changes that field or discards,
+an error about a value the re-read replaced goes, and a re-read that leaves no
+draft (another writer stored the person's own values) takes the draft's errors
+with it. A form holding no draft is reset whole. See
+[the save owner](../../packages/ui/src/views/form/use-form-view-save.ts).
+
+A resource field's metadata states three independent facts; read none of them
+from another:
+- `creatable`: a create through this resource offers the field;
+- `updatable`: this resource's update input accepts the field;
+- `createOnly`: the model refuses a change once a registered value is stored (a
+  create-only implementation selector), published only where this resource
+  writes the field. It implies no create path, which is `creatable` alone.
+
+A record form locks a `createOnly` field on an edit except while the record its
+draft was made against stores a key that is not registered, when the field can
+be chosen once more (a repair, `repairChoosable`). The repair asks the
+resource's repair read through the operation-documents seam
+(`useRepairChoicesOperation`: the `repairChoices` document the host's codegen
+generates for the root `roots.repairChoices` names, sent to the resource's own
+schema), so a resource without that root, or a host that generated no document
+for it, offers none; a person the server does not admit sees the field
+read-only with its words. It offers the field on a
+create only where it is `creatable`. While the repair's answer or a save is
+pending the selector is `loading`; a refused answer keeps it read-only with the
+server's words; a save that would send the repair's config without its selector
+is refused on the client. A page cannot unlock what
+the model's metadata locks: its own `createOnly: false` over a create-only
+selector changes nothing, and its own `createOnly: true` on a field the model
+does not make create-only locks it on an edit with no repair. The repair is
+the record form's: a rail row or a list never offers it, and a list, a board
+or any other surface that changes a stored record asks `fieldChangeable`
+(updatable and not create-only), never `fieldUpdatable` alone.
+
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
 still open a creation form. Fixtures must declare the write operations they intend

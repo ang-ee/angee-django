@@ -81,8 +81,9 @@ test("a historical statement without a changeset retains its source tooltip with
   response.changesetId = null;
   const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   await renderMarks();
+  // A plain mark with hover copy is itself the keyboard stop and the tooltip's trigger.
   const mark = await screen.findByLabelText("Source: Reference");
-  fireEvent.mouseEnter(mark.parentElement!);
+  fireEvent.mouseEnter(mark);
   expect(await screen.findByText("Imported source")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
   expect(warn.mock.calls.flat().join("\n")).not.toContain("example.DocumentStatement");
@@ -92,9 +93,8 @@ test("a statement subject without native history keeps its origin without openin
   const router = await renderMarks(false);
   const mark = await screen.findByLabelText("Source: Reference");
   expect(screen.queryByRole("button", { name: "Source: Reference" })).toBeNull();
-  const trigger = mark.parentElement!;
-  expect(trigger.tabIndex).toBe(0);
-  fireEvent.focus(trigger);
+  expect(mark.tabIndex).toBe(0);
+  fireEvent.focus(mark);
   expect(await screen.findByText("Imported source")).toBeTruthy();
   expect(router.state.location.search).not.toHaveProperty("chatterTab");
 });

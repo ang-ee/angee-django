@@ -159,6 +159,205 @@ live in code docstrings.
   their reason nowhere, the banner names them by their path and takes focus;
   `useFormViewSave` returns a new `form` every render; a refused member of a
   rows, object or list field; and the dialogs.
+- `angee.base`: **Changed behaviour.** A row whose stored implementation key
+  its `ImplClassField` no longer names (a key a later release retired, or one
+  only another release's registry holds during a rolling deploy) loads, lists
+  and filters: the key loads as its text, where a key the field names still
+  loads as its member, and a filter on it finds the rows that store it. Loading
+  one raised `ValidationError` ("Value '…' is not a valid choice."), so no
+  query that read such a row could finish. Nothing writes such a key that the row
+  does not already hold: every value the field prepares refuses one (a plain
+  value in an insert, `QuerySet.update`, `bulk_update`, or a `Value`'s
+  literal), except by a history copy or a migration's state model, which
+  write the key their row stored; any other expression (`F`, `Subquery`,
+  `Cast`, `Case`, or a `Value` inside one) is not checked. An update does not
+  validate such a key it is not changing (`ImplClassField.holds` reads it from
+  the stored row): a model `save()`, `full_clean`, a model form and the
+  GraphQL update save the row's other fields and keep the key, so a person, a
+  sync job or the other release of a rolling deploy goes on with it, and its
+  config is written only as stored; choosing another key is validated as
+  before. A write stores a key only as the registry spells it: the member's
+  name (`"LOCAL"`) or a padded key (`" local "`) is refused, as before, by
+  every field, except where a model or the GraphQL input normalises the key
+  first (an `ImplDefaultsMixin` insert, a GraphQL input), though a lookup
+  reads both as the key. A deserialized fixture, so a dump of such a row,
+  history tables included, refuses it as before. Resolving its
+  implementation (`get_<field>_impl()`, `resolve_class`, `resolve_for`) raises
+  `ImproperlyConfigured` naming the field, the key and the registry's setting.
+  `angee.graphql`: **Changed read contract.** Every field of a type that
+  projects an implementation key is nullable on read, in every Angee schema
+  (the column stays non-null in the database, and inputs, filters and
+  ordering, already strings, are unchanged: `_eq: "retired"` still finds the
+  row). Null there means the stored key is one the registry no longer names; a
+  registered key reads its enum member as before. A list or a record holding
+  such a row loads with no error, where the read failed with "Value '…' is not
+  a valid choice." `AngeeSchema.get_fields` reads each such field through
+  `angee.graphql.field_types.ImplementationKeyRead`, so no declaration changes
+  (`auto` stays `auto`). The console labels such a value "Not registered" in a
+  list cell and marks the field so on its record. A group's key is not such a field:
+  `strawberry-django-aggregates` refuses a group key outside the column's
+  choices (`ChoicesValueNotInEnumError`), so a list grouped, a board laned or a
+  facet counted by the column still cannot be read for such a row. Every Angee
+  schema answers that as a public refusal (`BAD_USER_INPUT`, which the console
+  does not retry) naming the column, for every choices column that holds a
+  value its choices no longer name: "A record holds an implementation that is
+  not registered, so this list cannot be grouped by backend class until that
+  is resolved.", or for any other choices column "A record holds a category
+  that is no longer offered, so this list cannot be grouped by it until that
+  is resolved." (a masked internal error before); the refusal is not logged: the
+  library's message, which names the stored value, reaches neither the client
+  nor a log record (`check --database`, `angee.E052`, names such rows). The console shows the words once on the grouped list and
+  the board; a refused facet now says why, above the options its last read
+  still holds, in the search panel and its shortcut, with no notice (each
+  facet was already its own read, so the others kept counting before too). **Known gap:** no "Not registered" group, lane or
+  facet bucket. Such a row's other fields save,
+  through the generic update too (it runs `full_clean()` and saves the whole
+  row), and it keeps its key; choosing an unregistered key is refused under the
+  key's field with its own message. A `create_only` selector (`Channel`,
+  `Feed`, `Directory`, `CalendarSource`, `Mount`, `VcsBridge`,
+  `InferenceProvider`, `NotionConnection`) holding such a key may move, once,
+  to a registered key, by a code-level save (`ImplDefaultsMixin.save`) or,
+  through the API, by an update the create flow's admission admits (below): the config its implementations own is carried
+  over by `ImplBase.carried_config`, valid by construction, since choosing a
+  class chooses its config's shape: **kept**, a stored value the new class reads
+  and accepts; **reset to the class's default**, a value it refuses, and every
+  value (the defaults alone) where a rule across keys refuses them together, so a
+  feed stored with `quota_limit: 5` repairs to `quota_limit: 10000` and a
+  wrong-typed `local_root` to the bridge class's default; **dropped**, a key it
+  does not read, extras included. Nothing reports what changed beyond the result:
+  the repair read shows the carried config before the save; a config sent with
+  the selector is validated and saved as sent; the new key is written only
+  while the row still holds the old one, so of two repairs at once one wins and
+  the other is refused as create-only; afterwards the selector is create-only
+  again ("Implementation selection is create-only."). `check --database`
+  (`angee.E052`) names such rows with the remedy an addon states in
+  `ANGEE_IMPL_KEY_REMEDIES`. An update that is not changing such a key writes
+  the column as itself, so a stale save never restores a retired key over one
+  committed since. A repair saved with `update_fields` must name the config
+  too, and a stale row that would write another config is refused as stale
+  (code `stale`). A save of a row that holds such a key reads the stored key and
+  config under the row's lock (`row_lock_queryset`) in its own transaction, so a
+  stale save racing a repair waits for it and is refused as stale; any other save
+  opens no transaction. `angee.graphql`: every update input carries its model's
+  create-only selectors (`create_only_selectors`, derived once in
+  `hasura_model_resource`), so `channels_set_input`,
+  `notion_connections_set_input`, `feeds_set_input` (both selectors) and any
+  consumer resource over such a model gain the column, and
+  `inference_providers_set_input` and `vcs_bridges_set_input` list it last; a
+  resource field's metadata gains `createOnly` (the model refuses a change once a
+  registered value is stored), published only where the resource writes the
+  field (`creatable` or `updatable`), so a read-only exposure says `false`; it
+  implies no create path, which `creatable` alone states. A resource whose update
+  root meets a create-only selector generates its repair read,
+  `<res>_repair_choices(id: ID!, field: String!): [ImplChoice!]!` (the console's
+  `inference_providers`, `vcs_bridges`, `notion_connections`, `channels`, `feeds`;
+  the resource metadata names it `roots.repairChoices`), whose `defaults` per choice
+  are what choosing it sets on that record, the config it carries over
+  (`ImplDefaultsMixin.repair_impl_defaults`). Its gate, in order: the create flow's
+  admission for the choices (`impl_choices_admitted`: the
+  `ANGEE_IMPL_CHOICES_ADMISSION` hook, which IAM points at `is_platform_admin`, or
+  the model's `can_read_impl_choices`; closed when no hook is set), so a repair
+  offers only what its reader could choose when creating such a record and grants
+  no new power; the resource's own `write_permission_classes`; the update's own
+  decision on the record (`authorize_update`); then the model ("Implementation
+  selection is create-only.", or "<label>.<field> has no repair." for a name that
+  is not a create-only selector). An update that names a create-only selector
+  asks the same admission (`AngeeHasuraWriteBackend.require_selectors_admitted`),
+  after the root's `write_permission_classes` and before `authorize_update` and
+  the model, so under IAM a non-administrator owner of a channel, a Notion
+  connection or a feed is refused the selector on update as on the read; an
+  update naming none asks nothing more and costs what it did. The admission's
+  one refusal, for a read and a write alike, is now "This actor may not choose an
+  implementation." (it was "Implementation choices are not readable by this
+  actor.", the `impl_choices` root's included). A schema that would expose the read without the
+  update root fails composition. `impl_choices(model, field)` is the create flow's
+  read only, as before. `hasura_model_resource` takes `write_permission_classes`,
+  asked on its insert, update and save roots, and a write backend's
+  `authorize_update(info, pk)` is the update's own decision before it writes. `@angee/ui`: the record form
+  offers a create-only selector (one the model's metadata makes create-only,
+  never a page's own flag) once more while the record its draft was made
+  against stores a key that is not registered, sets the config the chosen
+  implementation carries over, and saves the selector with that config, never
+  the config alone; afterwards the selector is locked again. A resource with no update root
+  (calendar sources, directories, mounts) or a selector a connect flow chose is
+  repaired by installing the implementation's addon again or by connecting the
+  record again.
+  **Upgrade:** a consumer with generated types takes
+  `| null` on these fields (one in the framework's own documents:
+  `ChannelBackendImpl` in messaging's overview); code that reads a selector's
+  value as a member (`.label`, `.value`) takes `field.key_for(value)` instead;
+  none in the framework does.
+- `angee.base`, `angee.graphql`, `angee.webforms`: **Changed behaviour.** A
+  JSON value Angee accepts keeps two bounds, `MAX_JSON_DEPTH` (64) and
+  `MAX_JSON_MEMBERS` (1,000,000) in `angee.base.serialization`, and no setting
+  raises them. The depth bound counts how many arrays and objects enclose a
+  member, an object's value or an array's item. The member bound counts every
+  member at every level as an expanding walk meets them, so a container reached
+  through several references, such as a variable a literal repeats, counts once
+  for each. `json_bound_violation` measures both with an explicit stack and
+  measures each distinct container once, so neither nesting nor shared
+  references make it recurse or repeat its work.
+  - Every schema `GraphQLSchemas` builds maps Strawberry's `JSON` scalar to
+    `JSON_SCALAR`, which refuses a variable or literal past either bound as
+    `BAD_USER_INPUT` while the request is coerced, before any resolver,
+    permission check or query runs; a literal's refusal names its location.
+    Output and the printed SDL are Strawberry's own.
+  - A JSON literal cannot embed a variable: `view: [$v]` or `config: {a: $v}`
+    at a `JSON` position is refused as `BAD_USER_INPUT`, located at the
+    variable, with "pass the whole value as a variable". A literal is coerced
+    once for each field that carries it, so an embedded variable was measured
+    (and later expanded) once per aliased field; a whole `$v` is coerced once
+    per operation, however many fields carry it. No document the framework,
+    its packages, examples, arp, the bridges or the MCP tools write embeds one.
+  - `validation_issues` refuses a value past either bound under `__all__`, and
+    `validate` raises its `ValidationError`, before a JSON Schema keyword walks
+    the value, so a public web form submission whose answers nest too deeply is
+    refused as `invalid_submission`.
+  - `validate` holds values the server produces to the same bounds: a step
+    output checked against its schema (an `await_run` step's child output) and
+    an extraction result checked against its retained schema. Such a value past
+    either bound now fails validation, where it used to validate, or to crash
+    with `RecursionError` past about 600 levels. The largest they produce sit far
+    inside: an awaited child in a shipped workflow returns a review, decision
+    or identity step's typed output of tens of members, and an extraction result
+    is capped by its inference's output limit of 32,768 tokens, at most about
+    33,000 members.
+  - What it closes: a caller who was not signed in could fail a GraphQL save
+    with an `INTERNAL` error, before its permission check, by sending a value
+    nested about a thousand levels deep (strawberry-django-hasura's input
+    reduction recursed through nested arrays, and Django's `JSONField` check
+    through nested objects, deeper still), or keep it busy for seconds by
+    repeating one large variable inside a literal; and a 4 KB web form
+    submission with answers nested about 600 levels deep failed in JSON
+    Schema's `uniqueItems`.
+  - The margins: the deepest value an addon accepts, a dashboard snapshot whose
+    widget filter uses all ten of its logical levels, nests 28. The largest an
+    addon's own caps admit, a web form definition of 200 questions with 200
+    two-language choices each, holds about 200,000 members and fills Django's
+    default 2.5 MiB request body, in which a tree holds at most 1,310,720. A
+    host that raises `DATA_UPLOAD_MAX_MEMORY_SIZE` meets the member bound all
+    the same, and no setting raises it. A resource condition keeps its own
+    depth bound of 12, measured by the same walk.
+  - A request body or WebSocket message nested too deeply for Python's JSON
+    decoder (some 60,000 levels, a 120 KB body) is malformed JSON, through
+    `decode_json` in `angee.base.serialization`: the GraphQL view answers
+    Strawberry's own 400, a refused view-as preview still answers its 403, the
+    GraphQL WebSocket closes with Strawberry's 4400, anonymous ingress
+    refuses it as `invalid_request`, and an agent's ACP WebSocket skips the
+    record as invalid JSON. Each raised an uncaught `RecursionError` before.
+  - Follow-up: strawberry-django-hasura's `input_to_dict` still recurses
+    through nested lists and expands shared references; bounding it belongs to
+    that library's own release.
+- `angee.appearance_integrate`: **Changed behaviour.** Website appearance
+  analysis refuses a caller who is not signed in with `UNAUTHENTICATED`, as its
+  signed-in contract states. It refused only a request with no actor at all, so
+  the anonymous actor REBAC gives an unauthenticated request was admitted: it
+  could make the server fetch outside URLs, and every anonymous caller spent
+  one shared rate window. It now spends neither the rate window nor a request,
+  and the refusal is REBAC's `MissingActorError`, which the GraphQL schema
+  answers as it answers any missing actor: `Authentication required.` with
+  `UNAUTHENTICATED`.
+
 - `@angee/ui`, parties, IAM: a refused field now takes and keeps the focus its
   refusal brings, on the record form and in every dialog, except a refused
   member, a record form's rows field refused as a whole, and the controls left

@@ -79,6 +79,19 @@ export function useGroupOperation(
 }
 
 /**
+ * A resource's repair read, `<res>_repair_choices(id, field)`: its generated document and its target (the
+ * resource's own schema), or unavailable where the resource names no such root or the host generated no
+ * document for it.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function useRepairChoicesOperation(
+  resource: DataResourceMetadata | null,
+): ResourceOperation {
+  return useResourceOperation(resource, "repairChoices", "repairChoices");
+}
+
+/**
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */

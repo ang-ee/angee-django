@@ -111,6 +111,18 @@ export function fieldUpdatable(
   return resourceFieldUpdatable(metadata?.resource, fieldName, metadata?.fields[fieldName]);
 }
 
+/**
+ * Whether a person may change a field on a stored record through the resource's update: it is
+ * updatable and not create-only. A create-only selector rides the update input only for its repair,
+ * which the record form offers on its own terms, so a list, a board or any other edit surface asks this.
+ */
+export function fieldChangeable(
+  metadata: ModelMetadata | null | undefined,
+  fieldName: string,
+): boolean {
+  return fieldUpdatable(metadata, fieldName) && metadata?.fields[fieldName]?.createOnly !== true;
+}
+
 function resourceFieldUpdatable(
   resource: DataResourceMetadata | null | undefined,
   fieldName: string,

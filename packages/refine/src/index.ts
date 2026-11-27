@@ -30,6 +30,7 @@ export {
   type GroupDocumentMap,
   type OperationDocumentKind,
   type OperationDocumentsBySchema,
+  type RepairChoicesDocumentMap,
   type SaveDocumentMap,
   type SchemaOperationDocuments,
 } from "./operation-documents";
