@@ -898,8 +898,6 @@ def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, s
     and every other call that names a send code, by its constant or its string, as ``code=`` or as a positional
     argument (``ValidationError(message, code)``): a refusal made around the one way."""
 
-    from angee.messaging_templates import engine as engine_module
-
     sites: list[tuple[str, str, str, str]] = []
     stray: list[str] = []
     send_codes = {name for _, _, name, _ in SEND_SITES}
@@ -907,8 +905,7 @@ def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, s
     def is_send_code(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
             return node.id in send_codes
-        return isinstance(node, ast.Constant) and node.value in SEND_CODES and node.value in {
-            getattr(engine_module, name) for name in send_codes}
+        return isinstance(node, ast.Constant) and node.value in SEND_CODES
 
     def source_of(node: ast.expr) -> str:
         assert isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name), ast.unparse(node)
@@ -920,18 +917,18 @@ def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, s
             if node.name in {"refusal_item", "_refused"}:
                 return
             function = node.name
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id == "refusal_item":
-                code = node.args[1]
-                assert isinstance(code, ast.Name), ast.unparse(node)
-                sites.append((module, function, code.id, source_of(node.args[2])))
-            elif node.func.id == "_refused":
-                code = node.args[0]
-                assert isinstance(code, ast.Name), ast.unparse(node)
-                for group in node.args[1:]:
-                    assert isinstance(group, ast.Tuple), ast.unparse(node)
-                    sites.append((module, function, code.id, source_of(group.elts[1])))
-        elif isinstance(node, ast.Call):
+        callee = node.func.id if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) else None
+        if isinstance(node, ast.Call) and callee == "refusal_item":
+            code = node.args[1]
+            assert isinstance(code, ast.Name), ast.unparse(node)
+            sites.append((module, function, code.id, source_of(node.args[2])))
+        elif isinstance(node, ast.Call) and callee == "_refused":
+            code = node.args[0]
+            assert isinstance(code, ast.Name), ast.unparse(node)
+            for group in node.args[1:]:
+                assert isinstance(group, ast.Tuple), ast.unparse(node)
+                sites.append((module, function, code.id, source_of(group.elts[1])))
+        elif isinstance(node, ast.Call):  # any other call, through a name or an attribute
             named = [*node.args, *(keyword.value for keyword in node.keywords if keyword.arg == "code")]
             stray.extend(f"{module}:{node.lineno} {ast.unparse(node)}" for value in named if is_send_code(value))
         for child in ast.iter_child_nodes(node):
