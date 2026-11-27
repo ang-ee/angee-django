@@ -104,6 +104,7 @@ from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
 
 _HYPHENS_AS_SPACES = str.maketrans(dict.fromkeys("-\u2010\u2011", " "))
+"""Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
 
 
 @cache
@@ -116,7 +117,6 @@ def _local_part_character(character: str) -> str:
 
     lowered = character.lower()
     return lowered if character.isascii() or (len(lowered) == 1 and not lowered.isascii()) else character
-"""Hyphens a name may carry, read as the space they separate words with (``Party.comparable_name``)."""
 
 
 class Party(
@@ -1156,10 +1156,13 @@ class Handle(
         return cls.identifies_account(parsed.platform, parsed.external_id)
 
     ADDRESS_WHITESPACE: ClassVar[str] = "".join(character for character in map(chr, range(128)) if character.isspace())
-    """What an email address is trimmed of at either end: the ASCII characters ``str.isspace`` holds, and no other.
+    """What an email address and its domain are trimmed of at either end: the ASCII characters ``str.isspace``
+    holds, and no other.
 
-    A non-ASCII space (a no-break space, an ideographic space) is kept: an address that begins with one is no
-    address (:meth:`is_email_address`), and its spelling key keeps it, so it is never another address's handle.
+    A non-ASCII space (a no-break space, an ideographic space) is kept, on either side of the ``@``, so a value it
+    pads never keys as the plain address and is a handle of its own. Before the ``@`` it is no address
+    (:meth:`is_email_address`: its name part holds a space). After it, it is one exactly when Django's domain rule
+    reads the space as a letter of the domain (it reads every character from U+00A1 to U+FFFF as one).
     """
 
     @classmethod
@@ -1290,14 +1293,18 @@ class Handle(
         can be (:attr:`DOMAIN_NAME_LIMIT`): a label never reads longer than its
         punycode, so such a name could not be sent as a domain, and a name of
         ligatures that each read as many letters (U+FDFA reads as 18) would
-        otherwise outgrow the columns its keys are stored in.
+        otherwise outgrow the columns its keys are stored in. A domain is trimmed of
+        ASCII whitespace only (:attr:`ADDRESS_WHITESPACE`), as an address is: a non-ASCII
+        space at either end stays in its label, which the codec reads as IDNA 2003 does
+        (NFKC makes most such spaces an ASCII space; one it prohibits keeps the label as
+        typed), so a padded domain never keys as the plain one.
 
         Handle keys are stored from it: changing what this returns means bumping
         :attr:`NORMALIZATION_VERSION`. An organization's key needs no version: its
         provision repair compares every row with this rule as it is.
         """
 
-        name = (domain or "").strip().lower()
+        name = (domain or "").strip(Handle.ADDRESS_WHITESPACE).lower()
         labels = []
         for label in name.split("."):
             try:
