@@ -1,8 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
-import { FORM_CONTAINERS, Field, FormView, GraphView, Group, containersFromChildren, graphNodeStyle, Input, invalidFormSubmit, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
+import { FORM_CONTAINERS, Field, FormView, GraphView, Group, containersFromChildren, graphNodeStyle, Input, invalidFormSubmit, PrimaryPaneProvider, PrimaryPanePublisher, useImplConfigFields, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
+import {
+  backendOperations, backendOperationsFor, backendResource, backends, createOnlyBackendResource, repairOperationDocuments,
+} from "./implementation-fixtures";
+import { storyField, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const statusOptions = [
   { value: "DRAFT", label: "Draft" },
@@ -172,10 +175,7 @@ function readOnlyFieldFor(field: FormField): FormField {
   return readOnlyField;
 }
 
-const scalar = (name: string, type: string, editable = true) => ({
-  name, kind: "scalar" as const, scalar: type, readable: true, aggregatable: false,
-  creatable: editable, updatable: editable, requiredOnCreate: false,
-});
+const scalar = (name: string, type: string, editable = true) => storyField(name, { scalar: type, creatable: editable, updatable: editable });
 const relation = (name: string, model: string) => ({ ...scalar(name, "ID"), kind: "relation" as const, scalar: null, relationModelLabel: model });
 // The file's resources, once: every story's FormView finds notes.Note in the schema's metadata.
 const personResource = testDataResource("people.Person", {
@@ -218,7 +218,7 @@ const person = (args: Record<string, unknown>) => {
   const id = isRecord(args.pk_columns) ? args.pk_columns.id : args.id;
   return people.find((candidate) => candidate.id === id) ?? null;
 };
-const storySchemas = storySchema({
+const storyOperations = {
   notes_by_pk: () => storyRecord,
   update_notes_by_pk: (args) => ({ ...storyRecord, ...patch(args) }),
   insert_notes_one: (args) => ({ ...storyRecord, id: "note-new", ...patch(args) }),
@@ -227,9 +227,13 @@ const storySchemas = storySchema({
   persons_aggregate: () => ({ aggregate: { count: people.length } }),
   persons_by_pk: person,
   update_persons_by_pk: (args) => ({ ...person(args), ...patch(args) }),
+} satisfies Parameters<typeof storySchema>[0];
+const storyResources = [noteResource, personResource, backendResource, planResource];
+const storySchemas = storySchema({
+  ...storyOperations, ...backendOperations,
   // The refused-save stories read their plan; their own submit answers the save, so nothing writes it.
   plans_by_pk: () => planRecord,
-}, { resources: [noteResource, personResource, planResource] });
+}, { resources: storyResources });
 
 const meta = {
   title: "Views/FormView",
@@ -321,6 +325,56 @@ export const RelationWithoutEdit: Story = {
   ),
 };
 // A relation field's quick create gets its story here, from the lane that builds it.
+
+// A backend whose stored implementation key the registry no longer names: its Backend reads null.
+const unregistered = backends[1];
+const backendField = { name: "backend_class", label: "Backend" } satisfies FormField;
+
+/**
+ * Old archive's Backend is editable: it carries the warning mark "Not registered", described "Its
+ * implementation cannot run until another is chosen.", and its select offers Local folder and S3
+ * bucket. Choosing one clears the mark, and saving it keeps the choice. Renaming it saves, and
+ * Backend keeps its mark.
+ */
+export const ImplementationKeyNotRegistered: Story = {
+  // Its save writes the backend: its own store, so no other story reads what it saved.
+  parameters: { angeeFixture: { schemas: storySchema({ ...storyOperations, ...backendOperationsFor() }, { resources: storyResources }) } },
+  render: () => (
+    <FormView resource="storage.Backend" id={unregistered.id} fields={[{ name: "label", label: "Name", title: true }, backendField]} />
+  ),
+};
+
+/**
+ * The same record with Backend create-only, repaired. Its stored key is not registered, so Backend can be chosen
+ * once more; its mark is described "Its implementation cannot run until another is chosen. Once saved, the choice
+ * cannot be changed." The form composes the implementation's config fields as the shipped pages do
+ * (`useImplConfigFields`). Choosing Local folder shows Root, kept at /srv/archive, and Create folders at its
+ * default; choosing S3 bucket instead keeps Root and shows Bucket at "archive", and Create folders is gone. Saving
+ * sends Backend with exactly the config shown, and Backend is then read-only.
+ */
+export const ImplementationKeyNotRegisteredCreateOnly: Story = {
+  name: "Implementation Key Not Registered, Create-only",
+  // Its save repairs the backend: its own store, so no other story reads the repaired key.
+  parameters: { angeeFixture: { schemas: storySchema({ ...storyOperations, ...backendOperationsFor() }, {
+    resources: [noteResource, personResource, createOnlyBackendResource],
+  }), operationDocuments: repairOperationDocuments } },
+  render: () => <RepairForm />,
+};
+
+/**
+ * The create-only story's form: Backend, create-only on the model (its metadata, never the page's flag), then
+ * the chosen implementation's config fields, as a bridge form composes them.
+ */
+function RepairForm() {
+  const implConfig = useImplConfigFields("storage.Backend", "backend_class");
+  return (
+    <FormView resource="storage.Backend" id={unregistered.id} fields={[
+      { name: "label", label: "Name", title: true }, backendField,
+      { name: "config", label: "Config", widget: "json", showWhen: (values) => !implConfig.hasSchema(values.backend_class) },
+      ...implConfig.fields,
+    ]} />
+  );
+}
 
 /** The plan's fields a refused save can name, each with the reason it is refused for. */
 const PLAN_REFUSALS = {

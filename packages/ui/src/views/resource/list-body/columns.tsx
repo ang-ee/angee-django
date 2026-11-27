@@ -5,10 +5,12 @@ import { Glyph } from "../../../chrome/Glyph";
 import { DefinitionPair } from "../../../fragments/DefinitionPair";
 import { useUiT, type UiTranslate } from "../../../i18n";
 import { useResolvedWidget, type WidgetDefinition } from "../../../widgets";
+import { StatusBadge } from "../../../widgets/statusBadge";
 import type { ColumnDescriptor } from "../../page";
 import { cellContent, columnLabelText, groupFieldLabel, headerPresses, headerSort, pressedSorting, readPath } from "./cell-utils";
 import { groupLabel } from "./grouping";
 import { queryForColumns } from "../resource-query";
+import { storedImplementationUnregistered } from "../implementation-fields";
 export interface BuildColumnsOptions {
   /** The list's group axes, as the table state resolves them once (`useResourceViewTableState`). */
   axes?: readonly GroupAxis[];
@@ -185,6 +187,9 @@ export function ListCellContent<TRow extends Row>({
   );
 }
 
+const NOT_REGISTERED = "not_registered";
+const NOT_REGISTERED_TONE = { [NOT_REGISTERED]: "warning" } as const;
+
 function resolvedCellContent<TRow extends Row>(
   column: ColumnDescriptor<TRow>,
   row: TRow,
@@ -192,6 +197,14 @@ function resolvedCellContent<TRow extends Row>(
   metadata: ModelMetadata | null | undefined,
   widget: WidgetDefinition | undefined,
 ): React.ReactNode {
+  // From the stored row: a column the row redacts is not marked, but only where the row carries its
+  // `redacted_fields`, which no list read selects today, so a list still marks a redacted selector.
+  if (!column.render && storedImplementationUnregistered(metadata, row, column.field)) {
+    // The record form marks the same fact with the warning tone; the cell wears it through the badge.
+    return <StatusBadge value={NOT_REGISTERED} tone={NOT_REGISTERED_TONE} display={column.statusDisplay}>
+      {t("implementation.notRegistered")}
+    </StatusBadge>;
+  }
   if (!column.render && widget?.cell) {
     const Cell = widget.cell;
     return (

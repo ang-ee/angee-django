@@ -13,6 +13,7 @@ import type { ComponentType } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import preview from "../../.storybook/preview";
 import * as FormViewStories from "./FormView.stories";
+import { repairDefaults } from "./implementation-fixtures";
 import * as ListViewStories from "./ListView.stories";
 import * as RefusedSubmitStories from "./RefusedSubmit.stories";
 
@@ -67,6 +68,8 @@ const RECORD_STORIES = [
 const REFUSED_SUBMIT_STORIES = ["MutationDialog", "ActionTypedArguments", "ActionSchemaArguments"] as const;
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
+  "./ListView.stories.tsx ImplementationKeyNotRegistered", "./FormView.stories.tsx ImplementationKeyNotRegistered",
+  "./FormView.stories.tsx ImplementationKeyNotRegisteredCreateOnly",
   "./ListView.stories.tsx PaneWithOrder", "./ListView.stories.tsx GroupedBehindAnotherKey", "./ListView.stories.tsx GroupedOnTheServer",
   "./ListView.stories.tsx GroupedByMonth", "./ListView.stories.tsx GroupedWithNoOrder",
   ...REFUSED_SUBMIT_STORIES.map((name) => `./RefusedSubmit.stories.tsx ${name}`),
@@ -196,6 +199,80 @@ test("Views/ListView / Grouped With Tie-breakers shows on its headers the sort i
     "Archive notes", "Approve budget", "Send invites", "Book the room", "Draft the brief", "Collect quotes",
   ]));
   expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+});
+
+test("Views/ListView / Implementation Key Not Registered says so in the warning tone, beside a registered implementation", async () => {
+  const said = consoleMessages();
+  render(<listView.ImplementationKeyNotRegistered />);
+  expect((await screen.findByText("Not registered")).className).toContain("bg-warning-soft");
+  expect(screen.getByText("Local folder")).toBeTruthy();
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+/** An element's accessible description: the text of the ids its `aria-describedby` names. */
+const description = (element: Element) => (element.getAttribute("aria-describedby") ?? "").split(" ")
+  .map((id) => document.getElementById(id)?.textContent ?? "").join(" ").trim();
+
+test("Views/FormView / Implementation Key Not Registered marks Backend, says it cannot run until another is chosen and offers them", async () => {
+  const said = consoleMessages();
+  render(<formView.ImplementationKeyNotRegistered />);
+  expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+  const control = screen.getByRole("combobox", { name: "Backend" });
+  expect(description(control)).toBe("Its implementation cannot run until another is chosen.");
+  fireEvent.click(control);
+  expect(await screen.findByRole("option", { name: "Local folder" })).toBeTruthy();
+  expect(screen.getByRole("option", { name: "S3 bucket" })).toBeTruthy();
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/FormView / Implementation Key Not Registered, Create-only offers Backend once more, switches its config fields as the read answers, and saves what is shown", async () => {
+  const said = consoleMessages();
+  // The composed story's own schema (merged over the file's), whose store this story's save writes.
+  const ownSchema = formView.ImplementationKeyNotRegisteredCreateOnly.parameters.angeeFixture.schemas.public!;
+  const writes = vi.spyOn(ownSchema as { fetch: typeof fetch }, "fetch");
+
+  render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
+  expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+  const control = await screen.findByRole("combobox", { name: "Backend" });
+  expect(description(control)).toBe(
+    "Its implementation cannot run until another is chosen. Once saved, the choice cannot be changed.");
+  const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
+  const choose = async (name: string) => {
+    fireEvent.click(screen.getByRole("combobox", { name: "Backend" }));
+    const option = await screen.findByRole("option", { name });
+    fireEvent.pointerDown(option, { pointerType: "mouse" });
+    fireEvent.click(option);
+  };
+  // A switch is labelled twice (its control and its hidden input); either holds the state.
+  const checked = (label: string) => screen.getAllByLabelText(label).map((element) =>
+    element.getAttribute("aria-checked") ?? String((element as HTMLInputElement).checked));
+  await choose("Local folder");
+  // The shared field keeps its stored value; the class's own field shows its default; the other class's is absent.
+  await waitFor(() => expect(value("Root")).toBe("/srv/archive"));
+  expect(new Set(checked("Create folders"))).toEqual(new Set(["true"]));
+  expect(screen.queryByLabelText("Bucket")).toBeNull();
+  await choose("S3 bucket");
+  await waitFor(() => expect(value("Bucket")).toBe("archive"));
+  expect(value("Root")).toBe("/srv/archive");
+  expect(screen.queryAllByLabelText("Create folders")).toEqual([]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
+  const requests = writes.mock.calls.map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as {
+    query?: string; variables?: Record<string, unknown>;
+  });
+  // The form asked what choosing each implementation sets on this record, the backend it shows.
+  expect(requests.find((request) => request.query?.includes("backends_repair_choices"))?.variables)
+    .toEqual({ id: "backend-2", field: "backend_class" });
+  // The wire request's body: the update's input is exactly the selector and the config the form showed.
+  const update = requests.find((request) => request.query?.includes("update_backends_by_pk"));
+  const input = Object.values(update?.variables ?? {}).find((value) => typeof value === "object" && value !== null
+    && "backend_class" in value);
+  expect(input).toEqual({ backend_class: "S3", config: repairDefaults.s3.config });
+  expect(said.warnings.filter((message) => message.includes(METADATA_WARNING))).toEqual([]);
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
 
 test("Views/ListView / Pane With Order checks the key the rows follow, offers no key the groups share, and a choice keeps the groups where they are", async () => {

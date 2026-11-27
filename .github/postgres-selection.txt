@@ -5,6 +5,8 @@
 # (scripts/postgres_selection.py).
 tests/test_workflows_definition.py
 tests/test_workflows_concurrency.py
+tests/test_impl_concurrency.py
+tests/test_integrate_graphql.py::test_authorize_update_called_alone_takes_no_row_lock_and_writes_nothing
 tests/test_workflows_runtime.py
 tests/test_workflows_install.py
 tests/test_workflows_subject.py

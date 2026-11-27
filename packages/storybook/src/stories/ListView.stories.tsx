@@ -10,6 +10,7 @@ import {
 } from "@angee/ui";
 
 import { ResourceQuery } from "@angee/metadata";
+import { backendOperations, backendResource } from "./implementation-fixtures";
 import { resourceSnapshotOperations, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const rows = [
@@ -179,6 +180,7 @@ const storySchemas = storySchema({
   notes_aggregate: () => ({ aggregate: { count: rows.length } }),
   tasks: () => tasks,
   tasks_aggregate: () => ({ aggregate: { count: tasks.length } }),
+  ...backendOperations,
   chores: () => chores,
   chores_aggregate: () => ({ aggregate: { count: chores.length } }),
   ...resourceSnapshotOperations([serverTaskResource], { "notes.ServerTask": serverTasks }),
@@ -194,7 +196,7 @@ const storySchemas = storySchema({
     ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
     ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
   ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
-}), taskResource, choreResource, serverTaskResource, errandResource, unorderedTaskResource] });
+}), taskResource, backendResource, choreResource, serverTaskResource, errandResource, unorderedTaskResource] });
 
 const meta = {
   title: "Views/ListView",
@@ -343,6 +345,19 @@ function GroupedTasks({ pane = false }: { pane?: boolean }) {
     ]} />
   );
 }
+
+/**
+ * Two storage backends; Old archive stores an implementation key the registry no longer names, so its
+ * Backend column reads null. Its cell says "Not registered" in the warning tone, where Team files'
+ * shows its implementation, Local folder.
+ */
+export const ImplementationKeyNotRegistered: Story = {
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="storage.Backend" columns={[{ field: "label", header: "Name" }, { field: "backend_class", header: "Backend" }]} />
+    </div>
+  ),
+};
 
 function ListFixture({ withShortcuts = false }: { withShortcuts?: boolean }) {
   return (

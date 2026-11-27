@@ -51,6 +51,7 @@ class NotesSchemaMetadataTests(SimpleTestCase):
                 "groups": "notes_groups",
                 "groupsCount": "notes_groups_count",
                 "list": "notes",
+                "repairChoices": None,
                 "save": None,
                 "update": "update_notes_by_pk",
             },

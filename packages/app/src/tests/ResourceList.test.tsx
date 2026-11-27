@@ -649,6 +649,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
     },
     useAngeeFacets: () => ({
       facets: {},
+      errors: {},
       fetching: false,
       error: null,
       refetch: vi.fn(),

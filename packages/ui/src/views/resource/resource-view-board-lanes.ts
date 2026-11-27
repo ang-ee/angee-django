@@ -1,6 +1,6 @@
 import * as React from "react";
 import {
-  fieldUpdatable,
+  fieldChangeable,
   refineResourceName,
   rowPublicId,
   type ModelFieldMetadata,
@@ -406,14 +406,14 @@ function boardLaneDragEnabled(
   modelMetadata: ModelMetadata | null | undefined,
 ): boolean {
   return laneSource
-    ? fieldUpdatable(modelMetadata, laneSource.field)
+    ? fieldChangeable(modelMetadata, laneSource.field)
       && (
         !laneSource.rankField
-        || fieldUpdatable(modelMetadata, laneSource.rankField)
+        || fieldChangeable(modelMetadata, laneSource.rankField)
       )
       && (
         !laneSource.rankInputField
-        || fieldUpdatable(modelMetadata, laneSource.rankInputField)
+        || fieldChangeable(modelMetadata, laneSource.rankInputField)
       )
     : false;
 }

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { renderHook } from "@testing-library/react";
+import { fireEvent, render, renderHook, screen } from "@testing-library/react";
 import type { ResourceFacetOption } from "@angee/refine";
 import { ResourceQuery, schemaFieldMetadataFromDataResources } from "@angee/metadata";
 import { extractFacet, groupDimension } from "@angee/refine";
@@ -11,6 +11,8 @@ import { scalarFacetDeclarations, useScalarFacets } from "./scalar-facet";
 import { createResourceViewState } from "../resource/resource-view-model";
 import { activeItems } from "../resource/search/active";
 import { searchFixture } from "../resource/search/search-fixture.test-support";
+import { SearchBox } from "../resource/search/SearchBox";
+import { createUiTestProviders } from "../../testing";
 
 const dataMocks = vi.hoisted(() => {
   const groupsDocument = { kind: "groups-document" };
@@ -145,6 +147,24 @@ describe("useScalarFacets", () => {
     ]);
   });
 
+  test("a facet whose read is refused carries its words, which the search panel shows above the options it still has", async () => {
+    const refused = "A record holds an implementation that is not registered.";
+    dataMocks.facets.mockReturnValue(resourceFacets({
+      status: [{ value: "DRAFT", label: "DRAFT", count: 2, key: { status: "DRAFT" } }],
+      source: [{ value: "api", label: "api", count: 1, key: { source: "api" } }],
+    }, { status: new Error(refused) }));
+    const { result } = renderHook(() => useScalarFacets("notes.Note",
+      [{ field: "status", widget: "statusBadge" }, { field: "source", widget: "statusBadge" }], NOTE_METADATA));
+
+    expect(result.current.map((facet) => [facet.field, facet.error])).toEqual([["status", refused], ["source", undefined]]);
+    const providers = createUiTestProviders();
+    render(<providers.Provider><SearchBox search={searchFixture({ catalog: { facets: result.current } })} /></providers.Provider>);
+    fireEvent.click(screen.getByRole("button", { name: "Search options" }));
+    const section = (await screen.findByText(refused)).closest("section")!;
+    // The refusal sits above the options its last read still holds.
+    expect(section.textContent).toBe(`Status${refused}Draft`);
+  });
+
   test("uses the canonical scalar axis without a display alias", () => {
     expect(scalarFacetDeclarations([], INTEGRATION_METADATA)).toEqual([
       {
@@ -237,6 +257,7 @@ const INTEGRATION_METADATA = schemaFieldMetadataFromDataResources([testDataResou
 
 function resourceFacets(
   facets: Record<string, readonly ResourceFacetOption[]>,
+  errors: Readonly<Record<string, Error>> = {},
 ) {
   return {
     facets: Object.fromEntries(
@@ -249,6 +270,7 @@ function resourceFacets(
         },
       ]),
     ),
+    errors,
     fetching: false,
     error: null,
     refetch: vi.fn(),

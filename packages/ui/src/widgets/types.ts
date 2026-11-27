@@ -187,6 +187,8 @@ export interface WidgetControlProps extends Pick<WidgetControlSurfaceProps, "pre
   max?: number;
   minLength?: number;
   maxLength?: number;
+  /** The control's own pending state: a select is disabled and busy while what it offers loads. */
+  loading?: boolean;
 }
 
 export interface WidgetFocusTarget {

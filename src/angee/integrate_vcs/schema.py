@@ -10,9 +10,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from strawberry import auto
-from strawberry.permission import PermissionExtension
 from strawberry.scalars import JSON
-from strawberry.types import get_object_definition
 
 from angee.graphql.actions import ActionResult, action_target
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
@@ -181,7 +179,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "vendor",
         "credential",
         "account",
-        "backend_class",
         "lifecycle",
         "config",
         "display_name",
@@ -191,6 +188,7 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         VcsBridge,
         public_id_fields=("vendor", "owner", "credential", "account"),
     ),
+    write_permission_classes=_ADMIN_PERMISSION_CLASSES,
     field_id_decode={
         "vendor": public_pk_decoder(Vendor),
         "owner": public_pk_decoder(get_user_model()),
@@ -198,16 +196,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "account": public_pk_decoder(ExternalAccount),
     },
 )
-for _field in get_object_definition(_VCS_BRIDGE_RESOURCE.mutation, strict=True).fields:
-    if _field.python_name in (
-        _VCS_BRIDGE_RESOURCE.insert_one_root,
-        _VCS_BRIDGE_RESOURCE.update_by_pk_root,
-    ):
-        _field.extensions.append(
-            PermissionExtension(
-                permissions=[permission() for permission in _ADMIN_PERMISSION_CLASSES],
-            )
-        )
 
 _REPOSITORY_RESOURCE = hasura_model_resource(
     RepositoryType,
