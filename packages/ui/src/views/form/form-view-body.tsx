@@ -55,7 +55,9 @@ import { directDottedPathMessages } from "./validation-errors";
 import { SectionHeading } from "./SectionHeading";
 import { AbsoluteTime } from "../../fragments/AbsoluteTime";
 import { RecordHeader, type RecordHeaderProps } from "../../fragments/RecordHeader";
-import { RecordFieldMarkControl, UnregisteredImplementationField, useUnregisteredImplementationExplanation } from "./record-field-marks";
+import {
+  RecordFieldMarkControl, UnregisteredImplementationExplanation, UnregisteredImplementationField, useUnregisteredImplementationExplanation,
+} from "./record-field-marks";
 import { createLabelForResource } from "../resource/utils/labels";
 
 // The wrapper draws the field's focus ring (`focus-within:focus-ring`). A focused input, textarea or
@@ -530,8 +532,7 @@ function BoundFormField({
   const readOnly = surface.fieldReadOnly(field);
   const repair = surface.repairState(field);
   const unregistered = isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, field.name, value);
-  // A refused repair keeps the server's words under the field; a pending one's control shows `loading`.
-  const shown = repair.refusal ? { ...field, description: repair.refusal } : field;
+  // A pending repair's control shows `loading`; a refused one's explanation gives the server's words.
   const relation = surface.relationByField.get(field.name);
   const relationList = surface.relationListByField.get(field.name);
   const currentRelationId = relationValueId(value);
@@ -552,7 +553,7 @@ function BoundFormField({
         <UnregisteredImplementationField field={unregistered ? field.name : null} readOnly={readOnly}
           once={repair.repairing} refusal={repair.refusal}><BoundFieldRow
           controlRef={controller.ref}
-          field={shown}
+          field={field}
           loading={repair.loading}
           rail={rail}
           relation={relation}
@@ -802,7 +803,6 @@ function BoundFieldRow({
         {field.label ?? field.name}
       </FieldLabel>
       <RecordFieldMarkControl field={field.name} label={field.label} restricted={restricted} /></div>
-      {explanation ? <span id={explanation.id} className="sr-only">{explanation.text}</span> : null}
       {!restricted ? <div
         className={cn(
           FIELD_CONTROL_CLASS,
@@ -855,6 +855,7 @@ function BoundFieldRow({
         )}
         </DescriptorPresenceControl>
       </div> : null}
+      <UnregisteredImplementationExplanation explanation={explanation} />
       <FieldFooter description={field.description} errors={displayedMessages} descriptionId={descriptionId} errorId={errorId} />
     </FieldRoot>
   );

@@ -3,6 +3,7 @@ import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
 import { Chip } from "../../ui/chip";
+import { FieldDescription } from "../../ui/field";
 import { Tooltip } from "../../ui/tooltip";
 import { RecordReference } from "../relation/RecordReference";
 import { Glyph } from "../../chrome/Glyph";
@@ -148,24 +149,47 @@ export function UnregisteredImplementationField({ field, readOnly = false, once 
   return <UnregisteredImplementation.Provider value={value}>{children}</UnregisteredImplementation.Provider>;
 }
 
+/** The explanation of a not-registered field: the words, the id its row gives them, and whether they
+ * are the server's refusal of the repair. */
+export interface UnregisteredImplementationExplanationText {
+  id: string;
+  text: string;
+  readOnly: boolean;
+  refused: boolean;
+}
+
 /** The explanation of `field`'s not-registered mark and the id its row gives it, or null where the
- * field carries none. The row renders it as screen-reader text under that id and names the id in its
- * control's `aria-describedby`; the mark shows the same words as its tooltip.
+ * field carries none. The row renders it (`UnregisteredImplementationExplanation`) under that id and
+ * names the id in its control's `aria-describedby`; the mark shows the same words as its tooltip.
  * @kind null
  * @reason Provider infrastructure: reads the record form's not-registered field.
  */
-export function useUnregisteredImplementationExplanation(field: string): {
-  id: string; text: string; readOnly: boolean;
-} | null {
+export function useUnregisteredImplementationExplanation(field: string): UnregisteredImplementationExplanationText | null {
   const t = useUiT();
   const unregistered = useContext(UnregisteredImplementation);
   if (unregistered?.field !== field) return null;
   return {
     id: unregistered.explanationId,
     readOnly: unregistered.readOnly,
+    refused: unregistered.refusal != null,
     text: unregistered.refusal ?? t(unregistered.readOnly ? "implementation.cannotRunUnchangeable"
       : unregistered.once ? "implementation.cannotRunUntilChosenOnce" : "implementation.cannotRunUntilChosen"),
   };
+}
+
+/** A field row's explanation of its not-registered mark, under the id its control is described by:
+ * screen-reader text, or, when it gives the server's refusal of the repair, shown under the field, the
+ * one place those words are said (the field's own description stays).
+ * @kind null
+ * @reason Provider infrastructure: renders the record form's not-registered explanation for a field row.
+ */
+export function UnregisteredImplementationExplanation({ explanation }: {
+  explanation: UnregisteredImplementationExplanationText | null;
+}) {
+  if (!explanation) return null;
+  return explanation.refused
+    ? <FieldDescription id={explanation.id}>{explanation.text}</FieldDescription>
+    : <span id={explanation.id} className="sr-only">{explanation.text}</span>;
 }
 
 /** Every native form field placement composes attention, provenance, and access marks once.

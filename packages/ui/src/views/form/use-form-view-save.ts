@@ -71,6 +71,7 @@ import {
   type FormValues,
   type LinesSeed,
   isFormValues,
+  formFieldLabel,
   repairSelectorLost,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
@@ -181,7 +182,7 @@ export interface UseFormViewSaveProps {
    * only where the record admits it). The save writes those it can
    * (`pathWritable`); `formFields` holds every candidate.
    */
-  formFieldsFor?: (record: Row | null, lockRecord?: Row | null) => readonly FieldDescriptor[];
+  formFieldsFor?: (record: Row | null, basis?: Row | null) => readonly FieldDescriptor[];
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
   refineFields: Fields;
   defaultValues?: Record<string, unknown>;
@@ -278,8 +279,12 @@ export interface FormViewSaveSurface {
    * its own value on a saved record).
    */
   fieldReadOnly: (field: FieldDescriptor) => boolean;
-  /** The record the mode lock reads: the one the draft was made against while the form holds edits. */
-  lockRecord: Row | null;
+  /**
+   * The edit's basis: the record the draft was made against. While the form holds no edits it is the
+   * record shown; it holds while the form holds edits, and an accepted save moves it to the record the
+   * save wrote. A save sends its revision, and the mode lock reads it.
+   */
+  editBasis: Row | null;
   /** The record form's own descriptor for `path`, the one its save reads (its mode lock included). */
   recordField: (path: string) => FieldDescriptor | undefined;
   /**
@@ -424,12 +429,18 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
-  // The record the mode lock reads: the one the draft was made against, held while the form holds edits,
-  // so a pick stays the save's until the save answers, whatever a re-read or another save stores meanwhile.
-  const [lockRecord, setLockRecord] = React.useState<Row | null>(displayRecord);
+  // The edit's basis, the one holder of the record the draft was made against: a save sends its
+  // revision, and the mode lock reads it, so a pick stays the save's until the save answers, whatever a
+  // re-read or another save stores meanwhile. Its ref is the same value for callbacks, written with it.
+  const [editBasis, setEditBasisState] = React.useState<Row | null>(displayRecord);
+  const editBasisRef = React.useRef<Row | null>(editBasis);
+  const setEditBasis = React.useCallback((basis: Row | null) => {
+    editBasisRef.current = basis;
+    setEditBasisState(basis);
+  }, []);
   const recordFields = React.useMemo(
-    () => formFieldsFor?.(displayRecord, lockRecord) ?? formFields,
-    [displayRecord, formFields, formFieldsFor, lockRecord],
+    () => formFieldsFor?.(displayRecord, editBasis) ?? formFields,
+    [displayRecord, editBasis, formFields, formFieldsFor],
   );
   // The paths the save writes (`formWritablePaths`), every one under a custom submit owner.
   const writableFieldNames = React.useMemo(
@@ -455,7 +466,6 @@ export function useFormViewSave({
     () => saveFields.filter((field) => !fieldIsRedacted(displayRecord, field.name)),
     [displayRecord, saveFields],
   );
-  const editBasisRecordRef = React.useRef<Row | null>(displayRecord);
   const loading = acknowledgedSource?.loading ?? (nativeReadEnabled && (read.query.isPending || read.query.isFetching));
   const loadError = acknowledgedSource === undefined ? read.query.error : null;
   const reload = React.useCallback(async (): Promise<Row | null> => {
@@ -591,14 +601,21 @@ export function useFormViewSave({
       }
     } else {
       const arrays = dirtyArrayValues(form.getValues(), (path) => form.getFieldState(path).isDirty);
-      reset(next, { keepDirtyValues: true, keepDirty: true });
+      // A draft keeps what was said about it across a re-read (a refusal stays until the person changes
+      // that field, or discards); a clean field whose value the re-read changed loses what was said about
+      // its old value. A form holding no draft is reset whole, as before.
+      const draft = form.formState.isDirty;
+      const stale = draft ? Object.keys(next).filter((name) => !form.getFieldState(name).isDirty
+        && !deepEqual(get(form.formState.defaultValues, name), next[name])) : [];
+      reset(next, { keepDirtyValues: true, keepDirty: true, keepErrors: draft });
+      if (stale.length) clearErrors(stale);
       for (const [path, value] of arrays) setValue(path, value, { shouldDirty: true });
     }
     resetDefaultValues(baseline, { keepIsValid: true });
     // Whole-value undo frames cannot restore fields from an older accepted baseline.
     resetHistory();
     activeFieldInteractions.current.clear();
-  }, [form, linesActive, linesField, reset, resetDefaultValues, resetHistory, setValue]);
+  }, [clearErrors, form, linesActive, linesField, reset, resetDefaultValues, resetHistory, setValue]);
   const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
   React.useEffect(() => {
@@ -617,7 +634,7 @@ export function useFormViewSave({
       if (!submitOwner) throw new Error("No custom form submission is configured.");
       return submitOwner(data, {
         resource, id: id ?? null, isCreate, record: displayRecord,
-        baselineRecord: editBasisRecordRef.current, lines,
+        baselineRecord: editBasisRef.current, lines,
         idempotencyKey,
         values: submitted, baselineValues: baseline,
       });
@@ -629,20 +646,16 @@ export function useFormViewSave({
   React.useEffect(() => {
     formIsDirtyRef.current = formIsDirty;
   }, [formIsDirty]);
-  React.useEffect(() => {
-    if (!formIsDirty) {
-      editBasisRecordRef.current = displayRecord;
-      setLockRecord(displayRecord);
-    }
-  }, [displayRecord, formIsDirty]);
+  // A form that holds no edits follows the record shown, in the render that shows it.
+  if (!formIsDirty && editBasis !== displayRecord) setEditBasis(displayRecord);
   // A repair: a create-only selector the record lets be chosen once more (`repairChoosable`, on the
-  // record the lock reads). What choosing each implementation sets on the record is the server's rule
+  // edit's basis). What choosing each implementation sets on the record is the server's rule
   // (`impl_choices` with the record), asked only of a form that takes edits; until it answers, and while
   // a save is pending, the selector shows `loading`; a refusal keeps it read-only, with the server's words.
   const repairFields = React.useMemo(
     () => isCreate || !formTakesEdits ? [] : recordFields.filter((field) => !field.readOnly
-      && repairChoosable(modelMetadata, lockRecord, field.name)),
-    [formTakesEdits, isCreate, lockRecord, modelMetadata, recordFields],
+      && repairChoosable(modelMetadata, editBasis, field.name)),
+    [editBasis, formTakesEdits, isCreate, modelMetadata, recordFields],
   );
   const repairChoicesBatch = useAuthoredQueryBatch(repairFields.map((field) => ({
     key: field.name,
@@ -660,7 +673,7 @@ export function useFormViewSave({
   const repairState = React.useCallback((field: FieldDescriptor): RepairState => {
     if (!repairFields.some((candidate) => candidate.name === field.name)) return NO_REPAIR;
     const error = repairChoicesBatch.get(field.name)?.error;
-    const refusal = error ? errorMessage(error, t("form.genericSaveError")) : null;
+    const refusal = error ? errorMessage(error, t("form.repairChoicesFailed")) : null;
     return { repairing: true, loading: !refusal && (pending || !repairChoices.has(field.name)), refusal };
   }, [pending, repairChoices, repairChoicesBatch, repairFields, t]);
   // The keys a repair seeded, by selector: a save never sends them without the selector that chose them.
@@ -694,7 +707,7 @@ export function useFormViewSave({
           const useSave = !isCreate && lines?.hasChanges && id != null && saveOperation.target !== null;
           const rootArguments: MutationRootArguments = {};
           if (!isCreate && (useSave ? saveRevision : updateRevision)) {
-            const revision = editBasisRecordRef.current?.revision;
+            const revision = editBasisRef.current?.revision;
             if (typeof revision !== "number" || !Number.isInteger(revision)) {
               throw new Error(t("form.revisionUnavailable"));
             }
@@ -817,7 +830,7 @@ export function useFormViewSave({
         detailKey,
         (current) => ({ ...current, data: acceptedRow(current?.data ?? record) }),
       )?.data ?? acceptedPatch;
-      editBasisRecordRef.current = accepted;
+      setEditBasis(accepted);
       repairSeedsRef.current.clear();
       if (!mounted.current) return;
       const savedValues = options.acceptedValues
@@ -928,12 +941,12 @@ export function useFormViewSave({
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
       const { data, resets, lines: linesDiff, lineBaseline } = saveFor(value);
-      // The config a repair seeded never leaves without the selector that chose it. The lock reads the
-      // draft's basis, so the selector stays in the save; should it not, the save is refused here, as
-      // stale lines are, the last line of defence.
+      // The config a repair seeded never leaves without the selector that chose it: a save that no longer
+      // includes the selector (its condition or its group hides it now) is refused here, as stale lines are.
       const lostSelector = repairSelectorLost(data, repairSeedsRef.current);
       if (lostSelector) {
-        applyFormErrors(form, { status: "conflict", message: t("form.repairLostSelector"), field: lostSelector });
+        const field = formFieldLabel(fieldByName, lostSelector) ?? lostSelector;
+        applyFormErrors(form, { status: "conflict", message: t("form.repairLostSelector", { field }), field: lostSelector });
         return;
       }
       if (!isCreate && linesDiff?.hasChanges && lineBaseline && linesConfig && linesField) {
@@ -977,6 +990,7 @@ export function useFormViewSave({
     [
       clearErrors,
       dataResource,
+      fieldByName,
       formReadOnly,
       isCreate,
       keyed,
@@ -1117,7 +1131,7 @@ export function useFormViewSave({
     resetHistory();
     activeFieldInteractions.current.clear();
     formIsDirtyRef.current = false;
-    editBasisRecordRef.current = displayRecord;
+    setEditBasis(displayRecord);
     repairSeedsRef.current.clear();
     onDiscarded?.();
   }, [draftScope, displayRecord, emptyValues, idempotencyKeys, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
@@ -1168,7 +1182,7 @@ export function useFormViewSave({
     reload,
     afterFieldChange,
     fieldReadOnly,
-    lockRecord,
+    editBasis,
     recordField,
     repairState,
     displaysField,

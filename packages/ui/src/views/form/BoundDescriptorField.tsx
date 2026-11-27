@@ -105,6 +105,7 @@ export function BoundDescriptorField({
     readOnly={fieldReadOnly} once={repair.repairing} refusal={repair.refusal}
   ><LabeledDescriptorField
     field={resolved}
+    loading={repair.loading}
     value={bound.value}
     dialogValues={siblingValues}
     readOnly={fieldReadOnly}

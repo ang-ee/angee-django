@@ -21,13 +21,20 @@ const backend = { ...base, name: "backend", kind: "enum" as const, createOnly: t
   values: [{ value: "LOCAL", description: "Local" }, { value: "STUB", description: "Stub" }] };
 const config = { ...base, name: "config", kind: "scalar" as const, scalar: "JSON" };
 const title = { ...base, name: "title", kind: "scalar" as const, scalar: "String" };
+const note = { ...base, name: "note", kind: "scalar" as const, scalar: "String" };
 const CARRIED = { root: "/srv/team", org: "local" };
 const STORED_CONFIG = { root: "/srv/team", retired: true };
 const PAGE: FieldDescriptor[] = [{ name: "title", title: true }, { name: "backend", label: "Backend" }, { name: "config", label: "Config" }];
-const RETIRED = { id: "note-1", title: "First", backend: null, config: STORED_CONFIG, permissions: ["read", "write"] };
+const RETIRED = { id: "note-1", title: "First", note: "n", backend: null, config: STORED_CONFIG, permissions: ["read", "write"] };
+const WITH_NOTE: FieldDescriptor[] = [...PAGE, { name: "note", label: "Note" }];
+const CREATE_ONLY = "Implementation selection is create-only.";
+// The server's refusal of a selector change once the stored key is registered, as the update answers it.
+const refusedAsCreateOnly = { graphQLErrors: [{ message: "Validation failed", extensions: { code: "VALIDATION",
+  validationErrors: { backend: [CREATE_ONLY] }, formErrors: [] } }] };
 const ONCE = "Its implementation cannot run until another is chosen. Once saved, the choice cannot be changed.";
 const UNCHANGEABLE = "Its implementation cannot run. It cannot be changed here.";
 
+type Surface = Parameters<typeof BoundDescriptorField>[0]["form"];
 type Choices = (variables: Record<string, unknown> | undefined) => Promise<{ data?: unknown }>;
 const answer: Choices = async () => ({ data: { impl_choices: [
   { key: "local", category: "", defaults: { config: CARRIED }, config_schema: null },
@@ -36,29 +43,36 @@ const answer: Choices = async () => ({ data: { impl_choices: [
 
 function fixture(stored: Row, options: {
   fields?: FieldDescriptor[]; meta?: Record<string, unknown>; choices?: Choices;
-  update?: (variables: Row) => Promise<{ data: Row }>;
+  update?: (variables: Row) => Promise<{ data: Row }>; bound?: boolean;
 } = {}) {
+  const surface: { current: Surface | null } = { current: null };
   const server = { row: { ...stored } as Row };
   const getOne = vi.fn(async () => ({ data: server.row }));
   const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: Record<string, unknown> } }) =>
     (options.choices ?? answer)(meta?.gqlVariables));
   const update = vi.fn(async ({ variables }: { variables: Row }) => {
     if (options.update) return options.update(variables);
+    if ("backend" in variables && server.row.backend != null) throw refusedAsCreateOnly;
     server.row = { ...server.row, ...variables, backend: String(variables.backend ?? server.row.backend).toUpperCase() };
     return { data: server.row };
   });
   const resource = testDataResource("notes.Note", {
-    fields: [title, { ...backend, ...options.meta }, config], implFields: ["backend"],
+    fields: [title, { ...backend, ...options.meta }, config, note], implFields: ["backend"],
   });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const { Provider, clearClients } = createUiTestProviders({ resources: [resource], apiUrl: "test://repair", router: true });
   render(<Provider dataProvider={{ getOne, custom, update }} queryClient={queryClient}><ModalsHost><ToastProvider>
     <AppRuntimeProvider runtime={{ widgets: defaultWidgets, containers: containersFromChildren(FORM_CONTAINERS, {}) }}>
-      <FormView resource="notes.Note" id="note-1" fields={options.fields ?? PAGE} />
+      <FormView resource="notes.Note" id="note-1" fields={options.fields ?? PAGE}
+        formExtras={({ form }: { form: Surface }) => {
+          surface.current = form;
+          return options.bound ? <BoundDescriptorField form={form} resource="notes.Note" field={{ name: "backend", label: "Backend",
+            widget: "select", options: [{ value: "LOCAL", label: "Local" }, { value: "STUB", label: "Stub" }] }} /> : null;
+        }} />
     </AppRuntimeProvider>
   </ToastProvider></ModalsHost></Provider>);
   const recordReads = () => custom.mock.calls.filter(([request]) => request?.meta?.gqlVariables?.record != null);
-  return { server, custom, update, queryClient, clearClients, recordReads };
+  return { server, getOne, custom, update, queryClient, clearClients, recordReads, surface };
 }
 
 async function pick(label: string) {
@@ -70,6 +84,7 @@ async function pick(label: string) {
   await waitFor(() => expect(screen.getByRole("combobox", { name: "Backend" }).textContent).toContain(label));
 }
 const save = () => fireEvent.click(screen.getByRole("button", { name: "Save" }));
+const LOST = "Choosing Backend set its configuration, but this save no longer includes Backend, so the configuration cannot be saved without it. Show Backend again, or discard your changes.";
 const settle = () => new Promise((done) => setTimeout(done, 50));
 afterEach(cleanup);
 
@@ -123,13 +138,46 @@ test("while the record's answer is pending the selector is loading and takes no 
 
 test("a refused answer keeps the selector read-only with the server's words under it, never 'cannot be changed here'", async () => {
   const refusal = "Note 'note-1' was not found.";
-  const f = fixture(RETIRED, { choices: async (variables) => { if (variables?.record != null) throw new Error(refusal); return answer(variables); } });
+  const f = fixture(RETIRED, { choices: async (variables) => { if (variables?.record != null) throw new Error(refusal); return answer(variables); },
+    fields: [{ name: "title", title: true }, { name: "backend", label: "Backend", description: "Where the notes are kept." },
+      { name: "config", label: "Config" }] });
 
   await screen.findByLabelText("Not registered: Backend");
   await waitFor(() => expect(f.recordReads().length).toBe(1));
-  await waitFor(() => expect(screen.getAllByText(refusal).length).toBeGreaterThan(0));
+  // Said once, under the field, beside the page's own description of it.
+  const words = await screen.findByText(refusal);
+  expect(screen.getAllByText(refusal)).toHaveLength(1);
+  expect(words.className).not.toContain("sr-only");
+  expect(screen.getByText("Where the notes are kept.")).toBeTruthy();
   expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
   expect(screen.queryByText(UNCHANGEABLE)).toBeNull();
+  f.clearClients();
+});
+
+test("the bound placement takes the repair's states from the record form: loading while the answer or a save is pending", async () => {
+  let release: () => void = () => undefined;
+  const late = new Promise<void>((done) => { release = done; });
+  let respond: () => void = () => undefined;
+  const f = fixture(RETIRED, { bound: true, fields: [{ name: "title", title: true }, { name: "backend", hidden: true }, { name: "config", label: "Config" }],
+    choices: async (variables) => { if (variables?.record != null) await late; return answer(variables); },
+    update: (variables) => new Promise((done) => { respond = () => {
+      f.server.row = { ...f.server.row, ...variables, backend: String(variables.backend).toUpperCase() };
+      done({ data: f.server.row });
+    }; }) });
+
+  const control = await screen.findByRole("combobox", { name: "Backend" });
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  expect(control.getAttribute("aria-busy")).toBe("true");
+  await act(async () => { release(); });
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Backend" }).getAttribute("aria-busy")).not.toBe("true"));
+  await pick("Local");
+  save();
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  const during = screen.getByRole("combobox", { name: "Backend" });
+  expect(during.hasAttribute("disabled") || during.getAttribute("aria-disabled") === "true").toBe(true);
+  await act(async () => { respond(); });
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
+  expect(f.update.mock.calls[0]?.[0]?.variables).toEqual({ backend: "LOCAL", config: CARRIED });
   f.clearClients();
 });
 
@@ -152,7 +200,7 @@ test("a pick stays the save's while a save is pending: the selector takes no sec
 });
 
 test("a re-read that finds the row repaired elsewhere keeps the pick in the save, so the server refuses it in words", async () => {
-  const f = fixture(RETIRED, { update: async (variables) => ({ data: { ...f.server.row, ...variables } }) });
+  const f = fixture(RETIRED);
 
   await waitFor(() => expect(f.recordReads().length).toBe(1));
   await pick("Local");
@@ -164,6 +212,94 @@ test("a re-read that finds the row repaired elsewhere keeps the pick in the save
   save();
   await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
   expect(f.update.mock.calls[0]?.[0]?.variables).toEqual({ backend: "LOCAL", config: CARRIED });
+  expect(await screen.findByText(CREATE_ONLY)).toBeTruthy();
+  await act(async () => { await f.queryClient.invalidateQueries(); });
+  await settle();
+  expect(screen.getByText(CREATE_ONLY)).toBeTruthy();
+  f.clearClients();
+});
+
+test("the server's refusal of a pick on a row repaired meanwhile stays on screen across the re-read, until the field changes", async () => {
+  const f = fixture(RETIRED);
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  await pick("Local");
+  // Another tab repairs the row; this form has not read it again.
+  f.server.row = { ...RETIRED, backend: "STUB" };
+  const reads = f.getOne.mock.calls.length;
+  save();
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  // The refusal reads the record again, which brings the changed row; the words stay.
+  await waitFor(() => expect(f.getOne.mock.calls.length).toBeGreaterThan(reads));
+  await settle();
+  expect(screen.getByText(CREATE_ONLY)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
+  // The person's own change to the field takes the refusal away: choosing what the row now stores leaves
+  // nothing to save, so the form follows the row and the selector is locked.
+  fireEvent.click(screen.getByRole("combobox", { name: "Backend" }));
+  const stub = await screen.findByRole("option", { name: "Stub" });
+  fireEvent.pointerDown(stub, { pointerType: "mouse" });
+  fireEvent.click(stub);
+  await waitFor(() => expect(screen.queryByText(CREATE_ONLY)).toBeNull());
+  f.clearClients();
+});
+
+test("a field edited while the repair's save is pending leaves the selector locked once the save is accepted", async () => {
+  let respond: () => void = () => undefined;
+  const f = fixture(RETIRED, { fields: WITH_NOTE, update: (variables) => new Promise((done) => { respond = () => {
+    f.server.row = { ...f.server.row, ...variables, backend: String(variables.backend).toUpperCase() };
+    done({ data: f.server.row });
+  }; }) });
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  await pick("Local");
+  save();
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "edited meanwhile" } });
+  await act(async () => { respond(); });
+  await settle();
+  // The save moved the edit's basis to the record it wrote: its key is registered, so the selector is locked.
+  expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+  expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
+  save();
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(2));
+  expect(f.update.mock.calls[1]?.[0]?.variables).toEqual({ note: "edited meanwhile" });
+  f.clearClients();
+});
+
+test("a selector the person's own edit hides after a pick leaves its seeded config unsent, refused in words naming it", async () => {
+  const f = fixture(RETIRED, { fields: [{ name: "title", title: true },
+    { name: "backend", label: "Backend", showWhen: (values) => values.note !== "hide" },
+    { name: "note", label: "Note" }, { name: "config", label: "Config" }] });
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  await pick("Local");
+  fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "hide" } });
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
+  save();
+  expect(await screen.findByText(LOST)).toBeTruthy();
+  await settle();
+  expect(f.update).not.toHaveBeenCalled();
+  f.clearClients();
+});
+
+test("a discarded pick leaves no seed behind: the selector hidden afterwards does not hold a later save", async () => {
+  const f = fixture(RETIRED, { fields: [{ name: "title", title: true },
+    { name: "backend", label: "Backend", showWhen: (values) => values.note !== "hide" },
+    { name: "note", label: "Note" }, { name: "config", label: "Config" }] });
+
+  await waitFor(() => expect(f.recordReads().length).toBe(1));
+  await pick("Local");
+  fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Discard" })).toBeNull());
+  // The person now hides the selector and writes the config themselves, as its editor writes it.
+  fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "hide" } });
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
+  act(() => { f.surface.current!.form.setValue("config", { root: "/srv/own" }, { shouldDirty: true }); });
+  save();
+  await waitFor(() => expect(f.update).toHaveBeenCalledOnce());
+  expect(f.update.mock.calls[0]?.[0]?.variables).toEqual({ note: "hide", config: { root: "/srv/own" } });
+  expect(screen.queryByText(LOST)).toBeNull();
   f.clearClients();
 });
 

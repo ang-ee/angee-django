@@ -21,7 +21,7 @@ import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, missingDraftValues, pathHolding, seedPreset, visibleFields, type FormValues } from "./form-view-model";
 import { usePresetMemory } from "./ActionFormProvider";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
-import { RecordFieldMarkControl, useUnregisteredImplementationExplanation } from "./record-field-marks";
+import { RecordFieldMarkControl, UnregisteredImplementationExplanation, useUnregisteredImplementationExplanation } from "./record-field-marks";
 
 /** What a descriptor field needs to offer (and optionally create) a related row. */
 export interface DescriptorFieldRelation {
@@ -221,6 +221,7 @@ export function LabeledDescriptorField({
   messages = [],
   showLabel = true,
   showDescription = true,
+  loading = false,
   onChange: changeValue,
   onCommit,
   controlRef,
@@ -240,6 +241,8 @@ export function LabeledDescriptorField({
   messages?: readonly string[];
   showLabel?: boolean;
   showDescription?: boolean;
+  /** The control's own pending state (the record form's repair: its answer, or a save, is pending). */
+  loading?: boolean;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
   controlRef?: (target: WidgetFocusTarget | null) => void;
@@ -279,7 +282,6 @@ export function LabeledDescriptorField({
         </FieldLabel>
         <RecordFieldMarkControl field={field.name} label={field.label} /></div>
       ) : null}
-      {explanation ? <span id={explanation.id} className="sr-only">{explanation.text}</span> : null}
       <DescriptorPresenceControl field={field} value={value} readOnly={readOnly || disabled} onChange={onChange} onCommit={onCommit} controlRef={controlRef}>
       {field.control ? (
         field.control({
@@ -321,6 +323,7 @@ export function LabeledDescriptorField({
             ...(describedBy ? { "aria-describedby": describedBy } : {}),
             ...(groupLabel ? { "aria-labelledby": labelId } : {}),
             ...(field.required && !readOnly ? { "aria-required": true } : {}),
+            ...(loading ? { loading: true } : {}),
           }}
           onChange={onChange}
           onCommit={onCommit}
@@ -328,6 +331,7 @@ export function LabeledDescriptorField({
         />
       )}
       </DescriptorPresenceControl>
+      <UnregisteredImplementationExplanation explanation={explanation} />
       {showDescription && field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
       ) : null}

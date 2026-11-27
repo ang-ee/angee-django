@@ -539,17 +539,17 @@ export function useFormViewSurface({
   ), [modelMetadata, schemaMetadata]);
   // `formFields` registers every candidate so any record's values load; one record's form is its own
   // fields and those of the groups it displays and of its rail rows. Its layout and its save read these.
-  // `lockRecord` is the record the lock reads: the save passes the one its draft was made against.
+  // `basis` is the record the lock reads: the save passes its edit's basis, the record the draft was made against.
   const regularFormFieldsFor = React.useCallback(
-    (record: Row | null, lockRecord: Row | null = record) => {
-      const locked = lockedFor(lockRecord);
+    (record: Row | null, basis: Row | null = record) => {
+      const locked = lockedFor(basis);
       return displayedFormFields(locked.fields, locked.groups, (group) => displaysGroup(group, record), pageGroupCount);
     },
     [displaysGroup, lockedFor, pageGroupCount],
   );
   // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
-    (record: Row | null, lockRecord: Row | null = record) => flattenedFormFields(regularFormFieldsFor(record, lockRecord),
+    (record: Row | null, basis: Row | null = record) => flattenedFormFields(regularFormFieldsFor(record, basis),
       (record ? displayedRailGroups(railGroups, record, railAdmits, modelMetadata) : [])
         .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
     [modelMetadata, railAdmits, railGroups, regularFormFieldsFor],
@@ -755,17 +755,17 @@ export function useFormViewSurface({
   }
   // The sheet's own declarations for this record, never a group it does not show.
   const sheetFields = React.useMemo(
-    () => regularFormFieldsFor(save.displayRecord, save.lockRecord),
-    [regularFormFieldsFor, save.displayRecord, save.lockRecord],
+    () => regularFormFieldsFor(save.displayRecord, save.editBasis),
+    [regularFormFieldsFor, save.displayRecord, save.editBasis],
   );
   const fieldLayout = React.useMemo(
     // Title, status and body come from the sheet's own fields.
     () => {
       // The sheet takes the lock from the record the save's draft was made against, as the save does.
-      const locked = lockedFor(save.lockRecord);
+      const locked = lockedFor(save.editBasis);
       return formViewFieldLayout(sheetFields, locked.fields, locked.groups, modelMetadata, isCreate);
     },
-    [isCreate, lockedFor, modelMetadata, save.lockRecord, sheetFields],
+    [isCreate, lockedFor, modelMetadata, save.editBasis, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [

@@ -1,12 +1,12 @@
 ---
-"@angee/ui": patch
+"@angee/ui": minor
 ---
 
 A record form offers a create-only implementation selector once more while the
 record its draft was made against stores a key that is not registered
 (`repairChoosable`, passed to `withModeLockedFields` as `choosable`). The lock
-reads that record, held while the form holds edits, so neither a pick nor a
-re-read or another save meanwhile re-locks it. Choosing an implementation there
+reads that record, held while the form holds edits and moved by an accepted
+save, so neither a pick nor a re-read or another save meanwhile re-locks it. Choosing an implementation there
 sets what the server says it sets on that record (`impl_choices` with `record`:
 the config it carries over), so the save sends the selector with the config the
 person sees; a save that would send that config without its selector is refused
@@ -16,6 +16,15 @@ before saving, never while a save is pending. After the save the selector is
 locked again. The repair asks `BaseImplRepairChoices`, a document of its own, which
 needs a server whose `impl_choices` takes `record`; the insert's
 `BaseImplChoices` is unchanged. While the answer is pending the selector is
-`loading`; a refused answer keeps it read-only with the server's words under it.
+`loading`; a refused answer keeps it read-only with the server's words under it,
+said once, beside the field's own description. The server's refusal of a save
+stays under the field across the re-read it causes, until the person changes
+that field or discards. A field bound through `BoundDescriptorField` takes the
+same states and lock. New public API: `WidgetControlProps.loading`,
+`LabeledDescriptorField`'s `loading`, and on `FormViewSaveSurface` `editBasis`
+(the record the draft was made against: a save sends its revision and the lock
+reads it), `recordField` and `repairState`. A save that would send the repair's
+config without its selector (its condition or its group hides it now) is
+refused on the client in words naming the selector.
 A page's own `createOnly` never gets the repair, and a page cannot unlock what
 the model's metadata locks.
