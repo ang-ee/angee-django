@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Self
 
@@ -43,21 +43,15 @@ from angee.base.querysets import AngeeQuerySet
 from angee.decisions.contracts import DecisionProposal
 from angee.messaging.backends import OutboundEmailChannelMissing, SystemChannelMissing
 from angee.messaging_templates.engine import (
-    INVALID_VALUES,
-    MESSAGE_TEMPLATE_REFUSED,
     NO_BRAND_KIT,
-    NOT_A_TEMPLATE,
     NOT_EFFECTIVE,
-    RENDER_BUDGET_EXCEEDED,
-    RENDER_FAILED,
     RENDER_ITERATION_LIMIT,
-    SUBJECT_TOO_LONG,
     VALUE_ITEMS_LIMIT,
     VALUE_NOT_LINKABLE,
-    VALUE_NOT_PRINTED,
     VALUE_STRING_LIMIT,
     VALUES_JSON_LIMIT,
-    VALUES_TOO_LARGE,
+    RefusalSource,
+    refusal_sources,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,30 +139,23 @@ QUESTION_LINK = ("question.url",)
 DIGEST_LINKS = ("questions.*.url",)
 """What a digest must be able to print for every question it lists: each one's link."""
 
-RUN_REFUSALS: dict[str, str] = {
-    NOT_A_TEMPLATE: "the row read for {key} is not a template",
-    VALUE_NOT_PRINTED: "the deployment's own row of {key} does not show every question's link",
-    VALUE_NOT_LINKABLE: "the deployment's own row of {key} prints a value that is not a link as a link",
-    MESSAGE_TEMPLATE_REFUSED: "the deployment's own row of {key}, or a row it includes, no longer renders",
-    RENDER_FAILED: "{key} failed to render; the worker's log holds the template library's traceback",
-    NO_BRAND_KIT: "no brand kit is the default; set a default brand kit",
+SET_A_DEFAULT_KIT = "no brand kit is the default; set a default brand kit"
+"""What an administrator does when no brand kit is the default (``NO_BRAND_KIT``)."""
+
+RUN_SOURCES: dict[RefusalSource, str] = {
+    RefusalSource.DEPLOYMENT: "this deployment's configuration must change",
+    RefusalSource.TEMPLATE: "edit the template row of {key}, or a row it includes, in the language it refused",
+    RefusalSource.UNKNOWN: "{key} failed to render; the worker's log names the failure's type",
 }
-"""A send's refusals that are the deployment's or a template row's, the same for every recipient: what to fix.
+"""The sources of a send's refusal that fail the run, each with what an administrator does about it.
 
-Each fails the run once (:class:`DecisionMailUnsendable`), never a person's skip.
-"""
-
-QUESTION_REFUSALS = frozenset({INVALID_VALUES, VALUES_TOO_LARGE, RENDER_BUDGET_EXCEEDED, SUBJECT_TOO_LONG})
-"""A send's refusals that may be the values one question carries for one reader, or a row's.
-
-The owner raises each for a row too (a path the row requires, a date in its own
-format, its own subject), so the row is judged first by its own sample
-(:meth:`_Run.refuse_row_faults`). Otherwise the question is skipped for that one
-reader, logged: a question's labels, facts and asker are read in each reader's scope,
-and a row may print any of them, so none of these codes is known not to depend on the
-reader, and no skip is shared. A run that skipped any question then fails once, at
-the end, naming the questions (:func:`_mail_each`). The fact and reason cuts and the
-choice cap keep the shipped rows inside the limits.
+A refusal of the deployment or of a template row is the same for every recipient of
+that row (``RefusalSource``): it fails the run once (:class:`DecisionMailUnsendable`),
+never a person's skip, after the others were tried, since a row is one language's. An
+``unknown`` one is the renderer's own failure (``render_failed``). A refusal of a
+mail's ``values`` alone skips that mail for that reader (:class:`QuestionUnsendable`);
+one that is also a template's is the template's. A refusal with no source is
+messaging's, handled by its code and class.
 """
 
 
@@ -177,25 +164,29 @@ class DecisionMailUnsendable(ImproperlyConfigured):
 
     Raised once per run, worded for an administrator, and never a person's skip: by
     :meth:`_Run.start` before anyone is mailed, or once a run tried everyone, when a
-    send refused what only the deployment can fix (:data:`RUN_REFUSALS`), or skipped
-    questions. It carries no link and no address; ``codes`` holds the refusals' codes
-    and ``skipped`` each skipped question's public id with its codes, so a reader
-    classifies it by those, never by its words.
+    send refused what only the deployment or a template row can fix
+    (:data:`RUN_SOURCES`), or skipped questions. It carries no link and no address;
+    ``codes`` and ``sources`` hold the refusals', and ``skipped`` each skipped
+    question's public id with its codes, so a reader classifies it by those, never by
+    its words.
     """
 
     def __init__(
-        self, message: str, *, codes: Iterable[str] = (), skipped: dict[str, set[str]] | None = None,
+        self, message: str, *, codes: Iterable[str] = (), sources: Iterable[RefusalSource] = (),
+        skipped: dict[str, set[str]] | None = None,
     ) -> None:
         super().__init__(message)
         self.codes = frozenset(codes)
+        self.sources = frozenset(sources)
         self.skipped = {public_id: frozenset(found) for public_id, found in (skipped or {}).items()}
 
 
 class QuestionUnsendable(Exception):
-    """One reader's mail of one question refuses that question's values (:data:`QUESTION_REFUSALS`).
+    """One reader's mail of one question refuses that mail's values (``RefusalSource.VALUES``).
 
-    Carries the codes alone, no link and no address. Whether the row or the question
-    is at fault is decided where it is caught (:meth:`_Run.refuse_row_faults`).
+    Carries the codes alone, no link and no address. The values are one reader's: a
+    question's labels, facts and asker are read in each reader's scope, so the skip is
+    that reader's, and the run names the question once it tried everyone.
     """
 
     def __init__(self, codes: Iterable[str]) -> None:
@@ -337,8 +328,8 @@ def unsendable_questions(
             try:
                 template.render(mail_values(user, digest_values(user, [row], [row], shared)), must_print=DIGEST_LINKS)
             except ValidationError as refusal:
-                if codes := refusal_codes(refusal) & QUESTION_REFUSALS:
-                    faulty[row.pk] = codes
+                if refusal_sources(refusal) == {RefusalSource.VALUES}:
+                    faulty[row.pk] = refusal_codes(refusal)
     return faulty
 
 
@@ -409,15 +400,10 @@ def question_values(
 
 @dataclass(frozen=True)
 class _Run:
-    """What one run reads once, before anyone is mailed: the link origin and each person's template rows.
-
-    Frozen in what it read; ``samples`` is a cache it fills as the run goes, each row's
-    verdict on its own sample (:meth:`refuse_row_faults`).
-    """
+    """What one run reads once, before anyone is mailed: the link origin and each person's template rows."""
 
     origin: str
     rows: dict[tuple[Any, str], Any]
-    samples: dict[Any, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
     @sensitive_variables()
@@ -427,8 +413,8 @@ class _Run:
         In order, each once for the whole run and before any render: the public origin
         (``configured_public_origin``, which raises ``PublicOriginUnavailable``), and
         system mail (``Channel.objects.system_mail_configured``, else
-        :class:`DecisionMailUnsendable`). A link the send cannot carry is refused at the
-        send (``value_not_linkable``, one of :data:`RUN_REFUSALS`). Each row is the
+        :class:`DecisionMailUnsendable`), and a default brand kit. A link the send cannot
+        carry is refused at the send, as the template's (:data:`RUN_SOURCES`). Each row is the
         library's own answer for the person (``effective(person=)``), read once per
         list of languages the library tries for them (``language_candidates``), all in
         one elevated read here, so its audit stays whatever a person's own transaction
@@ -448,8 +434,8 @@ class _Run:
         with system_context(reason="decisions_messaging.templates"):
             if apps.get_model("brandkit", "BrandKit").objects.default() is None:
                 raise DecisionMailUnsendable(
-                    f"Decision mail cannot be sent ({NO_BRAND_KIT}): {RUN_REFUSALS[NO_BRAND_KIT]}.",
-                    codes=[NO_BRAND_KIT],
+                    f"Decision mail cannot be sent ({NO_BRAND_KIT}): {SET_A_DEFAULT_KIT}.",
+                    codes=[NO_BRAND_KIT], sources=[RefusalSource.DEPLOYMENT],
                 )
             # Blocked debt: the user's Person for ``effective(person=)`` is a parties read (one
             # that creates nothing, beside ``Person.objects.for_user``); this goes when it lands.
@@ -472,32 +458,6 @@ class _Run:
         """The row of ``key`` ``user`` reads, as :meth:`start` read it."""
 
         return self.rows[user.pk, key]
-
-    def refuse_row_faults(self, user: Any, key: str, must_print: Iterable[str]) -> None:
-        """Raise :class:`DecisionMailUnsendable` when ``user``'s row of ``key`` refuses its own ``sample``.
-
-        Asked once a send refused a question's values (:class:`QuestionUnsendable`):
-        a row that cannot render its own sample (``MessageTemplate.render`` with the
-        mail's ``must_print``) is the row's fault for every question, not one
-        question's; a row whose sample renders is sound, and the question is at fault.
-        So a deployment's own row must keep a sample that renders: a stale one turns
-        each question's fault into the row's. Each row is judged once per run.
-        """
-
-        row = self.template(user, key)
-        if row.pk not in self.samples:
-            with system_context(reason=mail_reason(key)), translation.override(row.language):
-                try:
-                    row.render(row.sample, must_print=must_print)
-                    self.samples[row.pk] = frozenset()
-                except ValidationError as refusal:
-                    self.samples[row.pk] = refusal_codes(refusal)
-        if codes := self.samples[row.pk]:
-            raise DecisionMailUnsendable(
-                f"Decision mail cannot be sent ({', '.join(sorted(codes))}): the deployment's own row of {key} "
-                "refuses its own sample.",
-                codes=codes,
-            )
 
 
 PERMANENT_ERRORS: tuple[type[Exception], ...] = (ImproperlyConfigured, ObjectDoesNotExist, ValidationError, ValueError)
@@ -534,8 +494,8 @@ def refusal_codes(error: ValidationError) -> frozenset[str]:
     return frozenset(item.code or "invalid" for item in items or error.error_list)
 
 
-def _refused(user: Any, key: str, refusal: ValidationError) -> Mailed:
-    logger.info("%s mail to user %s: address refused (%s).", key, user.pk, ", ".join(sorted(refusal_codes(refusal))))
+def _refused(user: Any, key: str, codes: frozenset[str]) -> Mailed:
+    logger.info("%s mail to user %s: address refused (%s).", key, user.pk, ", ".join(sorted(codes)))
     return "refused"
 
 
@@ -552,15 +512,12 @@ def _mail_one(
     which wrote nothing. ``values`` is read inside the transaction; ``None`` means
     nothing is left to mail (``skipped``); it is read in the language of ``user``'s
     template row, so the text it gives reads in that language. The send names what
-    the mail must show (``must_print``); a refusal of that, or of a link, is the
-    template row's or the deployment's (:data:`RUN_REFUSALS`) and raises
-    :class:`DecisionMailUnsendable`, never a person's skip, with no link or address in it;
-    a refusal of the question's own values (:data:`QUESTION_REFUSALS`) raises
-    :class:`QuestionUnsendable` for the run verb to skip that question. No refusal's
-    own message leaves this frame, since a render's (``render_failed``) quotes the
-    exception, which may quote a value such as the link: every one is raised again
-    as its codes and this addon's words, ``from None``, except messaging's channel
-    refusals (:data:`RETRIED_REFUSALS`), whose fixed sentences the task retries. The notice is written
+    the mail must show (``must_print``). A send's refusal is classified by its sources
+    (``refusal_sources``), never its words: :func:`_refused_send` says what the run
+    does. The refusal is read inside the handler and what it comes to is raised after
+    it, so the run's error holds no reference to it (no cause, no context); only
+    messaging's channel refusals (:data:`RETRIED_REFUSALS`), fixed sentences the task
+    retries by their class, are raised as they are. The notice is written
     after the send (:meth:`MailNoticeManager.record`), replacing the failed message
     ``replacing`` when the person's notice holds one, so a send that raises writes
     none and the next run mails the person; a notice another run wrote or replaced
@@ -574,8 +531,9 @@ def _mail_one(
     try:
         _name, address = messages.clean_system_recipient(user.email or "")
     except ValidationError as refusal:
-        return _refused(user, key, refusal)
+        return _refused(user, key, refusal_codes(refusal))
     templates = apps.get_model("messaging_templates", "MessageTemplate").objects
+    outcome: Mailed | BaseException
     try:
         with transaction.atomic(durable=True):
             row = run.template(user, key)
@@ -590,28 +548,57 @@ def _mail_one(
                 transaction.set_rollback(True)
                 return "already"
     except ValidationError as refusal:
-        codes = refusal_codes(refusal)
-        if NOT_EFFECTIVE in codes:
-            raise TemplateRowChanged(
-                f"The row of {key} stopped being the one that renders while the run sent; the task retries.",
-                code=NOT_EFFECTIVE,
-            ) from None
-        if broken := sorted(codes & RUN_REFUSALS.keys()):
-            raise DecisionMailUnsendable(
-                f"Decision mail cannot be sent ({', '.join(broken)}): "
-                f"{'; '.join(RUN_REFUSALS[code].format(key=key) for code in broken)}.",
-                codes=broken,
-            ) from None
-        if faults := codes & QUESTION_REFUSALS:
-            raise QuestionUnsendable(faults) from None
-        if hasattr(refusal, "error_dict") and set(refusal.error_dict) == {"to"}:
-            return _refused(user, key, refusal)
-        if isinstance(refusal, RETRIED_REFUSALS):
-            raise  # Messaging's own channel refusals: fixed sentences, which the task retries by their class.
-        raise ValidationError([
-            ValidationError(f"Decision mail's send was refused ({code}).", code=code) for code in sorted(codes)
-        ]) from None
-    return "mailed"
+        outcome = _refused_send(refusal, user, key)
+    else:
+        return "mailed"
+    if isinstance(outcome, BaseException):
+        raise outcome
+    return outcome
+
+
+def _refused_send(refusal: ValidationError, user: Any, key: str) -> Mailed | BaseException:
+    """What a send's ``refusal`` of ``user``'s mail of ``key`` comes to: a skip, or the error the run raises.
+
+    Read by its sources (``refusal_sources``) and its codes, never its words, and each
+    new error made from those alone. In order: a row that stopped being effective
+    mid-run (``NOT_EFFECTIVE``) is :class:`TemplateRowChanged`, which the task retries;
+    a value a mail cannot carry as a link (``VALUE_NOT_LINKABLE``) is the template
+    row's; a deployment's, a template row's or an unknown refusal is the run's
+    (:data:`RUN_SOURCES`), a template's winning over values it also refuses; a refusal
+    of the mail's values alone is :class:`QuestionUnsendable`. A refusal with no
+    source is messaging's: keyed ``to``, the recipient is ``refused``; a channel
+    refusal (:data:`RETRIED_REFUSALS`) is itself; any other, its codes.
+    """
+
+    codes, sources = refusal_codes(refusal), refusal_sources(refusal)
+    if NOT_EFFECTIVE in codes:
+        return TemplateRowChanged(
+            f"The row of {key} stopped being the one that renders while the run sent; the task retries.",
+            code=NOT_EFFECTIVE,
+        )
+    if VALUE_NOT_LINKABLE in codes:
+        # This bridge's one link value is ``question.url``, built from the configured origin, which ``clean_link``
+        # always accepts; so a value refused as a link is one the row itself prints through ``url``: the row's.
+        sources = sources | {RefusalSource.TEMPLATE}
+    if run := [source for source in RUN_SOURCES if source in sources]:
+        fixes = [
+            SET_A_DEFAULT_KIT if source == RefusalSource.DEPLOYMENT and NO_BRAND_KIT in codes
+            else RUN_SOURCES[source].format(key=key)
+            for source in run
+        ]
+        return DecisionMailUnsendable(
+            f"Decision mail cannot be sent ({', '.join(sorted(codes))}): {'; '.join(fixes)}.",
+            codes=codes, sources=sources,
+        )
+    if sources:
+        return QuestionUnsendable(codes)
+    if hasattr(refusal, "error_dict") and set(refusal.error_dict) == {"to"}:
+        return _refused(user, key, codes)
+    if isinstance(refusal, RETRIED_REFUSALS):
+        return refusal
+    return ValidationError([
+        ValidationError(f"Decision mail's send was refused ({code}).", code=code) for code in sorted(codes)
+    ])
 
 
 def _failure(error: Exception) -> str:
@@ -631,9 +618,10 @@ def _mail_each(
     to skip (``skipped``, public id to codes), else the first failure, so the task
     fails visibly. Celery's ``SoftTimeLimitExceeded`` is no person's failure: it is
     raised at once, so the task stops inside its time limit. Nor is
-    :class:`DecisionMailUnsendable`: it is the deployment's row's, which is one
-    language's, so the others are still mailed, and it is logged and raised once,
-    never per person. A failure that is no refusal is raised again as its own class
+    :class:`DecisionMailUnsendable`: a template row's is one language's, so the others
+    are still mailed, and it is logged and raised once, never per person; one the
+    deployment's (``RefusalSource.DEPLOYMENT``, a default kit unset mid-run) stops the
+    run at that person, since no later send can succeed. A failure that is no refusal is raised again as its own class
     with this addon's words (:func:`_reworded`).
     """
 
@@ -648,6 +636,9 @@ def _mail_each(
         except DecisionMailUnsendable as error:
             outcomes["failed"] += 1
             defect = defect or error
+            if RefusalSource.DEPLOYMENT in error.sources:
+                logger.warning("%s stopped at user %s: the deployment refused (%s).", what, user.pk, error)
+                break
         except Exception as error:
             outcomes["failed"] += 1
             failures.append(error)
@@ -852,7 +843,6 @@ class DecisionNoticeManager[NoticeT: DecisionNotice](
                     replacing=failed.get(user.pk), decision=decision, occasion=occasion,
                 )
             except QuestionUnsendable as fault:
-                run.refuse_row_faults(user, key, QUESTION_LINK)
                 logger.warning(
                     "Decision %s %s mail to user %s skipped: its values cannot be sent (%s).",
                     decision.public_id, occasion.value, user.pk, fault,
@@ -943,7 +933,6 @@ class DigestNoticeManager[NoticeT: DigestNotice](MailNoticeManager[NoticeT], _Di
                         values=lambda: digest_values(user, listed, shown, shared),
                     )
                 except QuestionUnsendable as fault:
-                    run.refuse_row_faults(user, DIGEST_TEMPLATE_KEY, DIGEST_LINKS)
                     if len(shown) == 1:
                         faulty = {shown[0].pk: fault.codes}
                     else:

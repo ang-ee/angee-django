@@ -93,19 +93,17 @@ live in code docstrings.
     sent. An uncertain mail may have been delivered, so the addon never sends it
     again and never surfaces it: surfacing an uncertain system mail once is
     messaging's open item, and the addon has no "send again" act. Each send names
-    the question's link as what the mail must show (`must_print`). A refusal only the
-    deployment can fix (a row that cannot show the link or no longer renders, no
-    default brand kit) fails the run once (`DecisionMailUnsendable`), never a
-    person's skip. One that may be a question's (`invalid_values`,
-    `values_too_large`, `render_budget`, `subject_too_long`) is the row's when the
-    row refuses its own sample, so a deployment's own row must keep a sample that
-    renders; otherwise it skips that question for that reader alone, logged, and
-    mails the rest, and a run that skipped any question then fails once, naming
-    them. A digest whose questions fail only together lists half
+    the question's link as what the mail must show (`must_print`). A send's refusal
+    is classified by its sources (`refusal_sources`): one of the deployment or a
+    template row, or an unknown failure, fails the run once
+    (`DecisionMailUnsendable`), never a person's skip, a template's winning over
+    values it also refuses; one of the mail's values alone skips that question for
+    that reader, logged, and mails the rest, and a run that skipped any question then
+    fails once, naming them. A digest whose questions fail only together lists half
     as many until it sends. A row saved mid-run (`not_effective`) is retried, and
-    each run checks for a default brand kit before any render. No refusal's own message
-    leaves the addon, since a failing render's quotes the link: each is logged and
-    raised as its codes and the addon's words. One person's failure is
+    each run checks for a default brand kit before any render. No refusal's own
+    message leaves the addon: it reads codes and sources, and raises its own error
+    after the refusal's handler. One person's failure is
     logged and counted and the others still go, and the task then fails; Celery's
     soft time limit stops the run at once. A
     permanent defect (no public origin, system mail not configured, a missing

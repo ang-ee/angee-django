@@ -47,10 +47,8 @@ from angee.decisions_messaging.models import (
     FACT_TEXT_LIMIT,
     QUESTION_CHOICE_LIMIT,
     QUESTION_FACT_LIMIT,
-    QUESTION_REFUSALS,
     REASON_TEXT_LIMIT,
     RETRIED_REFUSALS,
-    RUN_REFUSALS,
     DecisionMailUnsendable,
     DecisionNoticeOccasion,
     MailAudience,
@@ -69,6 +67,7 @@ from angee.messaging_templates.engine import (
     INVALID_VALUES,
     NO_BRAND_KIT,
     NOT_EFFECTIVE,
+    RENDER_BUDGET_EXCEEDED,
     RENDER_FAILED,
     SEND_CODES,
     SUBJECT_TOO_LONG,
@@ -76,8 +75,9 @@ from angee.messaging_templates.engine import (
     VALUE_NOT_PRINTED,
     VALUE_STRING_LIMIT,
     VALUES_JSON_LIMIT,
+    RefusalSource,
 )
-from angee.messaging_templates.testing.faults import failing_filter
+from angee.messaging_templates.testing.faults import failing_filter, failing_render
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.projects.testing.models import Task
 from tests.conftest import create_platform_admin, vault_for
@@ -459,8 +459,8 @@ def test_a_digest_whose_delivery_failed_is_sent_again_that_day_on_its_one_notice
     assert DigestNotice.objects.mail_digests(now=now) == 0
 
 
-def test_a_row_that_gives_a_non_link_as_a_link_refuses_the_run_once(world: Any) -> None:
-    """``value_not_linkable``: a deployment's row prints the question's title as a link's destination."""
+def test_a_row_that_prints_a_non_link_as_a_link_is_the_templates_and_stops_the_run(world: Any) -> None:
+    """``value_not_linkable``: the bridge's one link is always carried, so a row giving the title as one is at fault."""
 
     with system_context(reason="tests.decisions_messaging.titled_link_row"):
         MessageTemplate(
@@ -473,10 +473,11 @@ def test_a_row_that_gives_a_non_link_as_a_link_refuses_the_run_once(world: Any) 
     question = ask(world, world.reviewer)
     with pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.codes == {VALUE_NOT_LINKABLE}
+    assert VALUE_NOT_LINKABLE in refused.value.codes and RefusalSource.TEMPLATE in refused.value.sources
+    assert refused.value.skipped == {} and "edit the template row" in str(refused.value)
     words = str(refused.value)
     assert ORIGIN not in words and "@" not in words
-    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+    assert refused.value.__cause__ is None and refused.value.__context__ is None
     with system_context(reason=READ):
         assert mailed() == [] and not Message._base_manager.exists()
 
@@ -493,11 +494,10 @@ def ask_choosing(world: Any, label: str) -> Any:
     ), actor=world.requester)
 
 
-def test_every_code_a_system_send_names_has_one_kind() -> None:
-    """The codes ``send_as_system``'s callers handle: each fails the run, skips a question or retries the run."""
+def test_of_the_send_codes_only_a_changed_row_is_cured_by_a_retry() -> None:
+    """The sources classify every other refusal; ``NOT_EFFECTIVE`` alone is read by its constant, and retried."""
 
-    kinds = (set(RUN_REFUSALS), set(QUESTION_REFUSALS), {NOT_EFFECTIVE})
-    assert set().union(*kinds) == SEND_CODES and sum(len(kind) for kind in kinds) == len(SEND_CODES)
+    assert NOT_EFFECTIVE in SEND_CODES
     assert not any(retry_may_cure(ValidationError("refused", code=code)) for code in SEND_CODES - {NOT_EFFECTIVE})
     assert retry_may_cure(TemplateRowChanged("changed", code=NOT_EFFECTIVE))
 
@@ -510,7 +510,8 @@ def test_no_default_brand_kit_fails_the_run_once_and_a_default_one_sends(world: 
     question = ask(world, world.reviewer)
     with pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.codes == {NO_BRAND_KIT} and refused.value.__context__ is None, "refused before any render"
+    assert refused.value.codes == {NO_BRAND_KIT} and refused.value.sources == {RefusalSource.DEPLOYMENT}
+    assert refused.value.__context__ is None, "refused before any render"
     with system_context(reason=READ):
         assert mailed() == [] and not Message._base_manager.exists()
     with system_context(reason="tests.decisions_messaging.kit"):
@@ -528,7 +529,7 @@ def skips_in(caplog: Any) -> list[str]:
 def test_a_question_whose_values_cannot_be_sent_is_skipped_per_reader_and_fails_the_run_once(
     world: Any, caplog: Any,
 ) -> None:
-    """A choice past ``VALUE_STRING_LIMIT``: its row renders its own sample, so the question is at fault."""
+    """A choice past ``VALUE_STRING_LIMIT``: the owner names the refusal ``values``, so the question is skipped."""
 
     question = ask_choosing(world, "w" * (VALUE_STRING_LIMIT + 1))
     with caplog.at_level(logging.WARNING, logger=decision_mail.__name__), pytest.raises(
@@ -581,30 +582,21 @@ def override(key: str, *, variables: dict[str, str], **fields: Any) -> None:
         ).save()
 
 
-def test_a_row_that_requires_a_value_the_bridge_never_sets_fails_the_run_visibly_and_mails_nothing(
-    world: Any,
-) -> None:
-    """Its own sample sets the value, so each reader's mail is skipped, and the run fails naming the question."""
-
-    sample = shipped_sample(DecisionNoticeOccasion.ASKED.template_key)
+def test_a_row_that_requires_a_key_the_bridge_never_sets_is_the_templates_and_stops_the_run(world: Any) -> None:
     override(
         DecisionNoticeOccasion.ASKED.template_key,
         source="Open [the question]({{ question.url }}): {{ question.code }}",
         variables={"question.url": "Where it opens.", "question.code": "A code the bridge never sets."},
-        sample={**sample, "question": {**sample["question"], "code": "Q-1"}},
     )
     question = ask(world, world.reviewer)
     with pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.skipped == {question.public_id: {INVALID_VALUES}}
+    assert RefusalSource.TEMPLATE in refused.value.sources and refused.value.skipped == {}
     with system_context(reason=READ):
         assert mailed() == [] and not Message._base_manager.exists()
 
 
-def test_a_digest_row_whose_sample_renders_skips_every_question_and_fails_the_run_visibly(world: Any) -> None:
-    """Its own sample sets the value, so the row is sound: each question is skipped, and the run names them."""
-
-    sample = shipped_sample(decision_mail.DIGEST_TEMPLATE_KEY)
+def test_a_digest_row_that_requires_a_key_the_bridge_never_sets_stops_the_run(world: Any) -> None:
     override(
         decision_mail.DIGEST_TEMPLATE_KEY,
         source="{% for question in questions %}\n\n[{{ question.title }}]({{ question.url }}) {{ question.code }}"
@@ -613,18 +605,18 @@ def test_a_digest_row_whose_sample_renders_skips_every_question_and_fails_the_ru
             "questions.*.title": "What it asks.", "questions.*.url": "Where it opens.",
             "questions.*.code": "A code the bridge never sets.",
         },
-        sample={**sample, "questions": [{**item, "code": "Q-1"} for item in sample["questions"]]},
     )
-    questions = [ask(world, world.reviewer), ask(world, world.reviewer)]
+    ask(world, world.reviewer)
+    ask(world, world.reviewer)
     with pytest.raises(DecisionMailUnsendable) as refused:
         DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2))
-    assert refused.value.skipped == {question.public_id: {INVALID_VALUES} for question in questions}
+    assert RefusalSource.TEMPLATE in refused.value.sources and refused.value.skipped == {}
     with system_context(reason=READ):
         assert not DigestNotice.objects.exists() and not Message._base_manager.exists()
 
 
 def test_a_digest_of_ten_bad_questions_and_five_good_sends_the_good_and_names_the_bad(world: Any) -> None:
-    """Every question listed first fails on its own and the row is sound: they are left out, the rest are sent."""
+    """Every question listed first fails on its own values: they are left out, and the rest are sent."""
 
     bad = [ask_choosing(world, "w" * (VALUE_STRING_LIMIT + 1)) for _ in range(DIGEST_QUESTION_LIMIT)]
     good = [ask(world, world.reviewer) for _ in range(5)]
@@ -637,7 +629,7 @@ def test_a_digest_of_ten_bad_questions_and_five_good_sends_the_good_and_names_th
 
 
 def test_a_row_whose_subject_grows_too_long_fails_the_run_visibly_and_mails_nothing(world: Any) -> None:
-    """The subject prints the reason twice: its sample's fits, a long reason's does not."""
+    """The subject prints the reason twice: a long reason makes it too long, which is the values', a skip."""
 
     override(
         DecisionNoticeOccasion.ASKED.template_key,
@@ -651,40 +643,48 @@ def test_a_row_whose_subject_grows_too_long_fails_the_run_visibly_and_mails_noth
     assert refused.value.skipped == {question.public_id: {SUBJECT_TOO_LONG}} and mailed() == []
 
 
-def test_a_row_that_refuses_its_own_sample_is_the_rows_fault_not_the_questions(world: Any) -> None:
+def test_a_null_required_value_skips_that_question_only(world: Any) -> None:
+    """The row requires each question's due time: an undated question's is null, so it alone is left out."""
+
     override(
-        DecisionNoticeOccasion.ASKED.template_key,
-        source="Open [the question]({{ question.url }}): {{ question.code }}",
-        variables={"question.url": "Where it opens.", "question.code": "A code nobody sets."},
+        decision_mail.DIGEST_TEMPLATE_KEY,
+        source="{% for question in questions %}\n\n[{{ question.title }}]({{ question.url }}) "
+               "{{ question.due_at|date:\"DATETIME_FORMAT\" }}\n\n{% endfor %}",
+        variables={
+            "questions.*.title": "What it asks.", "questions.*.url": "Where it opens.",
+            "questions.*.due_at": "When an answer is due.",
+        },
     )
-    question = ask(world, world.reviewer)
+    dated = ask(world, world.reviewer, due_at=timezone.now() + timedelta(days=5))
+    undated = ask(world, world.reviewer)
     with pytest.raises(DecisionMailUnsendable) as refused:
-        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.codes == {INVALID_VALUES} and refused.value.skipped == {} and mailed() == []
+        DigestNotice.objects.mail_digests(now=timezone.now() + timedelta(days=2))
+    assert refused.value.skipped == {undated.public_id: {INVALID_VALUES}}
+    ((_subject, text),) = mails(DigestNotice, world.reviewer)
+    assert link(dated) in text and link(undated) not in text
 
 
 def test_a_reader_whose_own_values_fail_is_skipped_and_the_next_reader_is_still_mailed(
     world: Any, caplog: Any,
 ) -> None:
-    """The row requires a field of each fact a reader is shown: a reader shown none is mailed."""
+    """The row prints each fact a reader is shown twenty times: the facts a reader reads pass the render's budget."""
 
-    sample = shipped_sample(DecisionNoticeOccasion.ASKED.template_key)
     override(
         DecisionNoticeOccasion.ASKED.template_key,
         source="Open [the question]({{ question.url }}).\n\n"
-               "{% for fact in question.facts %}\n\n{{ fact.note }}\n\n{% endfor %}",
-        variables={"question.url": "Where it opens.", "question.facts.*.note": "A note the bridge never sets."},
-        sample={**sample, "question": {**sample["question"], "facts": [{"note": "Checked"}]}},
+               "{% for fact in question.facts %}\n\n" + "{{ fact.value }}" * 20 + "\n\n{% endfor %}",
+        variables={"question.url": "Where it opens.", "question.facts.*.value": "Its value as text."},
     )
     blind = addressed_user("dm-blind")
     write_relationships([RelationshipTuple(to_object_ref(world.subject), "viewer", to_subject_ref(blind))])
-    question = ask(world, world.reviewer, blind, context=full_facts(1, world.subject))
+    facts = full_facts(QUESTION_FACT_LIMIT, world.subject, value="v" * FACT_TEXT_LIMIT)
+    question = ask(world, world.reviewer, blind, context=facts)
     revoke(world.subject, blind)
     with caplog.at_level(logging.WARNING, logger=decision_mail.__name__), pytest.raises(
         DecisionMailUnsendable,
     ) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.skipped == {question.public_id: {INVALID_VALUES}}
+    assert refused.value.skipped == {question.public_id: {RENDER_BUDGET_EXCEEDED}}
     mailed_users = {user for user, _occasion in mailed(question)}
     assert blind.pk in mailed_users and world.reviewer.pk not in mailed_users
     assert any(f"to user {world.reviewer.pk} skipped" in line for line in skips_in(caplog))
@@ -805,6 +805,41 @@ def test_a_failure_whose_class_takes_no_one_message_becomes_its_permanent_kind(w
     assert "undecodable" in [frame.name for frame in traceback.extract_tb(failed.value.__traceback__)]
 
 
+def test_a_default_kit_unset_while_the_run_sends_is_the_deployments_and_stops_the_run(
+    world: Any, caplog: Any,
+) -> None:
+    """The run's own check found a kit; the send's refusal is the deployment's: the run stops there, raised once."""
+
+    question = ask(world, world.reviewer, world.reader)
+    kits = apps.get_model("brandkit", "BrandKit")
+
+    def unset(sender: Any, instance: Any, **kwargs: Any) -> None:
+        pre_save.disconnect(unset, sender=DecisionNotice)
+        with system_context(reason="tests.decisions_messaging.kit"):
+            kits.objects.filter(is_default=True).update(is_default=False)
+
+    pre_save.connect(unset, sender=DecisionNotice, weak=False)
+    try:
+        with caplog.at_level(logging.INFO, logger=decision_mail.__name__), pytest.raises(
+            DecisionMailUnsendable,
+        ) as refused:
+            DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    finally:
+        pre_save.disconnect(unset, sender=DecisionNotice)
+    assert refused.value.codes == {NO_BRAND_KIT} and refused.value.sources == {RefusalSource.DEPLOYMENT}
+    assert len(mailed(question)) == 1, "the person mailed before the kit was unset keeps their mail"
+    messages = [record.getMessage() for record in caplog.records if record.name == decision_mail.__name__]
+    assert f"Decision {question.pk} asked mail: 1 failed, 1 mailed." in messages, "the third person is never tried"
+
+
+def test_an_unknown_render_failure_fails_the_run_once(world: Any) -> None:
+    question = ask(world, world.reviewer)
+    with failing_render(RuntimeError("the engine stopped")), pytest.raises(DecisionMailUnsendable) as refused:
+        DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
+    assert refused.value.codes == {RENDER_FAILED} and refused.value.sources == {RefusalSource.UNKNOWN}
+    assert mailed() == []
+
+
 def test_a_render_that_fails_quoting_the_link_never_lets_its_words_out(world: Any, caplog: Any) -> None:
     """``render_failed`` quotes the exception, here the link: the run's error, logs and store hold none of it."""
 
@@ -819,12 +854,17 @@ def test_a_render_that_fails_quoting_the_link_never_lets_its_words_out(world: An
     with failing_filter("upper", RuntimeError(f"cannot upper {link(question)}")), caplog.at_level(logging.DEBUG), \
             pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.codes == {RENDER_FAILED}
+    assert refused.value.codes == {RENDER_FAILED} and refused.value.sources == {RefusalSource.UNKNOWN}
     assert link(question) not in str(refused.value) and ORIGIN not in str(refused.value)
-    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+    assert refused.value.__cause__ is None and refused.value.__context__ is None, "it holds no reference to the refusal"
+    error = refused.value
+    logging.getLogger(decision_mail.__name__).error(
+        "Decision mail failed.", exc_info=(type(error), error, error.__traceback__),
+    )
     formatter = logging.Formatter()
     assert any(record.name == decision_mail.__name__ for record in caplog.records)
-    assert all(ORIGIN not in formatter.format(record) for record in caplog.records), "every logger, traceback included"
+    formatted = [formatter.format(record) for record in caplog.records]
+    assert not any(ORIGIN in text or "@" in text for text in formatted), "every logger, traceback included"
     with system_context(reason=READ):
         assert mailed() == [] and not Message._base_manager.exists()
 
@@ -880,8 +920,9 @@ def test_a_template_that_does_not_show_the_link_refuses_the_run_once(world: Any)
     question = ask(world, world.reviewer)
     with pytest.raises(DecisionMailUnsendable) as refused:
         DecisionNotice.objects.mail_decision(question.pk, occasion="asked")
-    assert refused.value.codes == {VALUE_NOT_PRINTED} and ORIGIN not in str(refused.value)
-    assert refused.value.__cause__ is None and refused.value.__suppress_context__
+    assert refused.value.codes == {VALUE_NOT_PRINTED} and refused.value.sources == {RefusalSource.TEMPLATE}
+    assert ORIGIN not in str(refused.value)
+    assert refused.value.__cause__ is None and refused.value.__context__ is None
     assert mailed() == []
 
 
