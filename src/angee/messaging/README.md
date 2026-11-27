@@ -445,7 +445,8 @@ refuses exactly when it is false. `SystemChannelBackend.system_mail_configured()
 is that backend's own contract, which callers do not name. The sender rule is
 `MessageManager.clean_recipient`, the one check every address messaging lands
 takes, plus `carries_address`: a sender whose part before the `@` is outside
-ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
+ASCII is refused, as no transport here speaks SMTPUTF8, and so is one whose
+domain is no host name in its IDNA form. A recipient's rule is
 `Message.objects.clean_system_recipient(entry, key=...)`, which
 `compose_as_system` applies to each recipient and a caller asks before offering
 a send; both read nothing. A system mail is mailed exactly at the address its
