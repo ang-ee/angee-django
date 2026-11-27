@@ -3444,8 +3444,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         An answer takes its parent's kind and platform and names no subject or
         address; one of a non-email kind is plain text from an explicit, saved
         ``sender`` on the parent's platform. A new message is an email to at least
-        one recipient, each entry as :meth:`clean_recipient` reads it, with an
-        optional one-line subject. An
+        one recipient, each entry as :meth:`clean_recipient` reads it and refused
+        ``cannot_carry`` when its domain is one the transport cannot write
+        (``email.require_carried(..., domain_only=True)``), with an optional
+        one-line subject; a name part outside ASCII is admitted, and its delivery
+        is refused for it. An
         email has ``text``, ``html`` or both and names no sender: its channel's
         default sends it.
         """
@@ -3487,6 +3490,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
                 for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
+            for addressee in recipients:
+                # A domain the transport cannot write is refused before anything is written.
+                require_carried(addressee.address, key=addressee.role, domain_only=True)
             if not recipients:
                 raise ValidationError({"to": ValidationError(
                     "Address the message to at least one recipient.", code="required",
@@ -3645,9 +3651,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``_Addressee.given``: a compose's own To/Cc/Bcc, as its recipient rule
         cleaned it), when the transport can carry it as handed
         (``email.carries_address``), which the row records and the message is mailed
-        at (``Recipient.envelope_address``); an address it cannot carry (its part
-        before the ``@`` outside ASCII, or a domain no host name in its IDNA form)
-        records nothing, and its delivery is refused with that reason. It is empty for a recipient
+        at (``Recipient.envelope_address``); an address whose part before the ``@``
+        is outside ASCII, which it cannot carry, records nothing, and its delivery is
+        refused with that reason (a domain it cannot write never reaches here: the
+        compose refused it). It is empty for a recipient
         the caller did not hand as an address: one a reply inherits from its parent,
         which is answered as its handle stores it, and one known only as a handle.
         ``handle`` is where the address lands, the survivor of any merge; ``addressed

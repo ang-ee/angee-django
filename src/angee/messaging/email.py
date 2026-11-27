@@ -399,17 +399,20 @@ class SystemChannelBackend(AnymailEmailChannelBackend):
         return True
 
 
-def _uncarried(address: str) -> str:
-    """What keeps the transports this backend writes for from carrying ``address``, or ``""`` when nothing does."""
+def _uncarried(address: str, *, domain_only: bool = False) -> str:
+    """What keeps the transports this backend writes for from carrying ``address``, or ``""`` when nothing does;
+    ``domain_only`` asks only of its domain."""
 
     local, _at, domain = address.rpartition("@")
-    if not local.isascii():
+    if not domain_only and not local.isascii():
         return "its part before the @ is outside ASCII"
     try:
         written = domain if domain.isascii() else punycode(domain)
     except UnicodeError:
         return "its domain is not a host name"
-    if written not in validate_email.domain_allowlist and not validate_email.validate_domain_part(written):
+    if len(written) > apps.get_model("parties", "Handle").DOMAIN_NAME_LIMIT or (
+        written not in validate_email.domain_allowlist and not validate_email.validate_domain_part(written)
+    ):
         return "its domain is not a host name"
     return ""
 
@@ -419,7 +422,8 @@ def carries_address(address: str) -> bool:
 
     Its part before the ``@`` must be ASCII: no transport here speaks SMTPUTF8.
     Its domain must be a host name in the ASCII (IDNA) form :func:`_mailbox`
-    writes, as Django's ``EmailValidator`` reads a domain: an internationalised
+    writes, as Django's ``EmailValidator`` reads a domain and no longer than a
+    domain name may be (``Handle.DOMAIN_NAME_LIMIT``): an internationalised
     domain is carried in that form, and one the IDNA codec cannot write, or
     writes as no host name (a space at either end of it), is not.
     :func:`require_carried` refuses what it does not carry.
@@ -428,16 +432,19 @@ def carries_address(address: str) -> bool:
     return not _uncarried(address)
 
 
-def require_carried(address: str, *, key: str) -> None:
+def require_carried(address: str, *, key: str, domain_only: bool = False) -> None:
     """Refuse ``address`` under ``key``, code ``cannot_carry``, unless :func:`carries_address` holds for it.
 
     The one refusal for every address messaging writes for the transport: a
     sender before any mail is written (under ``channel``), a recipient of system
     mail (under its role), and a mailbox the delivery writes, whose failure says it.
-    Its words name which side cannot be carried.
+    ``domain_only`` asks only of the domain, as a person's compose does before it
+    writes: it admits a name part outside ASCII, whose delivery is refused for
+    it, but no domain the transport cannot write. Its words name which side
+    cannot be carried.
     """
 
-    if reason := _uncarried(address):
+    if reason := _uncarried(address, domain_only=domain_only):
         raise ValidationError({key: ValidationError(
             f"This mail transport cannot carry %(address)s: {reason}.",
             code="cannot_carry", params={"address": address},

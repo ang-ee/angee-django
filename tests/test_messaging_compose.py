@@ -1489,26 +1489,54 @@ def _not_sent_for_its_domain(message: Any) -> None:
     )
 
 
+def _domain(length: int) -> str:
+    """A host name of exactly ``length`` characters: labels of at most 63, the last ``test``."""
+
+    labels, left = [], length - len(".test")
+    while left > 0:
+        size = min(63, left if left <= 63 else left - 2)
+        labels.append("a" * size)
+        left -= size + 1
+    domain = ".".join(labels) + ".test"
+    assert len(domain) == length, (len(domain), length)
+    return domain
+
+
 @pytest.mark.parametrize("domain", PADDED_DOMAINS)
 def test_a_persons_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_on_the_wire(
     desk: Any, domain: str,
 ) -> None:
-    """Every non-ASCII space at either end of a domain: the recipient rule refuses the entry, or strips the space at
-    its end and the mail goes to the address it cleaned; else the row records nothing and the delivery is refused with
-    the carry rule's reason. No codec error escapes."""
+    """Every non-ASCII space at either end of a domain: the compose is refused before anything is written (the entry
+    is no address, ``invalid``, or its domain no host name the transport can write, ``cannot_carry``), or the
+    recipient rule strips the space at its end and the mail goes to the address it cleaned. No codec error escapes."""
 
-    entry = f"kate@{domain}"
+    entry, rows = f"kate@{domain}", _rows()
     try:
         message = Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner, queued=True)
     except ValidationError as refused:
-        assert [error.code for error in refused.error_dict["to"]] == ["invalid"]
+        assert [error.code for error in refused.error_dict["to"]] in (["invalid"], ["cannot_carry"])
+        assert _rows() == rows
         return
     ((_handle, recorded),) = _rows_and_addresses(message)
-    if recorded:
-        assert recorded == entry.strip() and carries_address(recorded)
-        assert _delivered(message)["To"] == recorded
+    assert recorded == entry.strip() and carries_address(recorded)
+    assert _delivered(message)["To"] == recorded
+
+
+@pytest.mark.parametrize(("length", "carried"), [(253, True), (254, False)], ids=["253", "254"])
+def test_a_persons_mail_to_a_domain_longer_than_a_domain_name_may_be_is_refused_before_anything_is_written(
+    desk: Any, length: int, carried: bool,
+) -> None:
+    """``Handle.DOMAIN_NAME_LIMIT``: a domain of 253 characters is carried and sent, one of 254 refused."""
+
+    entry, rows = f"k@{_domain(length)}", _rows()
+    if not carried:
+        with pytest.raises(ValidationError) as refused:
+            Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner, queued=True)
+        assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+        assert _rows() == rows
         return
-    _not_sent_for_its_domain(message)
+    message = Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner, queued=True)
+    assert _delivered(message)["To"] == entry
 
 
 @pytest.mark.parametrize("domain", PADDED_DOMAINS)

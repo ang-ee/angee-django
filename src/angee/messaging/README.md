@@ -87,10 +87,14 @@ why only a contact administrator may merge two addresses; system mail
 (`compose_as_system`, so `send_mail`) records the address on the kept
 handle's row and goes exactly there, so a merge never redirects an account's
 or a workflow's mail. A person's compose in another spelling of the kept
-handle's own address is mailed as typed. An address no transport here carries
-(`carries_address`: its part before the `@` outside ASCII, or a domain that is
-no host name in its IDNA form, such as one padded with a non-ASCII space)
-records nothing, and its delivery is refused with that reason; a spelling of an address
+handle's own address is mailed as typed. A domain no transport here can write
+(`carries_address`: one that is no host name in its IDNA form, such as one with
+a non-ASCII space right after the `@`, or longer than `Handle.DOMAIN_NAME_LIMIT`)
+is refused `cannot_carry` before anything is written, for a person's recipient
+as for a system mail's and a sender; a space at an entry's end is stripped by
+the recipient rule first. An address whose part before the `@` is outside ASCII
+is admitted for a person, records nothing, and its delivery is refused with
+that reason; a spelling of an address
 the transport carries is always carried, as the spelling key keeps any
 character whose lower case would be ASCII. The reader (`Recipient.envelope_address`) asks
 the message's channel what a recorded address the handle's merges no longer
@@ -110,9 +114,10 @@ written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
 one whose local part is outside ASCII is admitted but cannot be delivered, as
-no transport here speaks SMTPUTF8, nor one whose domain the IDNA codec cannot
-write as a host name: its delivery fails with that reason stored, naming the
-address and the side that cannot be carried, never with the codec's error. A message takes at most
+no transport here speaks SMTPUTF8: its delivery fails with that reason stored,
+naming the address. A row written before the domain rule, whose handle holds a
+domain the transport cannot write, fails the same way with the domain's reason,
+never with the codec's error. A message takes at most
 [`MessageManager.recipient_limit()`](managers.py) addresses across `to`, `cc`
 and `bcc` (`ANGEE_MESSAGING_MAX_RECIPIENTS`, 50) and
 `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (20), both settings

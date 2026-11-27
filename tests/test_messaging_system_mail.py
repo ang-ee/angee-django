@@ -43,14 +43,14 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_MAILER_BACKEND,
 )
-from angee.messaging.email import SystemChannelBackend, SystemMailer, carries_address
+from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, SystemMailer, carries_address
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
 from angee.resources.testing.models import Resource
 from tests.conftest import Vendor, create_platform_admin, make_integration
 from tests.messaging_campaign import make_user
-from tests.test_messaging_compose import PADDED_DOMAINS, _merge_as_contact_administrator
+from tests.test_messaging_compose import PADDED_DOMAINS, _domain, _merge_as_contact_administrator
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
@@ -543,6 +543,33 @@ def test_a_system_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_o
     ((_handle, recorded),) = _given(message)
     assert recorded == entry.strip() and carries_address(recorded)
     assert _deliver(message).to == [recorded]
+
+
+@pytest.mark.parametrize(("length", "carried"), [(253, True), (254, False)], ids=["253", "254"])
+def test_a_system_mail_and_a_sender_whose_domain_is_longer_than_a_domain_name_may_be_are_refused(
+    system_mailer: Any, length: int, carried: bool,
+) -> None:
+    """``Handle.DOMAIN_NAME_LIMIT``, through ``compose_as_system`` and the sender rule: a domain of 253 characters is
+    carried and sent, one of 254 refused ``cannot_carry`` before anything is written."""
+
+    address, rows = f"k@{_domain(length)}", _rows()
+    sender = AnymailEmailChannelBackend(SimpleNamespace(config={"from_email": f"Desk <{address}>"}))
+    if not carried:
+        with pytest.raises(ValidationError) as refused:
+            Message.objects.compose_as_system(
+                reason="tests.messaging.system_mail.long_domain", to=[address], subject="Hi", text="Hi.",
+            )
+        assert [error.code for error in refused.value.error_dict["to"]] == ["cannot_carry"]
+        with pytest.raises(ValidationError) as refused:
+            sender.outbound_sender()
+        assert [error.code for error in refused.value.error_dict["channel"]] == ["cannot_carry"]
+        assert _rows() == rows
+        return
+    assert sender.outbound_sender() == ("Desk", address)
+    message = Message.objects.compose_as_system(
+        reason="tests.messaging.system_mail.long_domain", to=[address], subject="Hi", text="Hi.",
+    )
+    assert _deliver(message).to == [address]
 
 
 def test_a_queued_mail_whose_configured_sender_became_invalid_is_sent_from_its_recorded_sender(
