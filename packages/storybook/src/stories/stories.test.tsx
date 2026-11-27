@@ -180,7 +180,7 @@ test("Views/FormView / Implementation Key Not Registered, Create-only offers Bac
   expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
   const control = await screen.findByRole("combobox", { name: "Backend" });
   expect(description(control)).toBe(
-    "Its implementation cannot run until another is chosen. Once chosen, it cannot be changed.");
+    "Its implementation cannot run until another is chosen. Once saved, the choice cannot be changed.");
   fireEvent.click(control);
   fireEvent.click(await screen.findByRole("option", { name: "Local folder" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));

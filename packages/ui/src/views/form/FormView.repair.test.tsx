@@ -65,7 +65,7 @@ test("a create-only selector holding a retired key is chosen once more and saves
   const f = fixture(stored);
 
   const control = await screen.findByRole("combobox", { name: "Backend" });
-  expect(screen.getByText("Its implementation cannot run until another is chosen. Once chosen, it cannot be changed."))
+  expect(screen.getByText("Its implementation cannot run until another is chosen. Once saved, the choice cannot be changed."))
     .toBeTruthy();
   // The read asked what choosing each implementation sets on this record.
   expect(f.custom.mock.calls.at(-1)?.[0]?.meta?.gqlVariables).toEqual({ model: "notes.Note", field: "backend", record: "note-1" });

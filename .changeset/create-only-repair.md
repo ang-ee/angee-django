@@ -9,4 +9,6 @@ only, so a pick never re-locks it). Choosing an implementation there sets what
 the server says it sets on that record (`impl_choices` with `record`: the config
 it carries over), so the save sends the selector with the config the person
 sees. Its mark reads "Its implementation cannot run until another is chosen.
-Once chosen, it cannot be changed." After the save the selector is locked again.
+Once saved, the choice cannot be changed." The lock reads the stored key only, so
+another key may be chosen before saving. After the save the selector is locked
+again.

@@ -134,7 +134,7 @@ const UnregisteredImplementation = createContext<{
 export function UnregisteredImplementationField({ field, readOnly = false, once = false, children }: {
   field: string | null;
   readOnly?: boolean;
-  /** A create-only selector chosen once more here: after the save it cannot change again. */
+  /** A create-only selector that can be chosen once more here: once saved, the choice cannot change again. */
   once?: boolean;
   children: ReactNode;
 }) {
