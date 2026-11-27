@@ -10,6 +10,129 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.base`: **The deployment's public origin has one accessor.**
+  `angee.base.origins.configured_public_origin()` returns
+  `settings.ANGEE_PUBLIC_ORIGIN` as `public_origin` gives it under `DEBUG`, or
+  raises `PublicOriginUnavailable` (a `DomainError` coded
+  `PUBLIC_ORIGIN_UNAVAILABLE`, and an `ImproperlyConfigured`) when it is unset or
+  not one. Code that builds or judges a link without a request calls it instead
+  of reading the setting; the callers that read it today move onto it in their
+  own changes.
+
+- `angee.messaging_templates`: **A sender reads the send codes and the limits from the engine.**
+  `SEND_CODES` holds the eleven codes `send_as_system` can return from this addon, built
+  from their constants, and a test fails when a raise site names a code outside it or
+  retypes one. `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT` and `VALUE_ITEMS_LIMIT` are
+  defined in the engine (the walk imports them, so `walker.VALUE_ITEMS_LIMIT` still
+  resolves), and `RENDER_ITERATION_LIMIT`, `RENDER_OUTPUT_LIMIT` and
+  `RENDER_FILTER_INPUT_LIMIT` are `RenderBudget`'s defaults; no value changes. Tests make
+  a render fail through `angee.messaging_templates.testing.faults` (`failing_filter`,
+  `failing_render`) instead of patching the filter registry.
+
+- `angee.messaging_templates`: **A failed render's log names the row and the exception's type, never the
+  exception's text.** A render that fails unforeseen logs one error record naming the
+  row (its kind, key and language) and the exception's type, without its message or
+  traceback, which may quote a value the render was given, such as a sign-in link; the
+  caller's `render_failed` refusal is as before.
+
+- `angee.messaging_templates`: **A render never sends an empty link in place of a value it was given.**
+  Before rendering, each value a row prints through `url` (a Markdown link's
+  destination among them) that `url` would empty and that is not blank is
+  refused, `value_not_linkable`, naming its path and why; a blank value still
+  leaves an optional link empty, and `url` itself still gives no link for what it
+  refuses. A host sees one change: a send, a test send or a render whose link
+  value the rule refuses (a single-label host, a relative link, another scheme)
+  used to go out with `href=""` and is now refused before anything is written;
+  a preview of such a sample shows the refusal as its `render_error`.
+  `MessageTemplate.objects.clean_link(value, *, path="link") -> str` asks the same
+  rule before a run: the link a mail prints, `""` for a blank value, or the
+  render's refusal in the same words, for a value as a render prepares it. A
+  refusal names the link's host only when it is wholly a host and port, so no
+  part of a link past its host (a token behind an encoded separator) reaches an
+  answer, the preview or a log; `clean_link` and the send's two frames hide every
+  local from an exception's report, the recipient's address among them. The walk
+  records the paths each form prints through `url` (`TemplateWalk.link_paths`). The rule admits the
+  deployment's own public origin, asked of base (`configured_public_origin`), with
+  its port and whatever its host (a single label such as `localhost` under
+  `DEBUG`, an address, an IPv6 address written in its brackets); other
+  single-label hosts and addresses stay refused, now loudly. `must_print`
+  follows: a path with no `*` must be shown by each body of this mail, as the
+  render emits its value (itself or its link, escaped in the HTML; the stop-link
+  warning's comparison, now one helper), so a value that is blank or not text,
+  or left out by a false condition, is refused `value_not_printed` after the
+  render and before anything is written; a path through a list stays held to
+  the text, and an empty list passes. `must_print` given as one bare string is a
+  `TypeError`, no longer read letter by letter.
+
+- `angee.messaging_templates`: **A message template is sent as system work.**
+  - **New.** `MessageTemplate.objects.send_as_system(row, *, reason, to, values,
+    kit=None, must_print=())` renders one effective template (the caller picks it for its
+    recipient with `effective("template", key, person=...)`) with the caller's
+    values inside `system_context(reason=reason)`, and records it on messaging's
+    system channel through `Message.objects.compose_as_system`, queued: one
+    message per call, returned unbound, with no idempotency key. It is named
+    system work, which a person's button may cause when the caller's own
+    permission decided the send, the causing actor recorded in the caller's
+    changeset. Call it only from system work whose own gate decided the send: a
+    person's request reaches it only through such a gate, never from a resolver,
+    an MCP tool or a view that hands it a person's choice of row, address or values
+    unchecked. It checks no permission and decides nothing about the values, the
+    links in them or who may be mailed; a test lists the modules that call it. The
+    caller looks the row up inside its own `system_context(reason=...)`, under
+    the reason it sends with (the README's recipe), and names in `must_print` the
+    values the mail is useless without (a sign-in link's path):
+    `MessageTemplate.render(values, *, kit=None, must_print=())` refuses
+    (`value_not_printed`) before rendering when the HTML or the plain-text body
+    does not print one, so an override that drops it is refused, not sent; the
+    walk records what each form prints (`TemplateWalk.printed`). A blank `reason` is a `ValueError`; then
+    `MessageTemplate.send_refusal()` (a layout, block or part, `not_a_template`;
+    a row that is not what renders, `not_effective`), the render's codes, and what
+    `compose_as_system` refuses, as its docstring says, an address the transport
+    cannot carry among it; no message row is written before a refusal. Entering
+    the system context writes its permission audit row at once, even when the
+    render then refuses. What a send stores (the thread's title, the preview, the
+    parts and their content-addressed fragments, which outlive the message) is
+    read by the system channel's readers, whom messaging's README names.
+  - **New: the test send.** `MessageTemplate.objects.send_test(row, *, actor,
+    kit=None, idempotency_key=None)` sends a row with its `sample` to `actor`'s
+    own account address on the system channel, the subject after `[Test] `
+    (`TEST_SUBJECT_PREFIX`). The administrator presses and the system writes the
+    mail: the pressing is decided by `preview` alone
+    (`MessageTemplate.send_test_refusal()`, which then asks `send_refusal()`), an
+    account with no address is refused (`no_test_address`), and the mail is named
+    system work on `send_as_system`'s one path, the administrator recorded as who
+    caused it. With an `idempotency_key` the request (the row and the kit) is
+    claimed through provenance's `claim_created`: a retry returns the first
+    message, sent once, and another request under the key raises
+    `CreationKeyConflict`. The console gets
+    `send_message_template_test(template, brand_kit, idempotency_key)`, an
+    `ActionResult` naming the message (a signed-out caller gets the session's
+    error, a caller who may not preview the row `PERMISSION_DENIED`, a key reused
+    for another request `CREATION_KEY_CONFLICT`, the rest in band with its code), and
+    `MessageTemplateType.can_send_test`, what it asks first, riding the list's
+    statement. A test's thread and message are the system channel's, read as
+    messaging's README says. **Upgrade:** regenerate the console schema and its
+    codegen.
+  - **Shipped rows.** The `signature` part ships in Spanish too
+    (`part.signature.es`: "El equipo de {{ brand.name }}"), so every shipped part
+    has its English and Spanish rows. **Upgrade:** load the install tier. A
+    Spanish recipient of a template including `parts/signature` now reads the
+    Spanish line; a deployment that wrote its own Spanish `signature` row finds
+    it an override of the new default, with an updated default to keep or reset.
+  - **Changed.** A row fact read on a row the list did not annotate
+    (`is_effective`, `is_overridden`, `has_updated_default`,
+    `overrides_default`) is a structural read through the base manager and writes
+    no permission audit row. `render`'s documented codes include
+    `values_too_large`, which it already raised.
+  - **Dependencies.** `angee-messaging-templates` requires `angee-messaging`;
+    messaging still never imports message templates. **Upgrade:** a host that
+    lists `angee.messaging_templates` without `angee.messaging` now also enables
+    messaging, since the composer turns on a component's required addons; the
+    rest of messaging's requirements were already this addon's, and the new
+    libraries are `django-anymail` and `requests`. Such a host migrates,
+    synchronizes the permission schema and loads the install tier for messaging,
+    whose mail settings then apply.
+
 - `angee.messaging`, `angee.workflows_messaging`, `angee.iam_messaging`: **System mail: each email
   Django sends is recorded on a system channel and sent through one transport mailer.**
   - **Upgrade first:** stop the serving processes and workers through the operator
