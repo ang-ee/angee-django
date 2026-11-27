@@ -158,10 +158,13 @@ class ImplBase:
     def carried_config(cls, stored: Any) -> dict[str, Any]:
         """The config this implementation carries over from another implementation's ``stored`` config.
 
-        The stored keys its wire contract names (by alias) keep their values, its defaults fill the
-        keys it names that the stored config lacks, and any other key is dropped; the result is
-        normalized as a save normalizes it. An implementation without a config model leaves a row's
-        config untyped, so it carries the stored config whole.
+        Choosing an implementation chooses its config's shape, so the result is valid by construction:
+        the stored keys its wire contract names (by alias) keep their values, its defaults fill the keys
+        it names that the stored config lacks, and any other key is dropped. A kept value the config
+        refuses falls back to its default; a refusal that names no key (a rule across several, such as
+        one value smaller than another) falls back to the defaults alone. The result is normalized as a
+        save normalizes it. An implementation without a config model leaves a row's config untyped, so
+        it carries the stored config whole.
         """
 
         given = dict(stored) if isinstance(stored, Mapping) else {}
@@ -171,7 +174,16 @@ class ImplBase:
         readable = set(schema.get("properties", {}))
         kept = {key: value for key, value in given.items() if key in readable}
         defaults = cls.effective_defaults(config_schema=schema).get("config")
-        return cls.normalize_config({**(defaults if isinstance(defaults, dict) else {}), **kept})
+        base = defaults if isinstance(defaults, dict) else {}
+        while True:
+            try:
+                return cls.normalize_config({**base, **kept})
+            except ValidationError as error:
+                if not kept:
+                    # The implementation's own defaults are refused: its defect, never a record's.
+                    raise
+                named = {path.split(".", 2)[1] for path in error.message_dict if path.startswith("config.")}
+                kept = {key: value for key, value in kept.items() if key not in named} if named & kept.keys() else {}
 
     @classmethod
     def config_form_spec(cls, *, config_schema: dict[str, Any] | None = None) -> dict[str, Any] | None:

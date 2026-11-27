@@ -377,10 +377,11 @@ class ImplDefaultsMixin(models.Model):
         """Reshape the config for a repaired selector's new implementation (``ImplBase.carried_config``).
 
         A config other than the stored one is the one sent, which the new implementation validates
-        as any write's (:meth:`validate_impl_configs`). Otherwise the stored config is carried over;
-        a key the new implementation does not read is never dropped silently: the save is refused,
-        naming it, and the config must be sent. A save with ``update_fields`` that would leave out a
-        config the new implementation reads is refused: it must name the config too.
+        as any write's (:meth:`validate_impl_configs`), never replaced. Otherwise the save writes what
+        the chosen implementation carries over from the stored config, which the repair read showed
+        before the save: choosing an implementation chooses its config's shape, so a key it does not
+        read is dropped. A save with ``update_fields`` that would leave out a config the new
+        implementation reads is refused: it must name the config too.
         """
 
         try:
@@ -399,23 +400,15 @@ class ImplDefaultsMixin(models.Model):
         row = self._stored_values(config_field.attname)
         if row is None or config_field.value_from_object(self) != row[0]:
             return
-        stored = row[0]
-        carried = impl.carried_config(stored)
-        dropped = sorted(set(stored or {}) - set(carried))
-        if dropped:
-            raise ValidationError({config_field.name: (
-                f"The chosen {field.verbose_name} does not use {' and '.join(dropped)} in the configuration. "
-                f"Save the configuration with it to remove {'it' if len(dropped) == 1 else 'them'}."
-            )})
-        config_field.save_form_data(self, carried)
+        config_field.save_form_data(self, impl.carried_config(row[0]))
 
     def repair_impl_defaults(self, field_name: str) -> dict[str, dict[str, Any]]:
         """What choosing each implementation of ``field_name`` sets on this stored row: a repair.
 
         Each registered key maps to the config it carries over from the stored config
-        (``ImplBase.carried_config``) under the model's config column, the one value a repair sets.
-        Refused as create-only, as the write is, unless the stored row holds a key the field's
-        choices no longer name.
+        (``ImplBase.carried_config``, valid by construction) under the model's config column, the one
+        value a repair sets and the one a selector-only save writes. Refused as create-only, as the
+        write is, unless the stored row holds a key the field's choices no longer name.
         """
 
         field = self._meta.get_field(field_name)

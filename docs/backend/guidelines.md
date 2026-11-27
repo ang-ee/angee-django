@@ -502,10 +502,13 @@ Use these owners instead of maintaining another contract in an addon:
   `create_only` selector holding such a key may move, once, to a registered
   key: the config its implementations own is carried over
   ([`ImplBase.carried_config`](../../src/angee/base/implementations.py): the
-  keys the new class reads kept, its defaults filling the rest), a key the new
-  class does not read is never dropped silently (the save is refused, naming
-  it, unless the config is sent), the new key is written only while the row
-  still holds the old one, and afterwards the selector is create-only again.
+  keys the new class reads kept, its defaults filling the rest and replacing a
+  kept value it refuses, the defaults alone where a rule across keys refuses
+  them; a key the new class does not read is dropped: choosing a class chooses
+  its config's shape, and the repair read shows that config before the save),
+  a config sent with the selector is validated as sent, the new key is written
+  only while the row still holds the old one, and afterwards the selector is
+  create-only again.
   A repair saved with `update_fields` names the config too, or is refused; a
   stale row (loaded before its stored key moved) that would write another
   config is refused as stale (code `stale`). The resource layer derives the
@@ -518,10 +521,10 @@ Use these owners instead of maintaining another contract in an addon:
   registered. The console's record form offers that choice exactly then and
   sends the config it shows: `impl_choices(model, field, record)` answers,
   for each choice, what choosing it sets on that record (the config
-  `carried_config` carries over), gated exactly as the write is: write on the
-  record while its stored key is not registered, the administrator-or-policy
-  admission of a choices read without a record not asked, since a repair is
-  the writer's act
+  `carried_config` carries over), for an actor the choices' own admission
+  admits (an administrator, or the model's policy) who may also write the
+  record while its stored key is not registered: a repair offers only what
+  that person could choose when creating such a record
   ([`record_impl_choices`](../../src/angee/graphql/impl.py),
   `ImplDefaultsMixin.repair_impl_defaults`). A record without an update root (calendar sources, directories,
   mounts) or a selector a connect flow chose is not repaired in the console:

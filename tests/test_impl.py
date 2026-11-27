@@ -1740,9 +1740,21 @@ def test_an_implementation_carries_the_config_keys_it_reads_defaults_the_rest_an
     assert _BaseImpl.carried_config({"untyped": 1}) == {"untyped": 1}
 
 
+def test_a_carried_config_is_valid_by_construction() -> None:
+    """A kept value its config refuses falls back to its default; a refusal naming no key, to the defaults alone."""
+
+    feed = apps.get_model("posts", "Feed")._meta.get_field("feed_backend_class").resolve_class("manual")
+    defaults = feed.carried_config({})
+    assert defaults == {"quota_limit": 10000, "reply_reserve": 100, "active_thread_days": 30, "reobserve_units_per_cycle": 100}
+    # quota_limit must be at least 1: that value alone falls back, the valid one is kept.
+    assert feed.carried_config({"quota_limit": 0, "active_thread_days": 7}) == {**defaults, "active_thread_days": 7}
+    # reply_reserve must be smaller than quota_limit, a rule across both: the defaults alone.
+    assert feed.carried_config({"quota_limit": 5, "active_thread_days": 7}) == defaults
+
+
 @pytest.mark.django_db
 def test_a_create_only_selector_moves_off_a_key_not_registered_once_carrying_its_config() -> None:
-    """A repair saves with its config carried over, then create-only holds; no key is ever dropped silently."""
+    """A repair saves with the config its new implementation carries over, then create-only holds."""
 
     bridge = _retired_bridge("repaired")
     with system_context(reason="test.impl.repair"):
@@ -1759,6 +1771,7 @@ def test_a_create_only_selector_moves_off_a_key_not_registered_once_carrying_its
             stored.save()
     assert refused.value.message_dict == {"backend_class": ["Implementation selection is create-only."]}
 
+    # Choosing an implementation chooses its config's shape: a key it does not read is dropped.
     dropping = _retired_bridge("dropping")
     with system_context(reason="test.impl.repair.drop"):
         VcsBridge._base_manager.filter(pk=dropping.pk).update(
@@ -1766,18 +1779,27 @@ def test_a_create_only_selector_moves_off_a_key_not_registered_once_carrying_its
         )
         row = VcsBridge._base_manager.get(pk=dropping.pk)
         row.backend_class = "local"
-        with pytest.raises(ValidationError) as dropped, transaction.atomic():
+        row.save()
+        carried = VcsBridge._base_manager.values_list("backend_class", "config").get(pk=dropping.pk)
+    assert carried == ("local", LocalVCSBackend.carried_config({"local_root": "/srv/team"}))
+    assert "retired_option" not in carried[1]
+
+    # A config sent with the selector is the one validated and saved, never replaced by the carried one.
+    sending = _retired_bridge("sending")
+    with system_context(reason="test.impl.repair.sent"):
+        VcsBridge._base_manager.filter(pk=sending.pk).update(config={"local_root": "/srv/team"})
+        row = VcsBridge._base_manager.get(pk=sending.pk)
+        row.backend_class = "local"
+        row.config = {"local_root": 5}
+        with pytest.raises(ValidationError) as invalid, transaction.atomic():
             row.save()
-        assert dropped.value.message_dict == {"config": [
-            "The chosen backend class does not use retired_option in the configuration. "
-            "Save the configuration with it to remove it.",
-        ]}
-        row = VcsBridge._base_manager.get(pk=dropping.pk)
+        assert list(invalid.value.message_dict) == ["config.local_root"]
+        row = VcsBridge._base_manager.get(pk=sending.pk)
         row.backend_class = "local"
         row.config = {"local_root": "/srv/sent"}
         row.save()
-        sent = VcsBridge._base_manager.values_list("backend_class", "config__local_root").get(pk=dropping.pk)
-        assert sent == ("local", "/srv/sent")
+        sent = VcsBridge._base_manager.values_list("backend_class", "config__local_root").get(pk=sending.pk)
+    assert sent == ("local", "/srv/sent")
 
 
 @pytest.mark.django_db
@@ -1925,6 +1947,46 @@ def test_a_feed_s_own_selector_is_repaired_leaving_the_channel_s_selector_and_it
     assert stored == ("stub", "feed", reshaped)
     stub = feed_model._meta.get_field("feed_backend_class").resolve_class("stub")
     assert reshaped == stub.carried_config(stored_config)
+
+
+@pytest.mark.django_db
+def test_a_feed_whose_extra_keyed_config_is_repaired_by_its_selector_alone_keeps_what_the_new_class_reads() -> None:
+    """A YouTube-shaped config repaired to manual: the save writes what manual carries over, recheck_interval dropped."""
+
+    feed_model = apps.get_model("posts", "Feed")
+    feed = make_integration("feed-youtube-shaped", model=feed_model, feed_backend_class="manual")
+    stored = {"quota_limit": 20000, "reply_reserve": 1000, "active_thread_days": 30,
+              "reobserve_units_per_cycle": 100, "recheck_interval": 3600}
+    store_column(feed_model, feed.pk, "feed_backend_class", "retired")
+    with system_context(reason="test.impl.repair.youtube"):
+        feed_model._base_manager.filter(pk=feed.pk).update(config=stored)
+        row = feed_model._base_manager.get(pk=feed.pk)
+        choices = row.repair_impl_defaults("feed_backend_class")
+        row.feed_backend_class = "manual"
+        row.save()
+        saved = feed_model._base_manager.values_list("feed_backend_class", "config").get(pk=feed.pk)
+    kept = {key: value for key, value in stored.items() if key != "recheck_interval"}
+    assert choices["manual"] == {"config": kept}
+    assert saved == ("manual", kept)
+
+
+@pytest.mark.django_db
+def test_a_repair_read_of_a_jointly_invalid_stored_config_answers_the_defaults_and_the_repair_saves_them() -> None:
+    """Values that fail together no longer refuse the read or the save: the class's defaults take their place."""
+
+    feed_model = apps.get_model("posts", "Feed")
+    feed = make_integration("feed-jointly-invalid", model=feed_model, feed_backend_class="manual")
+    store_column(feed_model, feed.pk, "feed_backend_class", "retired")
+    manual = feed_model._meta.get_field("feed_backend_class").resolve_class("manual")
+    with system_context(reason="test.impl.repair.joint"):
+        feed_model._base_manager.filter(pk=feed.pk).update(config={"quota_limit": 5})
+        row = feed_model._base_manager.get(pk=feed.pk)
+        choices = row.repair_impl_defaults("feed_backend_class")
+        row.feed_backend_class = "manual"
+        row.save()
+        saved = feed_model._base_manager.values_list("config", flat=True).get(pk=feed.pk)
+    assert choices["manual"] == {"config": manual.carried_config({})}
+    assert saved == manual.carried_config({})
 
 
 @pytest.mark.django_db

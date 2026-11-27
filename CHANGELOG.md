@@ -69,10 +69,12 @@ live in code docstrings.
   `InferenceProvider`, `NotionConnection`) holding such a key may move, once,
   to a registered key, by any save the person may make
   (`ImplDefaultsMixin.save`): the config its implementations own is carried
-  over by `ImplBase.carried_config` (the stored keys the new class reads kept,
-  its defaults filling the rest; a key it does not read is never dropped
-  silently, the save being refused, naming it, unless the config is sent, in
-  which case what is sent is validated and saved); the new key is written only
+  over by `ImplBase.carried_config`, valid by construction (the stored keys the
+  new class reads kept, its defaults filling the rest and replacing a kept value
+  it refuses, the defaults alone where a rule across keys refuses them; a key it
+  does not read is dropped, since choosing a class chooses its config's shape,
+  and the repair read shows that config before the save); a config sent with
+  the selector is validated and saved as sent; the new key is written only
   while the row still holds the old one, so of two repairs at once one wins and
   the other is refused as create-only; afterwards the selector is create-only
   again ("Implementation selection is create-only."). `check --database`
@@ -96,11 +98,12 @@ live in code docstrings.
   implies no create path, which `creatable` alone states. `impl_choices` takes an
   optional `record`: each choice's `defaults` is then what choosing it sets on
   that record, the config it carries over (`ImplDefaultsMixin.repair_impl_defaults`),
-  answered for exactly whoever may write that record while its stored key is
-  not registered (the administrator-or-policy admission of a choices read
-  without a record is not asked: a repair is the writer's act), and refused as
-  the write is otherwise (not found, or "Implementation selection is
-  create-only."); a selector with no repair (its model composes no
+  answered for an actor the choices' own admission admits (an administrator, or
+  the model's policy) who may also write that record while its stored key is not
+  registered: a repair offers only what that person could choose when creating
+  such a record, and grants no new power; refused otherwise ("Implementation
+  choices are not readable by this actor.", not found, or "Implementation
+  selection is create-only."); a selector with no repair (its model composes no
   `ImplDefaultsMixin`, or the selector is not create-only) is refused in words
   under the field. `@angee/ui`: the record form
   offers a create-only selector (one the model's metadata makes create-only,

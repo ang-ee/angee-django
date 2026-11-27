@@ -65,12 +65,11 @@ class ImplClassField[T: RegistryBase = RegistryBase](TextChoicesField):
     key (``ImplDefaultsMixin.save``): the config its implementations own is
     carried over (``ImplBase.carried_config``), the new key is written only
     while the row still holds the old one, and afterwards the selector is
-    create-only again. A repair that would drop a stored config key the new
-    implementation does not use is refused unless the config is sent with it;
-    a repair saved with ``update_fields`` names the config too, or is refused.
-    The console's form sends the config it shows with a repair (the config
-    ``impl_choices(model, field, record)`` says the choice carries over), so a
-    person never meets those refusals; code and a bare GraphQL update do. A stale row
+    create-only again. A repair's config is what the chosen implementation
+    carries over, valid by construction (a kept value it refuses takes its
+    default; a key it does not read is dropped), which the repair read shows
+    before the save; a config sent with the selector is validated as sent. A
+    repair saved with ``update_fields`` names the config too, or is refused. A stale row
     (loaded before its stored key moved) that would write another config is
     refused as stale. Every update input of an Angee resource carries its
     model's create-only selectors (:func:`create_only_selectors`), and its
