@@ -50,6 +50,7 @@ export interface GroupedRenderParams {
   rootPage: number;
   pageSize: number;
   queryMeasures: readonly GroupMeasure[];
+  /** The list's order: each group's records follow it, and each level's groups its direction for their axis (`ResourceQuery.toGroupRead`). */
   leafOrder: ResourceListOrder | undefined;
   modelMetadata: ModelMetadata | null;
   emptyGroupMessage: string;
@@ -262,7 +263,7 @@ export function buildGroupedRenderModel<TRow extends Row>(
       depth === 0 ? rootPage : (pagination?.pageIndex ?? 0) + 1;
     const isLeafLevel = depth === groupStack.length - 1;
     const query: GroupByRequestOptions = {
-      ...resourceQuery.toGroupRead(axis, parentFilter),
+      ...resourceQuery.toGroupRead(axis, parentFilter, leafOrder),
       measures: queryMeasures,
       page: storedPage,
       pageSize: levelPageSize,

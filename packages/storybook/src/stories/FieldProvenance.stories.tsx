@@ -50,6 +50,7 @@ function PartyFieldProvenance() {
   // A read-only record's fields: the action form only hosts them, nothing is submitted.
   const { form } = useActionForm({
     defaultValues: { display_name: "Ada Lovelace", language: "English" },
+    shownFieldNames: fields.map((field) => field.name),
     submit: () => ({ status: "ok", data: null }),
   });
   const publications = useMemo(() => [{

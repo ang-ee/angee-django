@@ -365,8 +365,12 @@ export interface FormViewLineProps {
   lineFooter?: EditableLinesProps["footer"];
 }
 
-/** The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane. */
-function FormViewLines({
+/**
+ * The form's editable lines bound to its draft: in a declared `lines` section or their trailing pane.
+ * The pane stays mounted beside other panes, so its draft rows and their errors outlive a pane change;
+ * which pane a refused save selects is the surface's `revealField`, never the lines' own.
+ */
+export function FormViewLines({
   surface,
   linePrimaryFields,
   lineFields,
@@ -396,20 +400,6 @@ function FormViewLines({
       history={{ perform: history.perform, start: startFieldInteraction, commit: commitFieldInteraction }}
     />
   );
-}
-
-/**
- * The trailing lines' pane. It stays mounted beside other panes, so a save whose lines
- * fail, in the browser or on the server, selects it and the viewer sees the rows to fix.
- */
-export function FormViewLinesPane(props: FormViewLineProps & { surface: FormViewSurface }): React.ReactElement | null {
-  const { form: { control }, linesField, setActiveRecordTab, tabbed } = props.surface;
-  const { errors, submitCount } = useFormState({ control, name: linesField ?? undefined, disabled: !linesField });
-  const linesFailed = tabbed && linesField !== null && submitCount > 0 && get(errors, linesField) !== undefined;
-  React.useEffect(() => {
-    if (linesFailed) setActiveRecordTab(EDITABLE_LINES_SECTION);
-  }, [linesFailed, setActiveRecordTab, submitCount]);
-  return <FormViewLines {...props} />;
 }
 
 /** The record's sheet: its body field and every section, always shown above any panes. */

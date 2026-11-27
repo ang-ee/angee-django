@@ -11,7 +11,7 @@ import {
 
 import { ResourceQuery } from "@angee/metadata";
 import { backendOperations, backendResource } from "./implementation-fixtures";
-import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
+import { resourceSnapshotOperations, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const rows = [
   {
@@ -100,12 +100,94 @@ const taskResource = testDataResource("notes.Task", {
   query: { ...taskQuery, sort: { ...taskQuery.sort, default: (["status", "rank", "title"] as const).map((field) => ({ field, direction: "ASC" as const })) } },
 });
 
+// Forty chores, more than the table library samples to choose a sort, ordered by effort, most first: an order that does
+// not lead with their status. A quarter of them have no status. By first appearance their groups are todo, done, none,
+// doing; by the sum of their efforts, most first, done, none, doing, todo.
+const choreStatuses = ["todo", "done", null, "doing"] as const;
+const chores = Array.from({ length: 40 }, (_, index) => ({
+  id: `chore-${index + 1}`, title: `Chore ${String(index + 1).padStart(2, "0")}`, status: choreStatuses[index % 4], effort: (index * 7) % 40,
+}));
+const choreFields = { id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" }, effort: { scalar: "Int" } } as const;
+const choreQuery = ResourceQuery.forRows({ fields: choreFields }).contract;
+const choreResource = testDataResource("notes.Chore", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "chores", aggregate: "chores_aggregate" }, typeNames: { filter: "ChoreFilter", order: "ChoreOrder" },
+  fields: Object.entries(choreFields).map(([name, { scalar }]) => ({ name, kind: "scalar", scalar, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: { ...choreQuery, sort: { ...choreQuery.sort, default: [{ field: "effort", direction: "DESC" as const }] } },
+});
+
+// The same tasks held on a server, two more of them with no status, grouped by its groups read: the resource
+// snapshot answers that read in the order it asks for, as the server does.
+const serverTasks = [
+  ...tasks, { id: "task-7", title: "Sort the inbox", status: null, rank: 2 }, { id: "task-8", title: "File the receipts", status: null, rank: 1 },
+];
+const serverTaskQuery = ResourceQuery.forRows({ fields: taskFields }).contract;
+serverTaskQuery.axes.status!.server = { input: "STATUS", key: "status" };
+serverTaskQuery.axes.status!.drill = { kind: "value", field: "status", valueKey: "status", nullMode: "isNull", valueMap: [] };
+const serverTaskResource = testDataResource("notes.ServerTask", {
+  schemaName: "public", recordRepresentation: "title",
+  roots: { list: "server_tasks", aggregate: "server_tasks_aggregate", groups: "server_tasks_groups", groupsCount: "server_tasks_groups_count" },
+  typeNames: { filter: "ServerTaskFilter", order: "ServerTaskOrder" },
+  fields: Object.entries(taskFields).map(([name, { scalar }]) => ({ name, kind: "scalar", scalar, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: { ...serverTaskQuery, sort: { ...serverTaskQuery.sort, default: (["status", "rank", "title"] as const).map((field) => ({ field, direction: "ASC" as const })) } },
+});
+/** The server tasks' groups read, as a generated groups document names it: the groups, and their exact count. */
+const SERVER_TASK_GROUPS = `query ServerTaskGroups($group_by: [ServerTaskGroupBySpec!]!, $where: ServerTaskFilter, $having: ServerTaskHaving,
+  $order_by: [ServerTaskGroupOrder!], $limit: Int, $offset: Int) {
+  server_tasks_groups(group_by: $group_by, where: $where, having: $having, order_by: $order_by, limit: $limit, offset: $offset) {
+    key { status } aggregate { count }
+  }
+  totalCount: server_tasks_groups_count(group_by: $group_by, where: $where, having: $having)
+}`;
+
+// Ten errands, two of them without a due date, ordered in the browser by their date, latest first, then title. Read in
+// this order, their months come March, January, April, February.
+const errands = [
+  { id: "errand-1", title: "Renew the lease", due: "2026-03-12" },
+  { id: "errand-2", title: "Book the venue", due: "2026-01-20" },
+  { id: "errand-3", title: "Order the badges", due: "2026-04-02" },
+  { id: "errand-4", title: "Pay the deposit", due: "2026-02-14" },
+  { id: "errand-5", title: "Collect the keys", due: null },
+  { id: "errand-6", title: "Print the menus", due: "2026-03-28" },
+  { id: "errand-7", title: "Send the invoices", due: "2026-01-05" },
+  { id: "errand-8", title: "Hire the band", due: "2026-04-18" },
+  { id: "errand-9", title: "Water the plants", due: null },
+  { id: "errand-10", title: "Archive the receipts", due: "2026-02-27" },
+];
+const errandFields = { id: { scalar: "ID" }, title: { scalar: "String" }, due: { scalar: "Date" } } as const;
+const errandQuery = ResourceQuery.forRows({ fields: errandFields }).contract;
+const errandResource = testDataResource("notes.Errand", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "errands", aggregate: "errands_aggregate" }, typeNames: { filter: "ErrandFilter", order: "ErrandOrder" },
+  fields: Object.entries(errandFields).map(([name, { scalar }]) => ({ name, kind: "scalar", scalar, readable: true,
+    aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
+  query: { ...errandQuery, sort: { ...errandQuery.sort, default: [{ field: "due", direction: "DESC" as const }, { field: "title", direction: "ASC" as const }] } },
+});
+
+// The server's tasks held in the browser under a resource that declares no order, so no key orders them: they are
+// read open ones first, then closed, then the two with no status.
+const unorderedTaskResource = testDataResource("notes.UnorderedTask", {
+  schemaName: "public", rowModel: "client", recordRepresentation: "title",
+  roots: { list: "unordered_tasks", aggregate: "unordered_tasks_aggregate" }, typeNames: { filter: "UnorderedTaskFilter", order: "UnorderedTaskOrder" },
+  fields: taskResource.fields,
+  query: { ...taskQuery, sort: { ...taskQuery.sort, default: [] } },
+});
+
 const storySchemas = storySchema({
   notes: () => rows,
   notes_aggregate: () => ({ aggregate: { count: rows.length } }),
   tasks: () => tasks,
   tasks_aggregate: () => ({ aggregate: { count: tasks.length } }),
   ...backendOperations,
+  chores: () => chores,
+  chores_aggregate: () => ({ aggregate: { count: chores.length } }),
+  ...resourceSnapshotOperations([serverTaskResource], { "notes.ServerTask": serverTasks }),
+  errands: () => errands,
+  errands_aggregate: () => ({ aggregate: { count: errands.length } }),
+  unordered_tasks: () => serverTasks,
+  unordered_tasks_aggregate: () => ({ aggregate: { count: serverTasks.length } }),
 }, { resources: [testDataResource("notes.Note", {
   schemaName: "public",
   roots: { list: "notes", aggregate: "notes_aggregate" },
@@ -114,11 +196,14 @@ const storySchemas = storySchema({
     ["id", "ID"], ["title", "String"], ["tags", "String"], ["status", "String"],
     ["owner", "String"], ["words", "Int"], ["updatedAt", "DateTime"],
   ] as const).map(([name, scalar]) => [name, testQueryField(name, { scalar, sort: { field: name } })])) }),
-}), taskResource, backendResource] });
+}), taskResource, backendResource, choreResource, serverTaskResource, errandResource, unorderedTaskResource] });
 
 const meta = {
   title: "Views/ListView",
-  parameters: { angeeFixture: { schemas: storySchemas }, layout: "padded" },
+  parameters: {
+    angeeFixture: { schemas: storySchemas, operationDocuments: { public: { groups: { "notes.ServerTask": SERVER_TASK_GROUPS } } } },
+    layout: "padded",
+  },
 } satisfies Meta;
 
 export default meta;
@@ -135,11 +220,17 @@ export const SearchShortcuts: Story = {
 
 /**
  * Grouped by status and ordered by status, then rank, then title; open both groups to see their
- * rows. At load the Status header shows no sort (a group's tasks share their status), Rank shows
- * ascending (each group's rows follow it) and Title shows not sorted (it only breaks rank ties: Book
- * the room before Draft the brief). Press Title's sort button: Title sorts ascending behind the
- * status key, which a press never drops, Rank shows not sorted, and each group's rows follow their
- * titles (Collect quotes moves above Draft the brief) while the groups keep their status order.
+ * rows. At load the Status header shows ascending (the direction its groups go in: a group's tasks
+ * share their status), Rank shows ascending (each group's rows follow it) and Title shows not sorted
+ * (it only breaks rank ties: Book the room before Draft the brief). Only Rank's header carries an
+ * `aria-sort` that says a direction: the Status header's sort button and arrow name its groups'
+ * direction, and `aria-sort`, one header at a time, stays on the key the rows follow. Press Title's
+ * sort button: Title sorts ascending with the status key kept behind it, which a press never drops,
+ * Rank shows not sorted, and each group's rows follow their titles (Collect quotes moves above Draft
+ * the brief) while the groups keep their status order. Press Status's: the groups turn, open before
+ * closed, and their rows keep their titles' order, which Title's header still shows: a press on the
+ * grouping column leaves the records' order alone. Pressed at load, it turns the groups the same and
+ * Rank keeps its ascending sort and its `aria-sort`, Title still breaking the rank ties.
  */
 export const GroupedWithTieBreakers: Story = {
   name: "Grouped With Tie-breakers",
@@ -153,9 +244,9 @@ export const GroupedWithTieBreakers: Story = {
 /**
  * The same tasks as a side pane's list, grouped by status and ordered by status, then rank, then
  * title. The pane toolbar's More menu holds an Order group that checks "Rank, ascending" and offers
- * Rank and Title, each ascending and descending, and not Status. Choose "Title, descending": the
- * groups stay where they are and the Title header shows descending. Choosing the item already
- * checked changes nothing.
+ * Rank and Title, each ascending and descending, and not Status, whose header turns the groups.
+ * Choose "Title, descending": the groups stay where they are, the Status header still shows
+ * ascending and the Title header shows descending. Choosing the item already checked changes nothing.
  */
 export const PaneWithOrder: Story = {
   render: () => (
@@ -163,6 +254,85 @@ export const PaneWithOrder: Story = {
       <PaneToolbarHost>
         <GroupedTasks pane />
       </PaneToolbarHost>
+    </div>
+  ),
+};
+
+/**
+ * Forty chores grouped by status in the browser and ordered by effort, most first. The groups list by
+ * their status, doing, done, todo, and the chores without one last, under "No value"; the Status
+ * header shows ascending (the direction its groups go in) and Effort descending. Open a group: its
+ * chores follow their effort. Press Status's sort button: the groups turn, todo, done, doing, the
+ * group without a status still last, and Effort still shows descending: each group's chores keep
+ * their effort order. Press Title's: each group's chores follow their titles and the groups stay
+ * turned. Press Status's again: the groups turn back, the chores still by their titles.
+ */
+export const GroupedBehindAnotherKey: Story = {
+  name: "Grouped Behind Another Key",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.Chore" defaultGroup={{ field: "status" }} columns={[
+        { field: "status", header: "Status" }, { field: "effort", header: "Effort", align: "right" }, { field: "title", header: "Title" },
+      ]} />
+    </div>
+  ),
+};
+
+/**
+ * The tasks grouped by status on the server, two of them with no status, in the order their resource declares
+ * (status, rank, then title). The groups read asks for the groups ascending: closed, open, then the tasks without a
+ * status, under "No value"; the Status header shows ascending. Press Status's sort button: the read asks for them
+ * descending, open before closed, the group without a status still last, and the header shows descending, while Rank
+ * still shows ascending: the read asks for each group's tasks by rank, then title, behind the status key. Press it
+ * again to turn them back. The snapshot lists each group's tasks in its own order, whatever the records' order asks.
+ */
+export const GroupedOnTheServer: Story = {
+  name: "Grouped On The Server",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.ServerTask" defaultGroup={{ field: "status" }} columns={[
+        { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
+      ]} />
+    </div>
+  ),
+};
+
+/**
+ * Ten errands grouped by month in the browser and ordered by their date, latest first, then title. The months follow
+ * the date: April, March, February, January, newest first, though the errands are read with March's first, and the two
+ * errands without a date come last, under "No value". A month holds many dates, so its errands share none and there
+ * is no grouping column: the Due header shows the date's own sort, descending, with its `aria-sort`, and Title, which
+ * only breaks ties, shows not sorted. Open April: its errands are latest first, Hire the band before Order the badges.
+ * Press Due's sort button: the months and their errands go oldest first, January to April, "No value" still last;
+ * press it again for newest first. A third press clears the date's key: the months go ascending, as with no key held,
+ * and their errands keep the order they were read in.
+ */
+export const GroupedByMonth: Story = {
+  name: "Grouped By Month",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.Errand" defaultGroup={{ field: "due", granularity: "month" }} columns={[
+        { field: "due", header: "Due" }, { field: "title", header: "Title" },
+      ]} />
+    </div>
+  ),
+};
+
+/**
+ * The server story's tasks, two with no status, held in the browser under a resource that declares no order, grouped
+ * by status. With no key held the groups list ascending by their status, closed before open, though the open tasks are
+ * read first, and the tasks without one come last, under "No value". The Status header shows ascending, the direction
+ * groups go in with no key, Rank and Title show not sorted, and no header's `aria-sort` says a direction. Open a
+ * group: its tasks keep the order they were read in. Press Status's sort button: its first press writes the status key
+ * descending, open before closed, "No value" still last; press it again to turn them back.
+ */
+export const GroupedWithNoOrder: Story = {
+  name: "Grouped With No Order",
+  render: () => (
+    <div className="max-w-3xl">
+      <ListView resource="notes.UnorderedTask" defaultGroup={{ field: "status" }} columns={[
+        { field: "status", header: "Status" }, { field: "rank", header: "Rank", align: "right" }, { field: "title", header: "Title" },
+      ]} />
     </div>
   ),
 };

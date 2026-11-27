@@ -611,8 +611,8 @@ export function isFieldControlVisible(field: FieldDescriptor, values: FormValues
  * The fields a form shows a control of for `values`, in its order: those visible for them,
  * resolved against them (`visibleFields`, which applies `showWhen` once), that are not hidden:
  * `isFieldControlVisible` for a whole list, each field resolved first. A refusal's binder claims
- * the reasons of these (the record form's save and both form dialogs), and the rule checks ask
- * only these.
+ * the reasons of these (their names are `applyFormErrors`'s `shownFieldNames` on the record form's
+ * save and both form dialogs), and the rule checks ask only these.
  */
 export function shownFields<T extends FieldDescriptor>(fields: readonly T[], values: FormValues): T[] {
   return visibleFields(fields, values).filter((field) => !field.hidden);
