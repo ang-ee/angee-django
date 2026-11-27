@@ -34,6 +34,7 @@ from kombu.exceptions import OperationalError
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import PermissionAuditEvent, active_relationship_model
 
+from angee.base.models.identity import public_id_of
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import OutboundEmailChannelMissing, OutboundEmailNotConfigured, SystemChannelMissing
 from angee.messaging.constants import (
@@ -621,12 +622,13 @@ def test_a_sign_in_mail_written_while_its_address_was_merged_is_refused_after_th
     assert _deliver(again).to == ["account@example.test"]
 
 
+@pytest.mark.parametrize("merger", ["contact-administrator", "platform-administrator"])
 def test_a_system_mail_whose_kept_handle_is_merged_again_before_delivery_is_delivered_to_its_address(
-    system_mailer: Any,
+    system_mailer: Any, merger: str,
 ) -> None:
     """The account's address was merged into another when the mail was written; that handle is then merged into a
-    third. The fold re-points the account's redirect at the third, the survivor of the row's handle, whose merges
-    still hold the address: the mail goes there."""
+    third, by a contact administrator or a platform administrator. The fold re-points the account's redirect at the
+    third, the survivor of the row's handle, whose merges still hold the address: the mail goes there."""
 
     with system_context(reason="tests.messaging.system_mail.merged_again"):
         account, kept, outer = (
@@ -636,7 +638,12 @@ def test_a_system_mail_whose_kept_handle_is_merged_again_before_delivery_is_deli
     _merge_as_contact_administrator(kept, account)
     message = _system_mail(system_mailer, "compose-as-system", "account@example.test")
     assert _given(message) == [(kept.pk, "account@example.test")]
-    _merge_as_contact_administrator(outer, kept)
+    if merger == "contact-administrator":
+        _merge_as_contact_administrator(outer, kept)
+    else:
+        administrator = create_platform_admin("system-mail-second-merger")
+        with actor_context(administrator):
+            Handle._base_manager.get(pk=outer.pk).with_actor(administrator).merge(records=[public_id_of(kept)])
     with system_context(reason="tests.messaging.system_mail.merged_again"):
         assert Handle._base_manager.get(pk=account.pk).merged_into_id == outer.pk
     assert _deliver(message).to == ["account@example.test"]
