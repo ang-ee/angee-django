@@ -356,10 +356,6 @@ live in code docstrings.
     delivery through `MAILERS={"default": ...}` override `transport`. With
     messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
     say mail can be sent: ask `Channel.objects.system_mail_configured()`.
-    The emailed sign-in link (`angee.iam_messaging`) still asks the default
-    mailer, so a host with no transport offers a link whose send raises and
-    stamps nothing, and a recorded link whose delivery later fails is stamped as
-    sent.
   - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
     wherever messaging is installed, contributed by messaging's autoconfig. It
     records each email (a password reset, `sendtestemail`, a link an addon mails)
@@ -1102,6 +1098,60 @@ live in code docstrings.
   takes it, and it names the field but no longer repeats its reason.
   Nor a raised domain error reading "Request failed." or its code; inline
   action forms are the entry at the top of this section.
+- `angee.iam_messaging`: **Changed behaviour.** The emailed sign-in link is mailed
+  from a message template, as system mail. The addon ships the template
+  `iam_messaging.sign_in_link` in English and Spanish (`install` resources, in the
+  template library's `base` layout), and `SignInLinkManager.issue` picks the row
+  for the person's languages and sends it through
+  `MessageTemplate.objects.send_as_system` under the reason
+  `iam_messaging.sign_in_link.send`: recorded on messaging's system channel and
+  queued in the action's transaction, then the link is stored with `sent_at`.
+  Nothing is written before the last refusal, and the token is held by no
+  on-commit callback: the hard-coded English body, `SIGN_IN_LINK_SUBJECT` and the
+  send after commit (`SignInLink.send`) are removed, and `SignInLinkManager.issue`
+  returns the link alone; it sends and saves in one atomic block of its own, and
+  asks the send to show the link (`must_print=["link"]`), so a template override
+  that drops the link from either body, or shows it only under a condition false
+  for the person, is refused in band (`link_not_shown`, "…edit or delete the
+  deployment's version of the template, or of a block or part it includes."),
+  nothing written, the earlier link still current, and a warning names the
+  template, its language, its row's public id and the refusal's code. Every other
+  refusal of the render is answered the same way in the addon's words
+  (`link_not_rendered`, "…could not be rendered for this mail…"), never the
+  render's, which can quote a value, and no default brand kit in words of its own
+  (`brand_kit_missing`, "This deployment has no default brand kit…"); the system
+  channel's and compose's refusals pass as they are. The action answers "Sign-in
+  link queued for the account's email." (it said "sent"), and so do the
+  cooldown's refusal and the log: its mail's delivery is the recorded message's
+  to show on the system channel. A missing template's refusal names no command
+  ("This deployment has not installed the sign-in link's email template; its
+  operator loads its resources (provision does)."). Whether an account's address can
+  receive its link is messaging's `Message.objects.clean_system_recipient`, no
+  longer Django's `validate_email`: an administrator sees the account's own
+  refusal for an address outside ASCII before the @ (as before) and now also for
+  one messaging refuses that Django admits (a quoted local part with an escaped space),
+  which used to be offered and refused at the send in messaging's words. The mail
+  goes to the account's own spelling of its address, which the recipient row
+  records, whatever spelling or merge its handle has, or is not sent at all
+  when a merge it was written under is reverted before its delivery.
+  `SignInLinkManager.issue` and `redeem` and the backend's `authenticate` hide
+  their locals from an error report (bare `sensitive_variables`); the mutations
+  carry no mark, since the schema logs their unexpected errors with no
+  traceback. The addon now requires `angee-messaging`,
+  `angee-messaging-templates` and `angee-parties`, so a host that enables it
+  enables them and what they require, the brand kit among it. A link is offered
+  where base's `configured_public_origin()` gives an origin and
+  `Channel.objects.system_mail_configured()` holds (messaging's System mail), no
+  longer wherever a default mailer exists, and its refusal names no setting;
+  a system channel missing or paused, or the template missing, is refused in band
+  with nothing written (`SYSTEM_CHANNEL_MISSING`, `OUTBOUND_EMAIL_CHANNEL_MISSING`,
+  `template_missing`). `sent_at` means recorded and queued: a link whose delivery
+  later fails, or drops mid-send and stays uncertain, still replaces the link
+  before it. The fragment's comment now says the action's holders read the
+  recorded link on the system channel (revision 3). **Upgrade:** provision loads
+  the template rows (the `install` tier of `resources load`) and syncs the
+  fragment at revision 3; links are offered once system mail is configured
+  (messaging's README, System mail). No migration.
 - `@angee/ui`, `@angee/app`: **Changed contract.** The keyboard focus ring is
   Tailwind's ring layer, and forced-colours mode shows it. `focus-ring` and
   `focus-ring-danger` (`styles/index.css`) write Tailwind's ring variable, so
@@ -1485,7 +1535,7 @@ live in code docstrings.
     and PostgreSQL. `makemigrations` then writes IAM's `DeleteModel("SignInLink")`
     and, with the addon, its initial migration. After migrating, the host
     provisions, which syncs the permissions: IAM's schema at revision 32 and,
-    with the addon, its fragment at revision 2.
+    with the addon, its fragment at revision 3.
   - Until the rows are gone, both commands refuse, on django-compose
     0.1.0.dev14, which the framework requires since the composer upgrade below:
     - `makemigrations`, on the databases of the environment that authors the
