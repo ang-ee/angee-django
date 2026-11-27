@@ -45,11 +45,16 @@ definition iam/protected {
     permission member = manager->effective_member
 }
 
-// Decision access follows the concerned record's live permissions.
+// Decision access follows the concerned record's live permissions. A user a
+// question names in `managed_user` is one its owner manages there: neither the
+// assignee arm nor the administrator arm reaches them for `act`, only an
+// `owner_eligible` arm does, while their read stays.
 definition decisions/decision {
     relation concerned_record: extcontrib/record // rebac:field=records__extcontrib_record
+    relation managed_user: auth/user
 
     permission owner_eligible = concerned_record->write
+    permission owner_managed = managed_user
     permission read = concerned_record->read
 }
 

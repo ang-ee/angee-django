@@ -8,6 +8,7 @@ import pytest
 from django.apps import apps
 from django.core import checks
 from django.core.checks.registry import registry
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import isolate_apps
@@ -32,6 +33,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.origins import PublicOriginUnavailable, configured_public_origin
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 from tests.test_zed_extensions import _addon, _apply_emitted_schema_paths, _contrib_addon
@@ -222,21 +224,38 @@ def test_native_rebac_database_check_and_base_checks_are_registered() -> None:
     assert sum(check is check_database_routers for check in registry.registered_checks) == 1
 
 
-@pytest.mark.parametrize(
-    "origin,debug,valid",
-    [
-        ("", False, True),
-        ("https://app.example.test", False, True),
-        ("https://app.example.test:8443/", False, True),
-        ("http://localhost:5173", True, True),
-        ("http://app.example.test", False, False),
-        ("https://*.example.test", False, False),
-        ("https://user:secret@app.example.test", False, False),
-        ("https://app.example.test/path", False, False),
-        ("https://app.example.test:notaport", False, False),
-        ("https://exa mple.test", False, False),
-    ],
-)
+ORIGINS = [
+    ("", False, True),
+    ("https://app.example.test", False, True),
+    ("https://app.example.test:8443/", False, True),
+    ("http://localhost:5173", True, True),
+    ("http://app.example.test", False, False),
+    ("https://*.example.test", False, False),
+    ("https://user:secret@app.example.test", False, False),
+    ("https://app.example.test/path", False, False),
+    ("https://app.example.test:notaport", False, False),
+    ("https://exa mple.test", False, False),
+]
+
+
+@pytest.mark.parametrize(("origin", "debug", "valid"), ORIGINS)
+def test_the_configured_public_origin_is_the_one_the_check_accepts_and_none_is_a_coded_refusal(
+    origin: str, debug: bool, valid: bool,
+) -> None:
+    """The accessor asks the owner's rule of the setting: a valid origin comes back bare; an unset or invalid one is
+    refused with the owner's code, as an ``ImproperlyConfigured`` too."""
+
+    with override_settings(ANGEE_PUBLIC_ORIGIN=origin, DEBUG=debug):
+        if origin and valid:
+            assert configured_public_origin() == origin.rstrip("/")
+            return
+        with pytest.raises(PublicOriginUnavailable) as refusal:
+            configured_public_origin()
+    assert (refusal.value.code, str(refusal.value)) == ("PUBLIC_ORIGIN_UNAVAILABLE", "PUBLIC_ORIGIN_UNAVAILABLE")
+    assert isinstance(refusal.value, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(("origin", "debug", "valid"), ORIGINS)
 def test_an_invalid_public_origin_fails_the_system_check(origin: str, debug: bool, valid: bool) -> None:
     """Only a bare public origin is trusted for CSRF and links; any other set value is reported."""
 

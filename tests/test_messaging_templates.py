@@ -16,6 +16,7 @@ from django.db.models.deletion import Collector
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, SubjectRef, actor_context, system_context
+from rebac.models import PermissionAuditEvent
 from rebac.testing import assert_decisions
 
 from angee.base.models.identity import public_id_of
@@ -635,12 +636,17 @@ def test_the_row_facts_read_as_fields_and_filter_the_list(db: None) -> None:
     assert [row[:3] for row in listed({"has_updated_default": {"_eq": True}})] == [("base", "en", False)]
 
 
-def test_a_row_returned_without_annotations_reads_its_facts_itself(db: None) -> None:
+def test_a_row_returned_without_annotations_reads_its_facts_itself_structurally(db: None) -> None:
+    """Each fact is one read through the base manager: no elevation, so no permission audit row."""
+
     del db
     baseline = _row(baseline=True)
     override = _row()
+    audits = PermissionAuditEvent.objects.count()
     assert (baseline.is_effective, baseline.is_overridden, baseline.has_updated_default) == (False, True, False)
     assert (override.is_effective, override.is_overridden, override.has_updated_default) == (True, False, False)
+    assert (baseline.overrides_default, override.overrides_default) == (False, True)
+    assert PermissionAuditEvent.objects.count() == audits
 
 
 def test_listing_rows_with_their_facts_costs_the_same_at_one_and_at_twenty_five_rows(db: None) -> None:

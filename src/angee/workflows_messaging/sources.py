@@ -3,6 +3,7 @@
 from typing import Any
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, to_object_ref
 
 from angee.messaging.events import message_ingested
@@ -33,15 +34,25 @@ class MessageIngested(TriggerSource):
 
     @classmethod
     def check_access(cls, trigger: Any, actor: Any, record: Any = None) -> None:
-        """Check the channel when enabling and recheck current scope on admission."""
+        """Check the channel when enabling and recheck current scope on admission.
+
+        A channel the actor cannot read is refused as such; a readable system-only
+        one (``Channel.system_only``, the system channel) is refused under
+        ``channel``, before any grant.
+        """
         channel_id = trigger.require_channel_id()
         if record is not None:
             if record.channel_id != channel_id:
                 raise PermissionDenied("The message no longer belongs to the trigger's channel.")
         visible = apps.get_model("messaging", "Channel").objects.with_actor(actor).with_action("read")
-        if not visible.filter(pk=channel_id).exists():
+        channel = visible.filter(pk=channel_id).first()
+        if channel is None:
             subject = "The enabling user" if record is None else "The workflow principal"
             raise PermissionDenied(f"{subject} cannot read the channel.")
+        if channel.system_only:
+            raise ValidationError({"channel": ValidationError(
+                "The system channel is never a trigger source.", code="system_only",
+            )})
 
     @classmethod
     def connect(cls) -> None:

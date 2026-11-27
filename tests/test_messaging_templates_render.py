@@ -55,7 +55,17 @@ from angee.messaging_templates import walker as walker_module
 from angee.messaging_templates.engine import (
     ALLOWED_FILTERS,
     ALLOWED_TAGS,
+    INVALID_VALUES,
+    MESSAGE_TEMPLATE_REFUSED,
+    NO_BRAND_KIT,
     RENDER_BUDGET,
+    RENDER_BUDGET_EXCEEDED,
+    RENDER_FAILED,
+    RENDER_FILTER_INPUT_LIMIT,
+    RENDER_ITERATION_LIMIT,
+    RENDER_OUTPUT_LIMIT,
+    SUBJECT_TOO_LONG,
+    VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
     RenderBudget,
     RenderBudgetExceeded,
@@ -73,6 +83,7 @@ from angee.messaging_templates.html_checks import (
 )
 from angee.messaging_templates.models import MessageTemplateQuerySet
 from angee.messaging_templates.rendering import MarkdownFormatHandler
+from angee.messaging_templates.testing.faults import failing_filter
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
@@ -1182,7 +1193,8 @@ def _reading(html: str, *, scripting: bool) -> tuple[list[tuple[Any, ...]], list
     return markup, raw
 
 
-MARKER = "MARKER"
+MARKER = "https://example.test/MARKER"
+"""Visible text that is also a link ``url`` keeps, so a harmless value renders wherever a row prints its value."""
 _HTML_SPACE = " \t\n\f\r"
 
 
@@ -1229,6 +1241,21 @@ def _assert_value_stays_text(
                 if name in TEXT_ATTRIBUTES or (linking and (was, now) == (url(_harmless(value)), url(value))):
                     continue
                 assert now == was, (before[1], name, was, now)
+
+
+def _unless_unlinkable(render: Callable[[], str], value: str) -> str | None:
+    """``render()``'s HTML, or ``None`` when the render refused ``value`` as a link ``url`` would empty.
+
+    A row printing the value through ``url`` refuses a value that is no link (``value_not_linkable``) rather than
+    render it, so such a value never becomes markup: nothing is rendered. Any other refusal is the test's failure.
+    """
+
+    try:
+        return render()
+    except ValidationError as refusal:
+        assert [item.code for item in refusal.error_list] == [VALUE_NOT_LINKABLE], refusal
+        assert UNPRINTED.sub("", value).strip() and url(UNPRINTED.sub("", value)) == "", value
+        return None
 
 
 class _Rows:
@@ -1441,8 +1468,11 @@ def test_a_value_never_becomes_markup(
         event("refused")
         return  # a refused row never renders
     event("admitted")
-    marker = walk.render({"v": _harmless(value)}, kit=kit).html
-    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+    hostile = _unless_unlinkable(lambda: walk.render({"v": value}, kit=kit).html, value)
+    if hostile is None:
+        event("refused as a link")
+        return
+    _assert_value_stays_text(walk.render({"v": _harmless(value)}, kit=kit).html, hostile, value)
 
 
 _MARKDOWN = st.lists(st.sampled_from([
@@ -1468,8 +1498,9 @@ def test_a_value_never_becomes_markup_through_markdown(kit: Any, source: str, he
         walk = TemplateWalker(saving=True).walk(template, rows)
     except ValidationError:
         return
-    marker = walk.render({"v": _harmless(value)}, kit=kit).html
-    _assert_value_stays_text(marker, walk.render({"v": value}, kit=kit).html, value)
+    hostile = _unless_unlinkable(lambda: walk.render({"v": value}, kit=kit).html, value)
+    if hostile is not None:
+        _assert_value_stays_text(walk.render({"v": _harmless(value)}, kit=kit).html, hostile, value)
 
 
 PROPERTY_SOURCE = (
@@ -1477,8 +1508,12 @@ PROPERTY_SOURCE = (
     "{% for i in items %}{{ i }}{% endfor %}|{{ v|default:'d' }}|{{ v|upper }}|{{ v|lower }}|{{ v|capfirst }}|"
     "{{ v|title }}|{{ v|truncatechars:20 }}|{{ v|truncatewords:3 }}|{{ v|linebreaksbr }}|{{ v|length }}|"
     "{{ when|date }}|{{ v|floatformat }}|{{ v|pluralize }}|{{ v|yesno }}</p>"
+)
+PROPERTY_LINKS = (
     '<a href="{{ v|url }}" title="{{ v }}">{{ v|url }}</a><img alt="{{ v|upper }}" src="{{ v|default:\'\'|url }}" />'
 )
+"""The paths a value takes through ``url``, in a row of their own: a value that is no link is refused there, and
+:data:`PROPERTY_SOURCE` still renders it through every other filter."""
 
 
 @settings(deadline=None, max_examples=40, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -1492,12 +1527,17 @@ def test_a_value_never_becomes_markup_through_any_filter(plain: Any, kit: Any, v
             _row("block", "echo", source="<i>{{ x }}</i>", text_source="{{ x }}", variables={"x": "x"})
             _mail(PROPERTY_SOURCE, {"v": "x", "items.*": "x", "when": "x"}, format="html", text_source="{{ v }}",
                   key="tests.property")
+            _mail(PROPERTY_LINKS, {"v": "x"}, format="html", text_source="{{ v }}", key="tests.property_links")
         template = MessageTemplate.objects.get(key="tests.property")
+        links = MessageTemplate.objects.get(key="tests.property_links")
     for candidate in (value, SafeString(value), mark_safe("<b>" + value + "</b>")):
         harmless = _harmless(str(candidate))
         marker = _render(template, {"v": harmless, "items": [harmless], "when": "2026-11-24"}, kit).html
         rendered = _render(template, {"v": candidate, "items": [candidate], "when": "2026-11-24"}, kit)
         _assert_value_stays_text(marker, rendered.html, str(candidate))
+        linked = _unless_unlinkable(lambda: _render(links, {"v": candidate}, kit).html, str(candidate))
+        if linked is not None:
+            _assert_value_stays_text(_render(links, {"v": harmless}, kit).html, linked, str(candidate))
 
 
 TRUNCATING_SENDER = "x onmouseover=alert(document.domain) style=background:url(https://tracker.example/leak);x:"
@@ -1610,15 +1650,20 @@ ADMITTED_LINKS = {
 """Values url makes links of, percent-encoded and in punycode as markdown-it writes them, then escaped."""
 
 
-def test_a_url_value_gives_a_link_or_nothing(plain: Any, kit: Any) -> None:
-    """Property 3: a value gives an absolute https, http, mailto or tel link, or an empty target; a quote cannot
-    leave an attribute."""
+def test_a_url_value_gives_a_link_or_the_render_is_refused(plain: Any, kit: Any) -> None:
+    """Property 3: a value gives an absolute https, http, mailto or tel link; ``url`` gives any other value no link,
+    and a render refuses it rather than send an empty target; a blank value leaves it empty; a quote cannot leave an
+    attribute."""
 
     del plain
     template = _mail('<a href="{{ link|url }}">x</a>', {"link": "x"}, format="html", text_source="{{ link|url }}")
     for link in ("javascript:alert(1)", "JaVaScRiPt:alert(1)", "vbscript:x", "file:///etc/passwd",
                  "data:text/html,x", "data:image/png;base64,AAAA", "https://" + "a" * 2_050, *REFUSED_LINKS):
-        assert 'href=""' in _render(template, {"link": link}, kit).html, link
+        assert url(link) == "", link
+        with pytest.raises(ValidationError) as refusal:
+            _render(template, {"link": link}, kit)
+        assert [item.code for item in refusal.value.error_list] == [VALUE_NOT_LINKABLE], link
+    assert 'href=""' in _render(template, {"link": " "}, kit).html
     for link, sent in ADMITTED_LINKS.items():
         assert f'href="{sent}"' in _render(template, {"link": link}, kit).html, link
     rendered = _render(template, {"link": 'https://example.test/" onclick="x'}, kit)
@@ -1871,44 +1916,40 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
         "d is printed with a time", "e is printed with a time"]
 
 
-def _failing(raised: type[BaseException]) -> Any:
-    def upper(value: Any) -> str:
-        raise raised("a filter nobody thought of")
-
-    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
-    return upper
-
-
 @pytest.mark.parametrize("raised", [RuntimeError, ZeroDivisionError, ValueError])
 def test_any_other_failure_is_logged_then_refused_as_render_failed(
-    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: type[Exception],
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture, raised: type[Exception],
 ) -> None:
-    """Section 4: what nobody thought of is logged with its traceback, then leaves as render_failed; preview says so."""
+    """Section 4: what nobody thought of is logged as the row and the exception's type, never the exception's text
+    or traceback, which may quote a value, then leaves as render_failed; preview says so."""
 
     del plain
-    monkeypatch.setitem(register.filters, "upper", _failing(raised))
-    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
-    with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
-        with pytest.raises(ValidationError) as caught:
-            _render(template, {"name": "Ana"}, kit)
-        with system_context(reason="tests.messaging_templates.render.preview"):
-            preview = template.preview(kit=kit)
-    assert [item.code for item in caught.value.error_list] == ["render_failed"]
-    assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
-    assert preview.rendered is None
-    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
-    assert len(caplog.records) == 2 and all(record.exc_info for record in caplog.records)
+    with failing_filter("upper", raised("a filter nobody thought of")):
+        template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
+        with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
+            with pytest.raises(ValidationError) as caught:
+                _render(template, {"name": "Ana"}, kit)
+            with system_context(reason="tests.messaging_templates.render.preview"):
+                preview = template.preview(kit=kit)
+        assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
+        assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+        assert preview.rendered is None
+        assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
+        assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(
+            logging.ERROR,
+            f"A message template failed to render: the template {template.key} in en raised {raised.__name__}.",
+            None,
+    )] * 2
 
 
 @pytest.mark.parametrize("raised", [MemoryError, RecursionError])
 def test_running_out_of_room_is_not_a_refusal(
-    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, raised: type[Exception],
+    plain: Any, kit: Any, raised: type[Exception],
 ) -> None:
     """MemoryError and RecursionError say the process ran out of room, not that the row cannot render."""
 
     del plain
-    monkeypatch.setitem(register.filters, "upper", _failing(raised))
-    with pytest.raises(raised):
+    with failing_filter("upper", raised("a filter nobody thought of")), pytest.raises(raised):
         _render(_mail("{{ name|upper }}", {"name": "x"}), {"name": "Ana"}, kit)
 
 
@@ -1923,7 +1964,7 @@ def test_the_walk_and_the_warnings_are_inside_the_contract(
         patched.setattr(_TreeWalker, "close", lambda walker, tree: 1 / 0)
         with pytest.raises(ValidationError) as caught:
             _render(template, {"name": "Ana"}, kit)
-        assert [item.code for item in caught.value.error_list] == ["render_failed"]
+        assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
         with system_context(reason="tests.messaging_templates.render.preview"):
             assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
     monkeypatch.setattr(TemplateWalk, "unused", property(lambda walk: 1 / 0))
@@ -1945,22 +1986,22 @@ def test_a_caller_tells_each_refusal_apart_by_its_code(
         return {item.code for item in caught.value.error_list}
 
     template = _mail("{{ order.total }} {{ name }}", {"order.total": "x", "name": "x"}, key="tests.codes")
-    assert codes(template, {"order": "x"}) == {"invalid_values"}
-    assert codes(template, {"order": {"total": None}, "name": None}) == {"invalid_values"}
-    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {"message_template_refused"}
+    assert codes(template, {"order": "x"}) == {INVALID_VALUES}
+    assert codes(template, {"order": {"total": None}, "name": None}) == {INVALID_VALUES}
+    assert codes(_mail("{{ x|safe }}", key="tests.broken"), {}) == {MESSAGE_TEMPLATE_REFUSED}
     looping = _mail("{% for i in items %}" + "{{ i|upper }}{{ i|lower }}{{ i|title }}" * 2 + "{% endfor %}",
                     {"items.*": "x"}, key="tests.looping")
-    assert codes(looping, {"items": ["a"] * 501}) == {"invalid_values"}
-    assert codes(looping, {"items": ["a" * 90] * 500}) == {"render_budget"}
+    assert codes(looping, {"items": ["a"] * 501}) == {INVALID_VALUES}
+    assert codes(looping, {"items": ["a" * 90] * 500}) == {RENDER_BUDGET_EXCEEDED}
     long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
-    assert codes(long_subject, {"name": "n" * 600}) == {"subject_too_long"}
-    monkeypatch.setitem(register.filters, "upper", _failing(RuntimeError))
-    assert codes(looping, {"items": ["a"]}) == {"render_failed"}
+    assert codes(long_subject, {"name": "n" * 600}) == {SUBJECT_TOO_LONG}
+    with failing_filter("upper", RuntimeError("a filter nobody thought of")):
+        assert codes(looping, {"items": ["a"]}) == {RENDER_FAILED}
     with system_context(reason="tests.messaging_templates.render.kit"):
         BrandKit.objects.filter(pk=kit.pk).update(is_default=False)
     with pytest.raises(ValidationError) as caught, system_context(reason="tests.messaging_templates.render"):
         template.render({"order": {"total": 1}, "name": "Ana"})
-    assert {item.code for item in caught.value.error_list} == {"no_brand_kit"}
+    assert {item.code for item in caught.value.error_list} == {NO_BRAND_KIT}
 
 
 def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> None:
@@ -1971,7 +2012,7 @@ def test_a_lone_surrogate_is_refused_as_invalid_values(plain: Any, kit: Any) -> 
     template.sample = {"name": "a\ud800b"}  # unsaved: PostgreSQL's jsonb refuses a lone surrogate
     with pytest.raises(ValidationError, match="lone surrogate") as caught:
         _render(template, {"name": "a\ud800b"}, kit)
-    assert {item.code for item in caught.value.error_list} == {"invalid_values"}
+    assert {item.code for item in caught.value.error_list} == {INVALID_VALUES}
     with system_context(reason="tests.messaging_templates.render.preview"):
         assert template.preview(kit=kit).warnings[0].code == TemplateWarningCode.RENDER_ERROR
 
@@ -3006,6 +3047,9 @@ def test_the_costliest_pass_does_bounded_work(plain: Any, kit: Any, work: dict[s
     assert work["trees"] == trees and _charges(work["passes"]) == charges
     # The charges are counted against the budget's own limits: the costliest cases reach them.
     assert RenderBudget().limits == {"iterations": 500, "output": 200_000, "filter_input": 500_000}
+    assert RenderBudget().limits == {  # the defaults a sender reads are the exported limits
+        "iterations": RENDER_ITERATION_LIMIT, "output": RENDER_OUTPUT_LIMIT, "filter_input": RENDER_FILTER_INPUT_LIMIT,
+    }
     assert RenderBudget.for_lines().limits == {"iterations": 50, "output": 20_000, "filter_input": 50_000}
 
 

@@ -882,6 +882,36 @@ END:VEVENT"""
     }
 
 
+def test_two_aliases_of_one_mailbox_on_one_invitation_are_one_attendee(subscription: Subscription) -> None:
+    """Attendees are deduplicated on the person-matching key, so a provider's aliases stay one attendee.
+
+    Whether two aliases should be two attendees, by the spelling key, is open for a ruling; this pins today's rule.
+    """
+
+    planning = """BEGIN:VEVENT
+UID:planning@example.test
+DTSTART:20260403T150000Z
+DTEND:20260403T160000Z
+SUMMARY:Planning
+ORGANIZER;CN=Dana:mailto:dana@example.test
+ATTENDEE;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:erin.example@gmail.com
+ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Erin:mailto:erinexample+work@gmail.com
+END:VEVENT"""
+    subscription.feed.body = _feed(planning)
+    subscription.poll()
+
+    with system_context(reason="tests.ics"):
+        event = subscription.events()["planning@example.test"]
+        rows = [
+            (row.handle.value, row.role, row.response)
+            for row in EventAttendee.objects.filter(event=event).select_related("handle").order_by("role")
+        ]
+    assert sorted(rows) == sorted([
+        ("dana@example.test", AttendeeRole.ORGANIZER, AttendeeResponse.ACCEPTED),
+        ("erin.example@gmail.com", AttendeeRole.REQUIRED, AttendeeResponse.ACCEPTED),
+    ])
+
+
 def test_feed_shapes_take_the_event_owners_stored_form(subscription: Subscription) -> None:
     weekly = """BEGIN:VEVENT
 UID:offsite@example.test

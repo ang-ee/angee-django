@@ -444,16 +444,12 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
     namespace = {
         "INSTALLED_APPS": ("angee.messaging",) if include_messaging else (),
         "COMPOSE_OUTPUT_DIR": tmp_path / "runtime",
-        "MAILERS": {"default": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}},
+        "MAILERS": {"transport": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}},
         "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
     _configure(namespace, tmp_path)
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment"}
-    if include_messaging:
-        assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
-        assert namespace["ANGEE_EMAIL_DELIVERY_CONFIGURED"] is True
-    else:
-        assert "ANGEE_EMAIL_DELIVERY_CONFIGURED" not in namespace
+    assert namespace["MAILERS"]["transport"] == {"BACKEND": "anymail.backends.mailgun.EmailBackend"}
     assert namespace["ANYMAIL_MAILGUN_SENDER_DOMAIN"] == "example.test"
 
 
@@ -600,3 +596,77 @@ def test_native_environment_values_reach_declared_and_derived_capability_setting
         "https://operator.example.test" if environment else "https://project.example.test"
     )
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment" if environment else "project"}
+
+
+SYSTEM_MAILER = {"BACKEND": "angee.messaging.email.SystemMailer"}
+SMTP_YAML = """\
+  {alias}:
+    BACKEND: django.core.mail.backends.smtp.EmailBackend
+    OPTIONS:
+      host: smtp.example.test
+      port: 587
+"""
+SMTP = {"BACKEND": "django.core.mail.backends.smtp.EmailBackend", "OPTIONS": {"host": "smtp.example.test", "port": 587}}
+
+
+def _mail_host(tmp_path: Path, authored: str, *, installed: tuple[str, ...] = ("angee.messaging",)) -> dict[str, Any]:
+    """Configure a host that authors ``authored`` in its settings.yaml, as a deployment states its mail."""
+
+    (tmp_path / "settings.yaml").write_text(authored)
+    namespace: dict[str, Any] = {"INSTALLED_APPS": installed}
+    _configure(namespace, tmp_path)
+    return namespace
+
+
+def _mailers(*aliases: str) -> str:
+    return "MAILERS:\n" + "".join(SMTP_YAML.format(alias=alias) for alias in aliases)
+
+
+def test_a_host_stating_no_mailer_gets_the_system_mailer_and_error_mail_through_the_transport(tmp_path: Path) -> None:
+    namespace = _mail_host(tmp_path, "SECRET_KEY: mail-host\n")
+    assert namespace["MAILERS"] == {"default": SYSTEM_MAILER}
+    logging = namespace["LOGGING"]
+    assert logging["handlers"]["mail_admins"]["using"] == "transport"
+    assert logging["loggers"]["django"]["handlers"] == ["console", "mail_admins"]
+    # Kept as text: the settings loader does not read Django's server-log formatter as a reference.
+    assert logging["formatters"]["django.server"]["format"] == "[{server_time}] {message}"
+
+
+@pytest.mark.parametrize("stated", ["transport", "default-and-transport"])
+def test_a_stated_transport_reaches_the_settings_as_authored_beside_the_system_mailer(
+    tmp_path: Path, stated: str,
+) -> None:
+    authored = _mailers("transport")
+    if stated == "default-and-transport":
+        authored += "  default:\n    BACKEND: angee.messaging.email.SystemMailer\n"
+    assert _mail_host(tmp_path, authored)["MAILERS"] == {"default": SYSTEM_MAILER, "transport": SMTP}
+
+
+@pytest.mark.parametrize(
+    ("authored", "remedied"),
+    [
+        pytest.param(_mailers("default"), _mailers("transport"), id="own-default-renamed"),
+        pytest.param(_mailers("default", "transport"), _mailers("transport"), id="own-default-removed"),
+        pytest.param(
+            "MAILERS:\n  transport:\n    BACKEND: angee.messaging.email.SystemMailer\n", _mailers("transport"),
+            id="transport-that-records",
+        ),
+    ],
+)
+def test_a_mailer_setting_that_collides_with_messagings_is_refused_and_the_stated_edit_starts(
+    tmp_path: Path, authored: str, remedied: str,
+) -> None:
+    with pytest.raises(ImproperlyConfigured):
+        _mail_host(tmp_path, authored)
+    assert _mail_host(tmp_path, remedied)["MAILERS"] == {"default": SYSTEM_MAILER, "transport": SMTP}
+
+
+def test_a_host_that_authors_logging_keeps_it(tmp_path: Path) -> None:
+    authored = "LOGGING:\n  version: 1\n  disable_existing_loggers: false\n"
+    assert _mail_host(tmp_path, authored)["LOGGING"] == {"version": 1, "disable_existing_loggers": False}
+
+
+def test_without_messaging_mail_and_logging_are_the_hosts(tmp_path: Path) -> None:
+    namespace = _mail_host(tmp_path, _mailers("default"), installed=(BASE_APP,))
+    assert namespace["MAILERS"] == {"default": SMTP}
+    assert "LOGGING" not in namespace

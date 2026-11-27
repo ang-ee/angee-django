@@ -16,7 +16,6 @@ from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 
 from angee.base.pagination import clamp_page_size
-from angee.base.prefetch import prefetched
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import (
@@ -40,18 +39,16 @@ from angee.iam.schema import UserType
 Decision = apps.get_model("decisions", "Decision")
 DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 
-_CONCERN_RECORDS = "_decision_concern_records"
-_CONCERN_TARGET = "_decision_concern_target"
-
-
 def _concern_records(info: strawberry.Info) -> models.Prefetch:
-    """Batch readable concern links and their targets once per referenced type."""
+    """The reader's batch of readable concern links and targets (``Decision.concern_records_prefetch``)."""
 
-    actor = get_current_user(info)
-    links = DecisionRecord.objects.with_actor(actor).select_related("content_type").prefetch_related(
-        DecisionRecord.record_targets_prefetch(actor, to_attr=_CONCERN_TARGET),
-    )
-    return models.Prefetch("records", queryset=links, to_attr=_CONCERN_RECORDS)
+    return Decision.concern_records_prefetch(get_current_user(info))
+
+
+def _contexts(info: strawberry.Info) -> models.Prefetch:
+    """The reader's batch of the listed questions' contexts (``Decision.contexts_prefetch``)."""
+
+    return Decision.contexts_prefetch(get_current_user(info))
 
 
 @strawberry_django.type(DecisionRecord)
@@ -75,7 +72,6 @@ class DecisionType(AngeeNode):
     kind_label: str = strawberry_django.field(only=["kind"])
     requester: UserType | None = actor_scoped_to_one("requester")
     assignees: list[UserType] = actor_scoped_to_many("assignees")
-    context: JSON
     proposal: JSON
     records: list[DecisionRecordType] = actor_scoped_to_many("records")
     verdict: JSON | None
@@ -97,6 +93,11 @@ class DecisionType(AngeeNode):
     is_overdue: bool = strawberry_django.field(only=["verdict", "due_at"])
     permissions = permissions_field(("act",))
 
+    @strawberry_django.field(only=["context"], prefetch_related=[_contexts])
+    def context(self, info: strawberry.Info) -> JSON:
+        """The question's context as this reader is shown it (``Decision.context_for``), never the stored one whole."""
+        return cast(Any, self).context_for(get_current_user(info)).model_dump(mode="json")
+
     @strawberry_django.field(only=["answered_for"])
     def answered_for(self, info: strawberry.Info) -> JSON | None:
         """The record the answer was given for, shown only to a reader of that record."""
@@ -109,13 +110,8 @@ class DecisionType(AngeeNode):
 
     @strawberry_django.field(only=["id"], prefetch_related=[_concern_records])
     def concerns_label(self, info: strawberry.Info) -> str:
-        """The readable records this question concerns, by their own labels (a bill number, a supplier).
-
-        Lists batch concern targets by type through their native read scope. A
-        question loaded another way uses the same prefetch for its own concerns.
-        """
-        links = prefetched(cast(Any, self), _CONCERN_RECORDS, lambda: _concern_records(info))
-        return "; ".join(str(target) for link in links if (target := getattr(link, _CONCERN_TARGET)) is not None)
+        """The readable records this question concerns, by their own labels (``Decision.concern_labels``)."""
+        return "; ".join(cast(Any, self).concern_labels(get_current_user(info)))
 
 
 _DECISIONS = hasura_model_resource(

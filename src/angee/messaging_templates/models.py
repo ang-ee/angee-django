@@ -36,6 +36,15 @@ spelled as parties stores one (:class:`~angee.parties.fields.LanguageCodeField`)
 **Access.** Every signed-in actor reads rows; platform administrators create,
 write and delete rows that are not baselines, read every row's sample and preview
 every row, and nobody but a resource load writes a baseline (``permissions.zed``).
+
+**Sending.** :meth:`MessageTemplateManager.send_as_system` renders an effective
+template as named system work and records it on messaging's system channel, which
+delivers it: system mail, which a person's button may cause when the caller's own
+permission decided the send, the causing actor recorded in the caller's changeset.
+:meth:`MessageTemplateManager.send_test` is an administrator's test send of a
+row with its sample to their own address: decided by the row's ``preview``, then
+sent the same way, as named system work, with the administrator recorded as who
+caused it.
 """
 
 from __future__ import annotations
@@ -54,7 +63,8 @@ from django.core.validators import RegexValidator
 from django.db import IntegrityError, models, transaction
 from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Cast, Length
-from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref
+from django.views.decorators.debug import sensitive_variables
+from rebac import PermissionDenied, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
 
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeDataModel
@@ -66,6 +76,7 @@ from angee.base.querysets import ClosedUpdateQuerySet
 from angee.base.serialization import canonical_json_sha256
 from angee.brandkit.models import BrandKit
 from angee.graphql.capabilities import held_permissions
+from angee.messaging_templates.engine import NO_BRAND_KIT, NOT_A_TEMPLATE, NOT_EFFECTIVE, clean_link
 from angee.messaging_templates.rendering import MessageTemplateFormat, validate_variables
 from angee.messaging_templates.resources import MessageTemplateResource
 from angee.messaging_templates.walker import (
@@ -79,12 +90,15 @@ from angee.messaging_templates.walker import (
     in_layout,
 )
 from angee.parties.fields import LanguageCodeField, normalize_language_code
+from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
+    from angee.iam.models import User
+    from angee.messaging.models import Message
     from angee.parties.models import Person
 
 logger = logging.getLogger(__name__)
@@ -158,6 +172,16 @@ UNRESOLVED_DELETE_MESSAGE = (
 ONE_AT_A_TIME_MESSAGE = "Message templates are written one at a time, so each save derives its content hash."
 NO_BRAND_KIT_MESSAGE = "No brand kit is the default, and a message renders in a brand kit's name and colours."
 SHIPPED_DEFAULT_MESSAGE = "A shipped default has this kind, key and language: override it instead."
+NOT_A_TEMPLATE_MESSAGE = "Only a template is sent: a layout, block or part reaches a mail inside a template."
+NOT_EFFECTIVE_MESSAGE = (
+    "This row is not what renders for its kind, key and language (a shipped default its override replaces, or a row "
+    "not saved): send the row that renders."
+)
+NO_TEST_ADDRESS_MESSAGE = "Your account has no email address to send the test to."
+
+TEST_SUBJECT_PREFIX = "[Test] "
+"""What a test send's subject starts with (:meth:`MessageTemplateManager.send_test`), so the administrator who asked
+tells it from the mail its recipients get."""
 
 LAYOUT_PREVIEW = PreviewFrame(
     subject="A message in this layout",
@@ -636,8 +660,201 @@ _MessageTemplateManagerBase = AngeeHistoryManager.from_queryset(MessageTemplateQ
 
 
 class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManagerBase[TemplateT]):
-    """Owns the writes that start a row or an override: the deployment's own row, overriding a shipped default and
-    keeping an override over it."""
+    """Owns the writes that start a row or an override (the deployment's own row, overriding a shipped default and
+    keeping an override over it) and the sends of a template (:meth:`send_as_system`, :meth:`send_test`)."""
+
+    clean_link = staticmethod(clean_link)
+    """``clean_link(value, *, path="link") -> str``: the link a mail prints for ``value``, as a render prepares it, or
+    the render's refusal of it (:func:`~angee.messaging_templates.engine.clean_link`). A caller of
+    :meth:`send_as_system` that sends many mails with one link asks it once, before the first."""
+
+    @sensitive_variables()
+    def send_as_system(
+        self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None = None,
+        must_print: Iterable[str] = (),
+    ) -> Message:
+        """Render ``row`` with ``values`` as named system work and record it on the system channel, queued.
+
+        System mail from a template: named system work, which a person's button
+        may cause when the caller's own permission decided the send, the causing
+        actor recorded in the caller's changeset; and the one path every template
+        mail takes (:meth:`send_test` shares it). **Call it only
+        from system work whose own gate decided the send**: a person's request
+        reaches it only through such a gate, never from a resolver, an MCP tool
+        or a view that hands it a person's choice of row, address or values
+        unchecked. It checks no permission and decides nothing about the values,
+        the links in them or who may be mailed. The modules that call it are
+        listed by the test of this boundary, so a new caller is a reviewed change.
+
+        The caller picks ``row`` for its recipient inside its own named work, so
+        the lookup and the send are audited under one reason::
+
+            with system_context(reason=reason):
+                row = MessageTemplate.objects.effective("template", key, person=person)
+            MessageTemplate.objects.send_as_system(row, reason=reason, to=address, values=values)
+
+        The verb takes a row: a key with no row raises ``DoesNotExist`` from the
+        caller's own lookup, and a caller that offers the send to a person turns
+        it into its own coded refusal. ``row`` renders as the instance holds it, so edits not yet
+        saved are sent, and a row never saved is refused ``not_effective``. ``to``
+        is one entry as :meth:`~angee.messaging.managers.MessageManager.clean_recipient`
+        reads it: pass a bare address, since a typed name fills the display name
+        of a handle that has none. Nothing is idempotent: a caller that retries
+        sends again, unless it claims a key of its own first, as :meth:`send_test`
+        does.
+
+        ``must_print`` names the values the mail is useless without, a credential
+        or a call to action's target (``["link"]``, ``["person.first_name"]``): a
+        caller that mails one passes its path, and the send is refused
+        (``value_not_printed``) when a body cannot print it, or, for a path with
+        no ``*``, when this mail's body does not show it, as
+        :meth:`MessageTemplate.render` states for each kind of path. The default
+        requires nothing. A link value the mail cannot carry is refused whatever
+        ``must_print`` says (``value_not_linkable``); :attr:`clean_link` asks that
+        rule of a value before a run.
+
+        In order: a blank ``reason`` is a ``ValueError``, before anything is read;
+        :meth:`MessageTemplate.send_refusal`; the render
+        (:meth:`MessageTemplate.render`) inside ``system_context(reason=reason)``,
+        which reads every row and the default kit and whose entry writes one
+        permission audit row at once, kept when the render then refuses
+        (``value_not_linkable`` and ``value_not_printed`` among its refusals); then
+        :meth:`~angee.messaging.managers.MessageManager.compose_as_system` under
+        the same reason, outside that context, in the caller's own context and
+        transaction, with the rendered subject, plain text and HTML, which
+        refuses as its docstring says (an address the transport cannot carry
+        among it). The render comes before every one of compose's refusals, so
+        only a render refusal leaves the render's audit row. No message row is
+        written before a refusal. The audit rows commit or roll back with the
+        caller's transaction, and ``reason`` is recorded in them alone, never on
+        the message. Each call records one message and hands it to delivery once,
+        when the outermost transaction commits; it is returned unbound.
+
+        What the caller's values become, on the system channel: a new thread
+        titled with the rendered subject, kept in the thread's history; the
+        message, whose preview is the first 280 characters of the text; its
+        title, text and HTML parts, which point to content-addressed text
+        fragments that carry a search vector and that nothing deletes, so they
+        outlive the message. Who reads system mail, and how its handles are
+        recorded, is messaging's (its README, "System mail"): a value that is a
+        credential, such as a sign-in link, is readable by those readers until it
+        expires, and deleting the message does not remove its fragments. So the
+        send's frames hide every local, the values, the rendered text and the
+        address among them, and the render's frames the values (down to
+        ``TemplateWalk.render``, whose mark covers every frame it calls), as
+        Django's ``sensitive_variables``: with ``DEBUG`` off, when Django's filter
+        works, an exception's report never shows them.
+        """
+
+        # compose_as_system refuses a blank reason too, but only after the render, which this refusal precedes.
+        if not reason.strip():
+            raise ValueError("System mail requires a named reason.")
+        if (refusal := row.send_refusal()) is not None:
+            raise refusal
+        return self._render_and_record(row, reason=reason, to=to, values=values, kit=kit, must_print=must_print)
+
+    @sensitive_variables()
+    def send_test(
+        self, row: TemplateT, *, actor: User, kit: BrandKit | None = None, idempotency_key: str | None = None,
+    ) -> Message:
+        """Send ``row`` with its ``sample`` to ``actor``'s own account address, on the system channel: a test send.
+
+        An administrator presses for it, and the system writes the mail: the
+        pressing is decided by the row's ``preview`` alone, as a preview is, and
+        the mail is sent as named system work on :meth:`send_as_system`'s one
+        path, under the reason ``messaging_templates.message_template.send_test``,
+        with ``actor`` recorded as who caused it (the message's ``created_by``,
+        and the actor of the changeset its rows join). In order:
+        :meth:`MessageTemplate.send_test_refusal` under ``actor``
+        (``PermissionDenied`` before anything else is read, then the row's side,
+        :meth:`MessageTemplate.send_refusal`); an account with no email address
+        (``no_test_address``); with ``idempotency_key``, a claim of it for
+        ``actor``, the request being the row (its id, its ``content_hash`` and its
+        ``sample``) and the kit's id, through provenance's keyed creation
+        (``claim_created``), so a retry of the same request
+        returns the message it first sent, neither rendered nor sent again,
+        unless that message was trashed since, which messaging's replay rule
+        refuses (``MessageManager.replay_claimed``: ``discarded`` under
+        ``idempotency_key``), and the same key for another request raises
+        ``CreationKeyConflict``. A key names one press: mint one per press and
+        reuse it only to retry that press. So an edit of the row's text or sample
+        between two calls makes the second another request (a conflict, never a
+        stale replay), while an edit of a row it includes or of the kit does not;
+        after an address change a replay names the mail sent to the old address;
+        an omitted kit and the default kit named are two requests; and a first
+        message deleted outright leaves the key ``unavailable``. Then
+        the render, inside the system context, and ``compose_as_system``, the
+        subject after :data:`TEST_SUBJECT_PREFIX`, refusing as they do. A
+        refused test writes no message row. A keyed one runs in a transaction of
+        its own, the claim's, so its refusal rolls back the claim and everything
+        after it, the render's audit row among them, and the key stays free; an
+        unkeyed one opens none, and its render's audit row stays with the
+        caller's transaction, as any send's does.
+
+        The render reads what ``actor``'s own preview of the row reads: every
+        signed-in reader reads every message template and brand kit, the render
+        never reads an included row's sample, and the values are the sample of
+        ``row`` as the caller loaded it. Two tests in
+        ``tests/test_messaging_templates_send.py`` hold that condition, over the
+        composed schema and over the rows:
+        ``test_every_signed_in_reader_reads_every_template_and_kit_in_the_composed_schema``
+        and ``test_a_signed_in_user_with_no_grant_reads_every_template_row_and_every_kit``.
+        It stores what :meth:`send_as_system` stores, for the system channel's readers (messaging's README, "System
+        mail"); through every verb those are administrators, who read samples
+        and account addresses already. ``actor``'s existing handle for the
+        address receives it, as compose finds one.
+        """
+
+        with actor_context(actor):
+            if (refusal := row.send_test_refusal()) is not None:
+                raise refusal
+            if not actor.email:
+                raise ValidationError(NO_TEST_ADDRESS_MESSAGE, code="no_test_address")
+
+            def send() -> Message:
+                return self._render_and_record(
+                    row, reason="messaging_templates.message_template.send_test", to=actor.email, values=row.sample,
+                    kit=kit, subject_prefix=TEST_SUBJECT_PREFIX,
+                )
+
+            if idempotency_key is None:
+                return send()
+            messages = apps.get_model("messaging", "Message")
+            with changeset(fresh=True), transaction.atomic():
+                sent = changeset_model().objects.claim_created(
+                    f"messaging_templates.message_template.send_test:{to_subject_ref(actor)}",
+                    idempotency_key,
+                    values={
+                        "template": row.sqid, "content": row.content_hash, "sample": row.sample,
+                        "brand_kit": None if kit is None else kit.sqid,
+                    },
+                    model=messages,
+                    unavailable=ValidationError({"idempotency_key": ValidationError(
+                        "The claimed test send is unavailable.", code="unavailable",
+                    )}),
+                )
+                if sent is not None:
+                    return cast("Message", messages.objects.replay_claimed(sent))
+                message = send()
+                require_changeset().record_created(message)
+                return message
+
+    def _render_and_record(
+        self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
+        subject_prefix: str = "", must_print: Iterable[str] = (),
+    ) -> Message:
+        """Render ``row`` as named system work and record it on the system channel: the one path of both sends.
+
+        The render runs inside ``system_context(reason=reason)``; ``compose_as_system`` runs after it, outside, in
+        the caller's context. ``subject_prefix`` is the test send's marker, never a caller's argument.
+        """
+
+        with system_context(reason=reason):
+            rendered = row.render(values, kit=kit, must_print=must_print)
+        return cast("Message", apps.get_model("messaging", "Message").objects.compose_as_system(
+            reason=reason, to=[to], subject=subject_prefix + rendered.subject, text=rendered.plain_text,
+            html=rendered.html,
+        ))
 
     def override(self, baseline: TemplateT) -> TemplateT:
         """Return the deployment's override of ``baseline``, created from it when there is none.
@@ -820,6 +1037,16 @@ class _Backlinks(InstancePrefetch):
             ).items()
         ]
         return answers, lambda answer: answer[0], lambda row: identities.get(row.pk)
+
+
+def _lacking(row: MessageTemplate, permission: str) -> PermissionDenied | None:
+    """``PermissionDenied`` in :meth:`~angee.base.models.base.AngeeModel.require_access`'s words when the acting reader
+    does not hold ``permission`` on ``row`` (:func:`~angee.graphql.capabilities.held_permissions`, the list's own
+    projection when it carries one); ``None`` when it does. The one denial the row's refusals answer with."""
+
+    if permission in held_permissions(row, (permission,)):
+        return None
+    return PermissionDenied(f"Denied: the current actor lacks {permission!r} on {to_object_ref(row)}.")
 
 
 def _refusals(error: ValidationError, code: TemplateWarningCode) -> list[TemplateWarning]:
@@ -1016,18 +1243,57 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         ``can_keep_override`` from it.
         """
 
-        if "write" not in held_permissions(self, ("write",)):
-            return PermissionDenied(f"Denied: the current actor lacks 'write' on {to_object_ref(self)}.")
+        if (refused := _lacking(self, "write")) is not None:
+            return refused
         if not self.overrides_default:
             return ValidationError(NO_BASELINE_MESSAGE, code="no_baseline")
         return None
 
+    def send_test_refusal(self) -> Exception | None:
+        """What refuses the acting reader's test send of this row (:meth:`MessageTemplateManager.send_test`).
+
+        ``PermissionDenied`` unless the reader holds ``preview`` on the row
+        (:func:`~angee.graphql.capabilities.held_permissions`, the list's own
+        projection when it carries one), an administrator's tool; else
+        :meth:`send_refusal`; ``None`` when nothing does. The verb asks
+        it first, and the console projects ``can_send_test`` from it: the row's
+        side alone, so a test send it admits may still be refused in band, for an
+        account with no address, the system channel or its transport, or the
+        sample's render.
+        """
+
+        if (refused := _lacking(self, "preview")) is not None:
+            return refused
+        return self.send_refusal()
+
+    def send_refusal(self) -> ValidationError | None:
+        """What refuses sending this row (:meth:`MessageTemplateManager.send_as_system`, and a test send after its
+        permission): the row's side of a send.
+
+        ``not_a_template`` unless its kind is a mail
+        (:attr:`MessageTemplateKindHandler.carries_message_fields`), since a
+        layout, block or part reaches a mail inside a template; else
+        ``not_effective`` unless it is what renders for its kind, key and
+        language (:attr:`is_effective`: an overridden shipped default is not, nor
+        is a row never saved);
+        ``None`` when nothing does. It decides no permission: whoever sends
+        decides that. It reads ``kind`` and at most one structural statement, none
+        when the row carries the list's ``_is_effective`` annotation.
+        """
+
+        if not self.handler.carries_message_fields:
+            return ValidationError(NOT_A_TEMPLATE_MESSAGE, code=NOT_A_TEMPLATE)
+        if not self.is_effective:
+            return ValidationError(NOT_EFFECTIVE_MESSAGE, code=NOT_EFFECTIVE)
+        return None
+
     def _row_fact(self, name: str) -> bool:
-        """Read one row fact: the annotation ``with_row_facts`` set, else one query for this fact alone."""
+        """Read one row fact: the annotation ``with_row_facts`` set, else one structural query for this fact alone,
+        through the base manager, which writes no permission audit row: it answers a fact, never a row."""
 
         if (annotated := self.__dict__.get(f"_{name}")) is not None:
             return bool(annotated)
-        rows = type(self).system_queryset()
+        rows = type(self)._base_manager.all()
         fact = MessageTemplateQuerySet.row_fact_expressions[name](rows)
         return bool(rows.filter(pk=self.pk).annotate(fact=fact).values_list("fact", flat=True).first())
 
@@ -1171,7 +1437,10 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         rows = type(self).objects
         return TemplateWalker(saving=True).walk(self, rows.filter(is_baseline=True) if self.is_baseline else rows)
 
-    def render(self, values: Mapping[str, Any], *, kit: BrandKit | None = None) -> RenderedMessage:
+    @sensitive_variables("values")
+    def render(
+        self, values: Mapping[str, Any], *, kit: BrandKit | None = None, must_print: Iterable[str] = (),
+    ) -> RenderedMessage:
         """Render this row with ``values``, in ``kit``'s name and colours (the default kit when ``None``).
 
         Walks the row first, so a row written past :meth:`clean` that would not
@@ -1179,16 +1448,32 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         :meth:`~angee.messaging_templates.walker.TemplateWalk.render`. Every required
         value is present and not null, dates are ``date``, aware ``datetime`` or
         ISO 8601, and money is a ``Decimal`` printed through ``floatformat``. Reads
-        rows and the kit through the acting reader's scope: a sender renders as the
-        system actor. Raises ``ValidationError`` alone, each item with its code
-        (``invalid_values``, ``message_template_refused``, ``render_budget``,
+        rows and the kit through the ambient scope: a user's request renders under
+        that user, and named system work inside its own ``system_context``
+        (:meth:`MessageTemplateManager.send_as_system`). Raises ``ValidationError``
+        alone, each item with its code (``invalid_values``, ``values_too_large``,
+        ``message_template_refused``, ``value_not_linkable``, ``value_not_printed``, ``render_budget``,
         ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
         (:func:`~angee.messaging_templates.walker.refusals_only`).
+
+        ``must_print`` is an iterable of the declared paths the mail is sent for
+        (a bare string is a ``TypeError``), held as
+        :meth:`~angee.messaging_templates.walker.TemplateWalk.render` states: every
+        path declared and printed by each body's text, a path the row no longer
+        declares refused like one its text no longer prints, because an override
+        may edit ``variables`` as well as the text; a path with no ``*`` also
+        shown by each body of this mail, its value text that is not blank; a path
+        through a list held to the text alone, so an empty list passes. Each
+        refusal is ``value_not_printed``, one item per path and body. The preview
+        warns of a declared value nothing reads, but it knows no caller's
+        requirement, so it stays a warning; the requirement is the sender's to
+        pass here.
         """
 
         walk = TemplateWalker().walk(self, type(self).objects)
-        return walk.render(values, kit=self._brand_kit(kit))
+        return walk.render(values, kit=self._brand_kit(kit), must_print=must_print)
 
+    @sensitive_variables()
     def preview(self, *, kit: BrandKit | None = None, patch: Mapping[str, Any] | None = None) -> TemplatePreview:
         """Render this row with its ``sample``, or as ``patch`` would save it, and say what a sender should know.
 
@@ -1212,7 +1497,10 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         copy's validation), ``render_error`` when the row, as saved or as the
         patch would save it, does not render with its sample. Only a
         ``ValidationError`` leaves any of them
-        (:func:`~angee.messaging_templates.walker.refusals_only`).
+        (:func:`~angee.messaging_templates.walker.refusals_only`). Every local of
+        this frame and of each it calls (:meth:`_patched` among them) is Django's
+        ``sensitive_variables``: a report of a failure that propagates shows no
+        sample or patch.
         """
 
         self.require_access("preview")
@@ -1270,7 +1558,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         if kit is None:
             kit = apps.get_model("brandkit", "BrandKit").objects.default()
         if kit is None:
-            raise ValidationError(NO_BRAND_KIT_MESSAGE, code="no_brand_kit")
+            raise ValidationError(NO_BRAND_KIT_MESSAGE, code=NO_BRAND_KIT)
         return cast(BrandKit, kit)
 
     @classmethod

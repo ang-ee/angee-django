@@ -56,3 +56,13 @@
   source: 'The {{ brand.name }} team'
   variables: {}
   sample: {}
+- xref: part.signature.es
+  kind: part
+  key: signature
+  language: es
+  name: Signature
+  description: How an email signs off, in the brand's name.
+  format: markdown
+  source: 'El equipo de {{ brand.name }}'
+  variables: {}
+  sample: {}

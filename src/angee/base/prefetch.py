@@ -59,6 +59,29 @@ class InstancePrefetch:
         return rows, row_key, instance_key, self.single, self.name, False
 
 
+class ReaderBatch(InstancePrefetch):
+    """Answer one reader's facts for a whole row list through Django's native instance prefetch.
+
+    The trigger, not the store: ``batch`` names a classmethod of the listed rows'
+    model, called once with the rows and the reader the hint's queryset names
+    (:meth:`InstancePrefetch.reader`), and the batch classmethod remembers into a
+    :class:`ReaderMemo`, which each row's own method then answers from. Only the
+    prefetch's ``to_attr`` marker is attached; a list read without a reader is left
+    to answer per row.
+    """
+
+    def __init__(self, batch: str) -> None:
+        self.batch = batch
+
+    def related(
+        self, instances: list[Any], queryset: models.QuerySet[Any],
+    ) -> tuple[list[Any], Callable[[Any], object], Callable[[Any], object]]:
+        actor = self.reader(queryset)
+        if actor is not None and instances:
+            getattr(type(instances[0]), self.batch)(instances, actor)
+        return [], id, lambda row: row.pk
+
+
 def prefetched(row: models.Model, to_attr: str, build: Callable[[], models.Prefetch]) -> Any:
     """``row``'s ``to_attr``, read for ``row`` alone through ``build()``'s hint when no list read prefetched it.
 
@@ -91,7 +114,10 @@ def prefetched_objects(row: models.Model, relation: str) -> list[Any] | None:
 class ReaderMemo:
     """Answers one reader's batch read remembered on each row it answers.
 
-    A batch reads once for a reader and remembers each listed row's answer under
+    The store, not the trigger: the batch classmethod a :class:`ReaderBatch` hint
+    names remembers into a ``ReaderMemo``; an explicit primer such as
+    ``needaction_for_messages`` fills it directly. A batch reads once for a reader
+    and remembers each listed row's answer under
     the reader's subject reference; the row's own method answers from it, and any
     other actor asks the owning rule again. Nothing is remembered without an actor,
     under sudo (whose answers bypass the reader's policy) or as ``None``, which

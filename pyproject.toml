@@ -25,6 +25,7 @@ dependencies = [
     "angee-checklists==3.0.0",
     "angee-dashboards==3.0.0",
     "angee-decisions==3.0.0",
+    "angee-decisions-messaging==3.0.0",
     "angee-extraction==3.0.0",
     "angee-graphql==3.0.0",
     "angee-iam==3.0.0",
@@ -154,6 +155,7 @@ angee-calendar-integrate-ics = {workspace = true}
 angee-checklists = {workspace = true}
 angee-dashboards = {workspace = true}
 angee-decisions = {workspace = true}
+angee-decisions-messaging = {workspace = true}
 angee-extraction = {workspace = true}
 angee-graphql = {workspace = true}
 angee-iam = {workspace = true}
