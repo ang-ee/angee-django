@@ -753,6 +753,7 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
             raise refusal
         return self._render_and_record(row, reason=reason, to=to, values=values, kit=kit, must_print=must_print)
 
+    @sensitive_variables()
     def send_test(
         self, row: TemplateT, *, actor: User, kit: BrandKit | None = None, idempotency_key: str | None = None,
     ) -> Message:

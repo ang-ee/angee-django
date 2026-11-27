@@ -339,7 +339,8 @@ a value that is a credential, such as a sign-in link, is readable by those
 readers until it expires, and deleting the message does not remove its
 fragments. An exception's report hides the values, the rendered text and the
 address in every frame of a send, as Django's `sensitive_variables`: every local
-of `send_as_system` and its shared step `_render_and_record`, the values in
+of `send_as_system`, of `send_test` (the keyed path holds the written message, whose
+string form is its preview) and of their shared step `_render_and_record`, the values in
 `MessageTemplate.render`, every local of `MessageTemplate.preview` (its sample and
 a patch's unsaved edits), of `TemplateWalk.render` and of `clean_link` and of each
 frame they call; messaging marks its system write below them

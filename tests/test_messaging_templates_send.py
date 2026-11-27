@@ -777,6 +777,27 @@ def test_a_failure_out_of_a_preview_of_unsaved_edits_reports_no_sample_or_patch(
     assert _leaks(raised.value) == []
 
 
+def test_a_failure_after_a_keyed_test_send_wrote_its_message_reports_no_part_of_the_mail(
+    system_channel: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The keyed path holds the written message, whose string form is its preview: a failure after the write, with
+    the marker in the sample and so in the body, shows it in no frame from ``send_test`` down."""
+
+    del system_channel
+    tester = create_platform_admin("messaging-templates-keyed-reporter")
+    row = _greeting(key="tests.keyed_reported", sample={**SAMPLE, "name": "SECRET-marker"})
+
+    def refusing(self: Any, created: Any) -> None:
+        raise RuntimeError("The changeset refused the record.")
+
+    monkeypatch.setattr(changeset_model(), "record_created", refusing)
+    with pytest.raises(RuntimeError) as raised:
+        MessageTemplate.objects.send_test(row, actor=tester, idempotency_key="reported-1")
+    frames = [frame.name for frame in traceback.extract_tb(raised.value.__traceback__)]
+    assert "send_test" in frames and frames[-1] == "refusing"
+    assert _leaks(raised.value) == []
+
+
 def test_a_blank_reason_is_refused_before_anything_is_read(system_channel: Any) -> None:
     del system_channel
     row = _greeting()
