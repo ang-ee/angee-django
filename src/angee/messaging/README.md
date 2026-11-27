@@ -87,13 +87,16 @@ why only a contact administrator may merge two addresses; system mail
 (`compose_as_system`, so `send_mail`) records the address on the kept
 handle's row and goes exactly there, so a merge never redirects an account's
 or a workflow's mail. A person's compose in another spelling of the kept
-handle's own address is mailed as typed. An address the
-transport cannot carry as typed (`carries_address`) records nothing and is
-mailed at the handle's value. The reader (`Recipient.envelope_address`) asks
+handle's own address is mailed as typed. An address whose part before the `@`
+is outside ASCII, which no transport here carries (`carries_address`), records
+nothing, and its delivery is refused with that reason; a spelling of an address
+the transport carries is always carried, as the spelling key keeps any
+character whose lower case would be ASCII. The reader (`Recipient.envelope_address`) asks
 the message's channel what a recorded address the handle's merges no longer
 name means (the merge it was written under reverted, a row written past that
-check): on the system channel (`Channel.system_only`) the whole message is
-refused, settled failed with the reason "A recipient of this message no longer
+check): on the system channel (`Channel.system_only`), and for a message
+whose channel is gone, which the reader cannot tell from system mail, the whole
+message is refused, settled failed with the reason "A recipient of this message no longer
 names the address it was written for.", so system mail is exact or not sent and
 never reaches the kept handle's mailbox, and a new mail lands on the address's
 own handle; a person's row, which records only spellings of its own handle and

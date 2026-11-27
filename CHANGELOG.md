@@ -469,9 +469,11 @@ live in code docstrings.
   system channel's message is refused whole, settled failed with "A recipient of
   this message no longer names the address it was written for.", so system mail
   is exact or not sent, and the release does not hand it off again; a person's
-  row is mailed at the handle's value with a warning naming the row. An address the
-  transport cannot carry as given (`carries_address`) records nothing and is
-  mailed at the handle's value, as before. `HandleManager.find_identity_owners`
+  row is mailed at the handle's value with a warning naming the row; a message
+  whose channel is gone is refused the same way. An address whose part before
+  the `@` is outside ASCII, which no transport here carries (`carries_address`),
+  records nothing, and its delivery is refused with that reason, as before.
+  `HandleManager.find_identity_owners`
   returns the row owning each identity before its merge redirect;
   `find_identities` is it resolved to each survivor. From is written as the
   channel configures it (`AnymailEmailChannelBackend.outbound_sender`: its

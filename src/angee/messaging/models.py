@@ -2261,7 +2261,8 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
     address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
     """The address the caller handed for this recipient, as its recipient rule cleaned it
-    (``MessageManager.clean_recipient``) and as the transport carries it: a spelling of the handle's address
+    (``MessageManager.clean_recipient``), when the transport carries it (an address whose part before the ``@`` is
+    outside ASCII records nothing, and its delivery is refused): a spelling of the handle's address
     or of a handle merged into it (``Handle.is_spelling_of(..., merged=True)``): the bound for every writer,
     of which system mail alone records a merged handle's address, so it goes there while the row is on the
     survivor (``MessageManager._land_addressees``); the reader (:attr:`envelope_address`) refuses a system
