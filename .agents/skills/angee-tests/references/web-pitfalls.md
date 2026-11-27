@@ -25,6 +25,17 @@ Traps moved from the frontend guide's Pitfalls and Checks sections. Commands and
   refuse it and name the chain.
   `@angee/refine/testing` and `@angee/ui/testing` are Vitest harnesses; stories
   take `@angee/storybook/testing` and `@angee/refine/testing/wire`.
+- **A test that times out fails the rest of its file.** The runner does not stop
+  a timed-out test: it goes on inside the React `act` it was waiting in, and the
+  tests after it render into that open scope, so their trees never commit (a
+  read of an undefined view, an element not found). One timeout then shows as
+  the whole file red. On a machine loaded several times over, a heavy rendered
+  file's slowest test can pass its limit this way, where alone, or on a quiet
+  machine, the file passes. Read the first failure, the one that says the test
+  timed out; check the machine's load; run the failing package again directly
+  with its whole output kept, since a wrapper that keeps only a run's tail
+  shows the last failures and not the first. Raise no timeout for it: the
+  limits' owner is [the shared waiting limit](../../../../docs/checks.md#frontend-packages-and-addon-fragments).
 - **A rendered test waits for the effect itself.** Wait for the save's call or
   the element with the shared waiting limit; never pause a fixed time and then
   assert that something HAS happened, and pass no per-test timeout, a shorter
