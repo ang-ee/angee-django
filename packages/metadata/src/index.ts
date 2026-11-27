@@ -70,6 +70,7 @@ export {
   canDeleteRecord,
   type ResourceLifecycle,
   defaultWidgetForModelField,
+  fieldChangeable,
   fieldUpdatable,
   filterFieldType,
   isDateField,

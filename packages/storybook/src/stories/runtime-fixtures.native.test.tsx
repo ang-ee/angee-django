@@ -7,7 +7,10 @@ import { retryAppQuery } from "@angee/app/create-app";
 import { useAuthoredMutation, useQueryClient, type AuthoredMutate, type AuthoredMutateOptions, type TypedDocumentNode } from "@angee/refine";
 import { SURFACE_RENDERS_FAILURE } from "@angee/ui";
 import { gql } from "@angee/ui/lib/gql";
-import { GraphQLError, RuntimeFixture, storySchema, type RuntimeFixtureProps } from "./runtime-fixtures";
+import { ResourceQuery } from "@angee/metadata";
+import {
+  GraphQLError, RuntimeFixture, resourceSnapshotOperations, storySchema, testDataResource, type RuntimeFixtureProps,
+} from "./runtime-fixtures";
 
 type Client = ReturnType<typeof useQueryClient>;
 
@@ -58,4 +61,44 @@ test("a test's notification provider records the data layer's notices: a write t
   // One that does not: the data layer tells it, to the recorder.
   await refusedWrite(write);
   expect(opened).toEqual([{ type: "error", description: "Not allowed." }]);
+});
+
+test("a resource snapshot lists a groups read's groups in the order the read asks: each key's direction, nulls where it says, a label before its identity", () => {
+  const contract = ResourceQuery.forRows({ fields: {
+    id: { scalar: "ID" }, title: { scalar: "String" }, status: { scalar: "String" },
+    owner: { kind: "relation", identityPath: "owner.id", labelPath: "owner.name" }, "owner.name": { scalar: "String" },
+  } }).contract;
+  contract.axes.status!.server = { input: "STATUS", key: "status" };
+  contract.axes.owner!.server = { input: "OWNER", key: "owner_id", labelInput: "OWNER__NAME", labelKey: "owner__name" };
+  const resource = testDataResource("notes.Thing", { schemaName: "public", query: contract,
+    roots: { list: "things", groups: "things_groups", groupsCount: "things_groups_count" } });
+  // Two owners share a name, the second created first; two things have no status and no owner.
+  const rows = [
+    { id: "1", title: "One", status: "open", owner: { id: "o4", name: "Ann" } },
+    { id: "2", title: "Two", status: null, owner: null },
+    { id: "3", title: "Three", status: "closed", owner: { id: "o1", name: "Zed" } },
+    { id: "4", title: "Four", status: "open", owner: { id: "o2", name: "Ann" } },
+  ];
+  const groups = resourceSnapshotOperations([resource], { "notes.Thing": rows }).things_groups!;
+  const request = { fields: ["things_groups"], query: "", variables: {} };
+  const keys = (args: Record<string, unknown>, ...names: string[]) =>
+    (groups(args, request) as { key: Record<string, unknown> }[]).map(({ key }) => names.map((name) => key[name]).join("/"));
+  const byStatus = (direction: string, nulls?: string) =>
+    keys({ group_by: [{ field: "STATUS" }], order_by: [{ field: "status", direction, ...(nulls ? { nulls } : {}) }] }, "status");
+
+  expect(byStatus("ASC", "LAST")).toEqual(["closed", "open", ""]);
+  expect(byStatus("DESC", "LAST")).toEqual(["open", "closed", ""]);
+  expect(byStatus("ASC", "FIRST")).toEqual(["", "closed", "open"]);
+  // Without a placement, where SQL puts nulls: last ascending, first descending.
+  expect(byStatus("ASC")).toEqual(["closed", "open", ""]);
+  expect(byStatus("DESC")).toEqual(["", "open", "closed"]);
+  // A relation by its label, then its identity, each in the read's direction.
+  const owner = (direction: string) => keys({
+    group_by: [{ field: "OWNER" }, { field: "OWNER__NAME" }],
+    order_by: [{ field: "owner__name", direction, nulls: "LAST" }, { field: "owner_id", direction, nulls: "LAST" }],
+  }, "owner__name", "owner_id");
+  expect(owner("ASC")).toEqual(["Ann/o2", "Ann/o4", "Zed/o1", "/"]);
+  expect(owner("DESC")).toEqual(["Zed/o1", "Ann/o4", "Ann/o2", "/"]);
+  // A read that asks no order lists its groups as they first appear.
+  expect(keys({ group_by: [{ field: "STATUS" }] }, "status")).toEqual(["open", "", "closed"]);
 });

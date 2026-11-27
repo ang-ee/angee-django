@@ -31,12 +31,19 @@ export interface ListQueryFieldBinding {
   arguments: readonly ListQueryFieldArgument[];
 }
 
+/**
+ * A list read's `order_by`: one object per key, in priority order. A list, because a GraphQL
+ * server rebuilds an input object in its type's own field order: the key order of one object
+ * carries no priority.
+ */
+export type ListOrderBy = readonly Readonly<Record<string, unknown>>[];
+
 /** Bind already-compiled predicates through Refine's native document override. */
 export function listQueryMeta(
   target: ListQueryTarget,
   paths: readonly string[],
   where?: Record<string, unknown>,
-  orderBy?: unknown,
+  orderBy?: ListOrderBy,
   fieldBindings: readonly ListQueryFieldBinding[] = [],
 ) {
   for (const name of [target.root, target.aggregateRoot, target.filterType, target.orderType]) {

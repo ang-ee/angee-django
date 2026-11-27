@@ -920,7 +920,27 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   memory. Either way a grouped list pages its **root groups**: the server surface
   by its root `_groups` read, the client row model by TanStack's top-level rows
   (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
-  open groups' records; an ungrouped list pages records. A level's `repeated`
+  open groups' records; an ungrouped list pages records. On both, each level's
+  groups follow their own axis: by label, then identity, the group with no value
+  last in both directions, in the direction the list's order holds for a key the
+  axis shares or for the field it buckets (a date's months, quarters and weeks
+  follow the date), else ascending (`GroupAxis.direction`, the one rule). The table
+  state hands TanStack each axis's key ascending, ahead of the list's own keys, and
+  the axis's column compares its groups in that direction (`GroupAxis.compareGroups`),
+  since the table would turn a missing value with a descending key; it sorts by it
+  even where the field's header offers no press, while the list stores, links and
+  saves its order unchanged. The server's groups read asks for the same direction
+  and the same keys (`ResourceQuery.toGroupRead`), its text in the database's
+  collation where the browser compares it naturally. A press on a column whose key an axis
+  shares turns that level's groups, ascending and descending, never removed, and
+  leaves the records' order alone: its key leads, and every other key the order
+  holds that its axis does not share stays behind it, the records' and another
+  level's (`pressedSorting`). Its
+  sort button and arrow show their direction, while `aria-sort` stays on the
+  one header of the key the records follow (`headerAriaSort`); a press on any other column, and the pane's
+  Order select, orders the records inside the groups and keeps the axis keys the
+  order holds, and the date a bucket follows keeps its ordinary press, which
+  turns the buckets with it. A level's `repeated`
   ("Repeated values only") is a server group read option
   (`ResourceQuery.toGroupRead`): HAVING keeps groups of more than one record
   within its parent group and the read leaves out the records with no value, so
@@ -1002,13 +1022,18 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   predicates and required selections. Hand-building a resource view's Hasura
   `where` instead of using `ResourceQuery.toWhere` is a bug: the query owner
   validates canonical intent and translates it to the transport. This rule does
-  not prohibit variables for separate, authored GraphQL operations. A display
-  label never identifies a relation bucket. Invalid URL or favorite query state
-  must block dependent reads and offer recovery; dropping invalid constraints
-  silently broadens the user's query. Regression tests must exercise native
-  providers and table accessors, including grouping fields absent from visible
-  columns. Public API cutover guidance lives in the
-  [`@angee/ui` migration note](../../packages/ui/README.md#resource-query-migration).
+  not prohibit variables for separate, authored GraphQL operations. A list's
+  order goes on the wire as the list `ResourceQuery.toOrderBy` returns, one
+  single-key object per key in priority order, passed on as it is: a GraphQL
+  server reads one object's keys in its input type's own field order, so an
+  object carries no priority, and a read's `sorters` go the same way through
+  the patched Hasura provider ([stack](../stack.md)). A display label never
+  identifies a relation bucket. Invalid URL or favorite query state must block
+  dependent reads and offer recovery; dropping invalid constraints silently
+  broadens the user's query. Regression tests must exercise native providers
+  and table accessors, including grouping fields absent from visible columns.
+  Public API cutover guidance lives in the [`@angee/ui` migration
+  note](../../packages/ui/README.md#resource-query-migration).
 - A recipe's icon-button size keys are `iconSm`/`iconMd`/`iconLg` (one spelling
   across recipes). A default `size` is a visual contract — do not flip it without a
   requester (differing defaults like `Switch`/`ToggleGroup` `sm` vs `Toggle` `md`
@@ -1366,12 +1391,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   on its banner otherwise; a reason under a name only a `content` editor holds
   shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  The surface names the fields it shows (`shownFieldNames`) and each claims the
+  reasons under its path; `useActionForm` requires them of every caller, and
+  `[]` states that the form shows none.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
   and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
   several as a list; never join them into one text. A surface that asks
   (`applyFormErrors` with `focus` and a `fieldSummary`; the record form and
-  both form dialogs do)
+  both form dialogs do, and an inline action form asks `focus` only, through
+  `useActionForm`, whose `banner` it spreads on its banner)
   has a refused submit bring the person to its reasons, and `applyFormErrors`
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
@@ -1383,7 +1412,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   banner, which names the field but does not repeat its reason, focus only
   when the field's control takes none. A surface hands it its form and whether
   its controls are ready, and never moves a refusal's focus by an effect of
-  its own. Save stays focusable while a save runs.
+  its own. A record form brings a refused field into sight first, in the same
+  batch as it asks that focus: its surface's `revealField`
+  ([useFormViewSurface](../../packages/ui/src/views/form/form-view-surface.ts),
+  the owner `focusField` composes) selects the pane that holds the field and
+  opens a collapsed section around it, for a refusal and for the form's own
+  check alike; a line selects the lines' pane. Nothing else selects a pane for
+  a refused save, so a refusal that brings the person to the banner leaves the
+  selected pane, the lines included. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
@@ -2536,6 +2572,44 @@ owners so permitted actions remain visible but disabled, including keyboard,
 submit and upload paths. The app resets actor-bound queries on enter and exit;
 change subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
+
+A record form's draft is made against one record, its edit basis: the save
+sends its revision and the mode lock reads it. While the form holds no edits it
+is the record shown, in the same render; an accepted save moves it to the
+record written. A re-read keeps the draft and what was said about it: a server
+refusal stays under its field until the person changes that field or discards,
+an error about a value the re-read replaced goes, and a re-read that leaves no
+draft (another writer stored the person's own values) takes the draft's errors
+with it. A form holding no draft is reset whole. See
+[the save owner](../../packages/ui/src/views/form/use-form-view-save.ts).
+
+A resource field's metadata states three independent facts; read none of them
+from another:
+- `creatable`: a create through this resource offers the field;
+- `updatable`: this resource's update input accepts the field;
+- `createOnly`: the model refuses a change once a registered value is stored (a
+  create-only implementation selector), published only where this resource
+  writes the field. It implies no create path, which is `creatable` alone.
+
+A record form locks a `createOnly` field on an edit except while the record its
+draft was made against stores a key that is not registered, when the field can
+be chosen once more (a repair, `repairChoosable`). The repair asks the
+resource's repair read through the operation-documents seam
+(`useRepairChoicesOperation`: the `repairChoices` document the host's codegen
+generates for the root `roots.repairChoices` names, sent to the resource's own
+schema), so a resource without that root, or a host that generated no document
+for it, offers none; a person the server does not admit sees the field
+read-only with its words. It offers the field on a
+create only where it is `creatable`. While the repair's answer or a save is
+pending the selector is `loading`; a refused answer keeps it read-only with the
+server's words; a save that would send the repair's config without its selector
+is refused on the client. A page cannot unlock what
+the model's metadata locks: its own `createOnly: false` over a create-only
+selector changes nothing, and its own `createOnly: true` on a field the model
+does not make create-only locks it on an edit with no repair. The repair is
+the record form's: a rail row or a list never offers it, and a list, a board
+or any other surface that changes a stored record asks `fieldChangeable`
+(updatable and not create-only), never `fieldUpdatable` alone.
 
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can

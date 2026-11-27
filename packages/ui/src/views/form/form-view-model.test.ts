@@ -32,6 +32,7 @@ import {
   pathWritable,
   recordToValues,
   relationListValue,
+  repairSelectorLost,
   resolveField,
   seedPreset,
   titleText,
@@ -1000,4 +1001,12 @@ describe("a form field's label as text", () => {
       .toBe("form.fixHighlightedFieldsNamed:Title, code, rich, absent");
     expect(fieldValidationSummary({}, fields, t)).toBe("form.fixHighlightedFields");
   });
+});
+
+test("a save that sends a repair's seeded config without the selector that chose it names that selector", () => {
+  const seeds = new Map([["backend", ["config"]]]);
+  expect(repairSelectorLost({ backend: "S3", config: { bucket: "b" } }, seeds)).toBeNull();
+  expect(repairSelectorLost({ label: "Renamed" }, seeds)).toBeNull();
+  expect(repairSelectorLost({ config: { bucket: "b" } }, seeds)).toBe("backend");
+  expect(repairSelectorLost({ config: { bucket: "b" } }, new Map())).toBeNull();
 });

@@ -442,6 +442,17 @@ describe("Gantt collection over native list data", () => {
     await waitFor(() => expect(drawing.props?.events.map((event) => event.title)).toEqual(["Second interval"]));
   });
 
+  test("a pure priority swap of the view's order reads the bars again in the order now held", async () => {
+    const f = renderCollection();
+    await waitFor(() => expect(drawing.props?.events).toHaveLength(1));
+    const order = () => f.barRequests().at(-1)?.[0].meta?.gqlVariables?.order_by;
+    act(() => f.state().setSorting([{ id: "name", desc: true }, { id: "id", desc: false }]));
+    await waitFor(() => expect(order()).toEqual([{ name: "desc" }, { id: "asc" }]));
+    // The same keys and directions in the other priority.
+    act(() => f.state().setSorting([{ id: "id", desc: false }, { id: "name", desc: true }]));
+    await waitFor(() => expect(order()).toEqual([{ id: "asc" }, { name: "desc" }]));
+  });
+
   test("does not query records when the related row page is empty", async () => {
     const f = renderCollection({ getList: async () => ({ data: [], total: 0 }) });
     await waitFor(() => expect(drawing.props?.loading).toBe(false));

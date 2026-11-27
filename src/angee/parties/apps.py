@@ -23,9 +23,9 @@ class PartiesConfig(AppConfig):
     name = "angee.parties"
 
     def compose_provision(self, context: ProvisionContext) -> None:
-        """Repair handle keys and holders, directory owners' contact read and party creation times on every provision.
+        """Repair handle and organization-domain keys, holders, owners' contact read and party times on every provision.
 
-        They run after the resources load. ``renormalize_handles`` saves again
+        They run after the resources load. ``renormalize_handles`` writes again
         every handle's keys (its spelling key and person-matching key) computed
         under another version of the handle's normalization rule
         (``Handle.NORMALIZATION_VERSION``): the whole backlog, since a row with a
@@ -33,9 +33,16 @@ class PartiesConfig(AppConfig):
         that spells the address of another is folded into the older of the two
         and kept as a redirect, each fold in a transaction of its own; a fold the
         merge refuses is logged and left for the next provision. It saves in
-        batches of ``HandleManager.REPAIR_LIMIT`` rows, each its own transaction,
-        so an interrupted provision keeps what it saved and the next one resumes.
-        With no row behind, it costs one indexed query.
+        batches of ``REPAIR_BATCH`` rows (``repair_keys``), each its own
+        transaction, so an interrupted provision keeps what it saved and the next
+        one resumes. With no row behind, it costs one indexed query.
+        ``renormalize_organization_domains`` writes again each organization's
+        domain key that is not its domain under the domain-spelling rule
+        (``OrganizationManager.renormalize_domains``), through the same
+        walk: it reads every organization's domain in batches and writes the key of
+        only a row whose key differs. Both write their key columns alone (one
+        history version, no ``updated_at``), and a run with nothing stale writes
+        nothing.
         ``resolve_stale_owners`` states each holder written onto its row, leaves a
         trashed, confirmed or contested one as it is and re-resolves stale ones,
         at most ``HandleManager.REPAIR_LIMIT`` holders a run (past that, the
@@ -49,6 +56,7 @@ class PartiesConfig(AppConfig):
         """
 
         context.call("renormalize_handles")
+        context.call("renormalize_organization_domains")
         context.call("resolve_stale_owners")
         context.call("grant_directory_owner_contact_reads")
         context.call("backdate_parties_from_sources")

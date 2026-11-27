@@ -72,7 +72,7 @@ vi.mock("@angee/refine", async (importOriginal) => {
       fetching: false,
       error: null,
     }),
-    useAngeeFacets: () => ({ facets: {}, fetching: false, error: null }),
+    useAngeeFacets: () => ({ facets: {}, errors: {}, fetching: false, error: null }),
     useAngeeGroupBy: () => ({
       groups: [],
       total: undefined,

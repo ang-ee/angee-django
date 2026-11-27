@@ -290,7 +290,16 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
   form: Pick<UseFormReturn<TValues>, "setError">,
   result: FormSubmitResult<TData>,
   options: {
-    fieldNames?: Iterable<string>;
+    /**
+     * The names of the fields the surface shows, in its order (on a descriptor form, the names of
+     * what `shownFields` returns): each claims the reasons under its path and below it. A reason
+     * under any other path also shows on the banner, as `path: reason`; `[]` states the surface
+     * shows no field a reason can sit under, so every reason goes there. Absent, the caller binds
+     * reasons where they are and knows no drawn fields (a schema resolver's errors, an owner's
+     * projection of its issues onto paths): every path keeps its own reason and no field's reason
+     * reaches the banner, which still shows a form-level reason and a conflict's message.
+     */
+    shownFieldNames?: Iterable<string>;
     fieldSummary?: (errors: DottedPathFieldErrorMap) => string;
     fallback?: string;
     /**
@@ -299,8 +308,8 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
      * one, or one of a field the form does not display) calls it with no field: the banner, which
      * then also carries the line naming the refused fields, is the one place that says everything.
      * A refusal with field reasons only calls it with the first rendered field it names, in the
-     * order of `fieldNames` (the server's order without them). A submit's answer asks for this; an
-     * owner that projects issues while the person edits elsewhere does not.
+     * order of `shownFieldNames` (the server's order without them). A submit's answer asks for this;
+     * an owner that projects issues while the person edits elsewhere does not.
      */
     focus?: (field?: string) => void;
   } = {},
@@ -332,13 +341,13 @@ export function applyFormErrors<TValues extends FieldValues, TData>(
     default:
       return assertNeverResult(result);
   }
-  const fieldNames = options.fieldNames === undefined ? undefined : [...options.fieldNames];
+  const shownFieldNames = options.shownFieldNames === undefined ? undefined : [...options.shownFieldNames];
   const named = Object.keys(issues.fieldErrors).filter((name) => issues.fieldErrors[name]!.length > 0);
-  const claimed = (name: string) => !fieldNames || fieldNames.some((field) => dottedPathBelongsToField(name, field));
+  const claimed = (name: string) => !shownFieldNames || shownFieldNames.some((field) => dottedPathBelongsToField(name, field));
   // A reason no field shows: the banner is then the one place that says everything, and takes the focus.
   const bannerOnly = issues.formErrors.length > 0 || named.some((name) => !claimed(name));
   const focused = !options.focus || bannerOnly ? undefined
-    : fieldNames ? fieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
+    : shownFieldNames ? shownFieldNames.flatMap((field) => named.filter((name) => dottedPathBelongsToField(name, field)))[0] : named[0];
   const bound: Record<string, readonly string[]> = {};
   const unclaimed: Record<string, readonly string[]> = {};
   for (const [name, messages] of Object.entries(issues.fieldErrors)) {
@@ -600,13 +609,13 @@ export function directDottedPathMessages(
 /**
  * Own a field-to-messages map whose keys may address nested values with dotted
  * paths. A field binds its exact key and descendants, editing it clears the
- * same boundary, and keys belonging to no rendered field fold into one form
- * summary.
+ * same boundary, and keys belonging to none of the `shownFieldNames` fold into
+ * one form summary.
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useDottedPathFieldErrors(
-  fieldNames: readonly string[] = EMPTY_FIELD_NAMES,
+  shownFieldNames: readonly string[] = EMPTY_FIELD_NAMES,
 ): DottedPathFieldErrors {
   const [errors, setErrors] = React.useState<DottedPathFieldErrorMap>({});
   const replace = React.useCallback(
@@ -638,13 +647,13 @@ export function useDottedPathFieldErrors(
         Object.fromEntries(
           Object.entries(errors).filter(
             ([path]) =>
-              !fieldNames.some((field) =>
+              !shownFieldNames.some((field) =>
                 dottedPathBelongsToField(path, field),
               ),
           ),
         ),
       ),
-    [errors, fieldNames],
+    [errors, shownFieldNames],
   );
   return { replace, clear, messagesFor, clearField, formSummary };
 }
@@ -681,6 +690,29 @@ function validationErrorMessage(error: unknown, fallback: string): string {
 }
 
 const EMPTY_FIELD_NAMES: readonly string[] = [];
+
+/**
+ * The dotted path of every field error the form holds (any type: a server refusal, a rule, a
+ * conflict), never the form-level `root` ones, sorted. A re-read reads it to clear exactly the
+ * errors whose value it replaced.
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function fieldErrorPaths(errors: object): readonly string[] {
+  const paths: string[] = [];
+  const visit = (value: unknown, path: string): void => {
+    if (!value || typeof value !== "object") return;
+    if ("type" in value && typeof value.type === "string" && "message" in value) {
+      paths.push(path);
+      return;
+    }
+    for (const [name, child] of Object.entries(value)) {
+      if (name !== "ref" && name !== "types" && !(path === "" && name === "root")) visit(child, path ? `${path}.${name}` : name);
+    }
+  };
+  visit(errors, "");
+  return paths.sort();
+}
 
 /** Project RHF server errors into the backend dotted-path display contract. */
 export function serverErrorsFromForm(errors: object): Record<string, readonly string[]> {

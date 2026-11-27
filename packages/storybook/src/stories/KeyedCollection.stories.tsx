@@ -28,7 +28,7 @@ function CollectionExample() {
         const messages = result.issues.fieldErrors[entry.clientId];
         return messages ? [[`entries.${index}.key`, messages]] : [];
       })),
-    } });
+    } }, { shownFieldNames: ["entries"] });
   })}>
     {entries.map(({ clientId, key }, index) => <fieldset key={clientId} className="space-y-2 rounded-6 border p-3">
       <legend>Entry {clientId}</legend>

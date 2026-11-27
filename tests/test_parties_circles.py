@@ -1064,46 +1064,75 @@ def test_suggest_for_org_domain_suggests_at_low_confidence(db: None) -> None:
     assert link.source_kind == "rule"
 
 
-@pytest.mark.parametrize(
-    ("address", "stored"),
-    [
-        pytest.param("bob@bücher.example", "bücher.example", id="handle-unicode-organization-unicode"),
-        pytest.param("bob@bücher.example", "xn--bcher-kva.example", id="handle-unicode-organization-punycode"),
-        pytest.param("bob@xn--bcher-kva.example", "Bücher.example", id="handle-punycode-organization-unicode"),
-        pytest.param("bob@xn--bcher-kva.example", "XN--BCHER-KVA.example", id="handle-punycode-organization-punycode"),
-        # IDNA 2003 sends straße as strasse: the rule's spelling is ASCII, so an organization typed as the address
-        # spells its domain is found by that spelling.
-        pytest.param("bob@straße.example", "straße.example", id="handle-sharp-s-organization-sharp-s"),
-        pytest.param("bob@straße.example", "Strasse.example", id="handle-sharp-s-organization-ss"),
-        pytest.param("bob@bu\u0308cher.example", "bu\u0308cher.example", id="handle-nfd-organization-nfd"),
-        pytest.param("bob@bu\u0308cher.example", "bücher.example", id="handle-nfd-organization-nfc"),
-        pytest.param("bob@\uff45xample.test", "\uff45xample.test", id="handle-full-width-organization-full-width"),
-        pytest.param("bob@\uff45xample.test", "example.test", id="handle-full-width-organization-ascii"),
-        pytest.param(
-            "bob@strasse.example", "straße.example", id="handle-ss-organization-sharp-s",
-            marks=pytest.mark.xfail(
-                strict=True, raises=AssertionError,
-                reason="Organizations store no rule-derived domain key: one typed in a spelling the rule joins but "
-                "neither the rule's, its punycode nor the address's own is not found.",
-            ),
-        ),
-    ],
-)
-def test_suggest_for_org_domain_reads_both_spellings_of_an_internationalised_domain(
-    db: None, address: str, stored: str,
-) -> None:
-    """One rule for a domain on both sides: the handle's key, and the organization's domain as it was typed."""
+def test_suggest_for_org_domain_finds_an_organization_by_its_domain_key(db: None) -> None:
+    """The suggestion asks ``Organization.domain_filter``: another spelling of the domain finds it, kept as typed."""
 
     del db
     with system_context(reason="test suggest domain spellings"):
         owner = _user("ines")
-        publisher = Organization._base_manager.create(display_name="Bücher", domain=stored, created_by=owner)
-        handle = Handle._base_manager.create(platform="email", value=address, created_by=owner)
+        publisher = Organization._base_manager.create(display_name="Straße", domain="straße.example", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="bob@strasse.example", created_by=owner)
         link = Party.objects.suggest_for(handle)
 
     assert link is not None
     assert (link.subject_id, link.confidence, link.source_kind) == (publisher.pk, 0.4, "rule")
-    assert Organization._base_manager.get(pk=publisher.pk).domain == stored
+    assert Organization._base_manager.get(pk=publisher.pk).domain == "straße.example"
+
+
+@pytest.mark.parametrize("touched", [pytest.param(0, id="touch-the-first"), pytest.param(1, id="touch-the-second")])
+def test_suggest_for_organizations_sharing_a_domain_suggests_each_for_review(db: None, touched: int) -> None:
+    """Several organizations sharing a domain key are each a suggestion below review: none decides, whoever was touched.
+
+    Each is asserted at the twins' competing weight, below ``Party.REVIEW_CONFIDENCE``, in primary-key order; saving
+    either one (which moves the model's default ``-updated_at`` order) changes nothing.
+    """
+
+    del db
+    with system_context(reason="test suggest shared domain"):
+        owner = _user(f"kai-{touched}")
+        organizations = [
+            Organization._base_manager.create(display_name=name, domain=domain, created_by=owner)
+            for name, domain in (("Straße", "straße.example"), ("Strasse", "strasse.example"))
+        ]
+        before = Handle._base_manager.create(platform="email", value="ann@strasse.example", created_by=owner)
+        first = Party.objects.suggest_for(before)
+        organizations[touched].legal_name = "Touched"
+        organizations[touched].save()
+        after = Handle._base_manager.create(platform="email", value="ben@straße.example", created_by=owner)
+        second = Party.objects.suggest_for(after)
+
+        outcomes = []
+        for handle, link in ((before, first), (after, second)):
+            handle.refresh_from_db()
+            links = Party.statements.filter(handle=handle).order_by("subject_id")
+            outcomes.append((
+                link.subject_id,
+                [(row.subject_id, row.confidence, row.source_kind, row.is_confirmed) for row in links],
+                handle.party_id,
+            ))
+
+    ordered = sorted(organization.pk for organization in organizations)
+    expected = (ordered[0], [(pk, 0.3, "rule", False) for pk in ordered], None)
+    assert outcomes == [expected, expected]
+    assert all(confidence < Party.REVIEW_CONFIDENCE for _, rows, _ in outcomes for _, confidence, _, _ in rows)
+
+
+def test_suggest_for_one_organization_at_a_domain_is_suggested_as_before(db: None) -> None:
+    """One organization at the domain key is the organization: one rule suggestion at ``0.4``, and nothing else."""
+
+    del db
+    with system_context(reason="test suggest one organization"):
+        owner = _user("lea")
+        publisher = Organization._base_manager.create(display_name="Straße", domain="straße.example", created_by=owner)
+        Organization._base_manager.create(display_name="Elsewhere", domain="elsewhere.example", created_by=owner)
+        handle = Handle._base_manager.create(platform="email", value="ann@strasse.example", created_by=owner)
+        link = Party.objects.suggest_for(handle)
+        rows = [(row.subject_id, row.confidence) for row in Party.statements.filter(handle=handle)]
+        handle.refresh_from_db()
+
+    assert (link.subject_id, link.confidence, link.source_kind) == (publisher.pk, 0.4, "rule")
+    assert rows == [(publisher.pk, 0.4)]
+    assert handle.party_id is None
 
 
 def test_suggest_for_stays_inside_the_parties_the_handle_creator_owns(db: None) -> None:

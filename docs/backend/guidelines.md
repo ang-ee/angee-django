@@ -161,7 +161,12 @@ Use these owners instead of maintaining another contract in an addon:
   reconcile/load flows, and writes that begin from a model class. QuerySets own
   chainable read predicates and reusable scoping. If a resolver, view, or command
   repeats a filter predicate, promote it to a QuerySet; if it mutates row state,
-  promote it to a model or manager method.
+  promote it to a model or manager method. A read predicate's second home is a
+  model classmethod returning a `Q` that its callers compose, for a predicate
+  several managers or a relation path must share (the base manager, an unaudited
+  read, a join from another model); for example
+  [`Handle.spellings_filter`](../../src/angee/parties/models.py),
+  `Handle.identifies_account_filter(prefix)` and `Organization.domain_filter`.
 - **Database routing:** Angee runs on one database, Django's `default`. It
   selects no database per operation, and the base system check `angee.E050`
   requires only the `default` alias in `DATABASES` and refuses any
@@ -231,8 +236,11 @@ Use these owners instead of maintaining another contract in an addon:
 - **Batch per reader, answer per row.** A relation the owner computes (targets
   read per referenced type, a reader's facts for a run list) is an
   [`InstancePrefetch`](../../src/angee/base/prefetch.py) hinted through a native
-  `Prefetch(..., to_attr=...)`; a row's per-reader answers live in a
-  `ReaderMemo`, never remembered without an actor or under sudo; its owner answers
+  `Prefetch(..., to_attr=...)`; a reader's facts computed by a model's batch
+  classmethod hint a `ReaderBatch` naming it. A row's per-reader answers live in a
+  `ReaderMemo`, never remembered without an actor or under sudo: the batch
+  classmethod remembers into a `ReaderMemo`; an explicit primer such as
+  `needaction_for_messages` fills it directly. Its owner answers
   every miss from the rule, so sudo computes and never reads as empty. A resolver reads
   the hint's attribute through `prefetched(row, to_attr, build)`, which builds the
   hint only for a row loaded another way, so it reads its own value through the
@@ -474,7 +482,81 @@ Use these owners instead of maintaining another contract in an addon:
   model, field, key and count under `check --database` and at the start of
   `migrate`, where a column the pending migrations have yet to add is passed
   over, and the addon that stopped providing a key states the remedy in
-  `ANGEE_IMPL_KEY_REMEDIES`.
+  `ANGEE_IMPL_KEY_REMEDIES`. Such a row still loads, lists and filters, its key
+  read as text; nothing writes such a key the row does not already hold (a
+  history copy and a migration's state model write the key their row stored),
+  and no value the field prepares writes a key spelled other than the
+  registry's (except where a model or the GraphQL input normalises it first: an
+  `ImplDefaultsMixin` insert, a GraphQL input), while any other expression
+  (`F`, `Subquery`, `Cast`, `Case`, or a `Value` inside one) is not checked; a
+  lookup forgives what a person or a URL may spell. An update does not
+  validate a key it is not changing
+  ([`ImplClassField.holds`](../../src/angee/base/fields/implementation.py)
+  answers from the key the row was loaded with, else reads the stored row):
+  the row saves its other fields, the generic GraphQL
+  update and a model form that leaves the column out included, and keeps the
+  key and its config. Resolving
+  the key raises naming the field, the key and the setting. Every Angee GraphQL
+  schema reads such a key as null on a type's field
+  ([`ImplementationKeyRead`](../../src/angee/graphql/field_types.py)), which
+  the console labels "Not registered"; a group's key is not such a field, so a
+  list grouped, a board laned or a facet counted by the column cannot be read
+  (`strawberry-django-aggregates` refuses a group key outside the column's
+  choices: `ChoicesValueNotInEnumError`), which every Angee schema answers as a
+  public refusal naming the column
+  ([`AngeeSchema`](../../src/angee/graphql/schema.py)); the same holds for any
+  choices column holding a value its choices no longer name. No "Not
+  registered" group exists yet. A
+  `create_only` selector holding such a key may move, once, to a registered
+  key: the config its implementations own is carried over
+  ([`ImplBase.carried_config`](../../src/angee/base/implementations.py), since
+  choosing a class chooses its config's shape: kept, a stored value the new
+  class reads and accepts; reset to its default, a value it refuses, and every
+  value where a rule across keys refuses them together; dropped, a key it does
+  not read, extras included; nothing reports the change beyond the result, which
+  the repair read shows before the save),
+  a config sent with the selector is validated as sent, the new key is written
+  only while the row still holds the old one, and afterwards the selector is
+  create-only again.
+  A repair saved with `update_fields` names the config too, or is refused; a
+  stale row (loaded before its stored key moved) that would write another
+  config is refused as stale (code `stale`). The resource layer derives the
+  update surface once: every update input carries its model's create-only
+  selectors ([`create_only_selectors`](../../src/angee/base/fields/implementation.py),
+  read by `hasura_model_resource`) and the resource metadata publishes them
+  (`createOnly`), so no resource or page restates one; the model's save
+  decides. Create-only therefore means: chosen on create, and once more only
+  while its stored key is not registered: through the API, by a person the
+  create flow admits to choose it whose update of the record is allowed (the
+  repair read and the update ask the same gate, below); in code, by any save,
+  since a worker or a sync job has no request and no actor to admit and the
+  model's rules stand. The console's record form offers that choice exactly then and
+  sends the config it shows: the resource's generated repair read,
+  `<res>_repair_choices(id, field)` (`hasura_model_resource` generates it where
+  an update root meets a create-only selector; the metadata names it
+  `roots.repairChoices`), answers for each choice what choosing it sets on
+  that record (the config `carried_config` carries over). Its gate is the
+  resource's by construction, in order: the create flow's admission for the
+  choices (`impl_choices_admitted`, one owner: the `ANGEE_IMPL_CHOICES_ADMISSION`
+  hook or the model's `can_read_impl_choices`, closed without the hook), so a
+  repair offers only what its reader could choose when creating such a record;
+  the update root's `write_permission_classes`; the update's own decision
+  (`authorize_update`); then the model
+  ([`repair_impl_choices`](../../src/angee/graphql/impl.py),
+  `ImplDefaultsMixin.repair_impl_defaults`). An update that names a
+  create-only selector asks the same admission
+  (`AngeeHasuraWriteBackend.require_selectors_admitted`), after the
+  `write_permission_classes` its root asks before the resolver and before
+  `authorize_update` and the model, so the read and the write cannot drift; an
+  update naming none asks nothing more. The admission's one refusal, for a read
+  and a write alike, is "This actor may not choose an implementation.".
+  Composition refuses a schema that would expose the read without the update
+  root. A record without an update root (calendar sources, directories,
+  mounts) or a selector a connect flow chose is not repaired in the console:
+  its mark says "It cannot be changed here.", and the remedy is installing
+  again the addon that provides the implementation, or removing the record
+  and connecting it again. `angee.E052` and `ANGEE_IMPL_KEY_REMEDIES` name
+  such rows and the remedy.
 - **Rowless implementation catalogues compose the same registry owner.**
   [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
   metadata for fields and settings-selected uses. Native enum projection belongs
@@ -597,9 +679,13 @@ Use these owners instead of maintaining another contract in an addon:
   [tags](../../src/angee/tags/schema.py) do; they do not infer them from type fields.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
-- **Derived columns have two drift classes and two owners.** Signals own instance
-  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
-  `bulk_create` and queryset `update` paths, where signals do not run.
+- **Derived columns have two drift classes and two owners.** A column derived
+  from the row's own columns (a key) is written by the model's `save`, beside the
+  columns it derives from, whenever a save names them; a column derived from other
+  rows (a count, a denormalized reference) is kept by signals on instance
+  saves/deletes, cascades, and queryset deletes. Idempotent repair passes own the
+  `bulk_create` and queryset `update` paths, where neither runs
+  ([`repair_keys`](../../src/angee/parties/managers.py) for parties' keys).
 - **Never a database trigger or function.** Business rules, immutability and
   ownership guards belong to Django owners: cover instance, queryset, bulk,
   cascade and relation writes in the owning models/managers/querysets, with
@@ -655,8 +741,13 @@ data through REBAC, never a queryset bypass.
   An owner seals the permissions it derives this way through the base
   [sealed-permission check](../../src/angee/base/checks.py)
   (`check_sealed_permissions`), which refuses a fragment that changes one:
-  messaging's [`check_derived_reads`](../../src/angee/messaging/checks.py)
-  (`messaging.E003`) seals the thread and message `read` and `read_inbox`.
+  messaging's [`check_messaging_seals`](../../src/angee/messaging/checks.py)
+  (`messaging.E003`) seals the thread and message `read` and `read_inbox`, and,
+  in its `SEALED` map, the permissions kept closed to fragments because each
+  applies the system channel's seal or `& read`, which an appended arm would
+  escape. The thread's `write` is the known open one, and a thread's
+  `read_granted` is not sealed on system threads: widening it reaches system mail
+  too ([messaging's README](../../src/angee/messaging/README.md#system-mail)).
   Storage's [`check_derived_permissions`](../../src/angee/storage/checks.py)
   (`storage.E001`) also seals `inherit_visibility`, so only the drive's sharers
   can restore file inheritance.
@@ -952,7 +1043,8 @@ data through REBAC, never a queryset bypass.
   `system_context`/`asystem_context` for named system-owned work; do not elevate
   a user factory merely because it inserts a row. A gated factory that must
   elevate to create a row returns that row bound to the requesting actor, so
-  callers continue under the original actor, never the elevated one.
+  callers continue under the original actor, never the elevated one. Its
+  deliberate exceptions, each with its guard: merge and system mail (below).
 - **Structural reads use Django's `_base_manager`, including in consumers.**
   It is the model's unscoped read manager (`Meta.base_manager_name`), with no
   REBAC scope and no audit row. Use it for membership predicates, existence
@@ -1001,6 +1093,18 @@ data through REBAC, never a queryset bypass.
     hold. Querysets use
     `redirect_group(survivor)` for the survivor plus its flattened one-hop
     redirects.
+- **System mail is named system work.** Also a deliberate exception: the
+  calling verb checks its own permission first; only then does it call
+  [`MessageManager.compose_as_system`](../../src/angee/messaging/managers.py),
+  which consults no send right and records the causing actor in the changeset
+  ([messaging's README, System mail](../../src/angee/messaging/README.md#system-mail)).
+  Its direct callers are listed in [`tests/test_messaging_system_mail_callers.py`](../../tests/test_messaging_system_mail_callers.py).
+  Mail sent through Django's mail API is system mail. A consumer that sends its
+  organisation's own mail may instead send it straight through the `transport`
+  mailer by name (`MAILERS["transport"]`, messaging's `TRANSPORT_MAILER_ALIAS`):
+  that mail is outside messaging, which neither records, delivers nor retries it.
+  This is a deliberate exception, and it ends when named system work can compose
+  on an ordinary channel.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
@@ -1987,6 +2091,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
   alias that needs an annotation is declared on `hasura_model_resource`. Lazy
   preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
   boundary; extend that owner rather than re-walking selections in Angee.
+- **A read's order is a list.** `order_by` takes a list of single-key objects
+  and applies them in the list's order, on a list read and on a group's page of
+  rows ([contract test](../../tests/test_hasura_order_contract.py)). One object
+  of several keys carries no priority: GraphQL keeps no key order of an input
+  object, and the server reads its fields in the order type's own field order,
+  the resource's `sortable` order, so a client never sends one.
 - **Public-id lookups preserve their authorization boundary.** Use
   `require_instance_for_id` for required reads with the original queryset.
   `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are

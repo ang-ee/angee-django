@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { Filter } from "./filter";
-import { ResourceQuery, QueryParseError, groupSpecsFrom } from "./query";
-import type { QueryAxis, QueryField, QueryDrill, FilterOperator } from "./query-schema";
+import { ResourceQuery, QueryParseError, groupSpecsFrom, type GroupAxis } from "./query";
+import type { QueryAxis, QueryField, QueryDrill, QuerySort, FilterOperator } from "./query-schema";
 import { testDataResource, testQueryAxis, testQueryField, testResourceQuery } from "./testing";
 
 const channel: QueryAxis = {
@@ -453,8 +453,8 @@ describe("ResourceQuery", () => {
   });
   test("sorts only via declared canonical paths and exact wire keys", () => {
     const query = ResourceQuery.from(resource());
-    expect(query.toOrderBy()).toEqual({ message_count: "desc" });
-    expect(query.toOrderBy({ count: "ASC" })).toEqual({ message_count: "asc" });
+    expect(query.toOrderBy()).toEqual([{ message_count: "desc" }]);
+    expect(query.toOrderBy({ count: "ASC" })).toEqual([{ message_count: "asc" }]);
     expect(query.toSorters([{ field: "count", direction: "DESC" }])).toEqual([
       { field: "message_count", order: "desc" },
     ]);
@@ -462,6 +462,24 @@ describe("ResourceQuery", () => {
       /cannot be sorted/,
     );
     expect(() => query.toOrderBy({ count: "sideways" })).toThrow(/ASC\/DESC/);
+  });
+  test("a list read's order is one single-key object per key, in its priority: a server reads one object's keys in its type's order", () => {
+    const query = ResourceQuery.fromContract(testResourceQuery({ fields: {
+      due: testQueryField("due", { scalar: "Date", sort: { field: "due" } }),
+      title: testQueryField("title", { sort: { field: "title" } }),
+      // A relation's member sorts on its flat wire key.
+      "owner.name": testQueryField("owner.name", { sort: { field: "owner__name" } }),
+    } }));
+    // The same keys and directions in two priorities are two orders.
+    expect(query.toOrderBy([{ field: "due", direction: "DESC" }, { field: "title", direction: "ASC" }]))
+      .toEqual([{ due: "desc" }, { title: "asc" }]);
+    expect(query.toOrderBy([{ field: "title", direction: "ASC" }, { field: "due", direction: "DESC" }]))
+      .toEqual([{ title: "asc" }, { due: "desc" }]);
+    // A declared order object is read in its written key order.
+    expect(query.toOrderBy({ "owner.name": "ASC", due: "DESC" })).toEqual([{ owner__name: "asc" }, { due: "desc" }]);
+    // No order is an empty list, which orders nothing.
+    expect(query.toOrderBy([])).toEqual([]);
+    expect(query.toOrderBy({})).toEqual([]);
   });
   test("removes selected facet constraints while preserving other boolean branches", () => {
     const query = ResourceQuery.from(resource());
@@ -635,6 +653,104 @@ describe("which sort keys one group's records share", () => {
       axes: { "metadata.mailbox": testQueryAxis("metadata.mailbox", { kind: "json", paths: ["metadata"] }) },
     }));
     expect(json.axis("metadata.mailbox").shares("metadata.mailbox")).toBe(true);
+  });
+});
+
+describe("the order of an axis's groups", () => {
+  const contract = ResourceQuery.forRows({ fields: {
+    title: { scalar: "String" }, status: { scalar: "String" }, due: { scalar: "Date" },
+    owner: { kind: "relation", identityPath: "owner.id", labelPath: "owner.name" }, "owner.name": { scalar: "String" },
+  } }).contract;
+  contract.axes.status!.server = { input: "STATUS", key: "status" };
+  contract.axes.owner!.server = { input: "OWNER", key: "owner_id", labelInput: "OWNER__NAME", labelKey: "owner__name" };
+  contract.axes.due!.server = { input: "DUE", key: "due" };
+  const query = ResourceQuery.fromContract({ ...contract, sort: { default: [{ field: "status", direction: "DESC" }] } });
+  /** "field dir, ..." as sort keys. */
+  const order = (spec: string): QuerySort[] => spec ? spec.split(", ").map((key) => {
+    const [field, direction] = key.split(" ");
+    return { field: field!, direction: direction === "desc" ? "DESC" : "ASC" };
+  }) : [];
+
+  test.each([
+    ["no key the axis shares: ascending", { field: "status" }, "title desc", "ASC"],
+    ["its field held descending, behind another key", { field: "status" }, "title asc, status desc", "DESC"],
+    ["its field held ascending", { field: "status" }, "status asc, title desc", "ASC"],
+    ["an empty order: ascending", { field: "status" }, "", "ASC"],
+    ["a relation's member held descending", { field: "owner" }, "owner.name desc", "DESC"],
+    ["the first key the relation's axis shares decides", { field: "owner" }, "title desc, owner asc, owner.name desc", "ASC"],
+    ["a Date by day: the date it shares", { field: "due", granularity: "day" }, "due desc", "DESC"],
+    // A month's records do not share their date, but the months follow the date they bucket.
+    ["a Date by month: the date it buckets, held descending", { field: "due", granularity: "month" }, "title asc, due desc", "DESC"],
+    ["a Date by quarter: the date it buckets, held ascending", { field: "due", granularity: "quarter" }, "due asc", "ASC"],
+    ["a Date by week: the date it buckets, held descending", { field: "due", granularity: "week" }, "due desc", "DESC"],
+    ["a Date by month whose order does not hold the date: ascending", { field: "due", granularity: "month" }, "title desc", "ASC"],
+  ] as const)("%s", (_name, spec, held, direction) => {
+    expect(query.group(spec).direction(order(held))).toBe(direction);
+  });
+
+  test("a level's server read asks for the direction the list's order gives it, its empty group last either way", () => {
+    // A relation orders by label, then identity, each key in that direction.
+    expect(query.toGroupRead({ field: "owner" }, undefined, order("owner.name desc")).orderBy).toEqual([
+      { field: "owner__name", direction: "DESC", nulls: "LAST" },
+      { field: "owner_id", direction: "DESC", nulls: "LAST" },
+    ]);
+    // An order as a record, as a list keeps it; one holding no key the axis shares asks ascending.
+    expect(query.toGroupRead({ field: "status" }, undefined, { title: "DESC", status: "DESC" }).orderBy)
+      .toEqual([{ field: "status", direction: "DESC", nulls: "LAST" }]);
+    expect(query.toGroupRead({ field: "status" }, undefined, { title: "DESC" }).orderBy)
+      .toEqual([{ field: "status", direction: "ASC", nulls: "LAST" }]);
+    // Without an order, the resource's default, as the rows' order reads it.
+    expect(query.toGroupRead({ field: "status" }).orderBy).toEqual([{ field: "status", direction: "DESC", nulls: "LAST" }]);
+    // A month bucket's read asks for the direction of the date it buckets.
+    expect(query.toGroupRead({ field: "due", granularity: "month" }, undefined, order("due desc")).orderBy)
+      .toEqual([{ field: "month", direction: "DESC", nulls: "LAST" }]);
+    // The projection alone, which facets and dashboards read, stays ascending unless asked.
+    expect(query.axis("status").groupBy().orderBy).toEqual([{ field: "status", direction: "ASC", nulls: "LAST" }]);
+    expect(query.axis("status").groupBy("DESC").orderBy).toEqual([{ field: "status", direction: "DESC", nulls: "LAST" }]);
+  });
+
+  /** `rows` sorted by their groups of `axis` in `direction`, as a browser table sorts them. */
+  const byGroups = <T,>(axis: GroupAxis, rows: readonly T[], direction: QuerySort["direction"]): T[] =>
+    [...rows].sort((left, right) => axis.compareGroups(axis.groupKey(left), axis.groupKey(right), direction));
+
+  test.each([
+    ["ASC", ["4", "3", "5", "1", "6", "2"]],
+    ["DESC", ["1", "5", "3", "4", "6", "2"]],
+  ] as const)("records' groups compare %s by the server read's keys: label, then identity, a missing one after every other", (direction, ids) => {
+    // Two owners named alike part by identity; one with no name comes after every name, and the
+    // record with no owner after it, both ways.
+    const owners = [
+      { id: "1", owner: { id: "o1", name: "Zed" } }, { id: "2", owner: null }, { id: "3", owner: { id: "o4", name: "Ann" } },
+      { id: "4", owner: { id: "o2", name: "Ann" } }, { id: "5", owner: { id: "o3", name: "mia" } }, { id: "6", owner: { id: "o5", name: null } },
+    ];
+    expect(byGroups(query.axis("owner"), owners, direction).map(({ id }) => id)).toEqual(ids);
+  });
+
+  test.each([
+    ["ASC", ["blocked", "Closed", "closed", "item 9", "item 10", "open", null]],
+    ["DESC", ["open", "item 10", "item 9", "closed", "Closed", "blocked", null]],
+  ] as const)("text groups compare %s in the natural text order, then by code point, the empty group last", (direction, values) => {
+    const statuses = ["open", "Closed", null, "closed", "blocked", "item 10", "item 9"].map((status, index) => ({ id: String(index), status }));
+    expect(byGroups(query.axis("status"), statuses, direction).map(({ status }) => status)).toEqual(values);
+  });
+
+  test("two groups with no value tie both ways, so a comparison goes on to its next key; a date bucket compares as its bucket", () => {
+    const status = query.axis("status");
+    expect(status.compareGroups(status.groupKey({ status: null }), status.groupKey({ status: null }), "ASC")).toBe(0);
+    expect(status.compareGroups(status.groupKey({ status: null }), status.groupKey({ status: null }), "DESC")).toBe(0);
+    expect(status.compareGroups(status.groupKey({ status: "open" }), status.groupKey({ status: null }), "DESC")).toBeLessThan(0);
+    // Without a direction, ascending.
+    expect(status.compareGroups(status.groupKey({ status: "blocked" }), status.groupKey({ status: "open" }))).toBeLessThan(0);
+    // A key reads its identity, unless a caller has read it (a table's grouping value), and its label only where the
+    // axis has one; else the label is the identity.
+    expect(status.groupKey({ status: "open" })).toEqual(["open", "open"]);
+    expect(status.groupKey({ status: "open" }, "open")).toEqual(["open", "open"]);
+    expect(query.axis("owner").groupKey({ owner: { id: "o1", name: "Zed" } }, "o1")).toEqual(["Zed", "o1"]);
+    const month = query.axis("due", "month");
+    expect(month.groupKey({ due: "2026-03-20" })).toEqual(month.groupKey({ due: "2026-03-05" }));
+    expect(month.compareGroups(month.groupKey({ due: "2026-03-20" }), month.groupKey({ due: "2026-03-05" }), "DESC")).toBe(0);
+    expect(month.compareGroups(month.groupKey({ due: "2026-01-28" }), month.groupKey({ due: "2026-03-05" }), "ASC")).toBeLessThan(0);
+    expect(month.compareGroups(month.groupKey({ due: "2026-01-28" }), month.groupKey({ due: "2026-03-05" }), "DESC")).toBeGreaterThan(0);
   });
 });
 

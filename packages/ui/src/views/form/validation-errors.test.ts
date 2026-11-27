@@ -308,9 +308,9 @@ describe("validationErrorMessages", () => {
 
 describe("useDottedPathFieldErrors", () => {
   test("binds and clears exact dotted descendants and summarizes unmatched keys", () => {
-    const fieldNames = ["review", "rows"];
+    const shownFieldNames = ["review", "rows"];
     const { result } = renderHook(() =>
-      useDottedPathFieldErrors(fieldNames),
+      useDottedPathFieldErrors(shownFieldNames),
     );
 
     act(() =>
@@ -472,7 +472,7 @@ describe("shared form submission errors", () => {
       applyFormErrors(result.current, invalidFormSubmit({
         fieldErrors: { "rows.0.title": ["Required", "Use a unique title"], rowsExtra: ["Unknown field"] },
         formErrors: ["Review the form"],
-      }), { fieldNames: ["rows"] });
+      }), { shownFieldNames: ["rows"] });
     });
     expect(result.current.getFieldState("rows.0.title").error).toMatchObject({
       type: "server", message: "Required Use a unique title", types: { server: ["Required", "Use a unique title"] },
@@ -504,16 +504,31 @@ describe("shared form submission errors", () => {
     const { result } = renderHook(() => useForm<Record<string, unknown>>());
     act(() => {
       applyFormErrors(result.current, invalidFormSubmit({ fieldErrors: { url: ["The address is not allowed."] }, formErrors: [] }),
-        { fieldNames: ["url"], fallback: "Could not subscribe." });
+        { shownFieldNames: ["url"], fallback: "Could not subscribe." });
     });
     expect(result.current.getFieldState("url").error?.message).toBe("The address is not allowed.");
     expect(result.current.getFieldState("root.server").error).toBeUndefined();
     act(() => {
       result.current.clearErrors();
       applyFormErrors(result.current, invalidFormSubmit({ fieldErrors: {}, formErrors: [] }),
-        { fieldNames: ["url"], fallback: "Could not subscribe." });
+        { shownFieldNames: ["url"], fallback: "Could not subscribe." });
     });
     expect(result.current.getFieldState("root.server").error?.message).toBe("Could not subscribe.");
+  });
+
+  test("an empty list of shown fields claims none: every field reason shows on the banner, as `path: reason`, and the banner is asked", () => {
+    const { result } = renderHook(() => useForm<Record<string, unknown>>());
+    const focus = vi.fn();
+    act(() => {
+      applyFormErrors(result.current, invalidFormSubmit({
+        fieldErrors: { url: ["The address is not allowed."], "rows.0.qty": ["Too many."] }, formErrors: [],
+      }), { shownFieldNames: [], focus });
+    });
+    // Each reason is still set at its path, for a control a page renders itself.
+    expect(result.current.getFieldState("url").error?.message).toBe("The address is not allowed.");
+    expect(formErrorsFromForm({ root: { server: result.current.getFieldState("root.server").error } }))
+      .toEqual(["url: The address is not allowed.", "rows.0.qty: Too many."]);
+    expect(focus.mock.calls).toEqual([[undefined]]);
   });
 });
 
@@ -622,7 +637,7 @@ describe("where a refusal brings the person (applyFormErrors with `focus`)", () 
     const setError = vi.fn();
     const focus = vi.fn();
     applyFormErrors({ setError } as never, { status: "invalid", issues }, {
-      fieldNames: ["label", "code"],
+      shownFieldNames: ["label", "code"],
       fieldSummary: (errors) => `Fix: ${Object.keys(errors).join(", ")}`,
       fallback: "Save failed.",
       ...(ask ? { focus } : {}),

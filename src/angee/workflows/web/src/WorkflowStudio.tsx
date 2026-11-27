@@ -108,7 +108,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
   }
   const action = useActionForm<StudioValues, Acknowledgement>({
     defaultValues: initialValues,
-    fieldNames: [], genericErrorMessage: t("studio.saveFailed"),
+    shownFieldNames: [], genericErrorMessage: t("studio.saveFailed"),
     submit: async (values, options) => {
       setIssues(EMPTY_ISSUES);
       const snapshot = studioSnapshot({ ...values, layout: displayLayout.current ?? values.layout });
@@ -280,7 +280,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
           { icon: "arrow-up-right", label: t("studio.publish"), text: true, disabled: disabled || form.formState.isDirty || conflict !== null, onClick: () => void publishSaved() },
         ]}
       />
-      {!conflict || !action.saveConflict ? <ErrorBanner messages={action.formErrors} /> : null}
+      {!conflict || !action.saveConflict ? <ErrorBanner {...action.banner} messages={action.formErrors} /> : null}
       {hasIssues ? <ErrorBanner description={[issueMessage, ...projected.formErrors].join("\n")} /> : null}
       {conflict ? <Alert tone="warning" title={conflict.message} actions={<>
         <Button type="button" size="sm" disabled={disabled || conflict.revision == null} onClick={() => {

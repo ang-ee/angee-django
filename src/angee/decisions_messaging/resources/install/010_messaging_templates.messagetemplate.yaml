@@ -1,0 +1,297 @@
+# Decision mail: one part saying what a question is, and the three mails that include
+# it. Each links the question's page in the app, where the person decides; the mail
+# itself decides nothing. The part loads first, since the templates that include it
+# are walked when they save.
+- xref: part.decisions_messaging.question.en
+  kind: part
+  key: decisions_messaging.question
+  language: en
+  name: Decision question
+  description: One open question in a mail; what it is about, its choices, and the button that opens it in the app.
+  format: markdown
+  source: |-
+    **{{ question.title }}**
+
+    {% if question.reason %}
+
+    {{ question.reason }}
+
+    {% endif %}
+
+    {% if question.records|length %}
+
+    Concerns: {% for record in question.records %}{{ record }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if question.more_records %} and {{ question.more_records }} more{% endif %}
+
+    {% endif %}
+
+    {% if question.facts|length %}
+
+    {% for fact in question.facts %}
+
+    - {{ fact.label }}: {{ fact.value }}{% if fact.authority == 'correction' %} (corrected){% elif fact.authority == 'unverified' %} (unverified){% endif %}
+
+    {% endfor %}
+
+    {% if question.more_facts %}
+
+    And {{ question.more_facts }} more {{ question.more_facts|pluralize:"fact,facts" }} in the app.
+
+    {% endif %}
+
+    {% endif %}
+
+    Choices: {% for choice in question.choices %}{{ choice }}{% if not forloop.last %}; {% endif %}{% endfor %}{% if question.more_choices %} and {{ question.more_choices }} more{% endif %}
+
+    {% if question.asked_by %}
+
+    Asked by {{ question.asked_by }}
+
+    {% endif %}
+
+    {% if question.due_at %}
+
+    Answer due {{ question.due_at|date:"DATETIME_FORMAT" }}
+
+    {% endif %}
+
+    {% include "blocks/button" with label="Open the decision" url=question.url only %}
+  variables:
+    question.title: What kind of question it is.
+    question.reason: Why it is asked; may be empty.
+    question.records.*: The labels of the records it concerns that the reader reads, the first few.
+    question.more_records: How many more of those records there are than it names.
+    question.facts.*.label: What one fact the reader may see is.
+    question.facts.*.value: Its value as text.
+    question.facts.*.authority: Where its value comes from (source, correction or unverified).
+    question.more_facts: How many more of those facts there are than it shows.
+    question.asked_by: Who asked it; empty when no person did.
+    question.due_at: When an answer is due; empty when it is undated.
+    question.url: Where the question opens in the app.
+    question.choices.*: The labels of the alternatives it offers, the first few.
+    question.more_choices: How many more alternatives it offers than it names.
+  sample:
+    question:
+      title: Supplier choice
+      reason: Two suppliers match this invoice.
+      records:
+        - Invoice INV-0042
+      more_records: 2
+      facts:
+        - label: Supplier
+          value: Acme Ltd
+          authority: source
+        - label: Amount
+          value: 1234.50 EUR
+          authority: correction
+        - label: Paid
+          value: 'no'
+          authority: unverified
+      more_facts: 1
+      asked_by: Tomás Rey
+      due_at: '2027-03-01T09:00:00+00:00'
+      url: https://app.example.test/decisions/dcn_18
+      choices:
+        - Use the proposed supplier
+        - Choose another supplier
+      more_choices: 0
+- xref: template.decisions_messaging.decision_asked.en
+  kind: template
+  key: decisions_messaging.decision_asked
+  language: en
+  name: Decision asked
+  description: Sent once to each person a question can be put to, when it is asked.
+  format: markdown
+  layout: base
+  subject: 'A decision is waiting for you: {{ question.title }}'
+  preheader: 'Open it in the app to choose{% if question.due_at %} by {{ question.due_at|date:"DATE_FORMAT" }}{% endif %}.'
+  source: |-
+    {% include "parts/greeting" with person=person only %}
+
+    A question is waiting for your decision.
+
+    {% include "parts/decisions_messaging.question" with question=question only %}
+
+    {% include "parts/signature" only %}
+  variables:
+    person.first_name: The recipient's first name; may be empty.
+    question.title: What kind of question it is.
+    question.reason: Why it is asked; may be empty.
+    question.records.*: The labels of the records it concerns that the reader reads, the first few.
+    question.more_records: How many more of those records there are than it names.
+    question.facts.*.label: What one fact the reader may see is.
+    question.facts.*.value: Its value as text.
+    question.facts.*.authority: Where its value comes from (source, correction or unverified).
+    question.more_facts: How many more of those facts there are than it shows.
+    question.asked_by: Who asked it; empty when no person did.
+    question.due_at: When an answer is due; empty when it is undated.
+    question.url: Where the question opens in the app.
+    question.choices.*: The labels of the alternatives it offers, the first few.
+    question.more_choices: How many more alternatives it offers than it names.
+  sample:
+    person:
+      first_name: Ana
+    question:
+      title: Supplier choice
+      reason: Two suppliers match this invoice.
+      records:
+        - Invoice INV-0042
+      more_records: 2
+      facts:
+        - label: Supplier
+          value: Acme Ltd
+          authority: source
+        - label: Amount
+          value: 1234.50 EUR
+          authority: correction
+        - label: Paid
+          value: 'no'
+          authority: unverified
+      more_facts: 1
+      asked_by: Tomás Rey
+      due_at: '2027-03-01T09:00:00+00:00'
+      url: https://app.example.test/decisions/dcn_18
+      choices:
+        - Use the proposed supplier
+        - Choose another supplier
+      more_choices: 0
+- xref: template.decisions_messaging.decision_reminder.en
+  kind: template
+  key: decisions_messaging.decision_reminder
+  language: en
+  name: Decision reminder
+  description: Sent once to each person a question can be put to, when its reminder is due.
+  format: markdown
+  layout: base
+  subject: 'Still waiting for your decision: {{ question.title }}'
+  preheader: 'Open it in the app to choose{% if question.due_at %} by {{ question.due_at|date:"DATE_FORMAT" }}{% endif %}.'
+  source: |-
+    {% include "parts/greeting" with person=person only %}
+
+    A question you can decide is still waiting for an answer.
+
+    {% include "parts/decisions_messaging.question" with question=question only %}
+
+    {% include "parts/signature" only %}
+  variables:
+    person.first_name: The recipient's first name; may be empty.
+    question.title: What kind of question it is.
+    question.reason: Why it is asked; may be empty.
+    question.records.*: The labels of the records it concerns that the reader reads, the first few.
+    question.more_records: How many more of those records there are than it names.
+    question.facts.*.label: What one fact the reader may see is.
+    question.facts.*.value: Its value as text.
+    question.facts.*.authority: Where its value comes from (source, correction or unverified).
+    question.more_facts: How many more of those facts there are than it shows.
+    question.asked_by: Who asked it; empty when no person did.
+    question.due_at: When an answer is due; empty when it is undated.
+    question.url: Where the question opens in the app.
+    question.choices.*: The labels of the alternatives it offers, the first few.
+    question.more_choices: How many more alternatives it offers than it names.
+  sample:
+    person:
+      first_name: Ana
+    question:
+      title: Supplier choice
+      reason: Two suppliers match this invoice.
+      records:
+        - Invoice INV-0042
+      more_records: 2
+      facts:
+        - label: Supplier
+          value: Acme Ltd
+          authority: source
+        - label: Amount
+          value: 1234.50 EUR
+          authority: correction
+        - label: Paid
+          value: 'no'
+          authority: unverified
+      more_facts: 1
+      asked_by: Tomás Rey
+      due_at: '2027-03-01T09:00:00+00:00'
+      url: https://app.example.test/decisions/dcn_18
+      choices:
+        - Use the proposed supplier
+        - Choose another supplier
+      more_choices: 0
+- xref: template.decisions_messaging.decision_digest.en
+  kind: template
+  key: decisions_messaging.decision_digest
+  language: en
+  name: Decision digest
+  description: Sent once a day to each person with open questions waiting on them; it lists them, due first.
+  format: markdown
+  layout: base
+  subject: '{{ count }} decision{{ count|pluralize }} waiting for you'
+  preheader: The open questions you can answer, as of today.
+  source: |-
+    {% include "parts/greeting" with person=person only %}
+
+    {{ count }} question{{ count|pluralize }} {{ count|pluralize:"is,are" }} waiting for your decision.
+
+    {% for question in questions %}
+
+    {% include "parts/decisions_messaging.question" with question=question only %}
+
+    {% endfor %}
+
+    {% if more %}
+
+    {{ more }} more {{ more|pluralize:"is,are" }} waiting in the app.
+
+    {% endif %}
+
+    {% include "parts/signature" only %}
+  variables:
+    person.first_name: The recipient's first name; may be empty.
+    count: How many questions are waiting.
+    more: How many of them the list leaves out.
+    questions.*.title: What kind of question it is.
+    questions.*.reason: Why it is asked; may be empty.
+    questions.*.records.*: The labels of the records it concerns that the reader reads, the first few.
+    questions.*.more_records: How many more of those records there are than it names.
+    questions.*.facts.*.label: What one fact the reader may see is.
+    questions.*.facts.*.value: Its value as text.
+    questions.*.facts.*.authority: Where its value comes from (source, correction or unverified).
+    questions.*.more_facts: How many more of those facts there are than it shows.
+    questions.*.asked_by: Who asked it; empty when no person did.
+    questions.*.due_at: When an answer is due; empty when it is undated.
+    questions.*.url: Where the question opens in the app.
+    questions.*.choices.*: The labels of the alternatives it offers, the first few.
+    questions.*.more_choices: How many more alternatives it offers than it names.
+  sample:
+    person:
+      first_name: Ana
+    count: 2
+    more: 0
+    questions:
+      - title: Supplier choice
+        reason: Two suppliers match this invoice.
+        records:
+          - Invoice INV-0042
+        more_records: 2
+        facts:
+          - label: Supplier
+            value: Acme Ltd
+            authority: source
+        more_facts: 0
+        asked_by: Tomás Rey
+        due_at: '2027-03-01T09:00:00+00:00'
+        url: https://app.example.test/decisions/dcn_18
+        choices:
+          - Use the proposed supplier
+          - Choose another supplier
+        more_choices: 0
+      - title: Access request
+        reason: ''
+        records: []
+        more_records: 0
+        facts: []
+        more_facts: 0
+        asked_by: ''
+        due_at: ''
+        url: https://app.example.test/decisions/dcn_19
+        choices:
+          - Approve access
+          - Deny access
+        more_choices: 0
