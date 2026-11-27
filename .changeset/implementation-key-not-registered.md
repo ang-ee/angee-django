@@ -18,7 +18,10 @@ cannot write the record), "Its implementation cannot run. It cannot be changed
 here." A create-only selector holding such a key is offered once more (see
 `create-only-repair.md`). The record's other fields save either way; a
 refused choice shows the server's reason under the field. A dialog's field of
-the same name carries none. A null in any other column, or in a column reached
+the same name carries none. A list cell reads the stored row too, so a column
+the row redacts is not marked where the row carries its `redacted_fields`; no
+list read selects them, so a list still marks a selector column it redacts
+(latent: the record form is the one read that selects them). A null in any other column, or in a column reached
 through a relation (`channel.backend_class`), renders as before.
 
 A list grouped by such a column, a board laned by it and a facet counted on it
