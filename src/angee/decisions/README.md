@@ -26,6 +26,51 @@ of them, such as a represented party's admitted user, unions that arm into
 concern links and nothing else; the answer's referenced records still show only to
 their own readers.
 
+An admitted question sends `decision_asked` inside the ask's transaction, after
+decisions' own system work: receivers hold only the caller's authority, a receiver
+error rolls the admission back, and a refused ask sends nothing. A supersede asks its
+replacement inside its own `decisions.supersede` system context, so that replacement's
+receivers run elevated; a receiver reads under an authority it names, never the
+ambient one. A receiver with an external effect schedules it after commit.
+`Decision.objects.deciders()` maps each question to the active people it can be put
+to, in primary-key order: those who may both answer (`act`) and read it, service
+users and inactive accounts left out. `Decision.objects.put_to(person)` is the same
+rule read from the person's side: the open questions that can be put to them. A
+person is among a question's deciders exactly when the question is put to them.
+Neither has the "assigned to me or unassigned" clause `waiting_on` has, so an
+administrator is a decider of a question assigned to others. `deciders` makes two
+reverse lookups a question; `put_to` a few statements whatever the number of
+questions. `Decision.objects.administrators()` and `for_administrator(person)` are
+one more rule read from both sides: the platform administrators among a question's
+deciders, so an administrator is never put a question they cannot answer (an owner's
+`owner_managed` takes the administrator arm's `act` away).
+`decision.concern_labels(reader)` is the labels of the concerned records `reader`
+reads, and `decision.requester_name(reader)` the requester's name as `reader` reads
+that user; the console's `concerns_label` and a message sent to a person both read
+them for that person. `decision.context_for(reader)` is the question's context as
+`reader` is shown it, never the stored one whole: a reference whose record `reader`
+may not read is left out, its stored label with it, and so is a fact whose evidence
+names one, and a reference or evidence naming a model the deployment no longer has.
+Nothing else is left out: a fact with an empty value stays, since a widget reads its
+`row`. The reason and the facts with no evidence are the question's own statements,
+so the caller reads the row in `reader`'s scope, as GraphQL and the mails do.
+GraphQL's `context` field is `context_for` of the request's user; a list reads every
+row's context in one batch (`Decision.contexts_prefetch`), as `concerns_label` reads
+every row's labels (`Decision.concern_records_prefetch`). A list a caller reads
+itself, as the record timeline and the mails do, takes both through
+`Decision.reader_prefetches(reader)`; a mail adds the requester's name
+(`Decision.requester_names_prefetch`). `decision.facts_for(reader)`
+is its facts that have a value, in stored order, as the card's grid shows them; the
+caller slices, as with `concern_labels`. A fact's `row` is its widget's context and
+names no record. `decision.readable_answered_for(reader)` and
+`readable_answer_evidence(reader)` likewise leave out a reference to a dropped model.
+`fact.as_text()` is the one text form of a
+fact's value, the card's without a widget: object keys by `title_case`, the card's
+`titleCase`, and a widget fact's bare value.
+`decision.get_absolute_url()` is the question's console path,
+`/decisions/<public id>`: the [web fragment's](web/README.md) record route, which a
+link sent outside the app joins to the public origin.
+
 `DecisionProposal` is the Pydantic contract for the stored JSON:
 
 ```json

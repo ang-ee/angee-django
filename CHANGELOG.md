@@ -10,6 +10,120 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.decisions`: **Disclosure fix: GraphQL's `context` is the question's
+  context as the reader is shown it.** It returned the stored context whole to every
+  reader of the question, so a reader whose read on a referenced record, or on a
+  fact's evidence, was never granted or was revoked still read the record's stored
+  label and the fact drawn from it. `DecisionType.context` now resolves
+  `decision.context_for(reader)`: the references whose records the reader may read
+  (`readable_evidence`), the facts whose evidence they may read, and the reason, in
+  the stored shape, so the console card parses it unchanged. An entry naming a model
+  the deployment no longer has is left out for every reader, in the answer's
+  `answered_for` and `answer_evidence` too; a fact with an empty value stays, since a
+  widget reads its `row`. A list reads every row's context in one batch
+  (`Decision.contexts_prefetch`), and a list a caller reads itself, the record
+  timeline's and the mails', takes its concern labels and contexts together
+  (`Decision.reader_prefetches`), so `context` costs the same statements
+  for one row or many. Console users see the change where a proposal
+  names a record they may not read: its relation value shows without that record's
+  stored label.
+
+- `angee.decisions`, `angee.decisions_messaging`: **Open decisions are mailed to
+  the people they can be put to.**
+  - **New in decisions.** `decision_asked` (`angee.decisions.signals`) fires once
+    per admitted question, inside `Decision.objects.ask`'s transaction and outside
+    decisions' own system context: a refused ask sends nothing, and a receiver error
+    rolls the admission back. A supersede asks its replacement inside its own
+    `decisions.supersede` system context, so there receivers run elevated.
+    `Decision.get_absolute_url()` returns the question's console path,
+    `/decisions/<public id>`, the decisions fragment's record route; a test reads
+    the fragment's declaration so the two cannot drift.
+    `Decision.objects.deciders()` maps each question to the active people who may
+    both answer and read it, and `Decision.objects.put_to(person)` is the same rule
+    from the person's side: the open questions put to them. Neither has the
+    "assigned to me or unassigned" clause, so administrators are among the deciders
+    of questions assigned to others. `decision.concern_labels(reader)` returns the
+    labels of the concerned records `reader` reads, which the console's
+    `concerns_label` now joins, and `decision.requester_name(reader)` the
+    requester's name as `reader` reads that user. `decision.facts_for(reader)`
+    returns the context's facts `reader` is shown, in stored order, for the caller
+    to slice: one with an empty value is left out, as the card leaves it out, and so
+    is one whose evidence names a record `reader` may not read or a model the
+    deployment no longer has. `DecisionFact.as_text()` is a fact's one text form,
+    the card's without a widget (object keys by `title_case`, the card's
+    `titleCase`; a widget fact's bare value).
+    `Decision.objects.administrators()` and `for_administrator(person)` read the
+    platform administrators among a question's deciders from both sides, so an
+    administrator whose `act` an owner's `owner_managed` takes away is not put it.
+  - **New.** The bridge addon `angee.decisions_messaging` mails a question, after
+    commit, to its kind's audience when it is asked and when its reminder is due.
+    `ANGEE_DECISIONS_MESSAGING_AUDIENCES` maps decision kinds (`"*"` for every other
+    kind) to `deciders`, the default (the administrator arm and owners'
+    `owner_eligible` arms included; a holder of `act` who may not read the question,
+    service users and inactive accounts left out), or `administrators`, the platform
+    administrators among its deciders, whoever it is assigned to. A key is a
+    `Decision.kind` exactly as asked, not its label; an invalid mapping fails
+    start-up (`decisions_messaging.E001`), naming the entry. A deployment that sends
+    its setup questions to its administrators sets `{"*": "administrators",
+    "Approve posting": "deciders"}`, naming its sentence kinds as they are asked.
+    Once a day at 07:00 UTC it mails each active person one digest of the open
+    questions whose audience includes them, older ones
+    included, each person's list read in their own scope: the ones no asked or
+    reminder mail reached them about in the past day first, due first, at most ten
+    with a count of the rest, and none for a person every waiting question was
+    mailed to in the past day. Each mail is a shipped message template
+    (`decisions_messaging.decision_asked`, `decision_reminder` and `decision_digest`,
+    sharing the part `decisions_messaging.question`) sent with
+    `MessageTemplate.objects.send_as_system` as named system work, with no causing
+    actor, from values read in the recipient's own scope, so a mail never shows a
+    record label, a fact or a name that person cannot read; it lists the question's
+    facts that person is shown, at most fifteen, each in its text form cut to a
+    length derived from the renderer's limits for the questions the mail lists
+    (`FACT_TEXT_LIMIT` for one question, `DIGEST_FACT_TEXT_LIMIT` in the digest),
+    with an authority mark, its reason cut the same way (`REASON_TEXT_LIMIT`,
+    `DIGEST_REASON_TEXT_LIMIT`), its first choices with a count of the rest
+    (`QUESTION_CHOICE_LIMIT`, `DIGEST_CHOICE_LIMIT`), and links the question's page
+    in the app, where the person decides; no link decides anything.
+    `DecisionNotice` records each person mailed per question and occasion, and
+    `DigestNotice` per person and UTC day, each in the durable transaction of that
+    one send, so a retried task mails nobody twice; the mail verbs therefore run
+    outside any transaction. A notice's mail stands unless messaging recorded it as
+    failed: then the occasion's next run mails the person again on their one notice
+    (a digest that same day), and the digest's overlap counts the failed mail as never
+    sent. An uncertain mail may have been delivered, so the addon never sends it
+    again and never surfaces it: surfacing an uncertain system mail once is
+    messaging's open item, and the addon has no "send again" act. Each send names
+    the question's link as what the mail must show (`must_print`). A refusal only the
+    deployment can fix (a row that cannot show the link or no longer renders, no
+    default brand kit) fails the run once (`DecisionMailUnsendable`), never a
+    person's skip. One that may be a question's (`invalid_values`,
+    `values_too_large`, `render_budget`, `subject_too_long`) is the row's when the
+    row refuses its own sample, so a deployment's own row must keep a sample that
+    renders; otherwise it skips that question for that reader alone, logged, and
+    mails the rest, and a run that skipped any question then fails once, naming
+    them. A digest whose questions fail only together lists half
+    as many until it sends. A row saved mid-run (`not_effective`) is retried, and
+    each run checks for a default brand kit before any render. No refusal's own message
+    leaves the addon, since a failing render's quotes the link: each is logged and
+    raised as its codes and the addon's words. One person's failure is
+    logged and counted and the others still go, and the task then fails; Celery's
+    soft time limit stops the run at once. A
+    permanent defect (no public origin, system mail not configured, a missing
+    template row, a render or address refusal) is not retried; a system channel that
+    is missing or not connected is, 5, 15 and 45 minutes later. A question a workflow
+    step holds gets no reminder mail, since `remind_due` skips it.
+  - **Upgrade.** Add `angee.decisions_messaging` to the host's `INSTALLED_APPS`
+    (the full addons profile lists it), run `manage.py makemigrations
+    decisions_messaging` after compose and commit the migration, which creates
+    `DecisionNotice` and `DigestNotice`, then `manage.py provision`, which migrates,
+    synchronizes permissions and loads the install tier with the mails. Set
+    `ANGEE_PUBLIC_ORIGIN` and system mail (`MAILERS["transport"]`,
+    `DEFAULT_FROM_EMAIL`), and keep a default brand kit: decision mail names none.
+    Without the origin or system mail a task refuses before
+    anyone is mailed, once per run. Only questions
+    asked after the upgrade get an asked mail; the digest lists the open questions
+    waiting on each person, older ones included.
+
 - `angee.workflows`: **Runs read the records they are about.**
   - **New.** `WorkflowRunQuerySet.concerns(model, *, descendants=True)` is the
     inverse of `about`. It returns the `model` records the selected runs and their

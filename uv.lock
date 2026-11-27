@@ -26,6 +26,7 @@ members = [
     "angee-checklists",
     "angee-dashboards",
     "angee-decisions",
+    "angee-decisions-messaging",
     "angee-extraction",
     "angee-graphql",
     "angee-iam",
@@ -156,6 +157,7 @@ dependencies = [
     { name = "angee-checklists" },
     { name = "angee-dashboards" },
     { name = "angee-decisions" },
+    { name = "angee-decisions-messaging" },
     { name = "angee-extraction" },
     { name = "angee-graphql" },
     { name = "angee-iam" },
@@ -274,6 +276,7 @@ requires-dist = [
     { name = "angee-checklists", editable = "src/angee/checklists" },
     { name = "angee-dashboards", editable = "src/angee/dashboards" },
     { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-decisions-messaging", editable = "src/angee/decisions_messaging" },
     { name = "angee-extraction", editable = "src/angee/extraction" },
     { name = "angee-graphql", editable = "src/angee/graphql" },
     { name = "angee-iam", editable = "src/angee/iam" },
@@ -766,6 +769,33 @@ requires-dist = [
     { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-decisions-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/decisions_messaging" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-brandkit" },
+    { name = "angee-decisions" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-messaging" },
+    { name = "angee-messaging-templates" },
+    { name = "angee-parties" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-brandkit", editable = "src/angee/brandkit" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-messaging-templates", editable = "src/angee/messaging_templates" },
+    { name = "angee-parties", editable = "src/angee/parties" },
 ]
 
 [[package]]

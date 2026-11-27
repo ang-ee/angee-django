@@ -1012,7 +1012,11 @@ def _references(source: str, name: str) -> bool:
     )
 
 
-SYSTEM_SEND_CALLERS: frozenset[str] = frozenset()
+SYSTEM_SEND_CALLERS: frozenset[str] = frozenset({
+    # Mails a question only to the people it is put to, each judged by decisions' own rule before the send:
+    # ``act`` and ``read`` on the question (``Decision.objects.deciders``/``put_to``, ``administrators``).
+    "src/angee/decisions_messaging/models.py",
+})
 """The source modules that call ``send_as_system``, each added here in a reviewed change.
 
 Call it only from system work whose own gate decided the send: a person's request reaches it only through such a
