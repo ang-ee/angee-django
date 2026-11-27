@@ -41,58 +41,70 @@ export const repairDefaults = {
   s3: { config: { root: "/srv/archive", bucket: "archive" } },
 } as const;
 
-/** `storage.Backend`, whose `implFields` names `backend_class`: a null there is a key not registered. */
-export const backendResource = testDataResource("storage.Backend", {
-  schemaName: "public", recordRepresentation: "label", implFields: ["backend_class"],
-  roots: { aggregate: "backends_aggregate" }, typeNames: { filter: "BackendFilter", order: "BackendOrder" },
-  fields: [
-    storyField("id", { scalar: "ID", creatable: false, updatable: false }), storyField("label"),
-    storyField("backend_class", { kind: "enum", scalar: null, values: registered }),
-    storyField("config", { scalar: "JSON" }),
-  ],
-  query: testResourceQuery({ fields: {
-    id: testQueryField("id", { scalar: "ID" }),
-    label: testQueryField("label", { sort: { field: "label" } }),
-    backend_class: testQueryField("backend_class", { kind: "enum", values: registered, sort: { field: "backend_class" } }),
-  } }),
-});
+/**
+ * `storage.Backend`, whose `implFields` names `backend_class`: a null there is a key not registered. With
+ * `createOnly`, the model makes the selector create-only, as its metadata says (`createOnlyBackendResource`).
+ */
+function backendResourceFor({ createOnly = false }: { createOnly?: boolean } = {}) {
+  return testDataResource("storage.Backend", {
+    schemaName: "public", recordRepresentation: "label", implFields: ["backend_class"],
+    roots: { aggregate: "backends_aggregate" }, typeNames: { filter: "BackendFilter", order: "BackendOrder" },
+    fields: [
+      storyField("id", { scalar: "ID", creatable: false, updatable: false }), storyField("label"),
+      storyField("backend_class", { kind: "enum", scalar: null, values: registered, ...(createOnly ? { createOnly } : {}) }),
+      storyField("config", { scalar: "JSON" }),
+    ],
+    query: testResourceQuery({ fields: {
+      id: testQueryField("id", { scalar: "ID" }),
+      label: testQueryField("label", { sort: { field: "label" } }),
+      backend_class: testQueryField("backend_class", { kind: "enum", values: registered, sort: { field: "backend_class" } }),
+    } }),
+  });
+}
 
-// What the stories' saves write, by id, so a saved choice reads back as the server would read it.
-const stored = new Map<string, Record<string, unknown>>(backends.map((backend) => [backend.id, { ...backend }]));
-
-const backendById = (args: Record<string, unknown>) => {
-  const keys = args.pk_columns;
-  const id = typeof keys === "object" && keys !== null && "id" in keys ? keys.id : args.id;
-  return typeof id === "string" ? stored.get(id) ?? null : null;
-};
+export const backendResource = backendResourceFor();
+/** The same resource with its selector create-only on the model, as the server's metadata publishes it. */
+export const createOnlyBackendResource = backendResourceFor({ createOnly: true });
 
 /**
- * The backends' roots. A save writes what it sends and keeps the key the backend holds unless it chooses
- * another. `impl_choices` with a record answers, as the server does, only for a backend whose stored key
- * is not registered: what choosing each implementation sets on it (these backends carry no config).
+ * A fresh set of the backends' roots, with its own store of what its saves write, so a saved choice reads
+ * back as the server would read it within one story and never leaks into another. A save keeps the key a
+ * backend holds unless it chooses another. `impl_choices` with a record answers, as the server does, only
+ * for a backend whose stored key is not registered: what choosing each implementation sets on it.
  */
-export const backendOperations: Readonly<Record<string, GraphQLWireOperation>> = {
-  impl_choices: (args) => {
-    const record = typeof args.record === "string" ? stored.get(args.record) : undefined;
-    if (args.record != null && (record?.id !== "backend-2" || record.backend_class != null)) {
-      throw new Error("Implementation selection is create-only.");
-    }
-    return registered.map(({ value }) => {
-      const key = value.toLowerCase() as keyof typeof configSchemas;
-      return {
-        key, category: "", config_schema: configSchemas[key],
-        defaults: args.record != null ? repairDefaults[key] : insertDefaults[key],
-      };
-    });
-  },
-  backends: () => [...stored.values()],
-  backends_aggregate: () => ({ aggregate: { count: stored.size } }),
-  backends_by_pk: backendById,
-  update_backends_by_pk: (args) => {
-    const current = backendById(args);
-    if (!current) return null;
-    const saved = { ...current, ...(typeof args._set === "object" && args._set !== null ? args._set : {}) };
-    stored.set(String(saved.id), saved);
-    return saved;
-  },
-};
+export function backendOperationsFor(): Readonly<Record<string, GraphQLWireOperation>> {
+  const stored = new Map<string, Record<string, unknown>>(backends.map((backend) => [backend.id, { ...backend }]));
+  const backendById = (args: Record<string, unknown>) => {
+    const keys = args.pk_columns;
+    const id = typeof keys === "object" && keys !== null && "id" in keys ? keys.id : args.id;
+    return typeof id === "string" ? stored.get(id) ?? null : null;
+  };
+  return {
+    impl_choices: (args) => {
+      const record = typeof args.record === "string" ? stored.get(args.record) : undefined;
+      if (args.record != null && (record?.id !== "backend-2" || record.backend_class != null)) {
+        throw new Error("Implementation selection is create-only.");
+      }
+      return registered.map(({ value }) => {
+        const key = value.toLowerCase() as keyof typeof configSchemas;
+        return {
+          key, category: "", config_schema: configSchemas[key],
+          defaults: args.record != null ? repairDefaults[key] : insertDefaults[key],
+        };
+      });
+    },
+    backends: () => [...stored.values()],
+    backends_aggregate: () => ({ aggregate: { count: stored.size } }),
+    backends_by_pk: backendById,
+    update_backends_by_pk: (args) => {
+      const current = backendById(args);
+      if (!current) return null;
+      const saved = { ...current, ...(typeof args._set === "object" && args._set !== null ? args._set : {}) };
+      stored.set(String(saved.id), saved);
+      return saved;
+    },
+  };
+}
+
+/** The backends' roots most stories share (a story that saves a backend takes its own, `backendOperationsFor`). */
+export const backendOperations = backendOperationsFor();

@@ -343,8 +343,8 @@ export function fieldsWithMetadataDefaults(
       ...field,
       // A parent record's generated update cannot write another model's fields.
       ...(resolved && field.name.includes(".") ? { readOnly: true } : {}),
-      // A create-only selector is the model's fact, so no page restates it.
-      ...(field.createOnly === undefined && fieldMetadata?.createOnly ? { createOnly: true } : {}),
+      // A create-only selector is the model's fact: no page restates it, and no page unlocks it.
+      ...(fieldMetadata?.createOnly ? { createOnly: true } : {}),
       ...(widget !== field.widget ? { widget } : {}),
       label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.currencyField === undefined && fieldMetadata?.currencyField

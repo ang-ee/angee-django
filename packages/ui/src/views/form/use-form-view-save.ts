@@ -33,10 +33,11 @@ import { deepEqual } from "@tanstack/react-router";
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
 import { useDraftScope, useIdempotencyDraftOwner, useIdempotencyKeys } from "../../lib/idempotency-key";
-import { asWidgetDefinition, optionToken, slugify } from "../../widgets";
+import { asWidgetDefinition, canonicalOptionValue, slugify } from "../../widgets";
 import { fieldWidgetId, type FieldDescriptor } from "../page";
-import { BaseImplChoices, type ImplChoice } from "../resource/documents";
-import { storedImplementationUnregistered } from "../resource/implementation-fields";
+import { BaseImplRepairChoices, type ImplChoice } from "../resource/documents";
+import { repairChoosable } from "../resource/implementation-fields";
+import { errorMessage } from "../../feedback/error-message";
 import {
   diffLines,
   lineDiffConfig,
@@ -69,6 +70,8 @@ import {
   visibleFields,
   type FormValues,
   type LinesSeed,
+  isFormValues,
+  repairSelectorLost,
 } from "./form-view-model";
 import { useSaveOperation } from "../resource/resource-operations";
 import {
@@ -178,7 +181,7 @@ export interface UseFormViewSaveProps {
    * only where the record admits it). The save writes those it can
    * (`pathWritable`); `formFields` holds every candidate.
    */
-  formFieldsFor?: (record: Row | null) => readonly FieldDescriptor[];
+  formFieldsFor?: (record: Row | null, lockRecord?: Row | null) => readonly FieldDescriptor[];
   fieldByName: ReadonlyMap<string, FieldDescriptor>;
   refineFields: Fields;
   defaultValues?: Record<string, unknown>;
@@ -275,6 +278,16 @@ export interface FormViewSaveSurface {
    * its own value on a saved record).
    */
   fieldReadOnly: (field: FieldDescriptor) => boolean;
+  /** The record the mode lock reads: the one the draft was made against while the form holds edits. */
+  lockRecord: Row | null;
+  /** The record form's own descriptor for `path`, the one its save reads (its mode lock included). */
+  recordField: (path: string) => FieldDescriptor | undefined;
+  /**
+   * A field's repair, where the record lets its create-only selector be chosen once more
+   * (`repairChoosable`): `loading` while the server's answer is pending or a save is, and the server's
+   * words when it refuses.
+   */
+  repairState: (field: FieldDescriptor) => RepairState;
   /**
    * Whether the form displays `field`, holding `value`, at all (`formDisplaysField`): on a create,
    * not a field its save cannot write that holds nothing to display, nor, as the form's `status`, one
@@ -411,34 +424,18 @@ export function useFormViewSave({
     ? acknowledgedSource.record
     : read.result ?? null;
   const displayRecord = record;
+  // The record the mode lock reads: the one the draft was made against, held while the form holds edits,
+  // so a pick stays the save's until the save answers, whatever a re-read or another save stores meanwhile.
+  const [lockRecord, setLockRecord] = React.useState<Row | null>(displayRecord);
   const recordFields = React.useMemo(
-    () => formFieldsFor?.(displayRecord) ?? formFields,
-    [displayRecord, formFields, formFieldsFor],
+    () => formFieldsFor?.(displayRecord, lockRecord) ?? formFields,
+    [displayRecord, formFields, formFieldsFor, lockRecord],
   );
   // The paths the save writes (`formWritablePaths`), every one under a custom submit owner.
-  // A repair: a create-only selector this record lets be chosen once more (its stored key is not
-  // registered, so the mode lock left it writable). What choosing each implementation sets on the
-  // record comes from the server's rule (`impl_choices` with the record); until it answers, the
-  // selector takes no edits, so a pick always sends the config it carries over.
-  const repairFields = React.useMemo(
-    () => isCreate ? [] : recordFields.filter((field) => field.createOnly && !field.readOnly
-      && storedImplementationUnregistered(modelMetadata, displayRecord, field.name)),
-    [displayRecord, isCreate, modelMetadata, recordFields],
+  const writableFieldNames = React.useMemo(
+    () => formWritablePaths(recordFields, modeWritableNames, Boolean(submitOwner)),
+    [modeWritableNames, recordFields, submitOwner],
   );
-  const repairChoicesBatch = useAuthoredQueryBatch(repairFields.map((field) => ({
-    key: field.name,
-    document: BaseImplChoices,
-    variables: { model: dataResource?.modelLabel ?? resource, field: field.name, record: id ?? null },
-  })), { enabled: repairFields.length > 0 && id != null, errorNotification: false });
-  const repairChoices = React.useMemo(() => new Map(repairFields.flatMap((field) => {
-    const choices = repairChoicesBatch.get(field.name)?.data?.impl_choices;
-    return choices ? [[field.name, choices] as const] : [];
-  })), [repairChoicesBatch, repairFields]);
-  const writableFieldNames = React.useMemo(() => {
-    const writable = formWritablePaths(recordFields, modeWritableNames, Boolean(submitOwner));
-    const pending = new Set(repairFields.filter((field) => !repairChoices.has(field.name)).map((field) => field.name));
-    return writable && pending.size ? new Set([...writable].filter((name) => !pending.has(name))) : writable;
-  }, [modeWritableNames, recordFields, repairChoices, repairFields, submitOwner]);
   // Two facts, two sets. The record's own fields (`formFieldsFor`) its save can write (`pathWritable`):
   // what the save sends reads these, its resets of hidden fields included, and so do which declared
   // preset applies and the draft's drop and restore of hidden fields. A field only an undisplayed group
@@ -552,9 +549,9 @@ export function useFormViewSave({
       (!isCreate && record != null && Boolean(readOnlyWhen?.(record))) ||
       (!submitOwner &&
         !Boolean(isCreate ? dataResource?.roots.create : dataResource?.roots.update)) ||
-      (formFields.length > 0 && formFields.every((field) => field.readOnly))
+      (recordFields.length > 0 && recordFields.every((field) => field.readOnly))
     ),
-    [dataResource, formFields, isCreate, modelMetadata, readOnly, record, readOnlyWhen, submitOwner],
+    [dataResource, isCreate, modelMetadata, readOnly, record, readOnlyWhen, recordFields, submitOwner],
   );
   const formReadOnly = recordUnavailable || !formTakesEdits;
   const { registerFieldValidation, validateFields } = useFieldValidation();
@@ -633,8 +630,41 @@ export function useFormViewSave({
     formIsDirtyRef.current = formIsDirty;
   }, [formIsDirty]);
   React.useEffect(() => {
-    if (!formIsDirty) editBasisRecordRef.current = displayRecord;
+    if (!formIsDirty) {
+      editBasisRecordRef.current = displayRecord;
+      setLockRecord(displayRecord);
+    }
   }, [displayRecord, formIsDirty]);
+  // A repair: a create-only selector the record lets be chosen once more (`repairChoosable`, on the
+  // record the lock reads). What choosing each implementation sets on the record is the server's rule
+  // (`impl_choices` with the record), asked only of a form that takes edits; until it answers, and while
+  // a save is pending, the selector shows `loading`; a refusal keeps it read-only, with the server's words.
+  const repairFields = React.useMemo(
+    () => isCreate || !formTakesEdits ? [] : recordFields.filter((field) => !field.readOnly
+      && repairChoosable(modelMetadata, lockRecord, field.name)),
+    [formTakesEdits, isCreate, lockRecord, modelMetadata, recordFields],
+  );
+  const repairChoicesBatch = useAuthoredQueryBatch(repairFields.map((field) => ({
+    key: field.name,
+    document: BaseImplRepairChoices,
+    variables: { model: dataResource?.modelLabel ?? resource, field: field.name, record: id ?? "" },
+  })), { enabled: repairFields.length > 0 && id != null, errorNotification: false });
+  const repairChoices = React.useMemo(() => new Map(repairFields.flatMap((field) => {
+    const choices = repairChoicesBatch.get(field.name)?.data?.impl_choices;
+    return choices ? [[field.name, choices] as const] : [];
+  })), [repairChoicesBatch, repairFields]);
+  const recordField = React.useCallback(
+    (path: string) => recordFields.find((field) => field.name === path),
+    [recordFields],
+  );
+  const repairState = React.useCallback((field: FieldDescriptor): RepairState => {
+    if (!repairFields.some((candidate) => candidate.name === field.name)) return NO_REPAIR;
+    const error = repairChoicesBatch.get(field.name)?.error;
+    const refusal = error ? errorMessage(error, t("form.genericSaveError")) : null;
+    return { repairing: true, loading: !refusal && (pending || !repairChoices.has(field.name)), refusal };
+  }, [pending, repairChoices, repairChoicesBatch, repairFields, t]);
+  // The keys a repair seeded, by selector: a save never sends them without the selector that chose them.
+  const repairSeedsRef = React.useRef(new Map<string, readonly string[]>());
   const isDirtyNow = React.useCallback(() => formIsDirtyRef.current, []);
   const requestLeave = useUnsavedChangesNavigationGuard({
     isDirty: formIsDirty,
@@ -788,6 +818,7 @@ export function useFormViewSave({
         (current) => ({ ...current, data: acceptedRow(current?.data ?? record) }),
       )?.data ?? acceptedPatch;
       editBasisRecordRef.current = accepted;
+      repairSeedsRef.current.clear();
       if (!mounted.current) return;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
@@ -897,6 +928,14 @@ export function useFormViewSave({
         throw new Error(`Resource metadata for "${resource}" is not available.`);
       }
       const { data, resets, lines: linesDiff, lineBaseline } = saveFor(value);
+      // The config a repair seeded never leaves without the selector that chose it. The lock reads the
+      // draft's basis, so the selector stays in the save; should it not, the save is refused here, as
+      // stale lines are, the last line of defence.
+      const lostSelector = repairSelectorLost(data, repairSeedsRef.current);
+      if (lostSelector) {
+        applyFormErrors(form, { status: "conflict", message: t("form.repairLostSelector"), field: lostSelector });
+        return;
+      }
       if (!isCreate && linesDiff?.hasChanges && lineBaseline && linesConfig && linesField) {
         const latest = queryClient.getQueryData<GetOneResponse<RowRecord>>(detailKey)?.data ?? record;
         // Full-list writes implicitly delete omitted IDs. Refuse a stale draft
@@ -995,11 +1034,16 @@ export function useFormViewSave({
       // The preset the form declares for this field is the one its save reads again (see
       // `hiddenResetWrites`); a descriptor's own preset still seeds, but drops nothing.
       // A repair sets what the chosen implementation carries over on this record (`repairChoices`),
-      // which dirties the form, so the save sends the selector with the config the person sees.
-      const repair = scope ? undefined : repairChoices.get(field.name)
-        ?.find((choice: ImplChoice) => optionToken(choice.key) === optionToken(value));
-      for (const [path, seed] of Object.entries((repair?.defaults ?? {}) as Record<string, unknown>)) {
-        setValue(path, seed, { shouldDirty: true, shouldTouch: true });
+      // which dirties the form, so the save sends the selector with the config the person sees. It is a
+      // second path beside the page's preset (`seedPreset`) by intent: a preset seeds a create from the
+      // page's own declaration and preset memory; this writes the server's answer for this record, keyed
+      // as the prefill keys its choices (`canonicalOptionValue`), and only for the repair's selector.
+      const choices = scope ? undefined : repairChoices.get(field.name);
+      const chosen = choices && canonicalOptionValue(choices.map((choice: ImplChoice) => ({ value: choice.key, label: choice.key })), value);
+      const defaults = choices?.find((choice: ImplChoice) => choice.key === chosen)?.defaults;
+      if (choices && isFormValues(defaults)) {
+        for (const [path, seed] of Object.entries(defaults)) setValue(path, seed, { shouldDirty: true, shouldTouch: true });
+        repairSeedsRef.current.set(field.name, Object.keys(defaults));
       }
       const declared = saveFields.find((candidate) => candidate.name === scoped(field.name));
       const own = declared && resolveField(declared, form.getValues());
@@ -1048,11 +1092,12 @@ export function useFormViewSave({
       setValue],
   );
   const fieldReadOnly = React.useCallback(
-    (field: FieldDescriptor): boolean => formReadOnly || previewBlocked || fieldControlReadOnly(field, {
+    (field: FieldDescriptor): boolean => formReadOnly || previewBlocked || repairState(field).refusal != null
+      || fieldControlReadOnly(field, {
       writable: pathWritable(field.name, writableFieldNames), redacted: fieldIsRedacted(displayRecord, field.name), isCreate,
       writesOwnValue: Boolean(asWidgetDefinition(widgets[fieldWidgetId(field)])?.writesOwnValue),
     }),
-    [displayRecord, formReadOnly, isCreate, previewBlocked, widgets, writableFieldNames],
+    [displayRecord, formReadOnly, isCreate, previewBlocked, repairState, widgets, writableFieldNames],
   );
   const displaysField = React.useCallback(
     (field: FieldDescriptor, value: unknown, { status = false }: { status?: boolean } = {}): boolean => formDisplaysField(value, {
@@ -1073,6 +1118,7 @@ export function useFormViewSave({
     activeFieldInteractions.current.clear();
     formIsDirtyRef.current = false;
     editBasisRecordRef.current = displayRecord;
+    repairSeedsRef.current.clear();
     onDiscarded?.();
   }, [draftScope, displayRecord, emptyValues, idempotencyKeys, isCreate, onDiscarded, presetMemory, reset, resetHistory, values]);
   const startFieldInteraction = React.useCallback(
@@ -1122,6 +1168,9 @@ export function useFormViewSave({
     reload,
     afterFieldChange,
     fieldReadOnly,
+    lockRecord,
+    recordField,
+    repairState,
     displaysField,
     startFieldInteraction,
     commitFieldInteraction,
@@ -1129,6 +1178,15 @@ export function useFormViewSave({
     requestLeave,
   };
 }
+
+/** A field's repair state (`FormViewSave.repairState`). */
+export interface RepairState {
+  repairing: boolean;
+  loading: boolean;
+  refusal: string | null;
+}
+
+const NO_REPAIR: RepairState = { repairing: false, loading: false, refusal: null };
 
 function isFormSubmitAcknowledgement(value: Row | FormSubmitAcknowledgement): value is FormSubmitAcknowledgement {
   return value.kind === "form-submit-acknowledgement" && "record" in value && "values" in value;

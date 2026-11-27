@@ -528,7 +528,10 @@ function BoundFormField({
   const values = useWatch({ control: surface.form.control });
   const value = get(values, field.name);
   const readOnly = surface.fieldReadOnly(field);
+  const repair = surface.repairState(field);
   const unregistered = isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, field.name, value);
+  // A refused repair keeps the server's words under the field; a pending one's control shows `loading`.
+  const shown = repair.refusal ? { ...field, description: repair.refusal } : field;
   const relation = surface.relationByField.get(field.name);
   const relationList = surface.relationListByField.get(field.name);
   const currentRelationId = relationValueId(value);
@@ -547,9 +550,10 @@ function BoundFormField({
       name={field.name}
       render={({ field: controller, fieldState }) => (
         <UnregisteredImplementationField field={unregistered ? field.name : null} readOnly={readOnly}
-          once={Boolean(field.createOnly)}><BoundFieldRow
+          once={repair.repairing} refusal={repair.refusal}><BoundFieldRow
           controlRef={controller.ref}
-          field={field}
+          field={shown}
+          loading={repair.loading}
           rail={rail}
           relation={relation}
           relationList={relationList}
@@ -744,6 +748,7 @@ function BoundFieldRow({
   row,
   readOnly,
   restricted = false,
+  loading = false,
   errors,
   serverMessages,
   onChange,
@@ -751,6 +756,8 @@ function BoundFieldRow({
   controlRef,
 }: {
   field: FieldDescriptor;
+  /** The control's own pending state (a repair's answer, or its save, is pending). */
+  loading?: boolean;
   rail?: boolean;
   relation?: RelationFieldInfo;
   relationList?: RelationFieldInfo;
@@ -782,6 +789,7 @@ function BoundFieldRow({
     "aria-invalid": displayedMessages.length > 0 || undefined,
     "aria-required": field.required && !effectiveReadOnly || undefined,
     ...(composite ? { "aria-labelledby": `${controlId}-label` } : {}),
+    ...(loading ? { loading: true } : {}),
   };
   return (
     <FieldRoot

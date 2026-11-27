@@ -642,6 +642,8 @@ export const enUiMessages: Record<string, string> = {
   "form.list.actionNamed": "{action} {number}",
   "form.list.moveUpNamed": "Move item {number} up",
   "form.list.moveDownNamed": "Move item {number} down",
+  "form.repairLostSelector":
+    "This record's implementation changed while another was chosen here. Discard your changes and choose again.",
   "form.linesChanged":
     "These lines changed on the server. Discard local changes to load the saved lines before saving again.",
   "form.record": "Record",

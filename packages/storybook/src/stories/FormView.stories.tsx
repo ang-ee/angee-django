@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, useImplConfigFields, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
-import { backendOperations, backendResource, backends } from "./implementation-fixtures";
+import { backendOperations, backendOperationsFor, backendResource, backends, createOnlyBackendResource } from "./implementation-fixtures";
 import { storyField, storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
 const statusOptions = [
@@ -195,7 +195,7 @@ const person = (args: Record<string, unknown>) => {
   const id = isRecord(args.pk_columns) ? args.pk_columns.id : args.id;
   return people.find((candidate) => candidate.id === id) ?? null;
 };
-const storySchemas = storySchema({
+const storyOperations = {
   notes_by_pk: () => storyRecord,
   update_notes_by_pk: (args) => ({ ...storyRecord, ...patch(args) }),
   insert_notes_one: (args) => ({ ...storyRecord, id: "note-new", ...patch(args) }),
@@ -204,8 +204,9 @@ const storySchemas = storySchema({
   persons_aggregate: () => ({ aggregate: { count: people.length } }),
   persons_by_pk: person,
   update_persons_by_pk: (args) => ({ ...person(args), ...patch(args) }),
-  ...backendOperations,
-}, { resources: [noteResource, personResource, backendResource] });
+} satisfies Parameters<typeof storySchema>[0];
+const storyResources = [noteResource, personResource, backendResource];
+const storySchemas = storySchema({ ...storyOperations, ...backendOperations }, { resources: storyResources });
 
 const meta = {
   title: "Views/FormView",
@@ -324,15 +325,22 @@ export const ImplementationKeyNotRegistered: Story = {
  */
 export const ImplementationKeyNotRegisteredCreateOnly: Story = {
   name: "Implementation Key Not Registered, Create-only",
+  // Its save repairs the backend: its own store, so no other story reads the repaired key.
+  parameters: { angeeFixture: { schemas: storySchema({ ...storyOperations, ...backendOperationsFor() }, {
+    resources: [noteResource, personResource, createOnlyBackendResource],
+  }) } },
   render: () => <RepairForm />,
 };
 
-/** The create-only story's form: Backend, then the chosen implementation's config fields, as a bridge form composes them. */
+/**
+ * The create-only story's form: Backend, create-only on the model (its metadata, never the page's flag), then
+ * the chosen implementation's config fields, as a bridge form composes them.
+ */
 function RepairForm() {
   const implConfig = useImplConfigFields("storage.Backend", "backend_class");
   return (
     <FormView resource="storage.Backend" id={unregistered.id} fields={[
-      { name: "label", label: "Name", title: true }, { ...backendField, createOnly: true },
+      { name: "label", label: "Name", title: true }, backendField,
       { name: "config", label: "Config", widget: "json", showWhen: (values) => !implConfig.hasSchema(values.backend_class) },
       ...implConfig.fields,
     ]} />

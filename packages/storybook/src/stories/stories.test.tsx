@@ -13,7 +13,7 @@ import type { ComponentType } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import preview from "../../.storybook/preview";
 import * as FormViewStories from "./FormView.stories";
-import { backendOperations, repairDefaults } from "./implementation-fixtures";
+import { backendOperationsFor, repairDefaults } from "./implementation-fixtures";
 import * as ListViewStories from "./ListView.stories";
 import * as RefusedSubmitStories from "./RefusedSubmit.stories";
 
@@ -182,13 +182,16 @@ test("Views/FormView / Implementation Key Not Registered, Create-only offers Bac
   const said = consoleMessages();
   // The fixture answers the read in the contract's shape the server's read pins: per choice, defaults holding the
   // config field alone; a registered backend is refused as the write is.
+  const backendOperations = backendOperationsFor();
   const asked = await Promise.resolve(backendOperations.impl_choices!({
     model: "storage.Backend", field: "backend_class", record: "backend-2" }, {} as never));
   expect((asked as { key: string; defaults: unknown }[]).map(({ key, defaults }) => [key, defaults]))
     .toEqual([["local", repairDefaults.local], ["s3", repairDefaults.s3]]);
   expect(() => backendOperations.impl_choices!({ model: "storage.Backend", field: "backend_class", record: "backend-1" },
     {} as never)).toThrow("Implementation selection is create-only.");
-  const writes = vi.spyOn(FormViewStories.default.parameters.angeeFixture.schemas.public!, "fetch");
+  // The composed story's own schema (merged over the file's), whose store this story's save writes.
+  const ownSchema = formView.ImplementationKeyNotRegisteredCreateOnly.parameters.angeeFixture.schemas.public!;
+  const writes = vi.spyOn(ownSchema as { fetch: typeof fetch }, "fetch");
 
   render(<formView.ImplementationKeyNotRegisteredCreateOnly />);
   expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();

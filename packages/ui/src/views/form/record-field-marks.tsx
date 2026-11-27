@@ -119,7 +119,7 @@ function useRecordFieldMarksForField(field: string) {
 }
 
 const UnregisteredImplementation = createContext<{
-  field: string; readOnly: boolean; once: boolean; explanationId: string;
+  field: string; readOnly: boolean; once: boolean; refusal: string | null; explanationId: string;
 } | null>(null);
 
 /** Name the one field of the record's own form whose stored implementation key the registry no
@@ -131,17 +131,19 @@ const UnregisteredImplementation = createContext<{
  * @kind null
  * @reason Provider infrastructure: the record form's not-registered field.
  */
-export function UnregisteredImplementationField({ field, readOnly = false, once = false, children }: {
+export function UnregisteredImplementationField({ field, readOnly = false, once = false, refusal = null, children }: {
   field: string | null;
   readOnly?: boolean;
   /** A create-only selector that can be chosen once more here: once saved, the choice cannot change again. */
   once?: boolean;
+  /** The server's refusal of the repair, which the explanation gives in its words. */
+  refusal?: string | null;
   children: ReactNode;
 }) {
   const explanationId = useId();
   const value = useMemo(
-    () => field === null ? null : { field, readOnly, once, explanationId },
-    [explanationId, field, once, readOnly],
+    () => field === null ? null : { field, readOnly, once, refusal, explanationId },
+    [explanationId, field, once, readOnly, refusal],
   );
   return <UnregisteredImplementation.Provider value={value}>{children}</UnregisteredImplementation.Provider>;
 }
@@ -152,13 +154,16 @@ export function UnregisteredImplementationField({ field, readOnly = false, once 
  * @kind null
  * @reason Provider infrastructure: reads the record form's not-registered field.
  */
-export function useUnregisteredImplementationExplanation(field: string): { id: string; text: string } | null {
+export function useUnregisteredImplementationExplanation(field: string): {
+  id: string; text: string; readOnly: boolean;
+} | null {
   const t = useUiT();
   const unregistered = useContext(UnregisteredImplementation);
   if (unregistered?.field !== field) return null;
   return {
     id: unregistered.explanationId,
-    text: t(unregistered.readOnly ? "implementation.cannotRunUnchangeable"
+    readOnly: unregistered.readOnly,
+    text: unregistered.refusal ?? t(unregistered.readOnly ? "implementation.cannotRunUnchangeable"
       : unregistered.once ? "implementation.cannotRunUntilChosenOnce" : "implementation.cannotRunUntilChosen"),
   };
 }
@@ -184,7 +189,8 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
     ...published,
     ...(explanation ? [{
       field, label: t("implementation.notRegistered"), tone: "warning" as const,
-      explanation: explanation.text, describedBy: explanation.id,
+      // Where the field takes edits its control is the one stop and the one description.
+      explanation: explanation.text, describedBy: explanation.id, focusStop: explanation.readOnly,
     }] : []),
     ...(restricted ? [{ field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }] : []),
   ];
@@ -198,7 +204,7 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
 
 /** A mark as a field shows it: a published one may reveal its source; the form's own may explain itself
  * (its words, and the id of the text the field's row renders for them). */
-type ShownMark = RecordFieldMark & { reveal?: () => void; explanation?: string; describedBy?: string };
+type ShownMark = RecordFieldMark & { reveal?: () => void; explanation?: string; describedBy?: string; focusStop?: boolean };
 
 function RecordFieldMarkItem({ mark, field, label }: {
   mark: ShownMark;
@@ -222,7 +228,7 @@ function RecordFieldMarkItem({ mark, field, label }: {
   // also gives its control as the accessible description. A plain mark with hover copy is itself
   // a keyboard stop (a read-only field has no other), so it carries its name and that description.
   const hover = mark.origin ?? mark.explanation;
-  if (hover && !mark.target && !mark.reveal) {
+  if (hover && !mark.target && !mark.reveal && mark.focusStop !== false) {
     return <Tooltip label={hover}><span className="inline-flex" tabIndex={0} role="img" aria-label={ariaLabel}
       aria-describedby={mark.describedBy}>{badge}</span></Tooltip>;
   }

@@ -43,7 +43,7 @@ import {
   relationListFieldInfo,
   type RelationFieldInfo,
 } from "../resource/model-metadata-defaults";
-import { storedImplementationUnregistered } from "../resource/implementation-fields";
+import { repairChoosable } from "../resource/implementation-fields";
 import type { RecordActionDescriptor, RecordDeleteAction } from "./RecordActionBar";
 import { useArchiveActions } from "../resource/archive";
 import { useTrashActions } from "../resource/trash";
@@ -487,9 +487,10 @@ export function useFormViewSurface({
     [declaredGroups, modelMetadata, schemaMetadata],
   );
   // The mode lock for one record: a create-only selector stays choosable on an edit while the key
-  // the record stores is not registered. It reads the stored row only, so a pick does not re-lock it.
+  // the record stores is not registered (`repairChoosable`, the one owner of that question). It reads
+  // the stored row only, so a pick does not re-lock it.
   const lockedFor = React.useCallback((record: Row | null) => {
-    const choosable = (field: FieldDescriptor) => storedImplementationUnregistered(modelMetadata, record, field.name);
+    const choosable = (field: FieldDescriptor) => repairChoosable(modelMetadata, record, field.name);
     return {
       fields: withModeLockedFields(declaredResolvedFields, isCreate, choosable),
       groups: declaredResolvedGroups.map((group) => ({
@@ -538,16 +539,17 @@ export function useFormViewSurface({
   ), [modelMetadata, schemaMetadata]);
   // `formFields` registers every candidate so any record's values load; one record's form is its own
   // fields and those of the groups it displays and of its rail rows. Its layout and its save read these.
+  // `lockRecord` is the record the lock reads: the save passes the one its draft was made against.
   const regularFormFieldsFor = React.useCallback(
-    (record: Row | null) => {
-      const locked = lockedFor(record);
+    (record: Row | null, lockRecord: Row | null = record) => {
+      const locked = lockedFor(lockRecord);
       return displayedFormFields(locked.fields, locked.groups, (group) => displaysGroup(group, record), pageGroupCount);
     },
     [displaysGroup, lockedFor, pageGroupCount],
   );
   // Without a record no rail row is the form's: a create has no rail, and an edit's record is loading.
   const formFieldsFor = React.useCallback(
-    (record: Row | null) => flattenedFormFields(regularFormFieldsFor(record),
+    (record: Row | null, lockRecord: Row | null = record) => flattenedFormFields(regularFormFieldsFor(record, lockRecord),
       (record ? displayedRailGroups(railGroups, record, railAdmits, modelMetadata) : [])
         .map((group) => ({ fields: (group.fields ?? []).map((row) => row.field), actions: [] }))),
     [modelMetadata, railAdmits, railGroups, regularFormFieldsFor],
@@ -753,17 +755,17 @@ export function useFormViewSurface({
   }
   // The sheet's own declarations for this record, never a group it does not show.
   const sheetFields = React.useMemo(
-    () => regularFormFieldsFor(save.displayRecord),
-    [regularFormFieldsFor, save.displayRecord],
+    () => regularFormFieldsFor(save.displayRecord, save.lockRecord),
+    [regularFormFieldsFor, save.displayRecord, save.lockRecord],
   );
   const fieldLayout = React.useMemo(
     // Title, status and body come from the sheet's own fields.
     () => {
-      // The sheet takes the lock from the record it shows, as the save does.
-      const locked = lockedFor(save.displayRecord);
+      // The sheet takes the lock from the record the save's draft was made against, as the save does.
+      const locked = lockedFor(save.lockRecord);
       return formViewFieldLayout(sheetFields, locked.fields, locked.groups, modelMetadata, isCreate);
     },
-    [isCreate, lockedFor, modelMetadata, save.displayRecord, sheetFields],
+    [isCreate, lockedFor, modelMetadata, save.lockRecord, sheetFields],
   );
   const declaredActions = React.useMemo(
     () => [

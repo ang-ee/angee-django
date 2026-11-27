@@ -1371,9 +1371,8 @@ describe("FormView", () => {
     expect(await screen.findByRole("option", { name: "Local" })).toBeTruthy();
     expect(screen.getByRole("option", { name: "Stub" })).toBeTruthy();
 
-    // A selector read-only in this form cannot change here: declared so, or create-only on a stored
-    // record whose repair the server does not answer (this provider answers no `impl_choices`; the
-    // answered repair is FormView.repair.test.tsx).
+    // A selector read-only in this form cannot change here: declared so, or create-only by the page alone
+    // (the model's metadata does not make it create-only, so no repair is offered).
     for (const locked of [{ readOnly: true }, { createOnly: true }]) {
       cleanup();
       page(locked);
@@ -1383,20 +1382,20 @@ describe("FormView", () => {
       expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
       expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
     }
-    // Create-only is the model's own fact in its metadata: the page states nothing and the field locks the same.
+    // Create-only is the model's own fact in its metadata: the page states nothing, and on a stored record
+    // whose key is registered the field is locked (the repair, on a key not registered, is FormView.repair.test.tsx).
     {
       cleanup();
       const createOnly = { ...backend, createOnly: true };
       const published = testDataResource("notes.Note", { fields: [createOnly], implFields: ["backend"] });
+      const registered = { ...record, backend: "LOCAL" };
       renderWithProviders(<FormView resource="notes.Note" id="note-1"
         fields={[{ name: "title", title: true }, { name: "backend", label: "Backend" }]}
-        acknowledgedSource={{ record, values: record }} />,
+        acknowledgedSource={{ record: registered, values: registered }} />,
       { types: { NoteType: { resource: published, fields: { backend: createOnly } } } });
-      expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
-      const note = screen.getByText("Its implementation cannot run. It cannot be changed here.");
-      expect(note.className).toContain("sr-only");
-      expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
+      expect(await screen.findByText("Local")).toBeTruthy();
       expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+      expect(screen.queryByLabelText("Not registered: Backend")).toBeNull();
     }
   });
 

@@ -12,9 +12,10 @@ export function rowImplementations(implFields: readonly string[] | undefined, re
 }
 
 /**
- * Whether `field` reads null because the registry no longer names the implementation key its row
- * stores. An implementation-key column (the resource's `implFields`) is never null in storage, so its
- * read is null only for such a key, which a cell or a field shows as not registered, not as absent.
+ * Whether `field`'s read `value` is null because the registry no longer names the implementation key
+ * its row stores. An implementation-key column (the resource's `implFields`) is never null in storage,
+ * so its read is null only for such a key, or for a column the record redacts, which this reading of
+ * the value alone cannot tell: a caller holding the row asks {@link storedImplementationUnregistered}.
  * `implFields` names the resource's own columns, so a path through a relation
  * (`channel.backend_class`) is not matched: the cautious side, an empty value as before.
  */
@@ -39,6 +40,20 @@ export function storedImplementationUnregistered(
   path: string,
 ): boolean {
   return stored != null && !fieldIsRedacted(stored, path) && isUnregisteredImplementation(model, path, stored[path]);
+}
+
+/**
+ * Whether the record form may offer the selector at `path` once more, a repair: the model makes it
+ * create-only (its metadata's `createOnly`, never a page's own flag) and the record the draft was made
+ * against stores a key the registry no longer names. The one owner of that question: the mode lock,
+ * the repair read and the mark all ask it.
+ */
+export function repairChoosable(
+  model: ModelMetadata | null | undefined,
+  record: Row | null | undefined,
+  path: string,
+): boolean {
+  return model?.fields[path]?.createOnly === true && storedImplementationUnregistered(model, record, path);
 }
 
 /**

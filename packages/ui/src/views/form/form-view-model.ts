@@ -288,6 +288,23 @@ export function addFieldSelection(
   paths.add(field.name);
 }
 
+/** Whether `value` is a form's values object (a plain object, not a list). */
+export function isFormValues(value: unknown): value is FormValues {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The selector a save's `data` has lost while it still sends a path that selector's repair seeded
+ * (`seeds`: the seeded paths by selector), or null. Such a save would write the config one
+ * implementation's choice carried under the implementation the record stores, so it is refused.
+ */
+export function repairSelectorLost(data: FormValues, seeds: ReadonlyMap<string, readonly string[]>): string | null {
+  for (const [selector, seeded] of seeds) {
+    if (!Object.hasOwn(data, selector) && seeded.some((path) => Object.hasOwn(data, path))) return selector;
+  }
+  return null;
+}
+
 /**
  * The form's mode lock: an `editOnly` field is read-only on a create, a `createOnly` one on an edit,
  * unless `choosable` says the record lets it be chosen once more (a create-only selector whose stored

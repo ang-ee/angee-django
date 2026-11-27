@@ -34,15 +34,32 @@ interface BaseImplChoicesResult {
 type BaseImplChoicesVariables = {
   model: string;
   field: string;
-  /** A record whose stored key is not registered: each choice's `defaults` is then what choosing it sets on it. */
-  record?: string | null;
 };
 
 export const BaseImplChoices: TypedDocumentNode<
   BaseImplChoicesResult,
   BaseImplChoicesVariables
 > = gql`
-  query BaseImplChoices($model: String!, $field: String!, $record: ID) {
+  query BaseImplChoices($model: String!, $field: String!) {
+    impl_choices(model: $model, field: $field) {
+      key
+      category
+      defaults
+      config_schema
+    }
+  }
+`;
+
+/**
+ * What choosing each implementation sets on `record`, a repair: the record's stored key is not registered,
+ * so each choice's `defaults` is the config it carries over. Admitted as the record's write is. A separate
+ * document, so the insert's read (`BaseImplChoices`) asks a server nothing new.
+ */
+export const BaseImplRepairChoices: TypedDocumentNode<
+  BaseImplChoicesResult,
+  BaseImplChoicesVariables & { record: string }
+> = gql`
+  query BaseImplRepairChoices($model: String!, $field: String!, $record: ID!) {
     impl_choices(model: $model, field: $field, record: $record) {
       key
       category

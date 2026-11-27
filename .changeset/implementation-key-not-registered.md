@@ -13,9 +13,10 @@ the draft is discarded). The mark explains itself, as its field's accessible
 description (and its own, where the mark is the keyboard's stop) and on hover:
 where the field offers every registered implementation, "Its implementation
 cannot run until another is chosen."; where it is read-only on that form
-(declared `readOnly`, `createOnly` on a stored record, a column the update does
-not write, or a person who cannot write the record), "Its implementation cannot
-run. It cannot be changed here." The record's other fields save either way; a
+(declared `readOnly`, a column the update does not write, or a person who
+cannot write the record), "Its implementation cannot run. It cannot be changed
+here." A create-only selector holding such a key is offered once more (see
+`create-only-repair.md`). The record's other fields save either way; a
 refused choice shows the server's reason under the field. A dialog's field of
 the same name carries none. A null in any other column, or in a column reached
 through a relation (`channel.backend_class`), renders as before.
@@ -25,5 +26,5 @@ still cannot be read for such a row: the server refuses, publicly and in words
 naming the column, and the list and the board show those words once, without
 retrying. A refused facet says why above the options its last read still holds;
 each facet was already its own read, so the other facets kept counting before
-too. There is no "Not registered" group, lane or facet bucket yet. A filter chip
+too. There is no "Not registered" group, lane or facet bucket. A filter chip
 offers only registered implementations.

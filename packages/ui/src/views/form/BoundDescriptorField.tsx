@@ -4,7 +4,7 @@ import { useModelMetadata, useSchemaFieldMetadata } from "@angee/metadata";
 
 import type { DescriptorField } from "./DescriptorFieldList";
 import { LabeledDescriptorField } from "./DescriptorFieldList";
-import { fieldErrorMessages, isFieldVisible, resolveField, type FormValues } from "./form-view-model";
+import { fieldErrorMessages, isFieldVisible, isFormValues, resolveField, type FormValues } from "./form-view-model";
 import type { FormViewSaveSurface } from "./use-form-view-save";
 import { fieldsWithMetadataDefaults } from "../resource/model-metadata-defaults";
 import { isUnregisteredImplementationField } from "../resource/implementation-fields";
@@ -95,11 +95,14 @@ export function BoundDescriptorField({
   const resolved = resolveField(declared, siblingValues);
   const name = scope ? `${scope}.${resolved.name}` : resolved.name;
   if (!isFieldVisible(resolved, siblingValues)) return <></>;
-  const fieldReadOnly = readOnly || surface.fieldReadOnly({ ...resolved, name });
+  // The record form's own descriptor for the path, the one its save reads, carries the mode lock.
+  const recordField = { ...(surface.recordField(name) ?? resolved), name };
+  const fieldReadOnly = readOnly || surface.fieldReadOnly(recordField);
+  const repair = surface.repairState(recordField);
 
   return <BoundFormValue form={surface} name={name}>{(bound) => <UnregisteredImplementationField
     field={isUnregisteredImplementationField(surface.modelMetadata, surface.displayRecord, name, bound.value) ? resolved.name : null}
-    readOnly={fieldReadOnly}
+    readOnly={fieldReadOnly} once={repair.repairing} refusal={repair.refusal}
   ><LabeledDescriptorField
     field={resolved}
     value={bound.value}
@@ -112,6 +115,3 @@ export function BoundDescriptorField({
   /></UnregisteredImplementationField>}</BoundFormValue>;
 }
 
-function isFormValues(value: unknown): value is FormValues {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
