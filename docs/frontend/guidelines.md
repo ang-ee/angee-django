@@ -918,7 +918,27 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   memory. Either way a grouped list pages its **root groups**: the server surface
   by its root `_groups` read, the client row model by TanStack's top-level rows
   (`paginateExpandedRows: false`), so the pager counts groups and a page holds its
-  open groups' records; an ungrouped list pages records. A level's `repeated`
+  open groups' records; an ungrouped list pages records. On both, each level's
+  groups follow their own axis: by label, then identity, the group with no value
+  last in both directions, in the direction the list's order holds for a key the
+  axis shares or for the field it buckets (a date's months, quarters and weeks
+  follow the date), else ascending (`GroupAxis.direction`, the one rule). The table
+  state hands TanStack each axis's key ascending, ahead of the list's own keys, and
+  the axis's column compares its groups in that direction (`GroupAxis.compareGroups`),
+  since the table would turn a missing value with a descending key; it sorts by it
+  even where the field's header offers no press, while the list stores, links and
+  saves its order unchanged. The server's groups read asks for the same direction
+  and the same keys (`ResourceQuery.toGroupRead`), its text in the database's
+  collation where the browser compares it naturally. A press on a column whose key an axis
+  shares turns that level's groups, ascending and descending, never removed, and
+  leaves the records' order alone: its key leads, and every other key the order
+  holds that its axis does not share stays behind it, the records' and another
+  level's (`pressedSorting`). Its
+  sort button and arrow show their direction, while `aria-sort` stays on the
+  one header of the key the records follow (`headerAriaSort`); a press on any other column, and the pane's
+  Order select, orders the records inside the groups and keeps the axis keys the
+  order holds, and the date a bucket follows keeps its ordinary press, which
+  turns the buckets with it. A level's `repeated`
   ("Repeated values only") is a server group read option
   (`ResourceQuery.toGroupRead`): HAVING keeps groups of more than one record
   within its parent group and the read leaves out the records with no value, so
@@ -1364,12 +1384,16 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   on its banner otherwise; a reason under a name only a `content` editor holds
   shows in both. [applyFormErrors](../../packages/ui/src/views/form/validation-errors.ts)
   owns exhaustive narrowing and field/summary binding; malformed contracts throw.
+  The surface names the fields it shows (`shownFieldNames`) and each claims the
+  reasons under its path; `useActionForm` requires them of every caller, and
+  `[]` states that the form shows none.
   A refusal's form-level messages stay several: the form-level error holds a
   list, a surface reads it (`saveErrors`, `formErrors`, `formErrorsFromForm`)
   and hands it to `ErrorBanner`'s `messages`, which renders one as its body and
   several as a list; never join them into one text. A surface that asks
   (`applyFormErrors` with `focus` and a `fieldSummary`; the record form and
-  both form dialogs do)
+  both form dialogs do, and an inline action form asks `focus` only, through
+  `useActionForm`, whose `banner` it spreads on its banner)
   has a refused submit bring the person to its reasons, and `applyFormErrors`
   decides where: with a reason no field shows (a form-level one, or one of a
   field the form does not display) the banner takes focus and also carries
@@ -1381,7 +1405,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   banner, which names the field but does not repeat its reason, focus only
   when the field's control takes none. A surface hands it its form and whether
   its controls are ready, and never moves a refusal's focus by an effect of
-  its own. Save stays focusable while a save runs.
+  its own. A record form brings a refused field into sight first, in the same
+  batch as it asks that focus: its surface's `revealField`
+  ([useFormViewSurface](../../packages/ui/src/views/form/form-view-surface.ts),
+  the owner `focusField` composes) selects the pane that holds the field and
+  opens a collapsed section around it, for a refusal and for the form's own
+  check alike; a line selects the lines' pane. Nothing else selects a pane for
+  a refused save, so a refusal that brings the person to the banner leaves the
+  selected pane, the lines included. Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.
