@@ -1527,13 +1527,18 @@ def test_an_error_report_of_a_failing_redemption_shows_the_token_in_no_frame(
     assert _reported(failed.value, below="redeem" if entry == "the-manager" else "authenticate") == ([], [])
 
 
-@pytest.mark.parametrize("mutation", ["redeem_sign_in_link", "issue_user_sign_in_link"])
+@pytest.mark.parametrize(("mutation", "inline"), [
+    pytest.param("redeem_sign_in_link", False, id="redeem-the-token-a-variable"),
+    pytest.param("redeem_sign_in_link", True, id="redeem-the-token-written-in-the-request"),
+    pytest.param("issue_user_sign_in_link", False, id="issue"),
+])
 def test_an_unexpected_failure_through_a_mutation_is_logged_with_no_traceback_and_no_token(
-    deliverable, iam_admin, sent, settings, monkeypatch, caplog, mutation,
+    deliverable, iam_admin, sent, settings, monkeypatch, caplog, mutation, inline,
 ):
-    """No log record of a resolver's unexpected failure carries a traceback, so no report (an ``AdminEmailHandler``'s
-    included) is built from one: Angee's schema logs the class, path and frames as text and detaches the exception
-    before Strawberry logs the error. With the token a variable, no record and no answer holds it."""
+    """An unexpected failure inside a mutation is one log record, Angee's schema's: its class, path and frames as text,
+    with no traceback a report (an ``AdminEmailHandler``'s included) could be built from, and no record quotes the
+    request. So no record and no answer holds the token, whether it travels as a variable or written in the
+    request's document."""
 
     settings.DEBUG = False
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
@@ -1541,9 +1546,13 @@ def test_an_unexpected_failure_through_a_mutation_is_logged_with_no_traceback_an
     with caplog.at_level(logging.DEBUG):
         if mutation == "redeem_sign_in_link":
             sent(target, iam_admin)
+            token = f"{target.public_id}.{SECRET}"
+            document, variables = (
+                (f'mutation {{ redeem_sign_in_link(token: "{token}") {{ ok }} }}', {}) if inline
+                else (REDEEM, {"token": token})
+            )
             with _failing(_link_read):
-                answered = execute_schema(_schema("public"), REDEEM, {"token": f"{target.public_id}.{SECRET}"},
-                                          request=_request())
+                answered = execute_schema(_schema("public"), document, variables, request=_request())
         else:
             with _failing(_link_insert):
                 answered = execute_schema(_schema("console"), ISSUE, {"id": target.public_id}, user=iam_admin)
@@ -1551,6 +1560,7 @@ def test_an_unexpected_failure_through_a_mutation_is_logged_with_no_traceback_an
         ("An unexpected error occurred.", {"code": "INTERNAL"}),
     ]
     assert f"Unexpected GraphQL resolver error (DatabaseError) at path ['{mutation}']" in caplog.text
+    assert [record.name for record in caplog.records if record.levelno >= logging.ERROR] == ["angee.graphql.schema"]
     assert [record.name for record in caplog.records if record.exc_info] == []
     shown = SECRET in caplog.text or SECRET in str(answered.data)
     assert not shown

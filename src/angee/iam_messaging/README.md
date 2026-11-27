@@ -172,15 +172,14 @@ and the template's send and messaging's write and delivery mark their
 own. So, with `DEBUG` off, a failure before the render, in its refusal, inside
 the write, in delivery or in a redemption shows the token in no frame. An
 unexpected failure inside either GraphQL mutation reaches no Django report:
-Angee's schema logs its class, its path and its frames as text (file, line and
-source line, with no locals and no exception value), then detaches the exception,
-so Strawberry's own error line, which follows, carries no traceback either, and
-no log record holds one a report could be built from. That detaching, not a
-mark, is what protects the token on the mutations' path: a traceback from there
-would show it in GraphQL's own frames above the resolver, which no mark
-reaches. Strawberry's line quotes the request's document where the error
-points, so a token passed as a variable, as this addon's page passes it, is
-logged nowhere, but one written into the document itself is logged there.
+Angee's schema logs it once, its class, its path and its frames as text (file,
+line and source line, with no locals and no exception value), detaches the
+exception and quotes nothing of the request. So no log record holds a traceback
+a report could be built from, nor the token, whether it travels as a variable,
+as this addon's page passes it, or is written into the request's document. That
+detaching, not a mark, is what protects the token on the mutations' path: a
+traceback from there would show it in GraphQL's own frames above the resolver,
+which no mark reaches.
 Django never filters an exception's own message: nothing this addon raises
 carries the link or the address, and no refusal of the render passes in the
 render's own words, so no answer, banner or log line carries the secret. What
