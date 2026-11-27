@@ -1924,7 +1924,8 @@ def _failing(raised: type[BaseException]) -> Any:
 def test_any_other_failure_is_logged_then_refused_as_render_failed(
     plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: type[Exception],
 ) -> None:
-    """Section 4: what nobody thought of is logged with its traceback, then leaves as render_failed; preview says so."""
+    """Section 4: what nobody thought of is logged as the row and the exception's type, never the exception's text
+    or traceback, which may quote a value, then leaves as render_failed; preview says so."""
 
     del plain
     monkeypatch.setitem(register.filters, "upper", _failing(raised))
@@ -1938,7 +1939,11 @@ def test_any_other_failure_is_logged_then_refused_as_render_failed(
     assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
     assert preview.rendered is None
     assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
-    assert len(caplog.records) == 2 and all(record.exc_info for record in caplog.records)
+    assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(
+        logging.ERROR,
+        f"A message template failed to render: the template {template.key} in en raised {raised.__name__}.",
+        None,
+    )] * 2
 
 
 @pytest.mark.parametrize("raised", [MemoryError, RecursionError])
