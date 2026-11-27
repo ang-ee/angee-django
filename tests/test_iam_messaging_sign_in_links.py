@@ -1400,12 +1400,14 @@ def _link_read(sql: str, params: Any) -> bool:
 
 @pytest.mark.parametrize("depth", [
     "before-the-render", "in-the-renders-refusal", "inside-the-write", "the-links-own-insert",
+    "the-links-own-insert-for-a-system-caller",
 ])
 def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
     deliverable, iam_admin, settings, monkeypatch, depth,
 ):
     """With ``DEBUG`` off, as a deployment's error mail runs: each depth of the send, the token minted by then, and
-    the account's address from the action's own frame down."""
+    the account's address from the action's own frame down. A system caller reaches the manager without the
+    action, so its own mark is what hides the token there."""
 
     settings.DEBUG = False
     monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes=None: SECRET)
@@ -1422,13 +1424,20 @@ def test_an_error_report_of_a_failing_issue_shows_the_token_in_no_frame(
         failing = _failing(_message_insert if depth == "inside-the-write" else _link_insert)
     try:
         with failing, actor_context(iam_admin), pytest.raises(Exception) as failed:
-            target.with_actor(iam_admin).issue_sign_in_link()
+            if depth.endswith("for-a-system-caller"):
+                SignInLink.objects.issue(target, target.email, actor=None)
+            else:
+                target.with_actor(iam_admin).issue_sign_in_link()
     finally:
         post_init.disconnect(sender=MessageTemplate, dispatch_uid="tests.iam_messaging.no_origin")
     expected = {"before-the-render": PublicOriginUnavailable, "in-the-renders-refusal": ValidationError}
     assert isinstance(failed.value, expected.get(depth, DatabaseError))
-    assert _reported(failed.value, address=target.email) == ([], [])
-    assert _reported_secret(failed.value, below="issue_sign_in_link", needle=target.email) == []
+    if depth.endswith("for-a-system-caller"):  # this test's own frame holds the address it passed
+        assert _reported(failed.value, below="issue", address=target.email) == ([], [])
+        assert _reported_secret(failed.value, below="issue", needle=target.email) == []
+    else:
+        assert _reported(failed.value, address=target.email) == ([], [])
+        assert _reported_secret(failed.value, below="issue_sign_in_link", needle=target.email) == []
 
 
 def test_an_error_report_of_a_failing_delivery_shows_the_link_in_no_frame(
