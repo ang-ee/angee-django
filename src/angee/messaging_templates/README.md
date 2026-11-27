@@ -215,7 +215,10 @@ print; see [Sending as system work](#sending-as-system-work)), `render_budget` (
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
 any other failure, which is logged first as one error record naming the row (its
 kind, key and language) and the exception's type, never its message or its traceback,
-which may quote a value the render was given. Every code
+which may quote a value the render was given. No refusal holds the exception it
+replaces, as its cause or its context (`render_failed`, values that are not JSON,
+a lone surrogate): a caller that logs a refusal with its traceback prints neither
+the exception nor its text. Every code
 `send_as_system` returns from this addon is a constant of
 `angee.messaging_templates.engine`, to compare against rather than retype: the
 row's `NOT_A_TEMPLATE` and `NOT_EFFECTIVE`, and the render's `INVALID_VALUES`,

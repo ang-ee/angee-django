@@ -544,7 +544,11 @@ live in code docstrings.
   `render_budget` are `values`: a subject or budget exceeded on every item of a run is
   a template that is too long. A path the row requires is `values` when this item's
   values hold null for it or above it, and `template` only when the values do not set
-  it; an empty string or list is not missing. No refusal's words or `params` quote a value, nor a key
+  it; an empty string or list is not missing. No refusal holds the exception it replaces
+  (`render_failed`, values that are not JSON, a lone surrogate) as its `__cause__` or its
+  `__context__`, so a caller that logs one with its traceback prints neither; `refusals_only`
+  swallows the failure and its entry raises `guard.refused()` after the block. A value of the
+  wrong shape covers the required paths under it, in that list item alone. No refusal's words or `params` quote a value, nor a key
   of the values the row does not declare (`A value is over 10000 characters.`). **Changed words, which
   no caller should match:** `render_failed` names the exception's type only
   (`The message template did not render: it raised RuntimeError.`), no longer its

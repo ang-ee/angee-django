@@ -699,6 +699,19 @@ def test_every_caller_of_the_render_answers_one_sample_alike(
 SECRET = "https://app.example.test/sign-in/SECRET-marker"
 
 
+def _chained(error: BaseException) -> list[BaseException]:
+    """Every exception ``error`` holds as its cause or its context, and theirs in turn: what a report of it prints."""
+
+    chain: list[BaseException] = []
+    pending = [error.__cause__, error.__context__]
+    while pending:
+        linked = pending.pop()
+        if linked is not None and all(linked is not seen for seen in chain):
+            chain.append(linked)
+            pending += [linked.__cause__, linked.__context__]
+    return chain
+
+
 def _leaks(error: BaseException) -> list[tuple[str, str, str]]:
     """Each variable a Django exception report would show holding the marker in any case (an address is stored in
     lower case), outside the test's own frames: the send's, the render's and messaging's system write alike."""
@@ -869,7 +882,7 @@ SEND_SITES = sorted([
     # (module, function, code, source): the per-site table; a site whose fault changes fails here.
     ("engine.py", "check", "RENDER_BUDGET_EXCEEDED", "VALUES"),  # loops and includes over these values
     ("engine.py", "clean_link", "VALUE_NOT_LINKABLE", "VALUES"),
-    ("walker.py", "refusals_only", "RENDER_FAILED", "UNKNOWN"),  # nothing at the site names whose fault
+    ("walker.py", "refused", "RENDER_FAILED", "UNKNOWN"),  # refusals_only's, after the block: nothing names whose fault
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # not an object
     ("walker.py", "prepare", "INVALID_VALUES", "VALUES"),  # not JSON
     ("walker.py", "prepare", "VALUES_TOO_LARGE", "VALUES"),
@@ -895,8 +908,9 @@ SEND_SITES = sorted([
 
 def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, str]], list[str]]:
     """The (module, function, code, source) of each refusal ``tree`` makes through ``refusal_item`` or ``_refused``,
-    and every other call that names a send code, by its constant or its string, as ``code=`` or as a positional
-    argument (``ValidationError(message, code)``): a refusal made around the one way."""
+    and every other call that names a send code, by its constant (or a module's, ``engine.INVALID_VALUES``) or its
+    string, as ``code=`` or as a positional argument (``ValidationError(message, code)``): a refusal made around the
+    one way. It does not follow a code through a second name, ``**{"code": ...}`` or ``.code`` set after the fact."""
 
     sites: list[tuple[str, str, str, str]] = []
     stray: list[str] = []
@@ -905,6 +919,8 @@ def _send_sites(module: str, tree: ast.AST) -> tuple[list[tuple[str, str, str, s
     def is_send_code(node: ast.expr) -> bool:
         if isinstance(node, ast.Name):
             return node.id in send_codes
+        if isinstance(node, ast.Attribute):
+            return node.attr in send_codes
         return isinstance(node, ast.Constant) and node.value in SEND_CODES
 
     def source_of(node: ast.expr) -> str:
@@ -976,8 +992,8 @@ MARK = "SECRET-marker"
 VALUE_CASES = [
     # (id, source, variables, values, must_print, the (code, source) each caller is refused with)
     ("not-an-object", "Hi {{ name }}.", {"name": "A name."}, [MARK], [], {(INVALID_VALUES, "values")}),
-    ("not-json", "Hi {{ name }}.", {"name": "A name."}, {"name": MARK, "other": object()}, [],
-     {(INVALID_VALUES, "values")}),
+    ("not-json", "Hi {{ name }}.", {"name": "A name."}, {"name": MARK, "other": type(MARK, (), {})()}, [],
+     {(INVALID_VALUES, "values")}),  # the encoder's TypeError names the object's class: the marker
     ("too-large", "Hi {{ name }}.", {"name": "A name."}, {"name": MARK + "x" * 60_000}, [],
      {(VALUES_TOO_LARGE, "values")}),
     ("a-lone-surrogate", "Hi {{ name }}.", {"name": "A name."}, {"name": MARK + "\ud800"}, [],
@@ -1023,9 +1039,11 @@ def test_no_refusal_quotes_a_value_and_each_names_its_source_through_every_calle
     expected: set[tuple[str, str]],
 ) -> None:
     """For each refusal a value can cause, a marker in the values, or in a key of them the row does not declare, is
-    in no refusal's message, ``params`` or string form, through ``send_as_system``, the test send and the preview (an
-    administrator's sample, in its warnings); each item names the source the per-site table gives, and
-    ``refusal_sources`` reads exactly those."""
+    in no refusal's message, ``params``, ``args``, string form or printed traceback, through ``send_as_system``, the
+    test send and the preview (an administrator's sample, in its warnings); the refusal holds no exception as its cause
+    or its context, so a caller that logs it with its traceback prints none (the filter's error and the encoder's
+    quote the marker; a lone surrogate's ``UnicodeEncodeError`` holds the whole text); each item names the source the
+    per-site table gives, and ``refusal_sources`` reads exactly those."""
 
     del system_channel
     tester = create_platform_admin("messaging-templates-quoting")
@@ -1049,7 +1067,9 @@ def test_no_refusal_quotes_a_value_and_each_names_its_source_through_every_calle
             items = refusal.value.error_list
             assert {(item.code, (item.params or {})[REFUSAL_SOURCE]) for item in items} == expected, caller
             assert refusal_sources(refusal.value) == {source for _, source in expected}, caller
-            held = [str(refusal.value), *refusal.value.messages, *(repr(item.params) for item in items)]
+            assert _chained(refusal.value) == [], (caller, _chained(refusal.value))
+            held = [str(refusal.value), repr(refusal.value), repr(refusal.value.args), *refusal.value.messages,
+                    *(repr(item.params) for item in items), "".join(traceback.format_exception(refusal.value))]
             assert all(MARK not in text for text in held), (caller, held)
 
 

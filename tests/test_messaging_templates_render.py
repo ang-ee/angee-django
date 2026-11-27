@@ -1725,6 +1725,15 @@ def test_required_values_and_shapes(plain: Any, kit: Any) -> None:
         ("person is an object.", RefusalSource.VALUES),
         ("name is required and missing or null.", RefusalSource.TEMPLATE),
     ]
+    listed = _mail("{% for item in items %}{{ item.name }}{% endfor %}", {"items.*.name": "x"}, key="tests.listed")
+    for values, refusals in (  # a mis-shaped item hides the paths under it, never its siblings'
+        ({"items": ["flat", {}]}, [("items.* is an object.", RefusalSource.VALUES),
+                                   ("items.*.name is required and missing or null.", RefusalSource.TEMPLATE)]),
+        ({"items": ["flat", {"name": "Ana"}]}, [("items.* is an object.", RefusalSource.VALUES)]),
+    ):
+        with pytest.raises(ValidationError) as refusal:
+            _render(listed, values, kit)
+        assert [(item.messages[0], item.params[REFUSAL_SOURCE]) for item in refusal.value.error_list] == refusals
     rendered = _render(template, {"order": {"total": SafeString("<b>3</b>")}}, kit)
     assert "&lt;b&gt;3&lt;/b&gt;" in rendered.html
 

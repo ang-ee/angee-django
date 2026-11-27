@@ -735,7 +735,12 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
         written before a refusal. The audit rows commit or roll back with the
         caller's transaction, and ``reason`` is recorded in them alone, never on
         the message. Each call records one message and hands it to delivery once,
-        when the outermost transaction commits; it is returned unbound.
+        when the outermost transaction commits; it is returned unbound. What a
+        sender owes the values and how it reads a refusal is the README's "A
+        send's refusals": set every key the template reads, null for an item that
+        has no value there (a key left out is the template's fault, a null this
+        item's), and read whose fault a refusal is with
+        :func:`~angee.messaging_templates.engine.refusal_sources`.
 
         What the caller's values become, on the system channel: a new thread
         titled with the rendered subject, kept in the thread's history; the
@@ -1461,7 +1466,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         alone, each item with its code (``invalid_values``, ``values_too_large``,
         ``message_template_refused``, ``value_not_linkable``, ``value_not_printed``, ``render_budget``,
         ``subject_too_long``, ``no_brand_kit``, ``render_failed``) in ``error_list``
-        (:func:`~angee.messaging_templates.walker.refusals_only`).
+        (:class:`~angee.messaging_templates.walker.refusals_only`).
 
         ``must_print`` is an iterable of the declared paths the mail is sent for
         (a bare string is a ``TypeError``), held as
@@ -1504,7 +1509,7 @@ class MessageTemplate(ImmutableFieldsMixin, ResourceLoadMixin, HistoryMixin, Ang
         copy's validation), ``render_error`` when the row, as saved or as the
         patch would save it, does not render with its sample. Only a
         ``ValidationError`` leaves any of them
-        (:func:`~angee.messaging_templates.walker.refusals_only`). Every local of
+        (:class:`~angee.messaging_templates.walker.refusals_only`). Every local of
         this frame and of each it calls (:meth:`_patched` among them) is Django's
         ``sensitive_variables``: a report of a failure that propagates shows no
         sample or patch.
