@@ -1168,23 +1168,29 @@ def test_a_compose_executes_a_bounded_number_of_statements_per_known_recipient(d
     assert all(counts[size] <= ceiling for size, ceiling in STATEMENTS.items()), counts
 
 
-def test_a_compose_to_another_letter_case_of_a_contacts_address_is_addressed_as_the_contact_stores_it(
+def test_a_compose_to_another_letter_case_of_a_contacts_address_lands_on_its_handle_and_is_mailed_as_typed(
     desk: Any,
 ) -> None:
-    """One address is one handle: the contact typed first keeps its spelling, which the wire carries."""
+    """One address is one handle, which keeps the contact's spelling; the recipient row records the spelling
+    typed, which the wire carries."""
 
     with system_context(reason="tests.messaging.compose.spelling"):
         contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
     message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
     with system_context(reason="tests.messaging.compose.spelling"):
-        assert list(Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)) == [contact.pk]
+        assert list(Recipient._base_manager.filter(message=message).values_list("handle_id", "address")) == [
+            (contact.pk, "client@example.test"),
+        ]
         assert Handle._base_manager.filter(platform="email").count() == 2  # The client and the desk.
-    assert _wire(desk, message)["To"] == "Client@Example.test"
+        assert Handle._base_manager.get(pk=contact.pk).value == "Client@Example.test"
+    assert _wire(desk, message)["To"] == "client@example.test"
 
 
-def test_a_new_recipient_is_stored_and_sent_as_typed_and_every_other_spelling_lands_on_it(desk: Any) -> None:
-    """A handle compose creates first keeps the typed spelling, which the wire carries; a contact typed later in
-    another letter case, and a later compose, land on it."""
+def test_a_new_recipient_is_stored_as_typed_and_every_other_spelling_lands_on_it_and_is_mailed_as_typed(
+    desk: Any,
+) -> None:
+    """A handle compose creates first keeps the typed spelling; a contact typed later in another letter case, and
+    a later compose, land on it, and the later compose is mailed at the spelling it was given."""
 
     message = Message.objects.compose(channel=desk, to=["Ada@Example.com"], text="Hi.", actor=desk.owner)
     with system_context(reason="tests.messaging.compose.spelling"):
@@ -1192,9 +1198,11 @@ def test_a_new_recipient_is_stored_and_sent_as_typed_and_every_other_spelling_la
         contact = Handle.objects.upsert(platform="email", value="ada@example.com")
     later = Message.objects.compose(channel=desk, to=["ADA@example.COM"], text="Again.", actor=desk.owner)
     with system_context(reason="tests.messaging.compose.spelling"):
-        assert list(Recipient._base_manager.filter(message=later).values_list("handle_id", flat=True)) == [written]
+        assert list(Recipient._base_manager.filter(message=later).values_list("handle_id", "address")) == [
+            (written, "ADA@example.COM"),
+        ]
     assert (contact.pk, contact.value) == (written, "Ada@Example.com")
-    assert _wire(desk, message)["To"] == _wire(desk, later)["To"] == "Ada@Example.com"
+    assert (_wire(desk, message)["To"], _wire(desk, later)["To"]) == ("Ada@Example.com", "ADA@example.COM")
 
 
 def test_one_new_address_typed_twice_in_one_compose_is_stored_and_sent_once_as_first_typed(desk: Any) -> None:
@@ -1222,6 +1230,75 @@ def test_a_channels_sender_is_landed_as_configured(db: None, settings: Any) -> N
     assert _wire(channel, message)["From"] == "Desk <Desk@Example.TEST>"
 
 
+def test_a_channels_sender_is_written_as_configured_over_an_earlier_spelling_of_its_handle(
+    db: None, settings: Any,
+) -> None:
+    """The desk's configured address already has a handle in another spelling: the handle keeps its spelling, and
+    From is written as the channel configures it."""
+
+    del db
+    settings.MAILERS = MAILERS
+    with system_context(reason="tests.messaging.compose.sender"):
+        Handle.objects.upsert(platform="email", value="desk@example.test")
+    channel = make_integration("compose-sender-spelling", model=Channel, backend_class="email",
+                               config={"from_email": "Desk <Desk@Example.TEST>"})
+    message = Message.objects.compose(channel=channel, to=["client@example.test"], text="Hi.", actor=channel.owner)
+    with system_context(reason="tests.messaging.compose.sender"):
+        assert Message._base_manager.get(pk=message.pk).sender.value == "desk@example.test"
+    assert _wire(channel, message)["From"] == "Desk <Desk@Example.TEST>"
+
+
+def _addresses(message: Any) -> list[str]:
+    with system_context(reason="tests.messaging.compose.address"):
+        return list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("address", flat=True))
+
+
+def test_a_named_recipient_records_the_address_alone_as_compose_cleaned_it(desk: Any) -> None:
+    """The row records the bare address typed, never the name beside it, which the handle keeps."""
+
+    message = Message.objects.compose(channel=desk, to=["Client Name <Client@Example.test>"], text="Hi.",
+                                      actor=desk.owner)
+    assert _addresses(message) == ["Client@Example.test"]
+    assert _wire(desk, message)["To"] == "Client Name <Client@Example.test>"
+
+
+def test_rows_written_from_a_handle_record_no_address(desk: Any) -> None:
+    """Ingest and a reply write their rows from handles, so they record nothing: a reply is answered as the handle
+    stores it, whether it answers the sender or a Reply-To."""
+
+    raw = (
+        "From: Requester <requester@example.test>\r\nTo: Desk <Desk@Example.test>\r\n"
+        "Message-ID: <rows-from-handles@example.test>\r\nSubject: Hello\r\n\r\nbody\r\n"
+    ).encode()
+    with system_context(reason="tests.messaging.compose.address"):
+        (ingested,) = Message.objects.ingest([parse_message(raw, mailbox="INBOX", uid=1, uidvalidity=1)],
+                                            channel=desk)
+    answered = Message.objects.compose(parent=ingested, text="Answer.", actor=desk.owner)
+    redirected = Message.objects.compose(
+        parent=_receive(desk, "rows-reply-to", reply_to="Answers <answers@example.test>"), text="Answer.",
+        actor=desk.owner,
+    )
+    assert [_addresses(message) for message in (ingested, answered, redirected)] == [[""], [""], [""]]
+
+
+@pytest.mark.parametrize("erasure", ["the-handle-deleted", "the-channel-purged"])
+def test_a_recipients_address_leaves_with_its_handle_and_with_its_channels_purge(desk: Any, erasure: str) -> None:
+    """The address a row records is a second copy of the handle's address: it goes wherever the row goes."""
+
+    with system_context(reason="tests.messaging.compose.erasure"):
+        contact = Handle.objects.upsert(platform="email", value="Client@Example.test")
+    message = Message.objects.compose(channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner)
+    assert _addresses(message) == ["client@example.test"]
+    if erasure == "the-handle-deleted":
+        with system_context(reason="tests.messaging.compose.erasure"):
+            Handle._base_manager.filter(pk=contact.pk).delete()
+    else:
+        with actor_context(desk.owner):
+            Channel.objects.purge(desk)
+    with system_context(reason="tests.messaging.compose.erasure"):
+        assert not Recipient._base_manager.filter(address__iexact="client@example.test").exists()
+
+
 def test_a_providers_alias_is_a_handle_of_its_own_and_is_sent_as_typed(desk: Any) -> None:
     """A Gmail plus-tag is the same person's address, not the same address: its own handle, its tag kept."""
 
@@ -1245,10 +1322,11 @@ def test_inbound_mail_from_another_letter_case_of_a_contacts_address_lands_on_th
     assert inbound.sender_id == contact.pk
 
 
-def test_after_the_key_repair_folds_two_spellings_a_compose_lands_on_the_older_and_keeps_its_spelling(
+def test_after_the_key_repair_folds_two_spellings_a_compose_lands_on_the_older_and_is_mailed_as_typed(
     desk: Any,
 ) -> None:
-    """Rows an earlier rule kept apart are one handle after the repair: the survivor's spelling is on the wire."""
+    """Rows an earlier rule kept apart are one handle after the repair: a compose lands on the survivor, and the
+    spelling it was given is on the wire."""
 
     with system_context(reason="tests.messaging.compose.repair"):
         older, newer = Handle._base_manager.bulk_create(
@@ -1264,4 +1342,4 @@ def test_after_the_key_repair_folds_two_spellings_a_compose_lands_on_the_older_a
     with system_context(reason="tests.messaging.compose.repair"):
         assert list(Recipient._base_manager.filter(message=message).values_list("handle_id", flat=True)) == [older.pk]
         assert Handle._base_manager.get(pk=newer.pk).merged_into_id == older.pk
-    assert _wire(desk, message)["To"] == "Ada@Example.test"
+    assert _wire(desk, message)["To"] == "ADA@example.test"

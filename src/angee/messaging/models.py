@@ -22,6 +22,7 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -132,6 +133,8 @@ from angee.provenance.statements import (
 )
 from angee.resources.mixins import ResourceLoadMixin
 from angee.tags.models import TaggedModel
+
+logger = logging.getLogger(__name__)
 
 
 class Channel(Bridge, inherits="integrate.Integration"):
@@ -2222,6 +2225,9 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
     thread, set by :meth:`save` on insert and moved with the message by
     ``MessageManager.correct_source_thread``. A handle merge keeps the row on the
     handle it names; readers resolve ``handle`` through the handle's merge redirect.
+    ``address`` is the spelling a writer was handed for the handle, which the
+    message is mailed at (:attr:`envelope_address`); readers and search still go by
+    the handle.
     """
 
     merge_policies: ClassVar[Mapping[str, Any]] = {"handle": MergePolicy.KEEP}
@@ -2252,6 +2258,11 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
         related_name="recipient_rows",
     )
     role = StateField(choices_enum=RecipientRole, default=RecipientRole.TO)
+    address = models.CharField(max_length=512, blank=True, default="", db_default="", editable=False)
+    """The address a compose was handed for this recipient, as its recipient rule cleaned it
+    (``MessageManager.clean_recipient``): a spelling of the handle's address (``Handle.is_spelling_of``),
+    or empty for a row written from a handle (a picked handle, a reply, ingest), which is mailed at the
+    handle's own ``value``. It leaves with the row: with its handle, its message and a channel's purge."""
 
     class Meta:
         """Django model options for the recipient source model."""
@@ -2273,12 +2284,43 @@ class Recipient(AuditMixin, AngeeDataModel, concrete=True):
 
         return f"{self.handle_id} ({self.role})"
 
+    @property
+    def envelope_address(self) -> str:
+        """The address this row is mailed at: :attr:`address` while it spells the handle's address, else the handle's
+        own ``value``.
+
+        A row whose ``address`` names another address, written past :meth:`save` (a queryset ``update``), is mailed at
+        its handle's ``value`` with a warning naming the row, so mail never goes where its handle does not name.
+        """
+
+        handle = self.handle
+        if self.address and not handle.is_spelling_of(self.address):
+            logger.warning("Recipient %s holds an address its handle does not name; it is mailed at the handle's own.",
+                           self.pk)
+            return str(handle.value)
+        return self.address or str(handle.value)
+
+    def clean(self) -> None:
+        """Validate the row as :meth:`save` does: an ``address`` is a spelling of the handle's address."""
+
+        super().clean()
+        self._require_its_address()
+
+    def _require_its_address(self) -> None:
+        if self.address and not self.handle.is_spelling_of(self.address):
+            raise ValidationError({"address": ValidationError(
+                "A recipient's address is a spelling of its handle's address.", code="not_its_handle",
+            )})
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Insert the row on its message's thread; a different ``thread`` raises ``ValueError``.
 
-        Pass ``message=`` (the instance) so the message is not read again.
+        Pass ``message=`` (the instance) so the message is not read again, and ``handle=`` when ``address`` is set, so
+        the handle is not read either. An ``address`` that is not a spelling of the handle's address raises
+        ``ValidationError`` on ``address`` before anything is written.
         """
 
+        self._require_its_address()
         if self._state.adding:
             thread_id = self.message.thread_id
             if self.thread_id is not None and self.thread_id != thread_id:

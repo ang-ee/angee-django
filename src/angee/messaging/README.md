@@ -68,9 +68,16 @@ display name the email backend writes takes), is refused (`invalid`) under its
 role, never re-read. `compose` lands every address as typed, the channel's
 sender as configured, on the handle the handle owner finds for it
 (`HandleManager.find_identities`): any letter case or domain spelling of a
-stored address is that handle, and a message to it is addressed as the handle
-stores it, so an address with no handle yet is stored, shown and addressed as
-typed; a provider's alias is a handle of its own. A name inbound mail stored with a literal encoded word is
+stored address is that handle, which keeps the spelling it was first stored in
+and is what the message shows and search finds. The recipient row records the
+address as typed (`Recipient.address`), and the message is mailed at it
+(`Recipient.envelope_address`), From as the channel configures it
+(`outbound_sender`), so an address with no handle yet is stored, shown and
+addressed as typed; a provider's alias is a handle of its own. A row written
+from a handle (a reply, which is answered as its handle stores it, and ingest)
+records no address; a recorded address is always a spelling of its handle's
+(`Handle.is_spelling_of`, checked when the row is saved), and one written past
+that check is ignored with a warning, the mail going to the handle's own. A name inbound mail stored with a literal encoded word is
 written on the wire as `header_text` carries it, so an answer to its sender
 still reaches that sender. An address with an internationalised domain is
 stored as typed and written on the wire with its domain in ASCII (IDNA) form;
@@ -401,7 +408,10 @@ takes, plus `carries_address`: a sender whose part before the `@` is outside
 ASCII is refused, as no transport here speaks SMTPUTF8. A recipient's rule is
 `Message.objects.clean_system_recipient(entry, key=...)`, which
 `compose_as_system` applies to each recipient and a caller asks before offering
-a send; both read nothing.
+a send; both read nothing. A system mail is mailed exactly at the address its
+caller gave, after that rule, which its recipient row records, on whichever
+handle holds any spelling of it; it goes out from `DEFAULT_FROM_EMAIL` as
+configured, whatever spelling the sender's handle was first stored in.
 
 An error report hides every local of every frame of the system write, from the
 system mailer and `compose_as_system` down to the ORM's and the SQL's, and of

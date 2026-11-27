@@ -391,7 +391,9 @@ a sender is read; the message's source keeps its `From` header. See
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
 addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+(`Recipient.address`, empty for a row written from a handle), which the message
+is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 

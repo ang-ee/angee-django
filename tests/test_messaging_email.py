@@ -153,7 +153,10 @@ def test_outbound_email_envelope_uses_canonical_source_header_fallback(header_me
     assert rendered.cc == [] and rendered.bcc == []
 
 
+@override_settings(MAILERS=TRANSPORT)
 def test_outbound_email_keeps_native_sender_over_source_fallback(header_message):
+    """A sender handle the channel does not configure keeps its own address, ahead of the source's From."""
+
     owner, _outsider, message = header_message
     with actor_context(owner):
         handle = Handle.objects.create(platform="email", value="live@example.test")

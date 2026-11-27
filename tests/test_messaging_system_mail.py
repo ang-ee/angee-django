@@ -11,7 +11,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from email import message_from_bytes
-from email.utils import parseaddr
 from types import SimpleNamespace
 from typing import Any
 
@@ -292,8 +291,9 @@ def test_the_system_sender_and_a_recipient_land_on_one_handle_whatever_their_spe
 ) -> None:
     """The handle owner's rule: an address lands on the handle of any earlier spelling, which keeps its own.
 
-    With no handle yet, the sender and the recipient are stored and sent as typed; after an earlier
-    lower-case spelling, they land on its handle and the mail carries that stored spelling.
+    With no handle yet, the sender and the recipient are stored as typed; after an earlier lower-case
+    spelling, they land on its handle. Either way the mail is from the sender as configured and to the
+    recipient as given, which its row records.
     """
 
     settings.DEFAULT_FROM_EMAIL = "Ops <Ops@Example.test>"
@@ -312,9 +312,144 @@ def test_the_system_sender_and_a_recipient_land_on_one_handle_whatever_their_spe
     typed = {"ops@example.test": "Ops@Example.test", "reader@example.test": "Reader@Example.test"}
     assert handles == [(key, key if earlier else typed[key]) for key in sorted(typed)]
     assert sender == Handle._base_manager.get(spelling_key="ops@example.test").pk
-    assert (parseaddr(sent.from_email)[1], sent.to) == (
-        ("ops@example.test", ["reader@example.test"]) if earlier else ("Ops@Example.test", ["Reader@Example.test"])
-    )
+    with system_context(reason="tests.messaging.system_mail.spelling"):
+        assert list(Recipient._base_manager.filter(message=message).values_list("address", flat=True)) == [
+            "Reader@Example.test",
+        ]
+    assert (sent.from_email, sent.to) == ("Ops <Ops@Example.test>", ["Reader@Example.test"])
+
+
+def _given(message: Any) -> list[tuple[Any, str]]:
+    """The message's recipient rows as ``(handle id, address)``, in their order."""
+
+    with system_context(reason="tests.messaging.system_mail.given"):
+        return list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("handle_id", "address"))
+
+
+@pytest.mark.parametrize("entry", ["send-mail", "compose-as-system"])
+def test_a_system_mail_is_mailed_at_the_address_its_caller_gave_on_the_handle_of_its_first_spelling(
+    system_mailer: Any, entry: str,
+) -> None:
+    """An account's address and a handle's first spelling differ in letter case: the mail goes to the account's
+    spelling, which its row records, on that one handle, with no second handle or party."""
+
+    party_model = apps.get_model("parties", "Party")
+    with system_context(reason="tests.messaging.system_mail.given"):
+        handle = Handle.objects.upsert(platform="email", value="Reader@Example.test")
+        parties = party_model._base_manager.count()
+    if entry == "send-mail":
+        assert send_mail("Report", "Body.", None, ["reader@example.test"]) == 1
+        (message,) = _recorded(system_mailer)
+    else:
+        message = Message.objects.compose_as_system(
+            reason="tests.messaging.system_mail.given", to=["reader@example.test"], subject="Report", text="Body.",
+        )
+    assert _deliver(message).to == ["reader@example.test"]
+    assert _given(message) == [(handle.pk, "reader@example.test")]
+    with system_context(reason="tests.messaging.system_mail.given"):
+        assert list(Handle._base_manager.filter(spelling_key="reader@example.test").values_list("pk", "value")) == [
+            (handle.pk, "Reader@Example.test"),
+        ]
+        assert party_model._base_manager.count() == parties
+
+
+def test_two_system_mails_to_two_spellings_of_one_handle_are_each_mailed_at_their_own(system_mailer: Any) -> None:
+    """Two accounts whose addresses differ only in letter case share one handle; each mail goes to its own."""
+
+    for address in ("Guest.Case@Example.COM", "guest.case@example.com"):
+        assert send_mail("Your link", "Body.", None, [address]) == 1
+    first, second = _recorded(system_mailer)
+    assert [_deliver(message).to for message in (first, second)] == [
+        ["Guest.Case@Example.COM"], ["guest.case@example.com"],
+    ]
+    ((handle_id, _first),), ((second_handle_id, _second),) = _given(first), _given(second)
+    assert handle_id == second_handle_id
+    with system_context(reason="tests.messaging.system_mail.given"):
+        assert Handle._base_manager.filter(spelling_key="guest.case@example.com").count() == 1
+
+
+def test_a_system_recipient_records_the_address_alone_as_its_rule_cleaned_it(system_mailer: Any) -> None:
+    """A named entry records its bare address, never its name or a header's text; the name is the handle's."""
+
+    assert send_mail("Report", "Body.", None, ["Reader Name <Reader@Example.test>"]) == 1
+    (message,) = _recorded(system_mailer)
+    ((_handle_id, address),) = _given(message)
+    assert address == "Reader@Example.test"
+    assert _deliver(message).to == ["Reader Name <Reader@Example.test>"]
+
+
+@pytest.mark.parametrize("first_try", ["a-failed-hand-off", "a-transient-refusal"])
+def test_a_system_mail_sent_again_is_mailed_at_the_address_its_caller_gave(
+    system_mailer: Any, settings: Any, monkeypatch: pytest.MonkeyPatch, django_capture_on_commit_callbacks: Any,
+    first_try: str,
+) -> None:
+    """The release after a failed hand-off, and the retry after a transient refusal, mail the address given."""
+
+    with system_context(reason="tests.messaging.system_mail.again"):
+        Handle.objects.upsert(platform="email", value="Reader@Example.test")
+    if first_try == "a-failed-hand-off":
+        def refused(name: str, **options: Any) -> None:
+            raise OperationalError("[Errno 61] Connection refused")
+
+        monkeypatch.setattr(celery_app, "send_task", refused)
+    with django_capture_on_commit_callbacks(execute=True):
+        assert send_mail("Again", "Body.", None, ["reader@example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    if first_try == "a-transient-refusal":
+        settings.MAILERS = {"default": SYSTEM, "transport": {
+            "BACKEND": f"{FailingTransport.__module__}.FailingTransport",
+            "OPTIONS": {"failure": smtplib.SMTPRecipientsRefused({"reader@example.test": (450, b"Try again later")})},
+        }}
+        assert not deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
+        settings.MAILERS = {"default": SYSTEM, "transport": LOCMEM}
+    with system_context(reason="tests.messaging.system_mail.again"):
+        assert Message._base_manager.get(pk=message.pk).status == "queued"
+        Message._base_manager.filter(pk=message.pk).update(
+            scheduled_at=timezone.now() - timedelta(hours=1), delivery_lease_until=timezone.now() - timedelta(hours=1),
+        )
+    handed: list[dict[str, Any]] = []
+    monkeypatch.setattr(celery_app, "send_task", lambda name, **options: handed.append(options["kwargs"]))
+    with django_capture_on_commit_callbacks(execute=True):
+        assert Message.objects.release_held_messages() == 1
+    assert deliver_message(**handed[0])["delivered"]
+    assert [sent.to for sent in mail.outbox] == [["reader@example.test"]]
+
+
+def test_a_recipient_row_refuses_an_address_its_handle_does_not_name(system_mailer: Any) -> None:
+    """The row's validation, on save and on ``full_clean``: another address is refused before anything is written."""
+
+    assert send_mail("Report", "Body.", None, ["Reader@Example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    with system_context(reason="tests.messaging.system_mail.invariant"):
+        row = Recipient._base_manager.get(message=message)
+        row.address = "intruder@elsewhere.test"
+        for check in (row.save, row.full_clean):
+            with pytest.raises(ValidationError) as refused:
+                check()
+            assert [error.code for error in refused.value.error_dict["address"]] == ["not_its_handle"]
+        assert Recipient._base_manager.get(pk=row.pk).address == "Reader@Example.test"
+        row.address = "READER@example.test"
+        row.save()
+        assert Recipient._base_manager.get(pk=row.pk).address == "READER@example.test"
+
+
+def test_a_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(
+    system_mailer: Any, caplog: Any,
+) -> None:
+    """A queryset update puts another address on the row: the mail goes to the handle's own address, never that one,
+    and the warning names the row, not either address."""
+
+    assert send_mail("Report", "Body.", None, ["Reader@Example.test"]) == 1
+    (message,) = _recorded(system_mailer)
+    with system_context(reason="tests.messaging.system_mail.invariant"):
+        row = Recipient._base_manager.get(message=message)
+        Recipient._base_manager.filter(pk=row.pk).update(address="intruder@elsewhere.test")
+    caplog.set_level(logging.WARNING, logger="angee.messaging.models")
+    assert _deliver(message).to == ["Reader@Example.test"]
+    warned = [record.getMessage() for record in caplog.records if record.name == "angee.messaging.models"]
+    assert warned == [
+        f"Recipient {row.pk} holds an address its handle does not name; it is mailed at the handle's own.",
+    ]
 
 
 def test_a_django_email_is_recorded_on_the_system_channel_and_sent_once_through_the_transport(

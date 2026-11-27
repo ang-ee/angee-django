@@ -286,10 +286,19 @@ class AnymailEmailChannelBackend(ChannelBackend):
         return email
 
     def _sender(self, message: Any) -> str:
-        """``Message.sender``'s address, else the source's first ``From``, else the channel default."""
+        """The channel's sender as configured when ``Message.sender`` is its address; else the sender's own
+        address, else the source's first ``From``, else the channel default.
+
+        A message the channel wrote has the configured address's handle as its sender, which keeps the
+        spelling it was first stored in; From is written as the channel configures it
+        (:meth:`outbound_sender`). A sender the channel no longer configures keeps its own.
+        """
 
         if message.sender_id is not None:
-            sender = _address(message.sender)
+            name, address = self.outbound_sender()
+            if message.sender.is_spelling_of(address):
+                return _mailbox(name, address)
+            sender = _address(message.sender.display_name, message.sender.value)
             if sender:
                 return sender
         values = _source_addresses(message, "from")
@@ -298,11 +307,12 @@ class AnymailEmailChannelBackend(ChannelBackend):
         return _mailbox(*self.outbound_sender())
 
     def _recipients(self, message: Any) -> dict[str, list[str]]:
-        """The message's addresses per envelope role, else its source's for a role it has none in."""
+        """The message's addresses per envelope role, each as its row is mailed at (``Recipient.envelope_address``),
+        else its source's for a role it has none in."""
 
         recipients: dict[str, list[str]] = {"to": [], "cc": [], "bcc": []}
         for row in message.recipients.select_related("handle").order_by("role", "pk"):
-            address = _address(row.handle)
+            address = _address(row.handle.display_name, row.envelope_address)
             if address:
                 recipients[str(row.role)].append(address)
         for role in recipients:
@@ -532,11 +542,11 @@ def _mailbox(name: str, address: str) -> str:
     return formataddr((header_text(name), address))
 
 
-def _address(handle: Any) -> str:
-    value = str(handle.value or "").strip()
+def _address(name: Any, value: Any) -> str:
+    value = str(value or "").strip()
     if "@" not in value:
         return ""
-    return _mailbox(str(handle.display_name or ""), value)
+    return _mailbox(str(name or ""), value)
 
 
 def _source_addresses(message: Any, header: str) -> list[str]:

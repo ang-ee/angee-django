@@ -3358,7 +3358,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         (``Handle.is_email_address``, ``HandleManager.clean_identity``). The
         address is returned as typed: the handle owner lands any letter case or
         domain spelling of a stored address on its handle, and a handle compose
-        creates first keeps the typed spelling. It reads nothing, so a caller can
+        creates first keeps the typed spelling; the recipient row records the
+        address as returned, which the message is mailed at (``Recipient.address``). It reads nothing, so a caller can
         ask it before expensive work, and ``compose`` lands exactly what it
         returns. The refusal is ``invalid``, naming the entry as typed.
         """
@@ -3600,7 +3601,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     )
                 # A person's recipients keep that person as their creator; system work's have none.
                 with actor_context(_OUTGOING_ACTOR) if actor is None else nullcontext():
-                    rows = self._land_addressees(recipients, created_by_id=created_by_id)
+                    rows = self._land_addressees(recipients, given=outgoing.parent is None, created_by_id=created_by_id)
                 self._write_recipients(message, rows, created_by_id=created_by_id)
                 self.advance_thread(message)
                 if outgoing.queued:
@@ -3610,8 +3611,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         return message if actor is None else message.with_actor(actor)
 
     @staticmethod
-    def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
-        """Return each recipient's ``(handle id, role)`` in the order given, its addresses resolved in one read.
+    def _land_addressees(
+        recipients: Sequence[_Addressee], *, given: bool, created_by_id: Any,
+    ) -> list[tuple[Any, str, str]]:
+        """Return each recipient's ``(handle, role, address)`` in the order given, its addresses resolved in one read.
+
+        ``address`` is the address the caller handed (``given``: a compose's own
+        To/Cc/Bcc, as its recipient rule cleaned it), which the row records and the
+        message is mailed at (``Recipient.envelope_address``); it is empty for a
+        recipient given as a handle id, and for every recipient of a reply, which
+        is derived from its parent and answered as the handle stores it. A landed
+        recipient's handle is the instance, so the row's write reads nothing more.
 
         Known handles resolve through the handle owner's batch lookup
         (``HandleManager.find_identities``); an address with no handle, or with a
@@ -3637,7 +3647,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     fill_only=("display_name",), created_by_id=created_by_id,
                 )
         return [
-            (addressee.handle_id or found[(email, addressee.address)].pk, addressee.role) for addressee in recipients
+            (addressee.handle_id, addressee.role, "") if addressee.handle_id is not None
+            else (found[(email, addressee.address)], addressee.role, addressee.address if given else "")
+            for addressee in recipients
         ]
 
     def cancel_delivery(self, message: Any) -> None:
@@ -4852,7 +4864,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 for recipient in parsed.recipients
             ]
             self._write_recipients(
-                message, ((handle.pk, role) for handle, role in recipients), created_by_id=created_by_id,
+                message, ((handle, role, "") for handle, role in recipients), created_by_id=created_by_id,
             )
             handles = [*([] if sender is None else [sender]), *(handle for handle, _role in recipients)]
         if expected_thread is not None:
@@ -5054,17 +5066,27 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         )
         return file
 
-    def _write_recipients(self, message: Any, rows: Iterable[tuple[Any, str]], *, created_by_id: Any) -> None:
-        """Create ``message``'s recipient rows from ``(handle id, role)`` pairs, once per pair.
+    def _write_recipients(
+        self, message: Any, rows: Iterable[tuple[Any, str, str]], *, created_by_id: Any,
+    ) -> None:
+        """Create ``message``'s recipient rows from ``(handle or handle id, role, address)``, once per handle and role.
 
         The write path owns envelope dedup (the unique constraint is the
-        backstop): any producer may repeat an address within one role. Each row
-        takes its thread from ``message`` (``Recipient.save``).
+        backstop): any producer may repeat an address within one role, and two
+        spellings of one address in one role are one row, with the first spelling
+        given. Each row takes its thread from ``message`` (``Recipient.save``);
+        ``address`` is empty for a row written from a handle.
         """
 
         recipient_model = apps.get_model("messaging", "Recipient")
-        for handle_id, role in dict.fromkeys((handle_id, str(role)) for handle_id, role in rows):
-            recipient_model.objects.create(message=message, handle_id=handle_id, role=role, created_by_id=created_by_id)
+        written: dict[tuple[Any, str], tuple[Any, str]] = {}
+        for handle, role, address in rows:
+            written.setdefault((getattr(handle, "pk", handle), str(role)), (handle, address))
+        for (_handle_id, role), (handle, address) in written.items():
+            recipient_model.objects.create(
+                message=message, role=role, address=address, created_by_id=created_by_id,
+                **({"handle": handle} if isinstance(handle, models.Model) else {"handle_id": handle}),
+            )
 
 
 class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):

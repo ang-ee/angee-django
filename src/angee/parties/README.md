@@ -342,10 +342,13 @@ part in any script (`jörg@`, `peña@`) with no whitespace, control or format
 character (a zero-width space, a direction mark), a domain that passes the
 domain rule of Django's `EmailValidator` (an internationalised one as typed or
 punycoded), and no longer than an address may be or the handle's value holds.
-An email handle is one address whatever its letter case or domain spelling.
+An email handle is one address whatever its letter case or domain spelling:
+the platform matches addresses case-insensitively, the part before the `@` as
+well as the domain, though a mail server may tell `Ada@` and `ada@` apart.
 `upsert` and `find_identities` land any such spelling on the one live handle,
-which keeps the spelling first written as its `value`, what a message to it is
-addressed to; its spelling key (`Handle.spelling_key_of`) is what a live email
+which keeps the spelling first written as its `value`, what readers show and a
+message to it is addressed to unless its writer was handed another spelling
+(messaging's `Recipient.address`, which mail goes to); its spelling key (`Handle.spelling_key_of`) is what a live email
 handle is unique by (`uq_handle_spelling_key`). One address, by that key, is
 every letter case of it (lower-cased, not case-folded: `Straße@` and `STRASSE@`
 are two) and every spelling of its domain that the email backend sends as one

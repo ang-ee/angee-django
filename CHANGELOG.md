@@ -10,6 +10,36 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`: **Changed behaviour. A message is mailed at the address its
+  writer was given, and from its channel's sender as configured.** A compose's
+  own recipients, a person's and the system's (`compose`, `compose_as_system`,
+  so Django's `send_mail`), still land on the one handle of any spelling of
+  their address, and each recipient row now records the address it was given,
+  as its recipient rule cleaned it (`Recipient.address`): mail goes to that
+  spelling (`Recipient.envelope_address`), where it went to the spelling the
+  handle was first stored in. A row written from a handle records nothing and is
+  mailed at the handle's `value`, as before: a reply, which is still answered as
+  its handle stores it, and ingest, whose raw envelope stays in the message's
+  metadata. A recorded address is always a spelling of its handle's
+  (`Handle.is_spelling_of`): `Recipient.save` and `full_clean` refuse another
+  with a `ValidationError` on `address` (`not_its_handle`) before writing, and
+  one written past them (a queryset `update`) is ignored, with a warning naming
+  the row, the mail going to the handle's own. From is written as the channel
+  configures it (`AnymailEmailChannelBackend.outbound_sender`: its `from_email`,
+  else `DEFAULT_FROM_EMAIL`) whenever the message's sender handle is that
+  address, whatever spelling the handle keeps. What a message shows and what
+  search finds are unchanged: the handle; the GraphQL types and the resource
+  metadata do not expose the column. The recorded address leaves with its row:
+  with its handle, its message and its channel's purge.
+  - **Upgrade:** after compose, run `uv run --no-sync python manage.py
+    makemigrations messaging` and commit it: one added field on the recipients
+    table, `address`, with no backfill, empty meaning the handle's own spelling.
+    On PostgreSQL it is `ALTER TABLE "messaging_recipient" ADD COLUMN "address"
+    varchar(512) DEFAULT '' NOT NULL;`, a catalogue change with no table rewrite
+    (PostgreSQL 11 and later keep a constant default in the catalogue). Messages
+    queued before it are mailed at their handle's spelling, as they would have
+    been. Reversing it drops the column, which loses the given spellings and
+    nothing else: the messages are then mailed at their handles' spellings.
 - `angee.messaging`, `angee.workflows_messaging`, `angee.iam_messaging`: **System mail: each email
   Django sends is recorded on a system channel and sent through one transport mailer.**
   - **Upgrade first:** stop the serving processes and workers through the operator
@@ -122,7 +152,7 @@ live in code docstrings.
   with that entry's display name, where it lower-cased each. An answer to an
   address no handle holds yet stores and sends it in that spelling; an address a
   handle holds is sent as that handle stores it, with its display name, as every
-  recipient is. The IMAP parser still emits an address trimmed and lower-cased,
+  recipient written from a handle is. The IMAP parser still emits an address trimmed and lower-cased,
   the form every stored sync hash covers, so a message already synced hashes as
   it did. An IMAP account's own addresses (its `own_addresses`, its username and
   its external account's email) compare with a message's by spelling key, any
@@ -164,7 +194,7 @@ live in code docstrings.
   address on the row owning its exact value, else on the live handle owning its
   spelling key, else on the survivor of the oldest merged-away row owning it;
   the handle keeps the spelling first written as its `value`, what a message to
-  it is addressed to. A save that would keep a second live handle of an address
+  it shows (a compose's recipient is mailed at the spelling it was given, above). A save that would keep a second live handle of an address
   (an insert, a history revert, a resource load, a rewrite behind an
   `external_id`) is refused before it writes with
   `angee.parties.managers.ValueOwned`, a `ValidationError` on `value`

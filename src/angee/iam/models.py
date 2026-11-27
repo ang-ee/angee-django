@@ -389,7 +389,10 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     def normalize_email(cls, email: str | None) -> str:
         """Lowercase the whole address for every account kind, unlike Django.
 
-        Django lowercases only the domain. Python owns whitespace stripping and
+        Django lowercases only the domain. The platform matches addresses
+        case-insensitively (one handle per address, ``Handle.spelling_key_of``), so
+        the account's key is lower-cased whole; mail to the account goes to this
+        stored spelling. Python owns whitespace stripping and
         Unicode lowercasing; the stored email is the key, with no SQL transform.
         ``bulk_create`` and queryset ``update()`` bypass normalization; callers
         writing emails through them must normalize first.
