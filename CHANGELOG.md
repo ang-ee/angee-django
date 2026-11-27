@@ -1685,9 +1685,10 @@ live in code docstrings.
   numbers the rule reads only as their digits (`Handle.is_fallback_key`:
   `1-800-FLOWERS` and `1-800-COLLECT` are both `1800`) are two addresses, which
   only a contact administrator merges. `Handle.NORMALIZATION_VERSION` is 2: this rule,
-  with two amendments made before any release carries it, a domain whose spelling would
-  be longer than a domain name can be kept as typed, and an email local part lower-cased
-  but for a non-ASCII character whose lower case would be ASCII or of another length. A consumer rule
+  with three amendments made before any release carries it, a domain whose spelling would
+  be longer than a domain name can be kept as typed, an email local part lower-cased
+  but for a non-ASCII character whose lower case would be ASCII or of another length,
+  and an address and its domain trimmed of ASCII whitespace only. A consumer rule
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
@@ -1778,7 +1779,7 @@ live in code docstrings.
     `0.4`, the most recently updated (`.first()` over the model's `-updated_at`).
     One matching organization is suggested at `0.4` as before. Each further
     organization costs one suggestion's statements.
-  - **The handle rule's two amendments.** The domain-spelling rule keeps as typed
+  - **The handle rule's three amendments.** The domain-spelling rule keeps as typed
     a name whose spelling would be longer than a domain name can be
     (`Handle.DOMAIN_NAME_LIMIT`, 253 characters: RFC 1034, as Django's
     `URLValidator` bounds a host name). A name of ligatures that each read as many
@@ -1792,10 +1793,14 @@ live in code docstrings.
     handle, and `İ` stays `İ`, while `JOSÉ@` and `josé@`, `MÜLLER@` and
     `müller@` stay one handle each and the Angstrom and Ohm signs still fold onto
     `å` and `ω`. The kept characters are computed from `str.lower`, and a test
-    pins today's two. An address is trimmed of ASCII whitespace only
-    (`Handle.ADDRESS_WHITESPACE`): a value beginning with a no-break or another
-    non-ASCII space is no address (`Handle.is_email_address`), and its spelling key
-    keeps the space, so it is never another address's handle. The spelling key,
+    pins today's two. An address and its domain are trimmed of ASCII whitespace
+    only (`Handle.ADDRESS_WHITESPACE`, the one rule on both sides of the `@`): a
+    value padded with a no-break or another non-ASCII space, at either end of the
+    local part or of the domain, keeps the space in its spelling key and is a handle
+    of its own, never the plain address's. Before the `@` it is no address
+    (`Handle.is_email_address`); after it, it is one exactly when Django's domain
+    rule reads the space as a letter (U+00A1 to U+FFFF), and an organization's domain
+    padded so keys apart from the plain one too. The spelling key,
     and through it the person-matching key and `Handle.is_spelling_of`, read a
     local part only through `normalize_local_part`.
   - **An address's domain and the handles at a domain.** `Handle.domain_of(platform,

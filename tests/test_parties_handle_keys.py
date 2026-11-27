@@ -18,6 +18,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import OutputWrapper
+from django.core.validators import validate_email
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import timezone
@@ -482,6 +483,12 @@ _LOCAL_PARTS: dict[str, str] = {
     "\u00a0kate@example.test": "\u00a0kate@example.test",  # a no-break space is no ASCII whitespace: kept
 }
 
+# A domain is trimmed of ASCII whitespace only: a non-ASCII space at its end stays, read as IDNA 2003 reads it.
+_PADDED_DOMAINS: dict[str, str] = {
+    "example.test" + chr(0xA0): "example.test ",  # NFKC reads a no-break space as a space
+    "example.test" + chr(0x2028): "example.test" + chr(0x2028),  # one IDNA 2003 prohibits keeps the label as typed
+}
+
 NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
     1: (_VERSION_1_VALUES, _DOMAINS),
     2: (
@@ -494,8 +501,9 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
             **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
             **{("email", f"ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
             **{("email", value): key for value, key in _LOCAL_PARTS.items()},
+            **{("email", f"Kate@{domain}"): f"kate@{key}" for domain, key in _PADDED_DOMAINS.items()},
         },
-        {**_DOMAINS, **_IDNA_2003, **_LONGER_THAN_A_DOMAIN},
+        {**_DOMAINS, **_IDNA_2003, **_LONGER_THAN_A_DOMAIN, **_PADDED_DOMAINS},
         # The spelling key: letter case and domain spelling on email; none for what is no address, or off email.
         {
             ("email", "ada@example.test"): "ada@example.test",
@@ -513,6 +521,7 @@ NORMALIZATION_SAMPLE: dict[int, tuple[dict[Any, str], ...]] = {
             **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _IDNA_2003.items()},
             **{("email", f"Ada@{domain}"): f"ada@{one}" for domain, one in _LONGER_THAN_A_DOMAIN.items()},
             **{("email", value): key for value, key in _LOCAL_PARTS.items()},
+            **{("email", f"Kate@{domain}"): f"kate@{key}" for domain, key in _PADDED_DOMAINS.items()},
             ("email", "n/a"): "",
             ("imessage", "Ada@Example.test"): "",
             ("phone", "+1 787 555 0100"): "",
@@ -566,6 +575,41 @@ def test_the_rule_returns_what_its_version_pins_and_a_released_versions_outputs_
         "change: if a release carries it, bump Handle.NORMALIZATION_VERSION and check in the new outputs under the new "
         "number, since provisioning writes stored keys again only when it moves; if none does, amend its entry."
     )
+
+
+_NON_ASCII_SPACES = tuple(character for character in map(chr, range(0x80, 0x110000)) if character.isspace())
+"""Every non-ASCII character ``str.isspace`` holds, derived, so a Unicode version that moves the set moves the test."""
+
+
+def test_a_value_padded_with_a_non_ascii_space_is_never_the_plain_address_and_ascii_whitespace_still_is() -> None:
+    """Each such space, leading or trailing, on the local part or on the domain: the value keys apart from the plain
+    address, by both keys. ASCII whitespace where an address and its domain are trimmed still keys as the plain one.
+    A value the space pads before the ``@`` is no address; after it, it is one exactly when Django's domain rule
+    reads the space as a letter of the domain, which the test asks that rule rather than listing code points."""
+
+    def keys_of(value: str) -> tuple[str, str]:
+        return Handle.spelling_key_of("email", value), Handle.normalize_value("email", value)
+
+    plain = "kate@example.test"
+    plain_keys = keys_of(plain)
+    assert _NON_ASCII_SPACES
+    padded = {
+        "local-leading": lambda space: space + plain,
+        "local-trailing": lambda space: f"kate{space}@example.test",
+        "domain-leading": lambda space: f"kate@{space}example.test",
+        "domain-trailing": lambda space: plain + space,
+    }
+    for position, build in padded.items():
+        for space in _NON_ASCII_SPACES:
+            value, label = build(space), (position, f"U+{ord(space):04X}")
+            spelling, person = keys_of(value)
+            assert spelling != plain_keys[0] and person != plain_keys[1], label
+            domain = value.rpartition("@")[2].strip(Handle.ADDRESS_WHITESPACE)
+            expected = position.startswith("domain") and bool(validate_email.validate_domain_part(domain))
+            assert Handle.is_email_address(value) is expected, label
+    for space in Handle.ADDRESS_WHITESPACE:
+        for value in (space + plain, f"kate@{space}example.test", plain + space):
+            assert keys_of(value) == plain_keys, f"U+{ord(space):04X}"
 
 
 def test_the_local_part_keeps_exactly_the_characters_whose_lower_case_would_be_ascii_or_of_another_length() -> None:
