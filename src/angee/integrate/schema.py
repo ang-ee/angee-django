@@ -133,9 +133,9 @@ class ConsoleImplChoicesQuery:
 
     @strawberry.field(description=(
         "A selector's implementations and what choosing each sets: for an insert, its defaults; for record, "
-        "the config it carries over from that record (a repair). Without record, an administrator or the "
-        "model's own policy may read them; with record, exactly whoever may write that record, since a "
-        "repair is that writer's act."
+        "the config it carries over from that record (a repair). An administrator or the model's own policy "
+        "may read them; a repair asks, besides, the write on the record: it offers only what this person "
+        "could choose when creating such a record."
     ))
     def impl_choices(
         self,
@@ -144,16 +144,16 @@ class ConsoleImplChoicesQuery:
         field: str,
         record: Annotated[strawberry.ID | None, strawberry.argument(description=(
             "A record the actor may write whose stored key the field's choices no longer name: each choice's "
-            "defaults are then what choosing it sets on that record. Admitted as the write is (write on the "
-            "record, its stored key not registered); a record the actor cannot write reads as not found."
+            "defaults are then what choosing it sets on that record. Admitted as the choices are, then as the "
+            "write is (write on the record, its stored key not registered)."
         ))] = None,
     ) -> list[ImplChoice]:
-        """Return registry choices: for an insert under the administrator or model policy, for a repair as the write."""
-        if record is not None:
-            return record_impl_choices(info, model, field, record)
+        """Return registry choices under the administrator or owning model's policy, for an insert or a repair."""
         actor = _session_user(info)
         if not is_platform_admin(actor) and not can_read_impl_choices(model, field, actor):
             raise PermissionDenied("Implementation choices are not readable by this actor.")
+        if record is not None:
+            return record_impl_choices(info, model, field, record)
         return resolve_impl_choices(model, field)
 
 
@@ -1841,6 +1841,13 @@ def integration_input_extensions(resource: Any) -> list[type]:
 class IntegrationWriteBackend(AngeeHasuraWriteBackend):
     """Compose native patch authorization with model-owned credential attachment."""
 
+    def authorize_update(self, info: strawberry.Info, pk: str) -> Any:
+        """The integration's own write check on the target, before the write scope's (the update's order)."""
+
+        target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
+        target.require_access("write", _session_user(info))
+        return target
+
     def update(
         self,
         info: strawberry.Info,
@@ -1850,8 +1857,7 @@ class IntegrationWriteBackend(AngeeHasuraWriteBackend):
         expected_revision: int | None = None,
     ) -> Any:
         with transaction.atomic():
-            target = require_instance_for_id(self.model, pk, queryset=self.write_target_queryset())
-            target.require_access("write", _session_user(info))
+            target = self.authorize_update(info, pk)
             # The final child is locked first, matching workers and parent-addressed writes.
             with system_context(reason="integrate.graphql.patch.lock"):
                 target.lock_capability()

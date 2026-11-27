@@ -1844,6 +1844,40 @@ def test_a_writer_reads_what_each_implementation_sets_on_a_retired_bridge_and_is
     }
 
 
+@pytest.mark.parametrize(("app_label", "model_name", "root"), [
+    ("integrate_vcs", "VcsBridge", "vcs_bridges"),
+    ("agents", "InferenceProvider", "inference_providers"),
+])
+def test_an_administrator_only_resource_admits_its_insert_and_update_by_its_own_permission_classes(
+    db: None, app_label: str, model_name: str, root: str,
+) -> None:
+    """The resource's ``write_permission_classes`` ask before its write backend: its owner may not write it."""
+
+    from django.apps import apps
+
+    del db
+    row = make_integration(f"admits-{root}", model=apps.get_model(app_label, model_name))
+    admin = _platform_admin(f"admits-{root}-admin")
+    schema = GraphQLSchemas.from_discovery().build("console")
+    update = f"""
+        mutation($id: String!, $set: {root}_set_input!) {{
+          update_{root}_by_pk(pk_columns: {{id: $id}}, _set: $set) {{ id }}
+        }}
+    """
+    insert = f"""
+        mutation($object: {root}_insert_input!) {{ insert_{root}_one(object: $object) {{ id }} }}
+    """
+    asked = {"id": _public_id(row), "set": {"name" if model_name == "InferenceProvider" else "display_name": "Renamed"}}
+
+    by_owner = execute_schema(schema, update, asked, user=row.owner)
+    inserted = execute_schema(schema, insert, {"object": {"vendor": _public_id(row.vendor)}}, user=row.owner)
+    by_admin = execute_schema(schema, update, asked, user=admin)
+
+    for refused in (by_owner, inserted):
+        assert refused.errors is not None and refused.errors[0].message == "Platform admin permission required."
+    assert by_admin.errors is None, by_admin.errors
+
+
 _REPAIRABLE = (
     ("agents", "InferenceProvider", "backend_class"),
     ("calendar", "CalendarSource", "backend_class"),
@@ -1857,10 +1891,10 @@ _REPAIRABLE = (
 
 
 @pytest.mark.parametrize(("app_label", "model_name", "selector"), _REPAIRABLE)
-def test_a_repair_read_admits_exactly_whoever_may_write_the_record(
+def test_a_repair_read_offers_only_what_its_reader_could_choose_on_create(
     db: None, app_label: str, model_name: str, selector: str,
 ) -> None:
-    """With record, the write's gate alone: the owner is answered as an administrator is, and nobody else."""
+    """With record, the choices' own admission first: write on the record grants no repair the create flow does not."""
 
     from django.apps import apps
 
@@ -1893,12 +1927,11 @@ def test_a_repair_read_admits_exactly_whoever_may_write_the_record(
     without_record = execute_schema(schema, query, {**asked, "record": None}, user=owner)
     by_stranger = execute_schema(schema, query, asked, user=stranger)
 
-    assert by_owner.errors is None and by_admin.errors is None
-    assert by_owner.data == by_admin.data and by_owner.data["impl_choices"]
-    assert without_record.errors is not None and without_record.errors[0].message == (
-        "Implementation choices are not readable by this actor."
-    )
-    assert by_stranger.errors is not None and "not found" in by_stranger.errors[0].message
+    assert by_admin.errors is None and by_admin.data["impl_choices"]
+    for refused in (by_owner, without_record, by_stranger):
+        assert refused.errors is not None and refused.errors[0].message == (
+            "Implementation choices are not readable by this actor."
+        )
 
 
 @pytest.mark.parametrize(("label", "selector", "words"), [

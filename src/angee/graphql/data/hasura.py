@@ -26,6 +26,7 @@ from rebac import PermissionDenied, RebacMixin
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from strawberry.extensions import FieldExtension
+from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
@@ -261,6 +262,25 @@ class AngeeHasuraWriteBackend:
 
         return write_queryset(self.model)
 
+    def authorize_update(self, info: strawberry.Info, pk: str) -> Any:
+        """The update's own decision on ``pk`` before it writes, without the row lock: the row in this
+        backend's write scope (not found otherwise), then the row's own write permission.
+
+        The update makes the same decision under the lock; a surface that must answer exactly as the
+        update would, before writing anything, asks this. A subclass that adds to the update's decision
+        adds to this, and its update calls it.
+        """
+
+        del info
+        return self._write_permitted(require_instance_for_id(self.model, pk, queryset=self.write_target_queryset()), pk)
+
+    def _write_permitted(self, instance: Any, pk: str) -> Any:
+        """Refuse ``instance`` unless the actor may write it, in the update's words."""
+
+        if isinstance(instance, RebacMixin) and not instance.has_access("write"):
+            raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
+        return instance
+
     def _locked_write_target(self, pk: str, values: Mapping[str, Any]) -> Any:
         """Delegate lock order to the model, then recheck this surface's write scope."""
 
@@ -275,9 +295,7 @@ class AngeeHasuraWriteBackend:
                 pk,
                 queryset=targets.select_for_update(of=row_lock_paths(self.model)),
             )
-        if isinstance(instance, RebacMixin) and not instance.has_access("write"):
-            raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
-        return instance
+        return self._write_permitted(instance, pk)
 
     def create(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Create one row through this backend's native insertion contract; ``claim`` as :meth:`insert` takes it."""
@@ -1668,6 +1686,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     get_queryset: Callable[[strawberry.Info], models.QuerySet[Any]] | None = None,
     get_aggregate_queryset: Callable[[strawberry.Info], models.QuerySet[Any]] | None = None,
     write_backend: WriteBackend | None = None,
+    write_permission_classes: Sequence[type[BasePermission]] = (),
     id_decode: Callable[[Any], Any] | None = None,
     id_column: str = "pk",
     model_label: str | None = None,
@@ -1696,6 +1715,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     An update input always carries the model's create-only implementation selectors
     (:func:`_with_create_only_selectors`); the model's save refuses a change to one except
     while its stored key is not registered, and the resource metadata publishes them.
+
+    ``write_permission_classes`` are the resource's own admission of a write, beside the row's:
+    Strawberry permission classes the insert, update and save roots ask before their write backend
+    (an administrator-only resource names IAM's ``ADMIN_PERMISSION_CLASSES``).
 
     ``delete=True`` also generates ``<res>_delete(id, confirm=False)`` and its
     delete-preview metadata. The active write backend must implement
@@ -2141,6 +2164,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         result_roots.add(f"{resource.name}_save")
     for graphql_field in get_object_definition(resource.mutation, strict=True).fields:
         if graphql_field.python_name in result_roots:
+            if write_permission_classes:
+                graphql_field.extensions.insert(0, PermissionExtension(
+                    permissions=[permission() for permission in write_permission_classes],
+                ))
             graphql_field.extensions.append(_MutationResultExtension(read_queryset))
 
     def compile_filter(where: Any) -> Callable[[Any], Any]:
