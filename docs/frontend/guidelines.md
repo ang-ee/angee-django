@@ -1381,7 +1381,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   banner, which names the field but does not repeat its reason, focus only
   when the field's control takes none. A surface hands it its form and whether
   its controls are ready, and never moves a refusal's focus by an effect of
-  its own. Save stays focusable while a save runs.
+  its own. A record form brings a refused field into sight first, in the same
+  batch as it asks that focus: its surface's `revealField`
+  ([useFormViewSurface](../../packages/ui/src/views/form/form-view-surface.ts),
+  the owner `focusField` composes) selects the pane that holds the field and
+  opens a collapsed section around it, for a refusal and for the form's own
+  check alike; a refusal that brings the person to the banner asks no reveal
+  (the trailing lines still select their own pane after a failed save that
+  touches them). Save stays focusable while a save runs.
   The submitting owner shows `ok.message` once. [FormView.submit](../../packages/ui/src/views/form/use-form-view-save.ts)
   returns `FormSubmitResult<Row | FormSubmitAcknowledgement>`; missing mutation
   data is an invalid result, never an `ok` null sentinel.

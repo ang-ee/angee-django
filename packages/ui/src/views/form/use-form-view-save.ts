@@ -190,6 +190,15 @@ export interface UseFormViewSaveProps {
   onFieldInteractionStart?: (path: string) => void;
   onFieldInteractionCommit?: (path: string) => void;
   onDiscarded?: () => void;
+  /**
+   * Bring a refused field into sight: a refused save or record patch that brings the person to a
+   * field (`applyFormErrors`'s `focus` names one) calls it with that field, then asks the refusal's
+   * focus, in the same batch; one that brings them to the banner does not call it. A save the
+   * form's own check stops calls it with the first errored field, which the form library then
+   * focuses. The record form passes its surface's `revealField` through a ref, because this hook
+   * runs before the surface knows its panes.
+   */
+  revealField?: (path: string) => void;
   t: UiTranslate;
 }
 
@@ -319,6 +328,7 @@ export function useFormViewSave({
   onFieldInteractionStart,
   onFieldInteractionCommit,
   onDiscarded,
+  revealField,
   t,
 }: UseFormViewSaveProps): FormViewSaveSurface {
   const preview = useRuntimeViewAs();
@@ -722,9 +732,12 @@ export function useFormViewSave({
       fieldNames: [...shown.map((field) => field.name), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
       fallback: t("form.genericSaveError"),
-      focus: focusSaveRefusal,
+      focus: (field) => {
+        if (field !== undefined) revealField?.(field);
+        focusSaveRefusal(field);
+      },
     }) ? null : result;
-  }, [checkFields, fieldByName, focusSaveRefusal, form, linesField, t]);
+  }, [checkFields, fieldByName, focusSaveRefusal, form, linesField, revealField, t]);
   const commitSavedRecord = React.useCallback(
     (saved: Row, options: {
       submitted?: FormValues;
@@ -933,7 +946,12 @@ export function useFormViewSave({
       record,
     ],
   );
-  const submitForm = form.handleSubmit(submitValues);
+  // The form's own check failed: its first errored field is brought into sight as a refusal's is
+  // (`revealField`), and the form library then focuses it on its own deferred timer.
+  const submitForm = form.handleSubmit(submitValues, (errors) => {
+    const first = shownFields(checkFields, form.getValues()).find((field) => get(errors, field.name) !== undefined);
+    if (first) revealField?.(first.name);
+  });
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {
       if (previewBlockedRef.current) return null;

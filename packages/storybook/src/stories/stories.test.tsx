@@ -60,7 +60,10 @@ test.each(paths)("%s imports", (path) => {
 });
 
 /** The stories a browser pass reads, each checked by its own test below and so not rendered again here. */
-const RECORD_STORIES = ["EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit"] as const;
+const RECORD_STORIES = [
+  "EditMode", "ReadOnlyMode", "GroupedSections", "RetainedPanelActivity", "FullBleedTab", "RecordRail", "RelationWithoutEdit",
+  "RefusedSaveRevealsItsField", "RefusedSaveOpensItsSection",
+] as const;
 const REFUSED_SUBMIT_STORIES = ["MutationDialog", "ActionTypedArguments", "ActionSchemaArguments"] as const;
 const OWN_TESTS = new Set([
   ...RECORD_STORIES.map((name) => `./FormView.stories.tsx ${name}`), "./ListView.stories.tsx GroupedWithTieBreakers",
@@ -129,6 +132,42 @@ test("Views/FormView / Relation Without Edit's pickers list the people", async (
   fireEvent.click(await screen.findByRole("combobox", { name: "Approver: Alan Turing" }));
   expect(await screen.findByRole("option", { name: /Grace Hopper/ })).toBeTruthy();
   expect(said.errors.filter((message) => message.includes("no handler answers"))).toEqual([]);
+});
+
+/** Render a refused-save story, edit Summary and press Save with its button holding focus, as a click leaves it. */
+async function pressRefusedSave(Story: ComponentType) {
+  render(<Story />);
+  const summary = await screen.findByDisplayValue("Ship the import flow to every workspace.");
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Budget" }).getAttribute("aria-selected")).toBe("true"));
+  fireEvent.change(summary, { target: { value: "Ship the import flow." } });
+  const save = await screen.findByRole("button", { name: "Save" });
+  save.focus();
+  fireEvent.click(save);
+}
+
+test("Views/FormView / Refused Save Reveals Its Field selects the refused field's pane and brings focus to its field", async () => {
+  const said = consoleMessages();
+  await pressRefusedSave(formView.RefusedSaveRevealsItsField);
+  await waitFor(() => expect(document.activeElement).toBe(screen.queryByRole("textbox", { name: "Venue" })));
+  // The banner's turn is the timer after the field's: focus stays on the field.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  const venue = screen.getByRole("textbox", { name: "Venue" });
+  expect(document.activeElement).toBe(venue);
+  expect(venue.getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByText("Choose a venue that seats the whole team.")).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "Venue" }).getAttribute("aria-selected")).toBe("true");
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
+});
+
+test("Views/FormView / Refused Save Opens Its Section opens the collapsed section and brings focus to its field, the pane staying", async () => {
+  const said = consoleMessages();
+  await pressRefusedSave(formView.RefusedSaveOpensItsSection);
+  await waitFor(() => expect(document.activeElement).toBe(screen.queryByRole("textbox", { name: "Risk notes" })));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Risk notes" }));
+  expect(screen.getByRole("button", { name: "Risks" }).getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("tab", { name: "Budget" }).getAttribute("aria-selected")).toBe("true");
+  expect(said.errors.filter((message) => STORY_FAILURE.test(message))).toEqual([]);
 });
 
 const listView = composeStories(ListViewStories);

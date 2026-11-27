@@ -10,6 +10,29 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `@angee/ui`: a refused save on a record form now brings the person to its
+  first refused field even where the form did not show it. A field in a pane
+  group other than the selected pane (with another pane group, a saved-record
+  tab, kept mounted or not, or the trailing lines selected, on a saved record
+  or a create form) had no mounted control, or only the one of a pane opened
+  earlier, so the banner took focus and the field stayed out of sight. The
+  surface's `revealField` now selects the pane that holds the field and names
+  it to the sheet's sections, in the same batch as the refusal's own focus
+  (`useRefusalFocus`, unchanged), which then lands on the field; a record verb
+  whose patch the form's own `submit` refuses (`applyPatch`) does the same.
+  The form's own check does it too: a required field left empty in a pane that
+  is not selected, where Save focused nothing, selected no pane and showed
+  nothing, now has its pane selected and takes focus. With a reason no field
+  shows as well, the banner takes focus and the pane stays. `focusField`
+  composes `revealField`, the one owner of which pane holds a field. Left as
+  they are: the trailing lines still select their own pane after any failed
+  save that touches them, so a line refused beside a reason no field shows
+  moves the pane to the lines, and a pane group's field refused together with
+  a line ends on the lines pane with focus on the banner; only the first
+  refused field is revealed and no pane's tab marks that it holds one; the
+  lines refused as a whole show their reason nowhere, the banner names them by
+  their path and takes focus; `useFormViewSave` returns a new `form` every
+  render; a refused member of a rows, object or list field; and the dialogs.
 - `@angee/ui`, parties, IAM: a refused field now takes and keeps the focus its
   refusal brings, on the record form and in every dialog, except a refused
   member, a record form's rows field refused as a whole, and the controls left

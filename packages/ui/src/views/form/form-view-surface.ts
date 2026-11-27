@@ -94,7 +94,7 @@ export { acknowledgeFormSubmit } from "./use-form-view-save";
 export type RecordPresentation = "document" | "workspace";
 
 export interface RecordFieldFocusOptions {
-  /** The pane holding the field; a sheet field, or one in the trailing lines, needs none. */
+  /** The pane holding the field; a sheet field, one in the trailing lines or one a pane group declares needs none. */
   recordTabId?: string;
 }
 
@@ -110,7 +110,11 @@ export interface RecordPanelContext {
   recordId: string;
   reload: () => void;
   form: FormViewSaveSurface;
-  /** Focus one registered RHF field: in the sheet, or in the pane `recordTabId` names once it mounts. */
+  /**
+   * Bring one registered RHF field into sight and focus it: select the pane holding it (see
+   * `RecordFieldFocusOptions`), open a collapsed section holding it, and focus its control once
+   * that pane is the selected one.
+   */
   focusField: (path: string, options?: RecordFieldFocusOptions) => void;
   /**
    * The text of the label the form shows for its field `name`, so a pane that reports on a field
@@ -205,6 +209,7 @@ export interface FormViewSurface
   t: UiTranslate;
   /** The selected pane; undefined when the record has none. */
   activeRecordTab: string | undefined;
+  /** The field a reveal names to the sheet's sections until that reveal is done, so a collapsed one holding it opens; null otherwise. */
   requestedFocusPath: string | null;
   setActiveRecordTab: (tab: string) => void;
   isCreate: boolean;
@@ -675,7 +680,11 @@ export function useFormViewSurface({
     [selection],
   );
 
+  // The save hook runs before this surface knows its panes, so it reaches `revealField` through this ref.
+  const revealRef = React.useRef<(path: string) => void>(() => undefined);
+  const revealForSave = React.useCallback((path: string) => revealRef.current(path), []);
   const save = useFormViewSave({
+    revealField: revealForSave,
     resource,
     id,
     isCreate,
@@ -900,25 +909,40 @@ export function useFormViewSurface({
   });
   const [focusRequest, setFocusRequest] = React.useState(0);
   const [requestedFocusPath, setRequestedFocusPath] = React.useState<string | null>(null);
-  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+  /**
+   * Bring the field at `path` into sight, and move no focus: select the pane that holds it (the
+   * visible pane `options.recordTabId` names, else the trailing lines for a path under the lines
+   * field, else the pane group declaring it; none for a field the sheet shows), and name it to the
+   * sheet's sections (`requestedFocusPath`) so a collapsed one holding it opens. The one owner of
+   * which pane holds a field; returns the pane it selected, undefined when it selected none. It is
+   * not the only thing that selects a pane after a failed save: the trailing lines select their
+   * own when the failure touches them (`FormViewLinesPane`), whatever this selected.
+   */
+  const revealField = React.useCallback((path: string, options?: RecordFieldFocusOptions): string | undefined => {
     const { paneIds, linesPane, fieldPanes } = focusPanesRef.current;
     const linePath = save.linesField !== null
       && (path === save.linesField || path.startsWith(`${save.linesField}.`));
-    // The sheet always shows; only a field in a pane selects that pane before it takes focus.
+    // The sheet always shows; only a field in a pane selects that pane.
     const target = options?.recordTabId && paneIds.includes(options.recordTabId) ? options.recordTabId
       : linesPane && linePath ? EDITABLE_LINES_SECTION : fieldPanes.get(path);
-    pendingFocusRef.current = { path, recordTabId: target };
     setRequestedFocusPath(path);
     if (target !== undefined) setActiveRecordTab(target);
-    setFocusRequest((request) => request + 1);
+    return target;
   }, [focusPanesRef, save.linesField, setActiveRecordTab]);
+  revealRef.current = revealField;
+  /** Reveal the field (`revealField`), then focus it through the form library once the pane it selected is the selected one. */
+  const focusField = React.useCallback((path: string, options?: RecordFieldFocusOptions) => {
+    pendingFocusRef.current = { path, recordTabId: revealField(path, options) };
+    setFocusRequest((request) => request + 1);
+  }, [revealField]);
   React.useEffect(() => {
     const pending = pendingFocusRef.current;
-    if (!pending || (pending.recordTabId && pending.recordTabId !== activeRecordTab)) return;
+    if (pending?.recordTabId && pending.recordTabId !== activeRecordTab) return;
     pendingFocusRef.current = null;
-    save.form.setFocus(pending.path);
-    setRequestedFocusPath(null);
-  }, [activeRecordTab, focusRequest, save.form]);
+    if (pending) save.form.setFocus(pending.path);
+    // A reveal that asked no focus here (a refusal's, whose own owner focuses) is done too: its section saw it.
+    if (requestedFocusPath !== null) setRequestedFocusPath(null);
+  }, [activeRecordTab, focusRequest, requestedFocusPath, save.form]);
   const fieldLabel = React.useCallback((name: string) => formFieldLabel(fieldByName, name), [fieldByName]);
   const recordPanelContext = React.useMemo<RecordPanelContext | null>(
     () =>

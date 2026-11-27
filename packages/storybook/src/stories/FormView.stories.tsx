@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
-import { FORM_CONTAINERS, FormView, GraphView, containersFromChildren, graphNodeStyle, Input, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
+import { FORM_CONTAINERS, Field, FormView, GraphView, Group, containersFromChildren, graphNodeStyle, Input, invalidFormSubmit, PrimaryPaneProvider, PrimaryPanePublisher, usePrimaryPaneContent, type FormField, type GroupDescriptor } from "@angee/ui";
 
 import { storySchema, testDataResource, testQueryField, testResourceQuery } from "./runtime-fixtures";
 
@@ -191,6 +191,27 @@ const noteResource = testDataResource("notes.Note", { schemaName: "public", fiel
   scalar("body", "String"), relation("reviewer", personResource.modelLabel), relation("approver", personResource.modelLabel),
 ] });
 
+// A plan: Title and Summary on the sheet, Risk notes in a collapsed Risks section, Budget and Venue
+// each in a pane group, and its steps trailing as editable lines.
+const planRecord = {
+  id: "plan_launch",
+  title: storyRecord.title,
+  summary: "Ship the import flow to every workspace.",
+  risk: "Imports may time out on the largest workspaces.",
+  budget: "12 000 EUR",
+  venue: "Room 4",
+  steps: [
+    { id: "step_freeze", label: "Freeze the release branch", position: 0 },
+    { id: "step_smoke", label: "Run the import smoke tests", position: 1 },
+  ],
+};
+const planResource = testDataResource("notes.Plan", {
+  schemaName: "public",
+  fields: [scalar("id", "ID", false), ...["title", "summary", "risk", "budget", "venue"].map((name) => scalar(name, "String"))],
+  linesResource: { field: "steps", modelLabel: "notes.Step", positionField: "position",
+    fields: [scalar("label", "String"), scalar("position", "Int")] },
+});
+
 const patch = (args: Record<string, unknown>) => isRecord(args._set) ? args._set : isRecord(args.object) ? args.object : {};
 const people = [storyRecord.reviewer, storyRecord.approver];
 const person = (args: Record<string, unknown>) => {
@@ -206,7 +227,9 @@ const storySchemas = storySchema({
   persons_aggregate: () => ({ aggregate: { count: people.length } }),
   persons_by_pk: person,
   update_persons_by_pk: (args) => ({ ...person(args), ...patch(args) }),
-}, { resources: [noteResource, personResource] });
+  // The refused-save stories read their plan; their own submit answers the save, so nothing writes it.
+  plans_by_pk: () => planRecord,
+}, { resources: [noteResource, personResource, planResource] });
 
 const meta = {
   title: "Views/FormView",
@@ -298,6 +321,42 @@ export const RelationWithoutEdit: Story = {
   ),
 };
 // A relation field's quick create gets its story here, from the lane that builds it.
+
+/** The plan's fields a refused save can name, each with the reason it is refused for. */
+const PLAN_REFUSALS = {
+  venue: "Choose a venue that seats the whole team.",
+  risk: "Name who owns each risk.",
+  budget: "The budget needs a currency.",
+  summary: "Say what the launch ships.",
+} as const;
+type PlanRefusal = keyof typeof PLAN_REFUSALS;
+
+/**
+ * The plan opens on its Budget pane; its own submit refuses every save for the field `refused`
+ * names, with that field's reason and no other. Edit Summary and press Save: by default Venue,
+ * whose pane is not selected, is refused, so the Venue pane is selected and its field takes focus,
+ * marked invalid with its reason under it. The banner names the field and does not take focus.
+ */
+export const RefusedSaveRevealsItsField: StoryObj<{ refused: PlanRefusal }> = {
+  args: { refused: "venue" },
+  argTypes: { refused: { control: "inline-radio", options: Object.keys(PLAN_REFUSALS) } },
+  render: ({ refused }) => (
+    <FormView resource={planResource.modelLabel} id={planRecord.id} defaultRecordTab="budget" linesTabLabel="Steps"
+      submit={async () => invalidFormSubmit({ fieldErrors: { [refused]: [PLAN_REFUSALS[refused]] }, formErrors: [] })}>
+      <Field name="title" label="Title" widget="text" title />
+      <Group label="Overview"><Field name="summary" label="Summary" widget="text" /></Group>
+      <Group label="Risks" collapsible defaultOpen={false}><Field name="risk" label="Risk notes" widget="text" /></Group>
+      <Group label="Budget" pane="budget"><Field name="budget" label="Budget" widget="text" /></Group>
+      <Group label="Venue" pane="venue"><Field name="venue" label="Venue" widget="text" /></Group>
+    </FormView>
+  ),
+};
+
+/** The same plan with Risk notes refused: Save opens the collapsed Risks section, Risk notes takes focus, and the Budget pane stays. */
+export const RefusedSaveOpensItsSection: StoryObj<{ refused: PlanRefusal }> = {
+  ...RefusedSaveRevealsItsField,
+  args: { refused: "risk" },
+};
 
 export const RecordSectionHeading: Story = {
   render: () => <div className="max-w-3xl">
