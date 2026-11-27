@@ -40,7 +40,7 @@ from angee.messaging.backends import (
     ParsedThread,
 )
 from angee.messaging.constants import DELIVER_MESSAGE_TASK
-from angee.messaging.email import carries_address, header_text
+from angee.messaging.email import header_text, require_carried
 from angee.messaging.managers import _Addressee, _preview
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Party, Recipient, Thread
@@ -452,23 +452,73 @@ def test_mail_a_stranger_sends_onto_a_records_chatter_is_removable_and_mail_sent
     )
 
 
-def test_an_address_whose_local_part_no_transport_carries_fails_delivery_saying_so(desk: Any, settings: Any) -> None:
-    """Admitted, as inbound mail stores such senders, and refused at delivery with the reason a person can act on."""
+@pytest.mark.parametrize("queued", [True, False], ids=["queued", "a-draft"])
+@pytest.mark.parametrize("role", ["to", "cc", "bcc"])
+def test_an_address_whose_local_part_no_transport_carries_is_refused_under_its_role(
+    desk: Any, role: str, queued: bool,
+) -> None:
+    """No transport here speaks SMTPUTF8: a compose to such an address, queued or held as a draft, is refused under
+    the role it was typed in, with the reason a person can act on, before anything is written: no message, no
+    recipient row, and no handle for the address."""
+
+    entry = "jörg@example.test"
+    with system_context(reason="tests.messaging.compose.utf8_local"):
+        handles, rows = Handle._base_manager.count(), _rows()
+    with _refused(key=role, code="cannot_carry") as refused:
+        Message.objects.compose(channel=desk, **{role: [entry]}, text="Hi.", actor=desk.owner, queued=queued)
+    assert refused.value.message_dict == {
+        role: ["This mail transport cannot carry jörg@example.test: its part before the @ is outside ASCII."],
+    }
+    with system_context(reason="tests.messaging.compose.utf8_local"):
+        assert (Handle._base_manager.count(), _rows()) == (handles, rows)
+        assert not Handle._base_manager.filter(value=entry).exists()
+
+
+@pytest.mark.parametrize(
+    ("path", "address", "reason"),
+    [
+        ("an-answer", "jörg@example.test", "its part before the @ is outside ASCII"),
+        ("an-answer", "kate@ex\uff3fample.test", "its domain is not a host name"),
+        ("a-merge", "jörg@example.test", "its part before the @ is outside ASCII"),
+    ],
+    ids=[
+        "an-answer-to-a-sender-whose-part-before-the-at-is-outside-ascii",
+        "an-answer-to-a-sender-whose-domain-is-no-host-name",
+        "a-persons-mail-to-an-address-merged-into-one-it-cannot-carry",
+    ],
+)
+def test_a_recipient_no_compose_was_handed_that_the_transport_cannot_carry_fails_delivery_saying_so(
+    desk: Any, settings: Any, path: str, address: str, reason: str,
+) -> None:
+    """Only an address no compose was handed reaches the delivery uncarried: one an answer inherits from its parent,
+    which inbound mail stores as it came, and the kept handle a contact administrator merged a person's address
+    into. The compose writes it, its row recording no address, and the delivery is refused with the reason a person
+    can act on, never the codec's error."""
 
     settings.MAILERS = MAILERS
-    typed = Message.objects.compose(channel=desk, to=["jörg@example.test"], text="Hi.", actor=desk.owner, queued=True)
-    answer = Message.objects.compose(
-        parent=_receive(desk, "utf8-local", sender="jörg@example.test"), text="Answer.", actor=desk.owner, queued=True,
+    if path == "an-answer":
+        parent = _receive(desk, "uncarried", sender=address)
+        message = Message.objects.compose(parent=parent, text="Answer.", actor=desk.owner, queued=True)
+    else:
+        with system_context(reason="tests.messaging.compose.uncarried"):
+            merged = Handle.objects.upsert(platform="email", value="client@example.test")
+            kept = Handle.objects.upsert(platform="email", value=address)
+        _merge_as_contact_administrator(kept, merged)
+        message = Message.objects.compose(
+            channel=desk, to=["client@example.test"], text="Hi.", actor=desk.owner, queued=True,
+        )
+    ((landed, recorded),) = _rows_and_addresses(message)
+    assert recorded == ""
+    sent = len(mail.outbox)
+    assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["status"] == "failed"
+    assert len(mail.outbox) == sent
+    with system_context(reason="tests.messaging.compose.uncarried"):
+        stored = Message._base_manager.get(pk=message.pk)
+        shown = Handle._base_manager.get(pk=landed).value
+    assert stored.status == "failed"
+    assert stored.local_fact("delivery_error") == (
+        f"This mail transport cannot carry {shown}: {reason}. Send to another address of this contact."
     )
-    for message in (typed, answer):
-        assert deliver_message(message._meta.label_lower, message.pk, message.external_id)["status"] == "failed"
-        with system_context(reason="tests.messaging.compose.utf8_local"):
-            message.refresh_from_db()
-            assert message.local_metadata["delivery_error"] == (
-                "This mail transport cannot carry jörg@example.test: its part before the @ is outside ASCII. "
-                "Send to another address of this contact."
-            )
-    assert not mail.outbox
 
 
 def test_a_mail_sent_from_a_records_chatter_is_answered_and_its_answer_answered_by_email(
@@ -699,7 +749,6 @@ def test_an_entry_carrying_a_nul_is_refused_under_its_role(desk: Any, role: str,
     ("Customer@Example.COM", ("", "Customer@Example.COM")),
     ("Name <a@example.test>", ("Name", "a@example.test")),
     ('"Doe, Jane" <jane@example.test>', ("Doe, Jane", "jane@example.test")),
-    ("jörg@example.test", ("", "jörg@example.test")),
     ("Eve\tX <eve@example.test>", ("Eve X", "eve@example.test")),
 ])
 def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: str, expected: tuple[str, str]) -> None:
@@ -707,6 +756,26 @@ def test_clean_recipient_returns_exactly_what_compose_lands(desk: Any, entry: st
     message = Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner)
     with system_context(reason="tests.messaging.compose.clean_recipient"):
         assert Recipient._base_manager.get(message=message).handle.value == expected[1]
+
+
+@pytest.mark.parametrize("queued", [True, False], ids=["queued", "a-draft"])
+@pytest.mark.parametrize("entry", ["jörg@example.test", "kate@ex\uff3fample.test"])
+def test_a_persons_compose_refuses_what_the_transport_cannot_carry_as_clean_system_recipient_does(
+    desk: Any, entry: str, queued: bool,
+) -> None:
+    """``clean_recipient`` reads the entry; compose, queued or held as a draft, refuses it under its role with the
+    code and words of the whole recipient rule (``clean_system_recipient``), before anything is written."""
+
+    assert Message.objects.clean_recipient(entry) == ("", entry)
+    with pytest.raises(ValidationError) as asked:
+        Message.objects.clean_system_recipient(entry)
+    with system_context(reason="tests.messaging.compose.clean_recipient"):
+        handles, rows = Handle._base_manager.count(), _rows()
+    with _refused(key="to", code="cannot_carry") as refused:
+        Message.objects.compose(channel=desk, to=[entry], text="Hi.", actor=desk.owner, queued=queued)
+    assert refused.value.message_dict == asked.value.message_dict
+    with system_context(reason="tests.messaging.compose.clean_recipient"):
+        assert (Handle._base_manager.count(), _rows()) == (handles, rows)
 
 
 @given(st.text(alphabet=string.ascii_letters + '@.<>:;,()" ', max_size=40))
@@ -1473,8 +1542,10 @@ PADDED_DOMAINS = tuple(
 def test_the_transport_carries_an_internationalised_domain_and_the_default_senders_host() -> None:
     """Its IDNA form is a host name, and ``localhost`` is one Django's validator admits."""
 
-    assert carries_address("kate@m\u00fcnchen.example") and carries_address("webmaster@localhost")
-    assert not carries_address("kate@example.test\u2003")
+    require_carried("kate@m\u00fcnchen.example", key="to")
+    require_carried("webmaster@localhost", key="to")
+    with pytest.raises(ValidationError):
+        require_carried("kate@example.test\u2003", key="to")
 
 
 def _not_sent_for_its_domain(message: Any) -> None:
@@ -1518,7 +1589,8 @@ def test_a_persons_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_
         assert _rows() == rows
         return
     ((_handle, recorded),) = _rows_and_addresses(message)
-    assert recorded == entry.strip() and carries_address(recorded)
+    assert recorded == entry.strip()
+    require_carried(recorded, key="to")
     assert _delivered(message)["To"] == recorded
 
 
@@ -1557,10 +1629,12 @@ def test_a_row_written_before_the_rule_to_a_padded_domain_is_refused_at_delivery
                                       queued=True)
     with system_context(reason="tests.messaging.compose.carry"):
         Recipient._base_manager.filter(message=message).update(handle=padded, address="")
-    if carries_address(value.strip()):
-        assert _delivered(message)["To"] == value.strip()
+    try:
+        require_carried(value.strip(), key="to")
+    except ValidationError:
+        _not_sent_for_its_domain(message)
         return
-    _not_sent_for_its_domain(message)
+    assert _delivered(message)["To"] == value.strip()
 
 
 def test_a_persons_recipient_written_past_its_validation_is_mailed_at_its_handle_with_a_warning(
@@ -1586,31 +1660,27 @@ def test_a_persons_recipient_written_past_its_validation_is_mailed_at_its_handle
     [("\u212aate@example.test", "kate@example.test"), ("M\u00dcLLER@example.test", "m\u00fcller@example.test")],
     ids=["the-kelvin-sign-its-own-handle", "a-spelling-of-a-handle-it-cannot-carry"],
 )
-def test_an_address_the_transport_cannot_carry_as_given_is_not_recorded_and_its_delivery_is_refused(
-    desk: Any, given: str, existing: str,
+@pytest.mark.parametrize("queued", [True, False], ids=["queued", "a-draft"])
+def test_an_address_the_transport_cannot_carry_as_given_is_refused_before_anything_is_written(
+    desk: Any, given: str, existing: str, queued: bool,
 ) -> None:
     """A spelling of an ASCII mailbox is ASCII (``Handle.normalize_local_part`` keeps a character whose lower case
-    would be ASCII), so only a name part outside ASCII is one no transport here carries. The row records nothing for
-    it: the Kelvin sign is a handle of its own, ``MÜLLER@`` lands on ``müller@``'s; neither is sent, the delivery
-    refused with the carry rule's reason."""
+    would be ASCII), so only a name part outside ASCII is one no transport here carries. A compose to one, queued or
+    held as a draft, is refused under its role as typed before anything is written, whether it would have been a
+    handle of its own (the Kelvin sign) or landed on another's (``MÜLLER@`` on ``müller@``'s): no message, no
+    recipient row, and no handle."""
 
     with system_context(reason="tests.messaging.compose.carry"):
         handle = Handle.objects.upsert(platform="email", value=existing)
-    message = Message.objects.compose(channel=desk, to=[given], text="Hi.", actor=desk.owner, queued=True)
-    ((landed, address),) = _rows_and_addresses(message)
-    assert address == ""
-    assert (landed == handle.pk) is (Handle.spelling_key_of("email", given) == handle.spelling_key)
-    sent = len(mail.outbox)
-    assert not deliver_message(message._meta.label_lower, message.pk, message.external_id)["delivered"]
-    assert len(mail.outbox) == sent
+        handles, rows = Handle._base_manager.count(), _rows()
+    assert (Handle.spelling_key_of("email", given) == handle.spelling_key) is (given[0] != "\u212a")
+    with _refused(key="to", code="cannot_carry") as refused:
+        Message.objects.compose(channel=desk, to=[given], text="Hi.", actor=desk.owner, queued=queued)
+    assert refused.value.message_dict == {
+        "to": [f"This mail transport cannot carry {given}: its part before the @ is outside ASCII."],
+    }
     with system_context(reason="tests.messaging.compose.carry"):
-        stored = Message._base_manager.get(pk=message.pk)
-        shown = Handle._base_manager.get(pk=landed).value
-    assert stored.status == "failed"
-    assert stored.local_fact("delivery_error") == (
-        f"This mail transport cannot carry {shown}: its part before the @ is outside ASCII. "
-        "Send to another address of this contact."
-    )
+        assert (Handle._base_manager.count(), _rows()) == (handles, rows)
 
 
 @pytest.mark.parametrize("erasure", ["the-handle-deleted", "the-channel-purged"])

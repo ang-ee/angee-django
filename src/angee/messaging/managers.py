@@ -105,7 +105,7 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import carries_address, header_text, require_carried
+from angee.messaging.email import header_text, require_carried
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -3324,9 +3324,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         Refusals come before any write, in this order: a blank ``reason``
         (``ValueError``); compose's checks of the arguments (more recipients than
         ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
-        ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
-        carry (:meth:`clean_system_recipient`), under its role with code ``cannot_carry``,
-        so a mail that could never leave is never recorded as sent; system mail not configured,
+        ``cc``, ``bcc``, ``subject`` or ``text``, a recipient the transport cannot
+        carry last, under its role with code ``cannot_carry``, as
+        :meth:`clean_system_recipient` refuses it, so a mail that could never leave
+        is never recorded as sent); system mail not configured,
         from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
         ``channel``), none of which writes a permission audit row; then, after
         the lookup's own audit row, :class:`SystemChannelMissing` and a channel
@@ -3341,8 +3342,6 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             channel=None, parent=None, record=None, sender=None, to=to, cc=cc, bcc=bcc, subject=subject,
             text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
         )
-        for addressee in outgoing.recipients:
-            self.clean_system_recipient(addressee.address, key=addressee.role)
         channel_model = apps.get_model("messaging", "Channel")
         channels = channel_model.objects
         channels._require_system_mail()
@@ -3390,7 +3389,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         creates first keeps the typed spelling; the recipient row records the
         address as returned, which the message is mailed at (``Recipient.address``). It reads nothing, so a caller can
         ask it before expensive work, and ``compose`` lands exactly what it
-        returns. The refusal is ``invalid``, naming the entry as typed.
+        returns, unless the transport cannot carry it (:meth:`clean_system_recipient`
+        asks both). The refusal is ``invalid``, naming the entry as typed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3411,10 +3411,11 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
     def clean_system_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
         """Return the display name and the address system mail sends ``entry`` to, or refuse it under ``key``.
 
-        System mail's one recipient rule, which :meth:`compose_as_system` applies to
-        each recipient: :meth:`clean_recipient` (``invalid``), then the transport's
-        (:func:`~angee.messaging.email.require_carried`, ``cannot_carry``). It reads
-        and writes nothing, so a caller asks it before offering a send.
+        The recipient rule every compose applies, :meth:`compose_as_system`'s and a
+        person's (:meth:`_validate_outgoing`): :meth:`clean_recipient` (``invalid``),
+        then the transport's (:func:`~angee.messaging.email.require_carried`,
+        ``cannot_carry``). It reads and writes nothing, so a caller asks it before
+        offering a send.
         """
 
         name, address = self.clean_recipient(entry, key=key)
@@ -3445,10 +3446,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         address; one of a non-email kind is plain text from an explicit, saved
         ``sender`` on the parent's platform. A new message is an email to at least
         one recipient, each entry as :meth:`clean_recipient` reads it and refused
-        ``cannot_carry`` when its domain is one the transport cannot write
-        (``email.require_carried(..., domain_only=True)``), with an optional
-        one-line subject; a name part outside ASCII is admitted, and its delivery
-        is refused for it. An
+        ``cannot_carry`` when the transport cannot carry it
+        (``email.require_carried``), with an optional one-line subject. An
         email has ``text``, ``html`` or both and names no sender: its channel's
         default sends it.
         """
@@ -3491,8 +3490,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
             for addressee in recipients:
-                # A domain the transport cannot write is refused before anything is written.
-                require_carried(addressee.address, key=addressee.role, domain_only=True)
+                # What the transport cannot carry is refused before anything is written.
+                require_carried(addressee.address, key=addressee.role)
             if not recipients:
                 raise ValidationError({"to": ValidationError(
                     "Address the message to at least one recipient.", code="required",
@@ -3649,14 +3648,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
 
         ``address`` is the address the caller handed for that recipient
         (``_Addressee.given``: a compose's own To/Cc/Bcc, as its recipient rule
-        cleaned it), when the transport can carry it as handed
-        (``email.carries_address``), which the row records and the message is mailed
-        at (``Recipient.envelope_address``); an address whose part before the ``@``
-        is outside ASCII, which it cannot carry, records nothing, and its delivery is
-        refused with that reason (a domain it cannot write never reaches here: the
-        compose refused it). It is empty for a recipient
-        the caller did not hand as an address: one a reply inherits from its parent,
+        cleaned it), which the row records and the message is mailed at
+        (``Recipient.envelope_address``). The transport carries every handed
+        address that reaches here: the compose refused any other before anything
+        was written (``email.require_carried``). It is empty for a recipient the
+        caller did not hand as an address: one a reply inherits from its parent,
         which is answered as its handle stores it, and one known only as a handle.
+        Such a recipient whose address the transport cannot carry (an inbound
+        sender's part before the ``@`` outside ASCII, or a domain that is no host
+        name) is written all the same, and its delivery is refused with that
+        reason; so is a person's handed address merged into a handle whose value
+        it cannot carry, which the row follows (below).
         ``handle`` is where the address lands, the survivor of any merge; ``addressed
         handle`` is the handle owning the address before that redirect
         (``HandleManager.find_identity_owners``). Both are instances, so the row's
@@ -3708,7 +3710,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             spelled = handle.is_spelling_of(addressee.address) or (
                 actor is None and owner is not None and owner.is_spelling_of(addressee.address)
             )
-            recorded = addressee.given and spelled and carries_address(addressee.address)
+            recorded = addressee.given and spelled
             rows.append((handle, addressee.role, addressee.address if recorded else "", owner))
         return rows
 

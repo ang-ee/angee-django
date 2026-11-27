@@ -43,7 +43,7 @@ from angee.messaging.constants import (
     SYSTEM_CHANNEL_BACKEND,
     SYSTEM_MAILER_BACKEND,
 )
-from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, SystemMailer, carries_address
+from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, SystemMailer, require_carried
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient, Thread
 from angee.provenance.context import changeset, changeset_model
@@ -541,7 +541,8 @@ def test_a_system_mail_to_a_domain_padded_with_a_non_ascii_space_never_puts_it_o
         assert mail.outbox == []
         return
     ((_handle, recorded),) = _given(message)
-    assert recorded == entry.strip() and carries_address(recorded)
+    assert recorded == entry.strip()
+    require_carried(recorded, key="to")
     assert _deliver(message).to == [recorded]
 
 
