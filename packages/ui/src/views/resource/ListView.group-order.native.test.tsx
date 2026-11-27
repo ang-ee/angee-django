@@ -152,8 +152,14 @@ function matches(row: Row, where: unknown): boolean {
 }
 interface GroupsVariables {
   group_by?: { field: string; granularity?: string }[]; where?: unknown; with_rows?: boolean; limit?: number; offset?: number;
-  order_by?: { field: string; direction?: string; nulls?: string }[]; rows_order_by?: Record<string, string>;
+  order_by?: { field: string; direction?: string; nulls?: string }[]; rows_order_by?: unknown;
 }
+/**
+ * A records `order_by`'s keys, `[field, direction]` each, as the server reads it: a list in its order, and an object
+ * (a list of one) in its input type's own field order, here the fields' declared order, whatever order its keys came in.
+ */
+const recordOrderKeys = (order: unknown): [string, string][] => [order ?? []].flat().flatMap((entry) =>
+  Object.keys(FIELDS).filter((field) => field in (entry as object)).map((field): [string, string] => [field, (entry as Record<string, string>)[field]!]));
 /** A data provider over `rows`: the list read answers in their order; the groups read honours its order. */
 function wire(rows: readonly Row[]) {
   const getList = vi.fn(async (_params: GetListParams) => ({ data: rows as Row[], total: rows.length }));
@@ -182,7 +188,7 @@ function wire(rows: readonly Row[]) {
     });
     const page = sorted.slice(variables.offset ?? 0, (variables.offset ?? 0) + (variables.limit ?? sorted.length));
     // Each group's records, as PostgreSQL orders them: ascending nulls last, descending nulls first.
-    const recordOrder = Object.entries(variables.rows_order_by ?? {});
+    const recordOrder = recordOrderKeys(variables.rows_order_by);
     const ordered = (members: readonly Row[]) => [...members].sort((left, right) => {
       for (const [field, direction] of recordOrder) {
         const [a, b] = [readPath(left, field), readPath(right, field)];
@@ -362,7 +368,7 @@ function recordsByGroup(mounted: Mounted): Record<string, string[]> {
 /** A server list's groups read: the order it asks each group's records in, key by key ("rank asc"). */
 function recordsRead(mounted: Mounted): string[] {
   const variables = mounted.custom.mock.calls.map(([call]) => call.meta?.gqlVariables as GroupsVariables).filter((read) => read?.with_rows).at(-1);
-  return Object.entries(variables?.rows_order_by ?? {}).map(([field, direction]) => `${field} ${direction}`);
+  return recordOrderKeys(variables?.rows_order_by).map(([field, direction]) => `${field} ${direction}`);
 }
 
 /** Press a header's sort button, then look once the list has settled and its groups are open. */
@@ -575,6 +581,19 @@ test("7. a server list grouped by month asks for its months in the direction its
     headers: { Due: "ascending", Title: "none", Rank: "none" }, ariaSort: "Due ascending", read: ["month asc nulls last"] });
   expect(await press(list, "Due")).toEqual({ groups: [...MONTHS].reverse(), first: [], sorting: "due desc",
     headers: { Due: "descending", Title: "none", Rank: "none" }, ariaSort: "Due descending", read: ["month desc nulls last"] });
+});
+
+test("7. a pure priority swap of a server list grouped by month, set by its view state, reads its groups and their records again in the order now held", async () => {
+  const list = await mount({ kind: "server", declared: "rank asc, title asc", groupStack: [{ field: "due", granularity: "month" }], columns: DATE_COLUMNS });
+  expect(recordsRead(list)).toEqual(["rank asc", "title asc"]);
+  const reads = list.custom.mock.calls.length;
+  // The same keys in the same directions in the other priority, as a saved view or a link sets it, not a header press.
+  act(() => list.view().setSorting([{ id: "title", desc: false }, { id: "rank", desc: false }]));
+  await settled();
+  expect(list.custom.mock.calls.length).toBeGreaterThan(reads);
+  expect(recordsRead(list)).toEqual(["title asc", "rank asc"]);
+  // The months keep their order: no key the order holds is the date they bucket.
+  expect(look(list)).toMatchObject({ groups: MONTHS, sorting: "title asc, rank asc", read: ["month asc nulls last"] });
 });
 
 test("7. a browser list grouped by month and ordered by another column still lists the months in date order", async () => {

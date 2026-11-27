@@ -327,8 +327,14 @@ export class ResourceQuery {
     });
   }
 
-  toOrderBy(value?: unknown): Record<string, unknown> {
-    return Object.fromEntries(this.sortFrom(value).map(({ field, direction }) => [this.fields[field]!.sort!.field, direction.toLowerCase()]));
+  /**
+   * A list read's `order_by`: one single-key object per key of `value` (as `sortFrom` reads it,
+   * the resource's default when absent), in its priority order, each on its wire key; an empty
+   * order is an empty list. A list, because a GraphQL server rebuilds an input object in its
+   * type's own field order, so the key order of one object carries no priority.
+   */
+  toOrderBy(value?: unknown): { [wireField: string]: "asc" | "desc" }[] {
+    return this.sortFrom(value).map(({ field, direction }) => ({ [this.fields[field]!.sort!.field]: direction === "ASC" ? "asc" : "desc" }));
   }
 
   toSorters(value?: unknown): { field: string; order: "asc" | "desc" }[] {

@@ -25,6 +25,8 @@ test("native provider preserves compiled predicates, order, and pagination", asy
   const orderBy = [{ id: "desc" }];
   const target = { root: "messages", aggregateRoot: "message_stats", filterType: "MessageBoolExp", orderType: "MessageOrderBy", resourceIdentifier: "console.messaging.Message" };
   const meta = listQueryMeta(target, ["id", "channel.id", "channel.display_name"], where, orderBy);
+  // @ts-expect-error a list's order is a list: one object's key order carries no priority to the server
+  listQueryMeta(target, ["id"], where, { id: "desc" });
   const result = await provider.getList({ resource: "messages", filters: [], sorters: [], pagination: { currentPage: 2, pageSize: 2, mode: "server" }, meta });
   expect(result).toEqual({ data: [{ id: "m1" }], total: 3 });
   expect(request?.variables).toEqual({ where, order_by: orderBy, limit: 2, offset: 2 });
@@ -79,8 +81,10 @@ test("a groups document carries each group's first page of the list's fields", (
   expect(() => groupRowsDocument("query X { other { id } }", { root: "notes_groups", orderType: "NoteOrderBy" }, ["id"]))
     .toThrow("does not select notes_groups");
 
-  expect(groupByVariables({ dimensions: [{ input: "STATUS" }], rows: { limit: 3, orderBy: { title: "asc" } } }))
-    .toMatchObject({ with_rows: true, rows_limit: 3, rows_order_by: { title: "asc" } });
+  expect(groupByVariables({ dimensions: [{ input: "STATUS" }], rows: { limit: 3, orderBy: [{ title: "asc" }, { id: "desc" }] } }))
+    .toMatchObject({ with_rows: true, rows_limit: 3, rows_order_by: [{ title: "asc" }, { id: "desc" }] });
+  // @ts-expect-error a list's order is a list: one object's key order carries no priority to the server
+  groupByVariables({ dimensions: [{ input: "STATUS" }], rows: { limit: 3, orderBy: { title: "asc" } } });
   expect(groupByVariables({ dimensions: [{ input: "STATUS" }] })).not.toHaveProperty("with_rows");
   const result = extractGroupBy({
     notes_groups: [{ key: { status: "open" }, aggregate: { count: 2 }, rows: [{ id: "n1" }, { id: "n2" }] }],

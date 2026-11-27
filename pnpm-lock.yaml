@@ -17,6 +17,7 @@ pnpmfileChecksum: sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 
 patchedDependencies:
   '@refinedev/core@5.0.12': 4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289
+  '@refinedev/hasura@7.0.1': 731ec7844e0a25eeed38e9e279200860fcf69da43c7554719a1cf1e7abb9f8f5
   nuqs@2.10.1: 9a2f0e220ba879552e528a3c15528143e3af37d325894c61d8996b794d72a2e1
 
 importers:
@@ -233,7 +234,7 @@ importers:
         version: 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@refinedev/hasura':
         specifier: ^7.0.1
-        version: 7.0.1(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))
+        version: 7.0.1(patch_hash=731ec7844e0a25eeed38e9e279200860fcf69da43c7554719a1cf1e7abb9f8f5)(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))
       graphql:
         specifier: ^16.14.0
         version: 16.15.0
@@ -10327,7 +10328,7 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@refinedev/hasura@7.0.1(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))':
+  '@refinedev/hasura@7.0.1(patch_hash=731ec7844e0a25eeed38e9e279200860fcf69da43c7554719a1cf1e7abb9f8f5)(@refinedev/core@5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(gql-query-builder@3.8.0)(graphql-request@5.2.0(graphql@16.15.0))(graphql-ws@6.4.1(graphql@16.15.0)(ws@8.22.1))':
     dependencies:
       '@refinedev/core': 5.0.12(patch_hash=4f168eb83b408c82efa76d911df2c053a0a64547ab3acf5c4a35c885fb9ed289)(@tanstack/react-query@5.107.1(@types/react@19.3.0)(react@19.3.1))(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       camelcase: 6.3.0

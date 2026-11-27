@@ -10,7 +10,7 @@ import {
   type HttpError,
 } from "@refinedev/core";
 
-import { listQueryMeta, type ListQueryTarget } from "../list-query";
+import { listQueryMeta, type ListOrderBy, type ListQueryTarget } from "../list-query";
 import {
   aggregateRequest,
   actionRequest,
@@ -108,7 +108,7 @@ export interface GroupByBatchScope {
 export interface AngeeListBatchScope {
   key: string;
   where: Record<string, unknown> | undefined;
-  orderBy: unknown;
+  orderBy: ListOrderBy | undefined;
   page: number;
   pageSize: number;
 }

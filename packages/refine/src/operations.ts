@@ -12,6 +12,7 @@ import {
 import type { Fields, MetaQuery } from "@refinedev/core";
 import { parse, parseType, print } from "graphql";
 import { selectionText } from "./selections";
+import type { ListOrderBy } from "./list-query";
 
 /** Write preconditions are root arguments, never editable object fields. */
 export interface MutationRootArguments {
@@ -143,8 +144,8 @@ export interface AggregateRequestOptions {
 export interface GroupRowsRequest {
   /** The declared per-group page size. */
   limit: number;
-  /** The leaf list's own `order_by` value. */
-  orderBy?: unknown;
+  /** The leaf list's own `order_by`. */
+  orderBy?: ListOrderBy;
 }
 
 export interface GroupByRequestOptions extends AggregateRequestOptions {
@@ -381,7 +382,7 @@ export type GroupByVariables = {
   /** Set with a `rows` request: each group carries its first page. */
   with_rows?: true;
   rows_limit?: number;
-  rows_order_by?: unknown;
+  rows_order_by?: ListOrderBy;
 };
 
 export function groupByVariables(options: GroupByRequestOptions): GroupByVariables {

@@ -6,6 +6,7 @@ export {
   listQueryMeta,
   type GroupRowsTarget,
   type ListQueryFieldArgument,
+  type ListOrderBy,
   type ListQueryFieldBinding,
   type ListQueryTarget,
 } from "./list-query";
