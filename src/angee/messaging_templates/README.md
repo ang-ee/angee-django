@@ -221,7 +221,13 @@ which may quote a value the render was given. Every code
 row's `NOT_A_TEMPLATE` and `NOT_EFFECTIVE`, and the render's `INVALID_VALUES`,
 `VALUES_TOO_LARGE`, `MESSAGE_TEMPLATE_REFUSED`, `VALUE_NOT_LINKABLE`,
 `VALUE_NOT_PRINTED`, `RENDER_BUDGET_EXCEEDED`, `SUBJECT_TOO_LONG`, `NO_BRAND_KIT` and
-`RENDER_FAILED`; what compose refuses is messaging's. Every string value,
+`RENDER_FAILED`. `SEND_CODES` is all eleven: a sender compares its own handling
+against it, so a code added later fails the sender's test instead of falling
+into a default. The limits a sender may read are there too: `VALUES_JSON_LIMIT`,
+`VALUE_STRING_LIMIT`, `VALUE_ITEMS_LIMIT` (the values a render admits) and
+`RENDER_ITERATION_LIMIT` (the loop and include renders one pass may do, which
+bounds the items a mail can list). A recipient's refusal and the system channel's
+are messaging's, from compose, and none of these. Every string value,
 and the subject and preheader, drop the control characters and the bidirectional
 overrides and isolates (`UNPRINTED`). A sender picks the row with
 `effective("template", key, person=recipient)` and renders it in its own scope:

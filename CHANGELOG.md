@@ -535,6 +535,15 @@ live in code docstrings.
   not one. Code that builds or judges a link without a request calls it instead
   of reading the setting; the callers that read it today move onto it in their
   own changes.
+- `angee.messaging_templates`: **A sender reads the send codes and the limits from the engine.**
+  `SEND_CODES` holds the eleven codes `send_as_system` can return from this addon, built
+  from their constants, and a test fails when a raise site names a code outside it or
+  retypes one. `VALUES_JSON_LIMIT`, `VALUE_STRING_LIMIT` and `VALUE_ITEMS_LIMIT` are
+  defined in the engine (the walk imports them, so `walker.VALUE_ITEMS_LIMIT` still
+  resolves), and `RENDER_ITERATION_LIMIT`, `RENDER_OUTPUT_LIMIT` and
+  `RENDER_FILTER_INPUT_LIMIT` are `RenderBudget`'s defaults; no value changes. Tests make
+  a render fail through `angee.messaging_templates.testing.faults` (`failing_filter`,
+  `failing_render`) instead of patching the filter registry.
 - `angee.messaging_templates`: **A failed render's log names the row and the exception's type, never the
   exception's text.** A render that fails unforeseen logs one error record naming the
   row (its kind, key and language) and the exception's type, without its message or

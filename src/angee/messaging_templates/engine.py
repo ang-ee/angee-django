@@ -114,6 +114,26 @@ class RenderBudgetExceeded(ValidationError):
     """A pass spent its :class:`RenderBudget`; the render it belongs to fails."""
 
 
+RENDER_ITERATION_LIMIT = 500
+"""The loop and include renders one render pass may do (:class:`RenderBudget`): a sender bounds the items a mail lists
+by it."""
+
+RENDER_OUTPUT_LIMIT = 200_000
+"""The characters one render pass's loops may write (:class:`RenderBudget`)."""
+
+RENDER_FILTER_INPUT_LIMIT = 500_000
+"""What one render pass's filters may read (:class:`RenderBudget`)."""
+
+VALUES_JSON_LIMIT = 50_000
+"""The longest the values a render reads may be as JSON, in characters (``values_too_large`` past it)."""
+
+VALUE_STRING_LIMIT = 10_000
+"""The longest one string value may be (``invalid_values`` past it)."""
+
+VALUE_ITEMS_LIMIT = 500
+"""The most list items the values may hold in all (``invalid_values`` past it)."""
+
+
 class RenderBudget:
     """The work one render pass may do: loop and include renders, loop output, filter input.
 
@@ -122,7 +142,10 @@ class RenderBudget:
     ``if`` operators swallow an exception a filter raises.
     """
 
-    def __init__(self, *, iterations: int = 500, output: int = 200_000, filter_input: int = 500_000) -> None:
+    def __init__(
+        self, *, iterations: int = RENDER_ITERATION_LIMIT, output: int = RENDER_OUTPUT_LIMIT,
+        filter_input: int = RENDER_FILTER_INPUT_LIMIT,
+    ) -> None:
         """Start a pass with these limits."""
 
         self.limits = {"iterations": iterations, "output": output, "filter_input": filter_input}
@@ -349,6 +372,13 @@ NO_BRAND_KIT = "no_brand_kit"
 
 RENDER_FAILED = "render_failed"
 """The code of any other failure of a render, logged with its traceback first."""
+
+SEND_CODES = frozenset({
+    NOT_A_TEMPLATE, NOT_EFFECTIVE, INVALID_VALUES, VALUES_TOO_LARGE, MESSAGE_TEMPLATE_REFUSED, VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED, RENDER_BUDGET_EXCEEDED, SUBJECT_TOO_LONG, NO_BRAND_KIT, RENDER_FAILED,
+})
+"""Every code ``send_as_system`` can return from this addon, for a sender to compare its handling against: a code
+added later fails that comparison rather than falling silently into a default. What compose refuses is messaging's."""
 
 
 def _link(value: Any) -> tuple[str, str | None]:

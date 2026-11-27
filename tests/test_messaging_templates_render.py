@@ -61,6 +61,9 @@ from angee.messaging_templates.engine import (
     RENDER_BUDGET,
     RENDER_BUDGET_EXCEEDED,
     RENDER_FAILED,
+    RENDER_FILTER_INPUT_LIMIT,
+    RENDER_ITERATION_LIMIT,
+    RENDER_OUTPUT_LIMIT,
     SUBJECT_TOO_LONG,
     VALUE_NOT_LINKABLE,
     MessageTemplateEngine,
@@ -80,6 +83,7 @@ from angee.messaging_templates.html_checks import (
 )
 from angee.messaging_templates.models import MessageTemplateQuerySet
 from angee.messaging_templates.rendering import MarkdownFormatHandler
+from angee.messaging_templates.testing.faults import failing_filter
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import (
     CONDITION_OPERATOR_LIMIT,
@@ -1912,49 +1916,40 @@ def test_only_a_validation_error_leaves_render_and_preview(plain: Any, kit: Any)
         "d is printed with a time", "e is printed with a time"]
 
 
-def _failing(raised: type[BaseException]) -> Any:
-    def upper(value: Any) -> str:
-        raise raised("a filter nobody thought of")
-
-    upper._filter_name = "upper"  # type: ignore[attr-defined]  # what Library.filter records
-    return upper
-
-
 @pytest.mark.parametrize("raised", [RuntimeError, ZeroDivisionError, ValueError])
 def test_any_other_failure_is_logged_then_refused_as_render_failed(
-    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: type[Exception],
+    plain: Any, kit: Any, caplog: pytest.LogCaptureFixture, raised: type[Exception],
 ) -> None:
     """Section 4: what nobody thought of is logged as the row and the exception's type, never the exception's text
     or traceback, which may quote a value, then leaves as render_failed; preview says so."""
 
     del plain
-    monkeypatch.setitem(register.filters, "upper", _failing(raised))
-    template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
-    with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
-        with pytest.raises(ValidationError) as caught:
-            _render(template, {"name": "Ana"}, kit)
-        with system_context(reason="tests.messaging_templates.render.preview"):
-            preview = template.preview(kit=kit)
-    assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
-    assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
-    assert preview.rendered is None
-    assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
-    assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(
-        logging.ERROR,
-        f"A message template failed to render: the template {template.key} in en raised {raised.__name__}.",
-        None,
+    with failing_filter("upper", raised("a filter nobody thought of")):
+        template = _mail("{{ name|upper }}", {"name": "x"}, sample={"name": "Ana"})
+        with caplog.at_level(logging.ERROR, logger="angee.messaging_templates.walker"):
+            with pytest.raises(ValidationError) as caught:
+                _render(template, {"name": "Ana"}, kit)
+            with system_context(reason="tests.messaging_templates.render.preview"):
+                preview = template.preview(kit=kit)
+        assert [item.code for item in caught.value.error_list] == [RENDER_FAILED]
+        assert f"{raised.__name__}: a filter nobody thought of" in caught.value.messages[0]
+        assert preview.rendered is None
+        assert preview.warnings == [TemplateWarning(TemplateWarningCode.RENDER_ERROR, caught.value.messages[0])]
+        assert [(record.levelno, record.getMessage(), record.exc_info) for record in caplog.records] == [(
+            logging.ERROR,
+            f"A message template failed to render: the template {template.key} in en raised {raised.__name__}.",
+            None,
     )] * 2
 
 
 @pytest.mark.parametrize("raised", [MemoryError, RecursionError])
 def test_running_out_of_room_is_not_a_refusal(
-    plain: Any, kit: Any, monkeypatch: pytest.MonkeyPatch, raised: type[Exception],
+    plain: Any, kit: Any, raised: type[Exception],
 ) -> None:
     """MemoryError and RecursionError say the process ran out of room, not that the row cannot render."""
 
     del plain
-    monkeypatch.setitem(register.filters, "upper", _failing(raised))
-    with pytest.raises(raised):
+    with failing_filter("upper", raised("a filter nobody thought of")), pytest.raises(raised):
         _render(_mail("{{ name|upper }}", {"name": "x"}), {"name": "Ana"}, kit)
 
 
@@ -2000,8 +1995,8 @@ def test_a_caller_tells_each_refusal_apart_by_its_code(
     assert codes(looping, {"items": ["a" * 90] * 500}) == {RENDER_BUDGET_EXCEEDED}
     long_subject = _mail("x", {"name": "x"}, key="tests.subject", subject="{{ name }}{{ name }}")
     assert codes(long_subject, {"name": "n" * 600}) == {SUBJECT_TOO_LONG}
-    monkeypatch.setitem(register.filters, "upper", _failing(RuntimeError))
-    assert codes(looping, {"items": ["a"]}) == {RENDER_FAILED}
+    with failing_filter("upper", RuntimeError("a filter nobody thought of")):
+        assert codes(looping, {"items": ["a"]}) == {RENDER_FAILED}
     with system_context(reason="tests.messaging_templates.render.kit"):
         BrandKit.objects.filter(pk=kit.pk).update(is_default=False)
     with pytest.raises(ValidationError) as caught, system_context(reason="tests.messaging_templates.render"):
@@ -3052,6 +3047,9 @@ def test_the_costliest_pass_does_bounded_work(plain: Any, kit: Any, work: dict[s
     assert work["trees"] == trees and _charges(work["passes"]) == charges
     # The charges are counted against the budget's own limits: the costliest cases reach them.
     assert RenderBudget().limits == {"iterations": 500, "output": 200_000, "filter_input": 500_000}
+    assert RenderBudget().limits == {  # the defaults a sender reads are the exported limits
+        "iterations": RENDER_ITERATION_LIMIT, "output": RENDER_OUTPUT_LIMIT, "filter_input": RENDER_FILTER_INPUT_LIMIT,
+    }
     assert RenderBudget.for_lines().limits == {"iterations": 50, "output": 20_000, "filter_input": 50_000}
 
 
