@@ -839,7 +839,6 @@ class MessageTemplateManager[TemplateT: MessageTemplate](_MessageTemplateManager
                 require_changeset().record_created(message)
                 return message
 
-    @sensitive_variables()
     def _render_and_record(
         self, row: TemplateT, *, reason: str, to: str, values: Mapping[str, Any], kit: BrandKit | None,
         subject_prefix: str = "", must_print: Iterable[str] = (),
