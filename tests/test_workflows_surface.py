@@ -54,7 +54,8 @@ EXPECTED_VERBS = {
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": (
-        "admit disable drain enable enable_preview lock_grants reconcile_grants record_occurrences revoke_grant"
+        "admit disable drain enable enable_preview lock_grants lock_stored reconcile_grants record_occurrences "
+        "revoke_grant"
     ),
     "workflows.Trigger.queryset": "bulk_create update",
     "workflows.TriggerEvent.manager": "prune record_change record_changes record_occurrences skip_pending_occurrences",
@@ -64,12 +65,12 @@ EXPECTED_VERBS = {
         "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
     "workflows.WorkflowRun.queryset": (
-        "about about_filter blocking for_subject lock_owned_runs lock_run retention_candidates working_on"
+        "about about_filter blocking concerns for_subject lock_owned_runs lock_run retention_candidates working_on"
     ),
     "decisions.Decision.manager": "ask remind_due supersede",
     "decisions.Decision.queryset": (
-        "attention_expression for_records for_records_filter held_by_requesting_records_filter open "
-        "open_expression open_for overdue overdue_expression waiting_on"
+        "administrators attention_expression deciders for_administrator for_records for_records_filter "
+        "held_by_requesting_records_filter open open_expression open_for overdue overdue_expression put_to waiting_on"
     ),
 }
 

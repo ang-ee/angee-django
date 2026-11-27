@@ -45,6 +45,12 @@ class FormResource(AngeeResource):
     version = fields.Field(column_name="version", readonly=True, widget=NativeJSONWidget())
     publish = fields.Field(column_name="publish", readonly=True, widget=NativeJSONWidget())
     aliases = fields.Field(column_name="aliases", readonly=True, widget=NativeJSONWidget())
+    never_create_only = {
+        "publish": (
+            "publish applies on every changed row, so it is never create_only; list "
+            "version under create_only to leave the questions to staff once the form exists."
+        ),
+    }
 
     def before_import(self, dataset: Any, **kwargs: Any) -> None:
         """Refuse a file whose rows would set the form's state, or change what staff own, behind its verbs."""
@@ -60,11 +66,6 @@ class FormResource(AngeeResource):
             raise ResourceLoadError(
                 f"{self.entry.display}: a declared form's status follows its version's publication; declare "
                 "publish: false for a form a person publishes, and leave opening and closing it to staff."
-            )
-        if "publish" in self.entry.create_only:
-            raise ResourceLoadError(
-                f"{self.entry.display}: publish applies on every changed row, so it is never create_only; list "
-                "version under create_only to leave the questions to staff once the form exists."
             )
 
     def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:

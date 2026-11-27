@@ -76,7 +76,7 @@ test("copied record links restore native query navigation, page edges preserve t
             { updated_at: { _gte: "2026-09-01", _lt: "2026-10-01" } },
           ],
         },
-        order_by: { updated_at: "desc" },
+        order_by: [{ updated_at: "desc" }],
       },
     },
   });

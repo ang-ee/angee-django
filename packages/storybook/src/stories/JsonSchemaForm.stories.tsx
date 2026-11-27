@@ -21,6 +21,7 @@ function JsonSchemaForm(): React.ReactElement {
   const { form, run } = useActionForm<Values>({
     defaultValues: { title: "", email: "" },
     resolver,
+    shownFieldNames: fields.map((field) => field.name),
     submit: (values) => { setAccepted(values); return { status: "ok", data: null }; },
   });
   return <ActionFormProvider {...form}>

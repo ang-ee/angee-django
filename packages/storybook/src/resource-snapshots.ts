@@ -80,6 +80,7 @@ export function resourceSnapshotOperations(resources: readonly DataResourceMetad
       const having = args.having as { count_gt?: number } | undefined;
       return [...buckets.values()]
         .filter((bucket) => having?.count_gt === undefined || bucket.rows.length > having.count_gt)
+        .sort(byGroupOrder(args.order_by))
         .map((bucket) => ({ ...bucket, aggregate: aggregate(bucket.rows) }));
     };
     const { roots } = resource;
@@ -93,4 +94,26 @@ export function resourceSnapshotOperations(resources: readonly DataResourceMetad
     }
   }
   return operations;
+}
+
+/**
+ * A groups read's `order_by` as a server applies it, term after term: each key of the group in its direction, a
+ * null key where the term's `nulls` says, else where SQL puts it (last ascending, first descending). A read that
+ * orders by a label and then an identity breaks label ties by identity. Without an order, first appearance.
+ */
+function byGroupOrder(orderBy: unknown): (left: { key: Record<string, unknown> }, right: { key: Record<string, unknown> }) => number {
+  const terms = (Array.isArray(orderBy) ? orderBy : []) as readonly { field: string; direction?: string; nulls?: string | null }[];
+  return (left, right) => {
+    for (const { field, direction, nulls } of terms) {
+      const descending = direction === "DESC";
+      const [a, b] = [left.key[field] ?? null, right.key[field] ?? null];
+      if (a === null || b === null) {
+        if (a === b) continue;
+        return (a === null) === ((nulls ?? (descending ? "FIRST" : "LAST")) === "LAST") ? 1 : -1;
+      }
+      const order = typeof a === "number" && typeof b === "number" ? a - b : String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+      if (order !== 0) return descending ? -order : order;
+    }
+    return 0;
+  };
 }

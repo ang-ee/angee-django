@@ -122,6 +122,8 @@ parent's exposed kinds as `concrete_kinds`.
 **Backend class** — an `ImplClassField` value on a concrete owner model that
 selects an interchangeable strategy/client/backend while the row's persisted
 shape stays the same. Its base class names the implementation registry setting.
+A stored key the registry no longer names is **not registered**: the row loads,
+its GraphQL read is null and the console labels it so.
 
 **`Meta`** — Django's model options class. Keep Angee facts out of `Meta` unless
 the owning library explicitly supports them, such as `rebac_resource_type`.
@@ -226,6 +228,19 @@ linking and human-only member pickers). Access pickers include readable service
 users; agents and workflows link one service user each by composing
 [`ServiceUserMixin`](../src/angee/iam/models.py), whose sync and deactivation
 verbs their saves and delete receivers call.
+
+**Account action** — an action on a person's account (rename, deactivate, give
+or reset access, set a password, send a sign-in link), named by its Zed
+permission on `auth/user`. IAM owns the set and its shared refusals
+([`User.account_actions`](../src/angee/iam/models.py),
+`account_action_blockers`); an addon adds its own action through them, and the
+`account_actions` projection offers each action exactly where it acts.
+
+**Sign-in link** — a single-use link an administrator emails a person so they
+sign in once without a password; it expires, a newer link retires it, and it
+is never sent to a protected account. Owned by
+[`angee.iam_messaging`](../src/angee/iam_messaging/README.md); a host without
+that addon has none.
 
 **Workflow principal** — the workflow's linked service user. Trigger source
 grants are direct REBAC tuples for this user. Admission, source and domain checks,
@@ -378,9 +393,35 @@ a sender is read; the message's source keeps its `From` header. See
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
 addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+(`Recipient.address`, empty for one no caller handed as an address), which the message
+is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
+
+**Transport mailer** — the one mailer that sends, `MAILERS["transport"]`:
+messaging delivers every email through it, and without it delivery is not
+configured. Not Django's default mailer, which is the **System mailer**. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mail** — mail the framework writes as named system work, each email
+Django sends among it: one queued message written on the **System channel** by
+`MessageManager.compose_as_system`, its causing actor recorded in the changeset,
+and delivered through the **Transport mailer**. Nobody sends it as a person on a
+channel they send from. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mailer** — Django's default mailer wherever messaging is installed,
+`SystemMailer`: it records each email Django sends as **System mail** and sends
+nothing itself. A consumer's own mail sent straight through the **Transport
+mailer** by name is a deliberate exception, outside messaging. See [messaging's contracts](../src/angee/messaging/README.md).
+
+**System channel** — messaging's install row `messaging.system_channel` (backend
+`system`), where **System mail** is written. Administrators alone read it, no
+verb shares its threads or grants on its messages, and it is system-only: nobody
+chooses it to send from or to watch. A person finds it in a
+list of channels under the label "System mail", which the row is given once, when
+it is created. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **Compose (a message)** — write one outgoing message through
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery
@@ -390,7 +431,10 @@ The console composes through the `compose_message` mutation, offers a new email
 on the channels its `sendable` filter keeps (`reply` on a channel
 `ChannelQuerySet.outbound_email_rule` admits), and states the recipient bound,
 `MessageManager.recipient_limit`, as `message_recipient_limit`. A message
-messaging wrote, rather than synced, is `Message.is_locally_written`.
+messaging wrote, rather than synced, is `Message.is_locally_written`. Its pages
+write through `useComposeMessage`: **New message**, a new email
+(`NewMessageAction`), and **Reply**, an answer from the box a transcript docks
+under its conversation where its host opts in (`ThreadTranscript`'s `reply`).
 Not the **Composer** (`django-compose`). See
 [messaging's contracts](../src/angee/messaging/README.md).
 
@@ -561,6 +605,56 @@ intent remain separate facts.
 **posts** — the public-post and engagement overlay on `messaging`. A Feed is a
 Channel child, so posts use the same channel-scoped message identity and access.
 
+## Message templates
+
+**Message template** — one row of outgoing mail's text for one kind, key and
+language (`messaging_templates.MessageTemplate`). A sender renders the row a
+recipient reads; messaging delivers what is sent. See
+[the message templates README](../src/angee/messaging_templates/README.md).
+
+**Send a message template as system work** — render an effective message
+template for one address as named system work and record it on messaging's
+system channel (`MessageTemplateManager.send_as_system`); the row's language is
+the mail's, the caller's own gate authorised the send, and the caller names the
+values the mail is useless without (`must_print`), which each body must print. See
+[sending as system work](../src/angee/messaging_templates/README.md#sending-as-system-work).
+
+**Test send** — an administrator's send of a message template with its sample
+to their own account address (`MessageTemplateManager.send_test`): decided by
+the row's `preview` alone and projected as `can_send_test`, then sent as named
+system work on messaging's system channel with a `[Test] ` subject, the
+administrator recorded as who caused it. See
+[a test send](../src/angee/messaging_templates/README.md#a-test-send).
+
+**Layout / template / block / part** — a message template's four kinds, written
+once. A **template** is the mail itself, with its subject, preheader and the
+**layout** it sits in, the HTML that wraps templates; a **block** (a styled
+piece) and a **part** (a piece of wording) are what rows include by name. What
+differs by kind is the kind's handler. See
+[the rows](../src/angee/messaging_templates/README.md#the-rows).
+
+**Shipped default / override** — a **shipped default** (a baseline) is a row an
+addon ships in its `install` resources, written only by a resource load. The
+deployment's **override** is its own row with the default's kind, key and
+language (`overrides_default`); deleting it resets to the default. A row says
+whether its reader may start or keep an override (`can_override`,
+`can_keep_override`), as the verbs decide. See
+[shipped defaults, overrides and reset](../src/angee/messaging_templates/README.md#shipped-defaults-overrides-and-reset).
+
+**Preview (message templates)** — a row rendered with its sample, with what a
+sender should know about it. A preview with a **patch** renders the open form's
+unsaved edits as Save would write them: it needs `write` as well as `preview`
+and whatever Save's gates ask of the columns it edits, refuses what Save would
+refuse (what Save's validation refuses as `save_refused`, in Save's words and
+under its fields; an edit Save admits but its sample cannot render is a
+`render_error`), and saves nothing. See [rendering](../src/angee/messaging_templates/README.md#rendering).
+
+**Backlinks (message templates)** — the rows, in any language, naming a message
+template's kind and key: a template its layout, any row a block or part it
+includes. It is the Links rule's **Backlinks**, incoming references
+([context aside](frontend/guidelines.md#context-aside)), read for one record's page. See
+[the console](../src/angee/messaging_templates/README.md#console).
+
 ## Frontend
 
 **Files / `storage`** — **Files** is the user-facing product name; `storage` is
@@ -632,6 +726,13 @@ activate a theme.
 
 **Appearance** — the effective presentation and the user or host settings that
 select it: a theme, a color-scheme preference and that theme's supported options.
+The host's options may come at run time from one installed **host appearance**
+source ([host and user precedence](frontend/appearance.md#host-and-user-precedence)).
+
+**Brand kit** — a deployment's brand facts, one `angee.brandkit` row per kit; once
+any exists, exactly one is the **default kit**. A theme owns structure and applies a
+kit, unless its options decline the host appearance source (see the
+[brand kit README](../src/angee/brandkit/README.md)).
 
 **Color scheme** — the light or dark rendering of a theme. A preference may be
 `light`, `dark` or `system`; the resolved DOM state is always `light` or `dark`.
@@ -642,6 +743,15 @@ a theme rather than a template.
 
 **Rendered binding** — the single rendered (styled) Angee binding over Refine
 state, owned by `@angee/ui`.
+
+**Idempotency key (client)** — the request identity a keyed write carries, one
+per **draft**: what one surface writes to one target (a record's chatter box,
+the dialog for one action on one record, a new-record form), named by its
+**draft scope**, which one surface holds at a time; a create form's scope
+names the surface hosting it. `useIdempotencyKeys` mints the key at the
+draft's first attempt and keeps it for the app runtime until a confirmed
+answer ends the draft, so every retry of it, edited or not, is written once by
+the server; a conflict (the key spent on other content) starts a new draft.
 
 **Settings place** — the one synthetic destination in every console that groups
 every menu node declared with `group:"platform"`, at any depth. Its rail entry

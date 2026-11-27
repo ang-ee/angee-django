@@ -22,7 +22,8 @@ export const tabsVariants = tv({
     tab:
       "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 text-13 font-medium text-fg-muted outline-none transition-colors hover:text-fg focus-visible:focus-ring data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50 data-[active]:text-fg [&_.glyph]:size-3.5",
     indicator: "absolute bg-brand",
-    panel: "focus:outline-none",
+    // Base UI puts the open panel in the tab order: tabbing into it shows the ring.
+    panel: "outline-none focus-visible:focus-ring",
     count: "",
   },
   variants: {

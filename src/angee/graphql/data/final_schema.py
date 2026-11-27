@@ -22,6 +22,7 @@ _ROOT_OWNERS = {
     "delete_name": "mutation",
     "delete_preview_name": "mutation",
     "changes_name": "subscription",
+    "repair_choices_name": "query",
 }
 
 _CAPABILITY_ROOTS = (

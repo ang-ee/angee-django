@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRecordChromeContextMaybe } from "../resource/record-chrome-context";
 import { Button } from "../../ui/button";
 import type { Tone } from "../../lib/tones";
 import { Chip } from "../../ui/chip";
+import { FieldDescription } from "../../ui/field";
 import { Tooltip } from "../../ui/tooltip";
 import { RecordReference } from "../relation/RecordReference";
 import { Glyph } from "../../chrome/Glyph";
@@ -118,7 +119,115 @@ function useRecordFieldMarksForField(field: string) {
   }) ?? []), [bridge?.marks, field, record, setRevealed]);
 }
 
+const UnregisteredImplementation = createContext<{
+  field: string; marked: boolean; readOnly: boolean; once: boolean; refusal: string | null; explanationId: string;
+} | null>(null);
+
+/** Name the one field of the record's own form whose stored implementation key the registry no
+ * longer names and whose value in the form is still empty; only that field's marks read it, and
+ * `readOnly` (the field's own state in this form) decides what the mark explains. The field's row
+ * describes its control with that explanation (`useUnregisteredImplementationExplanation`), so a
+ * screen reader hears it on focus. React context crosses portals, so a dialog rendered inside that
+ * field's row would see it too; none is.
+ * @kind null
+ * @reason Provider infrastructure: the record form's not-registered field.
+ */
+export function UnregisteredImplementationField({ field, marked = true, readOnly = false, once = false, refusal = null, children }: {
+  /** The field this explains: one marked not registered, or one whose repair the server refused. */
+  field: string | null;
+  /** Whether the field carries the "Not registered" mark: the record shown stores a key not registered. */
+  marked?: boolean;
+  readOnly?: boolean;
+  /** A create-only selector that can be chosen once more here: once saved, the choice cannot change again. */
+  once?: boolean;
+  /**
+   * The server's refusal of the repair, which the explanation gives in its words, under the field,
+   * whatever the record shown now stores.
+   */
+  refusal?: string | null;
+  children: ReactNode;
+}) {
+  const explanationId = useId();
+  const value = useMemo(
+    () => field === null || (!marked && refusal === null) ? null : { field, marked, readOnly, once, refusal, explanationId },
+    [explanationId, field, marked, once, readOnly, refusal],
+  );
+  return <UnregisteredImplementation.Provider value={value}>{children}</UnregisteredImplementation.Provider>;
+}
+
+/** The explanation of a not-registered field: the words, the id its row gives them, and whether they
+ * are the server's refusal of the repair. */
+export interface UnregisteredImplementationExplanationText {
+  id: string;
+  text: string;
+  /** Whether the field carries the "Not registered" mark (a refusal alone carries none). */
+  marked: boolean;
+  readOnly: boolean;
+  refused: boolean;
+}
+
+/** The explanation of `field`'s not-registered mark and the id its row gives it, or null where the
+ * field carries none. The row renders it (`UnregisteredImplementationExplanation`) under that id and
+ * names the id in its control's `aria-describedby`; the mark shows the same words as its tooltip.
+ * @kind null
+ * @reason Provider infrastructure: reads the record form's not-registered field.
+ */
+export function useUnregisteredImplementationExplanation(field: string): UnregisteredImplementationExplanationText | null {
+  const t = useUiT();
+  const unregistered = useContext(UnregisteredImplementation);
+  if (unregistered?.field !== field) return null;
+  return {
+    id: unregistered.explanationId,
+    marked: unregistered.marked,
+    readOnly: unregistered.readOnly,
+    refused: unregistered.refusal != null,
+    text: unregistered.refusal ?? t(unregistered.readOnly ? "implementation.cannotRunUnchangeable"
+      : unregistered.once ? "implementation.cannotRunUntilChosenOnce" : "implementation.cannotRunUntilChosen"),
+  };
+}
+
+/** Whether a field row's control is described by its explanation beside the row's own `messages`: not
+ * when the explanation is the server's refusal and one of those messages says the same sentence (the
+ * refused read and a refused save both saying it), so the control's description reads it once.
+ * @kind null
+ * @reason Provider infrastructure: decides the record form's not-registered explanation for a field row.
+ */
+export function explainsBeside(explanation: UnregisteredImplementationExplanationText, messages: readonly string[]): boolean {
+  return !(explanation.refused && messages.includes(explanation.text));
+}
+
+/** Whether the field's "Not registered" mark is itself described by the explanation: where the field is
+ * read-only the mark is the keyboard's one stop, and its description is the explanation's id. */
+function explainsMark(explanation: UnregisteredImplementationExplanationText): boolean {
+  return explanation.marked && explanation.readOnly;
+}
+
+/** A field row's explanation of its not-registered mark, under the id its control is described by:
+ * screen-reader text, or, when it gives the server's refusal of the repair, shown under the field, the
+ * one place those words are said (the field's own description stays). Beside a field error saying the
+ * same sentence (`explainsBeside`) the error says it, once: the row renders nothing more, except the
+ * hidden text a mark is described by (`explainsMark`), so no unreferenced copy is read in browse mode.
+ * @kind null
+ * @reason Provider infrastructure: renders the record form's not-registered explanation for a field row.
+ */
+export function UnregisteredImplementationExplanation({ explanation, messages = [] }: {
+  explanation: UnregisteredImplementationExplanationText | null;
+  /** The row's own displayed messages (its field errors). */
+  messages?: readonly string[];
+}) {
+  if (!explanation) return null;
+  const hidden = <span id={explanation.id} className="sr-only">{explanation.text}</span>;
+  if (!explainsBeside(explanation, messages)) return explainsMark(explanation) ? hidden : null;
+  return explanation.refused ? <FieldDescription id={explanation.id}>{explanation.text}</FieldDescription> : hidden;
+}
+
 /** Every native form field placement composes attention, provenance, and access marks once.
+ * The field the record's own form names through `UnregisteredImplementationField` carries "Not
+ * registered" as an attention mark, its explanation as the tooltip (and, through the field's row,
+ * the control's accessible description): its implementation cannot run until another is chosen,
+ * where the field offers the registered ones, and cannot be changed here where it is read-only. The
+ * record's other fields save either way; a refusal stays the server's, shown under the field. A
+ * dialog's field of the same name is not that field, so it carries none.
  * @kind fragment
  */
 export function RecordFieldMarkControl({ field, label, restricted = false }: {
@@ -128,9 +237,16 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
 }) {
   const t = useUiT();
   const published = useRecordFieldMarksForField(field);
-  const marks: readonly RecordFieldMark[] = restricted
-    ? [...published, { field, label: t("form.restricted"), tone: "neutral", icon: "lock" }]
-    : published;
+  const explanation = useUnregisteredImplementationExplanation(field);
+  const marks: readonly ShownMark[] = [
+    ...published,
+    ...(explanation?.marked ? [{
+      field, label: t("implementation.notRegistered"), tone: "warning" as const,
+      // Where the field takes edits its control is the one stop and the one description.
+      explanation: explanation.text, describedBy: explanation.id, focusStop: explainsMark(explanation),
+    }] : []),
+    ...(restricted ? [{ field, label: t("form.restricted"), tone: "neutral" as const, icon: "lock" }] : []),
+  ];
   if (!marks.length) return null;
   return <>
     {marks.map((mark, index) => (
@@ -139,8 +255,12 @@ export function RecordFieldMarkControl({ field, label, restricted = false }: {
   </>;
 }
 
+/** A mark as a field shows it: a published one may reveal its source; the form's own may explain itself
+ * (its words, and the id of the text the field's row renders for them). */
+type ShownMark = RecordFieldMark & { reveal?: () => void; explanation?: string; describedBy?: string; focusStop?: boolean };
+
 function RecordFieldMarkItem({ mark, field, label }: {
-  mark: RecordFieldMark & { reveal?: () => void };
+  mark: ShownMark;
   field: string;
   label?: ReactNode;
 }) {
@@ -157,7 +277,15 @@ function RecordFieldMarkItem({ mark, field, label }: {
   } else {
     control = <span aria-label={ariaLabel}>{badge}</span>;
   }
-  return mark.origin
-    ? <Tooltip label={mark.origin}><span className="inline-flex" tabIndex={mark.target || mark.reveal ? undefined : 0}>{control}</span></Tooltip>
+  // The hover copy is the value's source, or the form's own explanation, which the field's row
+  // also gives its control as the accessible description. A plain mark with hover copy is itself
+  // a keyboard stop (a read-only field has no other), so it carries its name and that description.
+  const hover = mark.origin ?? mark.explanation;
+  if (hover && !mark.target && !mark.reveal && mark.focusStop !== false) {
+    return <Tooltip label={hover}><span className="inline-flex" tabIndex={0} role="img" aria-label={ariaLabel}
+      aria-describedby={mark.describedBy}>{badge}</span></Tooltip>;
+  }
+  return hover
+    ? <Tooltip label={hover}><span className="inline-flex">{control}</span></Tooltip>
     : control;
 }

@@ -331,6 +331,17 @@ test("standalone shortcut controls drop unavailable targets once in production a
   expect(error).toHaveBeenCalledExactlyOnceWith('Search shortcut "page.toggle.setup": unknown toggle id "setup".');
 });
 
+test("a facet shortcut whose read was refused says why above the options it still has, and its listbox is described by it", async () => {
+  const refused = "A record holds an implementation that is not registered.";
+  const search = searchFixture({ catalog: { facets: [{ field: "status", label: "Status", source: "scalar", error: refused,
+    options: [{ id: "status:open", label: "Open", filter: { status: { exact: "open" } } }] }] } });
+  render(<SearchControls search={search} shortcuts={pageSearchShortcuts({ shortcuts: [{ kind: "facet", field: "status" }] })} />);
+  fireEvent.click(screen.getByRole("combobox", { name: "Status" }));
+  const list = await screen.findByRole("listbox");
+  expect(document.getElementById(list.getAttribute("aria-describedby") ?? "")?.textContent).toBe(refused);
+  expect(screen.getByRole("option", { name: "Open" })).toBeTruthy();
+});
+
 test("malformed shortcuts, duplicate ids, box false still fail fast in production", () => {
   vi.mocked(developmentMode).mockReturnValue(false);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});

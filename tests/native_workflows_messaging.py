@@ -85,12 +85,12 @@ class MessageTriggerTests(TransactionTestCase):
         )
         self.channel = self.make_channel("message-source")
 
-    def make_channel(self, key):
+    def make_channel(self, key, *, backend_class="manual"):
         """Create the native channel connection without external transport."""
         with system_context(reason="message source channel"):
             vendor = apps.get_model("integrate.Vendor").objects.create(slug=key, display_name=key)
             return Channel.objects.create(
-                vendor=vendor, owner=self.owner, backend_class="manual", lifecycle="connected",
+                vendor=vendor, owner=self.owner, backend_class=backend_class, lifecycle="connected",
             )
 
     def trigger(self, *, channel=None, actor=None, enabled=True):
@@ -203,6 +203,18 @@ class MessageTriggerTests(TransactionTestCase):
             Trigger.objects.enable(trigger, actor=self.admin)
         self.assertFalse(Trigger.system_queryset().get(pk=trigger.pk).enabled)
 
+    def test_a_system_only_channel_is_refused_as_a_source_before_any_grant(self):
+        """An administrator reads the system channel, yet cannot make it a trigger's source."""
+        system = self.make_channel("system-source", backend_class="system")
+        trigger = self.trigger(channel=system, enabled=False)
+        with self.assertRaises(ValidationError) as refused:
+            Trigger.objects.enable(trigger, actor=self.admin)
+        self.assertEqual(refused.exception.error_dict["channel"][0].code, "system_only")
+        trigger = Trigger.system_queryset().get(pk=trigger.pk)
+        self.assertFalse(trigger.enabled)
+        self.assertEqual(trigger.granted_relationships(actor=self.admin), ())
+        self.assertFalse(system.with_actor(self.workflow.user).has_access("read"))
+
     def test_admission_rechecks_channel_read_under_workflow_principal(self):
         """The standing channel grant survives a change in the enabler's reach."""
         self.workflow.with_actor(self.admin).grant_record_access("editor", self.owner)
@@ -258,6 +270,15 @@ class MessageTriggerTests(TransactionTestCase):
         trigger = Trigger.objects.enable(trigger, actor=self.admin)
         self.assertTrue(trigger.enabled)
         self.assertEqual(trigger.channel_id, replacement.pk)
+
+    def test_a_changed_channel_is_a_changed_rule_so_a_reapplied_row_disables_the_trigger(self):
+        """The channel is the message source's scope field: the rule a resource load or an edit compares."""
+        trigger = self.trigger()
+        stored = Trigger.system_queryset().get(pk=trigger.pk)
+        trigger.channel = self.make_channel("replacement-rule")
+        self.assertTrue(trigger.changes_rule_of(stored))
+        trigger.channel_id = stored.channel_id
+        self.assertFalse(trigger.changes_rule_of(stored))
 
     def test_admission_rechecks_current_message_channel(self):
         """Moving a pending message cannot bypass its trigger's authored scope."""

@@ -23,7 +23,7 @@ import type { ResourceViewContextValue } from "../resource-view-context";
 import type { ResourceViewGroup } from "../resource-view-model";
 import type { ListEmptyContent, ResourceTableHeaderVisibility, ResourceTableLayout } from "../resource-view-types";
 import type { ColumnDescriptor } from "../../page";
-import { alignOf, ariaSortForColumn, formatMeasure, groupMeasuresFromColumns, measureValue } from "./cell-utils";
+import { alignOf, formatMeasure, groupMeasuresFromColumns, headerAriaSort, measureValue } from "./cell-utils";
 import { ListEmpty, ListSkeletonRows } from "./loading";
 import { LeadingSelectionCell, renderListRow } from "./rows";
 import { ALIGN_CLASS } from "./types";
@@ -306,7 +306,7 @@ interface FlatListHeaderProps<TRow extends Row> {
   headerVisibility: ResourceTableHeaderVisibility;
   /** `table.getHeaderGroups()`, which the table keeps until a column is shown, hidden, moved or pinned. */
   headerGroups: readonly HeaderGroup<TRow>[];
-  /** The table's sorting, which each header's sort button and `aria-sort` show through its column. */
+  /** The table's sorting: a change renders the memoised header again, and each header reads its sort from the table (`headerSort`). */
   sorting: SortingState;
   reorderable: boolean;
   selectable: boolean;
@@ -475,7 +475,7 @@ export function ListHeaderCell<TRow extends Row>({
       title={header.isPlaceholder ? undefined : developerTitle(header.column.id, resourceView.resource)}
       className={ALIGN_CLASS[alignOf(header.column.columnDef)]}
       style={{ minWidth: header.column.columnDef.minSize }}
-      aria-sort={ariaSortForColumn(header.column)}
+      aria-sort={headerAriaSort(header.column, header.getContext().table)}
     >
       {showVisibleFields ? (
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2">

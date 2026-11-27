@@ -23,7 +23,7 @@ export function folderSource(metadata: ModelMetadata, drive: string): Collection
       document: StorageFoldersPage, models: FOLDER_MODELS, enabled: Boolean(drive),
       variables: (request: CollectionPageRequest) => ({
         where: query.toWhere(folderCollectionFilter(drive, request)),
-        order: [query.toOrderBy(request.order ?? { name: "ASC" })],
+        order: query.toOrderBy(request.order ?? { name: "ASC" }),
         limit: request.pageSize, offset: (request.page - 1) * request.pageSize,
       }),
       select: (data) => ({ rows: data.folders.map(storageFolderRow), total: data.folders_aggregate.aggregate?.count ?? 0 }),

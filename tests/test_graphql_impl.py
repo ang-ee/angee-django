@@ -50,7 +50,7 @@ def test_relation_default_metadata_omits_missing_and_unreadable_targets(
     settings.ANGEE_VCS_BACKEND_CLASSES = {"github": f"{__name__}.ScopedDefaultBackend"}
     actor = create_platform_admin("impl-default-admin") if readable else create_user("impl-default-reader")
     # Authorizing registry metadata does not grant access to its referenced rows.
-    monkeypatch.setattr("angee.integrate.schema.can_read_impl_choices", lambda model, field, actor: True)
+    monkeypatch.setattr("angee.graphql.impl.can_read_impl_choices", lambda model, field, actor: True)
     vendor = None
     if target_exists:
         with system_context(reason="test scoped implementation default"):

@@ -10,6 +10,7 @@ import pytest
 from anymail.message import AnymailMessage
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.checks import Tags, run_checks
 from django.core.exceptions import ValidationError
 from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
@@ -23,19 +24,23 @@ from angee.messaging.backends import (
     ParsedPart,
     ParsedThread,
 )
-from angee.messaging.email import AnymailEmailChannelBackend
+from angee.messaging.constants import TRANSPORT_MAILER_ALIAS
+from angee.messaging.email import AnymailEmailChannelBackend, SystemChannelBackend, carries_address
 from angee.messaging.testing.models import Channel, Fragment, Handle, Message, Part
 from angee.messaging_integrate_imap.parser import parse_message
 from tests.conftest import Vendor, make_integration
 
 pytestmark = pytest.mark.filterwarnings("error::django.utils.deprecation.RemovedInDjango2028Warning")
 
+LOCMEM = {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}
+TRANSPORT = {"default": LOCMEM, "transport": LOCMEM}
+"""Delivery configured: the test mailer is the transport mailer messaging sends through."""
+NO_TRANSPORT = {"default": LOCMEM}
+"""Delivery not configured: no transport mailer is stated."""
 
-@override_settings(
-    ANGEE_EMAIL_DELIVERY_CONFIGURED=True,
-    MAILERS={"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}},
-)
-def test_native_default_mailer_delivers_anymail_message_without_legacy_api(monkeypatch: pytest.MonkeyPatch) -> None:
+
+@override_settings(MAILERS=TRANSPORT)
+def test_the_transport_mailer_delivers_an_anymail_message_without_legacy_api(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = AnymailEmailChannelBackend(None)
     email = AnymailMessage("Subject", "Body", "sender@example.test", ["reader@example.test"])
     monkeypatch.setattr(transport, "email_message", lambda message: email)
@@ -44,17 +49,29 @@ def test_native_default_mailer_delivers_anymail_message_without_legacy_api(monke
     delivered = mail.outbox[-1]
     assert delivered.subject == "Subject"
     assert delivered.to == ["reader@example.test"]
-    assert delivered.sent_using == "default"
+    assert delivered.sent_using == "transport"
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS=NO_TRANSPORT)
+def test_without_a_transport_mailer_delivery_sends_nothing_through_the_default_mailer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = AnymailEmailChannelBackend(None)
+    monkeypatch.setattr(transport, "email_message", lambda message: AnymailMessage(
+        "Subject", "Body", "sender@example.test", ["reader@example.test"],
+    ))
+    with pytest.raises(IntegrationError, match="not configured"):
+        transport.deliver(SimpleNamespace(pk="no-transport"))
+    assert mail.outbox == []
+
+
 def test_native_mailer_open_failure_closes_without_entering_send(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = AnymailEmailChannelBackend(None)
     email = AnymailMessage("Subject", "Body", "sender@example.test", ["reader@example.test"])
     monkeypatch.setattr(transport, "email_message", lambda message: email)
     connection = Mock()
     connection.open.side_effect = TimeoutError("Connection never opened")
-    monkeypatch.setattr("angee.messaging.email.mailers", SimpleNamespace(default=connection))
+    monkeypatch.setattr("angee.messaging.email.mailers", {TRANSPORT_MAILER_ALIAS: connection})
     with pytest.raises(IntegrationError) as failure:
         transport.deliver(SimpleNamespace(pk="native-mailer"))
     assert failure.value.transient
@@ -136,7 +153,10 @@ def test_outbound_email_envelope_uses_canonical_source_header_fallback(header_me
     assert rendered.cc == [] and rendered.bcc == []
 
 
+@override_settings(MAILERS=TRANSPORT)
 def test_outbound_email_keeps_native_sender_over_source_fallback(header_message):
+    """A sender handle the channel does not configure keeps its own address, ahead of the source's From."""
+
     owner, _outsider, message = header_message
     with actor_context(owner):
         handle = Handle.objects.create(platform="email", value="live@example.test")
@@ -152,7 +172,7 @@ def test_source_header_fallback_preserves_an_explicit_system_reader(header_messa
         assert message.source_header_values("to") == ("Recipient <recipient@example.test>",)
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True, DEFAULT_FROM_EMAIL="Default <default@example.test>")
+@override_settings(MAILERS=TRANSPORT, DEFAULT_FROM_EMAIL="Default <default@example.test>")
 @pytest.mark.parametrize(
     "config,expected",
     [
@@ -170,14 +190,26 @@ def test_default_sender_is_one_validated_identity(config: object, expected: tupl
     assert backend._sender(unaddressed) == f"{expected[0]} <{expected[1]}>"
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS=TRANSPORT)
 def test_default_sender_refuses_an_invalid_configured_address() -> None:
     backend = AnymailEmailChannelBackend(SimpleNamespace(config={"from_email": "invalid"}))
     with pytest.raises(ValidationError, match="Configure a valid sender address"):
         backend.outbound_sender()
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False)
+@override_settings(MAILERS=TRANSPORT, DEFAULT_FROM_EMAIL="Jörg <jörg@example.test>")
+def test_a_default_sender_the_transport_cannot_carry_is_refused_before_any_mail_is_written() -> None:
+    """The mailbox writer's rule refuses the sender from settings, where the delivery would otherwise fail."""
+
+    for backend in (AnymailEmailChannelBackend, SystemChannelBackend):
+        with pytest.raises(ValidationError) as refused:
+            backend.default_sender()
+        assert [error.code for error in refused.value.error_dict["channel"]] == ["cannot_carry"]
+    assert not SystemChannelBackend.system_mail_configured()
+    assert not carries_address("jörg@example.test") and carries_address("ada@exämple.test")
+
+
+@override_settings(MAILERS=NO_TRANSPORT)
 def test_default_sender_requires_a_configured_transport() -> None:
     backend = AnymailEmailChannelBackend(SimpleNamespace(config={"from_email": "sender@example.test"}))
     with pytest.raises(OutboundEmailNotConfigured) as refused:
@@ -201,7 +233,7 @@ def test_outbound_email_admits_every_connected_backend_declaring_configured_emai
     paused = make_integration("paused-mail", model=Channel, backend_class="email")
     with system_context(reason="test.messaging.outbound_email"):
         paused.pause()
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True):
+        with override_settings(MAILERS=TRANSPORT):
             assert set(Channel.objects.outbound_email()) == {billing, mailbox}
             assert billing.outbound_sender() == ("Billing", "billing@example.test")
             with pytest.raises(OutboundEmailChannelMissing):
@@ -217,7 +249,7 @@ def test_outbound_email_names_why_its_selection_is_empty(db: None) -> None:
     paused = make_integration("paused-mail", model=Channel, backend_class="email")
     with system_context(reason="test.messaging.outbound_email"):
         paused.pause()
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True):
+        with override_settings(MAILERS=TRANSPORT):
             assert set(Channel.objects.require_outbound_email(backend_class="email")) == {billing}
             assert not Channel.objects.filter(pk=paused.pk).outbound_email(backend_class="email").exists()
             assert not Channel.objects.outbound_email(backend_class="manual").exists()
@@ -227,7 +259,7 @@ def test_outbound_email_names_why_its_selection_is_empty(db: None) -> None:
                 Channel.objects.filter(pk=paused.pk).require_outbound_email(backend_class="email")
             with pytest.raises(OutboundEmailChannelMissing):
                 Channel.objects.filter(pk=mailbox.pk).require_outbound_email(backend_class="email")
-        with override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=False):
+        with override_settings(MAILERS=NO_TRANSPORT):
             assert not Channel.objects.outbound_email().exists()
             with pytest.raises(OutboundEmailNotConfigured) as off:
                 Channel.objects.require_outbound_email()
@@ -236,7 +268,22 @@ def test_outbound_email_names_why_its_selection_is_empty(db: None) -> None:
     assert off.value.code == "OUTBOUND_EMAIL_NOT_CONFIGURED"
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+def test_a_system_only_channel_is_never_selected_to_send_from(db: None) -> None:
+    """The system channel delivers email, yet nobody chooses it: every outbound selection leaves it out."""
+
+    del db
+    billing = make_integration("billing", model=Channel, backend_class="email")
+    system = make_integration("system-mail", model=Channel, backend_class="system")
+    with system_context(reason="test.messaging.outbound_email"), override_settings(MAILERS=TRANSPORT):
+        assert billing.lifecycle == system.lifecycle == Channel.Lifecycle.CONNECTED
+        assert set(Channel.objects.outbound_email()) == {billing}
+        assert set(Channel.objects.require_outbound_email(backend_class="email")) == {billing}
+        assert not Channel.objects.outbound_email(backend_class="system").exists()
+        with pytest.raises(OutboundEmailNotConfigured):
+            Channel.objects.require_outbound_email(backend_class="system")
+
+
+@override_settings(MAILERS=TRANSPORT)
 def test_outbound_email_predicate_is_lazy_and_chainable() -> None:
     # No database fixture: constructing either selection must not execute SQL.
     selected = Channel.objects.outbound_email(backend_class="email").filter(pk=41)
@@ -290,7 +337,7 @@ def mail_desk(db: None, settings: Any) -> tuple[Any, Any]:
     """An email channel whose default sender is the desk, with delivery configured, and one request it received."""
 
     del db
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = TRANSPORT
     channel = make_integration(
         "reply-desk", model=Channel, backend_class="email", config={"from_email": "Desk <desk@example.test>"},
     )
@@ -460,3 +507,19 @@ def test_a_reply_of_another_kind_keeps_its_client_token_and_writes_no_envelope(d
     with system_context(reason="tests.messaging.chat_reply.read"):
         assert not reply.recipients.exists()
         assert list(reply.parts.values_list("role", flat=True)) == ["body"]
+
+
+@pytest.mark.parametrize(
+    ("transport", "reported"),
+    [
+        pytest.param(LOCMEM, True, id="locmem"),
+        pytest.param({"BACKEND": "django.core.mail.backends.console.EmailBackend"}, True, id="console"),
+        pytest.param({"BACKEND": "django.core.mail.backends.smtp.EmailBackend"}, False, id="smtp"),
+        pytest.param(None, False, id="no-transport"),
+    ],
+)
+def test_the_deploy_check_reports_a_development_transport(settings: Any, transport: Any, reported: bool) -> None:
+    settings.MAILERS = {"default": LOCMEM, **({"transport": transport} if transport is not None else {})}
+    deploy = {message.id for message in run_checks(include_deployment_checks=True, tags=[Tags.mail])}
+    assert ("messaging.E004" in deploy) is reported
+    assert "messaging.E004" not in {message.id for message in run_checks(tags=[Tags.mail])}

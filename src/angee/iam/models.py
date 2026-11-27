@@ -1,7 +1,8 @@
 """Source models for Angee identity.
 
-Pure identity: the swappable ``User`` and its manager, and the emailed
-single-use ``SignInLink``. The OAuth connection
+Pure identity: the swappable ``User`` and its manager. Its account actions are
+an open set (``User.account_actions``); ``iam_messaging`` adds the emailed
+sign-in link. The OAuth connection
 substrate (``OAuthClient``/``ExternalAccount``/``Credential``) is owned by
 ``integrate``; OIDC login fields are contributed onto that OAuth client by
 ``iam_integrate_oidc``. Everyone signed in reads a person's name; restricted
@@ -18,13 +19,9 @@ import re
 import secrets
 from collections.abc import Callable, Iterable, Mapping
 from copy import copy
-from datetime import timedelta
-from email.utils import parseaddr
 from functools import partial
 from typing import Any, ClassVar, Self, cast
-from urllib.parse import urlencode
 
-from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
@@ -32,15 +29,12 @@ from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core import checks
-from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.core.mail import EmailMessage, mailers
-from django.core.mail.handler import DEFAULT_MAILER_ALIAS
-from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
-from django.utils.crypto import constant_time_compare, salted_hmac
+from django.utils.crypto import constant_time_compare
 from django.views.decorators.debug import sensitive_variables
 from rebac import (
     ObjectRef,
@@ -67,15 +61,12 @@ from angee.base.exceptions import DomainError
 from angee.base.fields.state import StateField
 from angee.base.identity import canonical_subject_ref
 from angee.base.managers import AngeeManager
-from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import PublicIdentity, instance_from_public_id
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.roles import role_anchor
-from angee.base.models.timestamps import auto_now_stamps
-from angee.base.origins import public_origin
 from angee.base.querysets import AngeeQuerySet
-from angee.iam.events import person_created, sign_in_link_sent
+from angee.iam.events import person_created
 from angee.iam.identity import user_label
 from angee.iam.roles import protected_account_holders
 
@@ -94,12 +85,6 @@ IAMProtected = role_anchor("iam/protected", name="IAMProtected")
 PROTECTED_ACCOUNT_MESSAGE = "This account is protected: it is your own, staff, a superuser, or holds an elevated role."
 """Refusal for account operations that retain full protected-account restrictions."""
 
-SIGN_IN_LINK_PATH = "/sign-in-link"
-"""The public web route a sign-in link opens; IAM's web fragment declares the same path."""
-
-SIGN_IN_LINK_UNAVAILABLE_MESSAGE = "Sign-in links need a default mailer and ANGEE_PUBLIC_ORIGIN."
-"""Refusal of the sign-in link verb on a deployment that cannot build or send the link."""
-
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +95,7 @@ def bounded_limit(limit: int, *, maximum: int = VISIBLE_PEOPLE_MAX_LIMIT) -> int
 
 
 def _require_confirmed(confirmed: bool, message: str) -> None:
-    """Refuse an account verb its caller did not explicitly confirm."""
+    """Refuse an account action its caller did not explicitly confirm."""
 
     if confirmed is not True:
         raise ValidationError({"confirmed": message})
@@ -207,13 +192,12 @@ class UserKind(models.TextChoices):
 
 
 class UserAccountAction(models.TextChoices):
-    """Account verbs, each named by its Zed permission and sharing protected-account blockers."""
+    """IAM's own account actions, each named by its Zed permission; ``User.account_actions`` offers them."""
 
     SET_ACTIVE = "set_active", "Set active"
     RENAME = "rename", "Rename"
     RESET_PASSWORD = "reset_password", "Reset password"
     ISSUE_PASSWORD = "issue_password", "Issue password"
-    ISSUE_SIGN_IN_LINK = "issue_sign_in_link", "Issue sign-in link"
     SET_PASSWORD = "set_password", "Set password"
 
 
@@ -308,9 +292,9 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
         its ``member`` permission — are protected from every actor; an actor's
         own account is protected from that actor. Generic updates and Set password
         admit administrators (Set password still refuses self); the other account
-        verbs and view-as refuse every protected account. Staff is
+        actions and view-as refuse every protected account. Staff is
         a restricted field (``read__is_staff``): within the reach of preview,
-        updates and the account verbs, IAM's Zed tells ``actor`` which accounts are
+        updates and the account actions, IAM's Zed tells ``actor`` which accounts are
         not staff (``nonstaff_account``), and every other account counts as
         protected, so the rule fails closed. A system caller (no actor) reads the
         column directly.
@@ -405,7 +389,10 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     def normalize_email(cls, email: str | None) -> str:
         """Lowercase the whole address for every account kind, unlike Django.
 
-        Django lowercases only the domain. Python owns whitespace stripping and
+        Django lowercases only the domain. The platform matches addresses
+        case-insensitively (one handle per address, ``Handle.spelling_key_of``), so
+        the account's key is lower-cased whole; mail to the account goes to this
+        stored spelling. Python owns whitespace stripping and
         Unicode lowercasing; the stored email is the key, with no SQL transform.
         ``bulk_create`` and queryset ``update()`` bypass normalization; callers
         writing emails through them must normalize first.
@@ -792,7 +779,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     ``kind=service`` rows are non-login principals for agents and automation:
     the same row owns authorization, audit stamps, and revision authorship
     without widening password/OIDC login surfaces. Every instance save counts
-    a revision, so account verbs and administrative updates refuse a stale
+    a revision, so account actions and administrative updates refuse a stale
     expected revision.
     """
 
@@ -873,67 +860,71 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
                 kwargs["update_fields"] = update_field_names
         super().save(*args, **kwargs)
 
-    @staticmethod
+    @classmethod
+    def account_actions(cls) -> tuple[str, ...]:
+        """The account actions, in offer order, each named by its Zed permission on ``auth/user``.
+
+        A donor that adds an action extends this and :meth:`account_action_blockers`
+        through ``super()``, and runs it under :meth:`lock_for_account_action`.
+        """
+
+        return tuple(UserAccountAction.values)
+
+    @classmethod
     def account_action_blockers(
-        action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
+        cls, action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
     ) -> tuple[tuple[Q, str], ...]:
-        """Return the target conditions refusing ``action``, each with its refusal.
+        """Return the target conditions refusing ``action`` beyond IAM's own, each with its refusal.
 
         The conditions come from the acting subject's ``protection_condition``,
-        ``inactive_condition`` and ``own_account_condition``. The locked verbs and
-        the batched ``account_actions`` projection share these conditions, so a
-        control is offered exactly when its verb admits it. Only ``actor is None``
-        denotes system work, which retains the full protected-account refusal.
-        Other subjects without a concrete user cannot set passwords.
+        ``inactive_condition`` and ``own_account_condition``. Every account action
+        first meets IAM's person-kind and protected-account blockers, which no
+        override can drop (:func:`account_action_refusals`); this hook adds what
+        one action refuses besides, and a donor extends it through ``super()``.
+        The locked actions and the batched ``account_actions`` projection share
+        the conditions, so a control is offered exactly when its action admits it.
         """
 
         usable_password = ~Q(password__startswith=UNUSABLE_PASSWORD_PREFIX)
-        blockers = [
-            (~Q(kind=UserKind.PERSON), "Only person accounts can be managed."),
-        ]
-        if action == UserAccountAction.SET_PASSWORD and not system:
-            # Its sealed permission caps the audience at platform admins, with both write gates.
-            if own is None:
-                blockers.append((Q(pk__isnull=False), "Only a concrete user can set another person's password."))
-            else:
-                blockers.append((own, "Use Change password for your own account; it requires your current password "
-                                 "and keeps this session signed in."))
-        else:
-            blockers.append((protection, PROTECTED_ACCOUNT_MESSAGE))
+        blockers: list[tuple[Q, str]] = []
         if action in {UserAccountAction.RESET_PASSWORD, UserAccountAction.ISSUE_PASSWORD}:
             blockers.append((inactive, "Only active accounts can receive a password."))
         if action == UserAccountAction.RESET_PASSWORD:
             blockers.append((~usable_password, "This account has no password to reset; give it access instead."))
         if action == UserAccountAction.ISSUE_PASSWORD:
             blockers.append((usable_password, "This account already has a usable password."))
-        if action == UserAccountAction.ISSUE_SIGN_IN_LINK:
-            blockers.append((inactive, "Only active accounts can receive a sign-in link."))
-            if not SignInLink.deliverable():
-                blockers.append((Q(pk__isnull=False), SIGN_IN_LINK_UNAVAILABLE_MESSAGE))
         return tuple(blockers)
 
     @classmethod
     def account_action_annotations(cls, actor: Any) -> dict[str, models.expressions.BaseExpression]:
-        """Batch every account verb's permission and eligibility for one actor's rows.
+        """Batch every account action's permission and eligibility for one actor's rows.
 
-        Keys are ``UserAccountAction`` values. Without an actor nothing is allowed.
+        Keys are the actions :meth:`account_actions` names. Without an actor nothing is allowed.
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
         """
 
         if actor is None:
-            return {action: models.Value(False) for action in UserAccountAction.values}
+            return {action: models.Value(False) for action in cls.account_actions()}
         protection = cls.objects.protection_condition(actor)
         inactive = cls.objects.inactive_condition(actor)
         own = cls.objects.own_account_condition(actor)
         annotations: dict[str, models.expressions.BaseExpression] = {}
-        for action in UserAccountAction.values:
+        for action in cls.account_actions():
             rows = cls.objects.with_actor(actor).with_action(action).scoped_for_aggregate()
-            for condition, _error in cls.account_action_blockers(action, protection, inactive, own, system=False):
+            for condition, _error in account_action_refusals(cls, action, protection, inactive, own, system=False):
                 rows = rows.exclude(condition)
             annotations[action] = models.Exists(rows.filter(pk=models.OuterRef("pk")))
         return annotations
 
     def account_actions_for(self, actor: Any) -> list[str]:
-        """Return the account verbs ``actor`` may run on this row, in declaration order."""
+        """Return the account actions ``actor`` may run on this row, in :meth:`account_actions` order.
+
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
+        """
 
         if actor is None:
             return []
@@ -946,7 +937,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
             .values(*(f"_iam_{name}" for name in annotations))
             .first()
         ) or {}
-        return [action for action in UserAccountAction.values if allowed.get(f"_iam_{action}")]
+        return [action for action in type(self).account_actions() if allowed.get(f"_iam_{action}")]
 
     def protected_against(self, actor: Any) -> bool:
         """Whether this account needs protected-account admission; see ``protection_condition``."""
@@ -960,11 +951,17 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         )
 
     def account_action_error(self, action: str, actor: Any) -> str | None:
-        """Return the first refusal of ``action`` on this stored row for ``actor``, or None."""
+        """Return the first refusal of ``action`` on this stored row for ``actor``, or None.
+
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
+        """
 
         users = type(self).objects
         rows = users.system_context(reason="iam.account.eligibility").filter(pk=self.pk)
-        blockers = type(self).account_action_blockers(
+        blockers = account_action_refusals(
+            type(self),
             action,
             users.protection_condition(actor),
             users.inactive_condition(actor),
@@ -976,12 +973,19 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
                 return error
         return None
 
-    def _lock_for_account_action(self, action: str, *, expected_revision: int | None) -> Self:
-        """Lock this account and admit ``action`` for the instance's actor under the lock.
+    def lock_for_account_action(self, action: str, *, expected_revision: int | None) -> Self:
+        """Lock this account and admit account action ``action`` for the instance's actor under the lock.
 
-        Actor presence is required before locking. System callers bypass the
-        permission by the REBAC library's contract but still meet eligibility;
-        protection then excludes staff, superusers and elevated accounts only.
+        Every account action, a donor's included, runs under this: the locked row
+        must pass ``action``'s Zed permission, the expected revision and
+        :func:`account_action_refusals`. Actor presence is required before
+        locking. System callers bypass the permission by the REBAC library's
+        contract but still meet eligibility; protection then excludes staff,
+        superusers and elevated accounts only.
+
+        IAM's own, which a donor never overrides: overriding it removes protection,
+        and nothing reports it. A donor extends :meth:`account_action_blockers`
+        through ``super()``, the one extension point.
         """
 
         actor, bypass = self.effective_actor(strict=True)
@@ -1016,33 +1020,8 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """
 
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.ISSUE_PASSWORD), expected_revision=None)
+            user = self.lock_for_account_action(str(UserAccountAction.ISSUE_PASSWORD), expected_revision=None)
             return self._store_new_password(user, reason="iam.password.issue", expected_revision=None)
-
-    @sensitive_variables("token")
-    def issue_sign_in_link(self) -> None:
-        """Email an active, unprotected person a single-use sign-in link.
-
-        Permission and eligibility are checked on the locked row, as for
-        :meth:`issue_password`, and the account needs a valid email address:
-        the link goes to ``email`` only. A link issued within
-        ``ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`` seconds of the account's previous
-        one is refused. The row keeps the token's keyed digest, never the token.
-        The email leaves through Django's default mailer once the link commits,
-        so inside a caller's transaction it is sent only if that transaction
-        commits, and a mailer failure raises from that commit. The newest link
-        the mailer accepted is the only one that signs in.
-        """
-
-        with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.ISSUE_SIGN_IN_LINK), expected_revision=None)
-            try:
-                validate_email(user.email)
-            except ValidationError:
-                raise ValidationError("This account has no valid email address to send a sign-in link to.") from None
-            links = cast(Any, apps.get_model("iam", "SignInLink")).objects
-            link, token = links.issue(user, actor=self.effective_actor(strict=True)[0])
-            transaction.on_commit(partial(link.send, token))
 
     def reset_password(self, *, confirmed: bool, expected_revision: int) -> str:
         """Replace an active, unprotected person's usable password and return the new secret once.
@@ -1054,7 +1033,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         _require_confirmed(confirmed, "Confirm resetting this account's password.")
         with transaction.atomic():
             action = str(UserAccountAction.RESET_PASSWORD)
-            user = self._lock_for_account_action(action, expected_revision=expected_revision)
+            user = self.lock_for_account_action(action, expected_revision=expected_revision)
             return self._store_new_password(user, reason="iam.password.reset", expected_revision=expected_revision)
 
     def set_active(self, active: bool, *, confirmed: bool, expected_revision: int) -> None:
@@ -1067,7 +1046,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
 
         _require_confirmed(confirmed, "Confirm changing this account's access.")
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.SET_ACTIVE), expected_revision=expected_revision)
+            user = self.lock_for_account_action(str(UserAccountAction.SET_ACTIVE), expected_revision=expected_revision)
             if user.is_active != active:
                 user.is_active = active
                 user.sudo(reason="iam.account.set_active").save(
@@ -1084,7 +1063,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         if not (first_name or last_name):
             raise ValidationError({"first_name": "Enter a first or last name."})
         with transaction.atomic():
-            user = self._lock_for_account_action(str(UserAccountAction.RENAME), expected_revision=expected_revision)
+            user = self.lock_for_account_action(str(UserAccountAction.RENAME), expected_revision=expected_revision)
             user.first_name, user.last_name = first_name, last_name
             user.clean_fields(
                 exclude=[field.name for field in user._meta.fields if field.name not in {"first_name", "last_name"}]
@@ -1145,7 +1124,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Set another person's password through the revision-checked administration and write gates."""
 
         with transaction.atomic():
-            user = self._lock_for_account_action(
+            user = self.lock_for_account_action(
                 str(UserAccountAction.SET_PASSWORD), expected_revision=expected_revision,
             )
             actor, _bypass = user.effective_actor(strict=True)
@@ -1244,248 +1223,31 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         return self.first_name
 
 
-def _default_sender_usable() -> bool:
-    """Whether ``DEFAULT_FROM_EMAIL`` names a valid address, as messaging's outbound sender requires."""
+def account_action_refusals(
+    model: Any, action: str, protection: Q, inactive: Q, own: Q | None, *, system: bool,
+) -> tuple[tuple[Q, str], ...]:
+    """Return every condition refusing account action ``action``, IAM's mandatory ones first.
 
-    _name, address = parseaddr(str(settings.DEFAULT_FROM_EMAIL))
-    try:
-        validate_email(address)
-    except ValidationError:
-        return False
-    return True
-
-
-def _token_parts(token: str) -> tuple[str, str]:
-    """Split a token into its account public id and secret; both are empty for a malformed one."""
-
-    selector, _, secret = token.partition(".") if len(token) <= _SIGN_IN_TOKEN_MAX_LENGTH else ("", "", "")
-    return (selector, secret) if selector and secret else ("", "")
-
-
-class SignInLinkSpent(Exception):
-    """A genuine sign-in link that can no longer sign in.
-
-    It is used, expired or retired, no longer its account's newest sent link,
-    bound to account facts that have since changed, or for an account that is
-    inactive or protected. Its holder had the real link, so this refusal is
-    not a guess.
+    Every action meets the person-kind blocker and then the protected-account
+    blocker before ``model.account_action_blockers`` adds its own, so a donor
+    that drops ``super()`` or filters its result still refuses protected
+    accounts. Set password is the one exception: outside system work it refuses
+    the actor's own account instead, and other subjects without a concrete user,
+    since its sealed permission caps the audience at platform admins with both
+    write gates. Only ``actor is None`` denotes system work, which retains the
+    full protected-account refusal.
     """
 
-
-class SignInLinkManager[LinkT: SignInLink](AngeeManager[LinkT]):
-    """Issue, redeem and retire sign-in links, always as system work.
-
-    Not a GraphQL surface: ``User.issue_sign_in_link`` issues a link under the
-    account's lock and IAM's ``SignInLinkBackend`` redeems one.
-    """
-
-    @sensitive_variables("secret")
-    def issue(self, user: Any, *, actor: SubjectRef | None) -> tuple[LinkT, str]:
-        """Store a fresh link for ``user`` and return it with its token, the token's only copy.
-
-        The caller holds ``user``'s row lock and has admitted the issue. A link
-        within ``ANGEE_IAM_SIGN_IN_LINK_COOLDOWN`` seconds of the account's
-        previous one is refused. The token is ``<user public id>.<secret>``; the
-        row keeps the secret's keyed digest and the account digest
-        (:meth:`SignInLink.token_digest`, :meth:`SignInLink.account_digest`),
-        and ``created_by`` is ``actor``.
-        """
-
-        now = timezone.now()
-        cooldown = timedelta(seconds=int(settings.ANGEE_IAM_SIGN_IN_LINK_COOLDOWN))
-        with system_context(reason="iam.sign_in_link.issue"):
-            if cooldown and self.filter(user=user, created_at__gt=now - cooldown).exists():
-                raise ValidationError("A sign-in link was sent to this account moments ago; wait to send another.")
-            secret = secrets.token_urlsafe(32)
-            link = self.model(
-                user=user,
-                token_hash=self.model.token_digest(user.pk, secret),
-                account_hash=self.model.account_digest(user),
-                expires_at=now + timedelta(seconds=int(settings.ANGEE_IAM_SIGN_IN_LINK_TTL)),
-            )
-            if actor is not None:
-                link.with_actor(actor)
-            link.save()
-        return link, f"{user.public_id}.{secret}"
-
-    @sensitive_variables("token", "secret", "digest")
-    def redeem(self, token: str) -> Any | None:
-        """Consume ``token`` and return the person it signs in.
-
-        ``None`` means the token matches no link of a person, as a guess does;
-        :class:`SignInLinkSpent` means it matches one that can no longer sign
-        in. The token's account public id is not a secret, and an unknown one
-        refuses like a wrong secret. The secret's digest is compared with every
-        link of the account through ``constant_time_compare``, and only the
-        newest link the mailer accepted signs in. It must be unused and
-        unexpired, its account facts (:meth:`SignInLink.account_digest`)
-        unchanged, and its account an active, unprotected person. The account's
-        row lock serializes redemption with issuing, and a conditional update
-        consumes the link, so a token signs in once on every database backend.
-        """
-
-        selector, secret = _token_parts(token)
-        reason = "iam.sign_in_link.redeem"
-        users = get_user_model().objects.system_context(reason=reason).people().lock_if_supported()
-        with transaction.atomic(), system_context(reason=reason):
-            user = instance_from_public_id(get_user_model(), selector, queryset=users) if selector else None
-            if user is None:
-                return None
-            digest = self.model.token_digest(user.pk, secret)
-            links = list(self.filter(user=user).order_by("-pk"))
-            matched = None
-            for link in links:
-                if constant_time_compare(link.token_hash, digest):
-                    matched = link
-            if matched is None:
-                return None
-            now = timezone.now()
-            current = next((link for link in links if link.sent_at is not None), None)
-            if (
-                matched is not current
-                or matched.used_at is not None
-                or matched.expires_at <= now
-                or not constant_time_compare(matched.account_hash, self.model.account_digest(user))
-                or not user.is_active
-                or user.protected_against(None)
-            ):
-                raise SignInLinkSpent
-            consumed = self.filter(pk=matched.pk, used_at__isnull=True).update(
-                used_at=now,
-                **auto_now_stamps(self.model, now),
-            )
-            if consumed != 1:
-                raise SignInLinkSpent
-        logger.info("Signed in user %s with a sign-in link.", user.pk)
-        return user
-
-    def retire(self, user: Any) -> int:
-        """Expire ``user``'s unused links now, so none of them signs in later; the rows stay."""
-
-        now = timezone.now()
-        with system_context(reason="iam.sign_in_link.retire"):
-            return self.filter(user=user, used_at__isnull=True, expires_at__gt=now).update(
-                expires_at=now,
-                **auto_now_stamps(self.model, now),
-            )
-
-
-_SIGN_IN_TOKEN_MAX_LENGTH = 256
-"""Longest token ``redeem`` reads; issued tokens are a public id, a dot and 43 characters."""
-
-_SIGN_IN_LINK_SALT = "angee.iam.sign_in_link"
-"""``salted_hmac`` key salt of the stored token digest."""
-
-_SIGN_IN_ACCOUNT_SALT = "angee.iam.sign_in_link.account"
-"""``salted_hmac`` key salt of the stored account digest."""
-
-SIGN_IN_LINK_SUBJECT = "Your sign-in link"
-"""Subject of the email that carries a sign-in link."""
-
-
-class SignInLink(AuditMixin, AngeeModel, concrete=True):
-    """One emailed, single-use sign-in link for a person account.
-
-    Internal to IAM: no public id, no GraphQL surface, no REBAC resource type.
-    ``User.issue_sign_in_link`` issues links and IAM's ``SignInLinkBackend``
-    redeems them through :class:`SignInLinkManager`. A row keeps the token's
-    keyed digest, never the token; a digest of the account facts the link is
-    bound to; when it expires; when the mailer accepted it (``sent_at``); and
-    when it signed in (``used_at``). ``created_by`` is the issuer, empty for a
-    system issue. Rows stay as the issue record, and only the account's newest
-    sent link signs in.
-
-    Django's ``PasswordResetTokenGenerator`` derives its tokens from account
-    state: two links issued for one account stay valid together until the
-    account next signs in or changes its password, and nothing records who
-    issued them. Retiring the previous link on reissue and the issuer record
-    need a row. ``SECRET_KEY`` keys both digests and ``salted_hmac`` ignores
-    ``SECRET_KEY_FALLBACKS``, so rotating the key voids every outstanding link.
-    """
-
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sign_in_links")
-    token_hash = models.CharField(max_length=64)
-    # Rows issued before this column existed keep the empty default and read as spent.
-    account_hash = models.CharField(max_length=64, default="")
-    expires_at = models.DateTimeField()
-    sent_at = models.DateTimeField(null=True, blank=True)
-    used_at = models.DateTimeField(null=True, blank=True)
-
-    objects = SignInLinkManager()
-
-    class Meta:
-        """Django model options for the IAM sign-in link source."""
-
-        abstract = True
-
-    @staticmethod
-    def token_digest(user_pk: Any, secret: str) -> str:
-        """Return the stored digest of ``secret`` for the account ``user_pk``, keyed by ``SECRET_KEY``."""
-
-        return salted_hmac(_SIGN_IN_LINK_SALT, f"{user_pk}\x00{secret}", algorithm="sha256").hexdigest()
-
-    @staticmethod
-    def account_digest(user: Any) -> str:
-        """Return the digest of the account facts a link is bound to: email, password and last sign-in.
-
-        As in Django's ``PasswordResetTokenGenerator``, a new email address, a
-        password set or changed and any sign-in each retire the account's
-        outstanding links.
-        """
-
-        last_login = "" if user.last_login is None else user.last_login.replace(microsecond=0, tzinfo=None)
-        value = f"{user.pk}\x00{user.email}\x00{user.password}\x00{last_login}"
-        return salted_hmac(_SIGN_IN_ACCOUNT_SALT, value, algorithm="sha256").hexdigest()
-
-    @staticmethod
-    def token_account(token: str) -> str:
-        """Return the account public id ``token`` names, or ``""``: the per-account key for login throttling."""
-
-        return _token_parts(token)[0]
-
-    @classmethod
-    def deliverable(cls) -> bool:
-        """Whether this deployment can build and send links: a usable public origin, sender and default mailer."""
-
-        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
-        return origin is not None and _default_sender_usable() and DEFAULT_MAILER_ALIAS in mailers
-
-    @staticmethod
-    def url_for(token: str) -> str:
-        """Return the public URL that redeems ``token``; the token rides the fragment, which no request carries."""
-
-        origin = public_origin(settings.ANGEE_PUBLIC_ORIGIN, debug=settings.DEBUG)
-        if origin is None:
-            raise ImproperlyConfigured(SIGN_IN_LINK_UNAVAILABLE_MESSAGE)
-        return f"{origin}{SIGN_IN_LINK_PATH}#{urlencode({'token': token})}"
-
-    @sensitive_variables("token", "body")
-    def send(self, token: str) -> None:
-        """Email ``token``'s link to the account and record the send.
-
-        The message is rendered here and handed to Django's default mailer as
-        plain text; neither it nor the token is stored or logged. Once the
-        mailer accepts it, ``sent_at`` is stamped, which makes it the account's
-        current link, and ``sign_in_link_sent`` fires. A mailer failure
-        propagates and leaves ``sent_at`` empty, so the previously sent link
-        keeps working.
-        """
-
-        user = cast(Any, self).user
-        expires = timezone.localtime(self.expires_at)
-        body = (
-            "Use this link to sign in:\n\n"
-            f"{self.url_for(token)}\n\n"
-            f"It works once and expires on {expires:%Y-%m-%d %H:%M %Z}. A newer link replaces it.\n\n"
-            "If you did not expect this email, you can ignore it.\n"
-        )
-        EmailMessage(SIGN_IN_LINK_SUBJECT, body, to=[user.email]).send(using=DEFAULT_MAILER_ALIAS)
-        now = timezone.now()
-        with system_context(reason="iam.sign_in_link.sent"):
-            type(self)._base_manager.filter(pk=self.pk).update(sent_at=now, **auto_now_stamps(type(self), now))
-        self.sent_at = now
-        logger.info("Sent a sign-in link to user %s.", user.pk)
-        sign_in_link_sent.send(sender=type(user), instance=user, link=self)
+    mandatory = [(~Q(kind=UserKind.PERSON), "Only person accounts can be managed.")]
+    if action == UserAccountAction.SET_PASSWORD and not system:
+        if own is None:
+            mandatory.append((Q(pk__isnull=False), "Only a concrete user can set another person's password."))
+        else:
+            mandatory.append((own, "Use Change password for your own account; it requires your current password "
+                              "and keeps this session signed in."))
+    else:
+        mandatory.append((protection, PROTECTED_ACCOUNT_MESSAGE))
+    return (*mandatory, *model.account_action_blockers(action, protection, inactive, own, system=system))
 
 
 class ServiceUserMixin(PublicIdentity, models.Model):

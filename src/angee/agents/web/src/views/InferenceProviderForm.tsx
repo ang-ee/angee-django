@@ -29,7 +29,6 @@ function InferenceProviderForm({ resource: _resource, ...props }: RegisteredForm
             prefill={backendClassPrefill}
             prefillPreserveDirty
             prefillReplace={["config"]}
-            createOnly
           />
           <Field name="vendor" />
           <Field name="credential" />

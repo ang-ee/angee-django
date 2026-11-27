@@ -1,6 +1,7 @@
 import * as React from "react";
 import { rowPublicId, useModelMetadata, isClientRowModel, type Row } from "@angee/metadata";
 import { stableSerialize } from "@angee/refine";
+import { navigationScopeKey } from "./record-navigation-context";
 import { useResourceViewMaybe } from "./resource-view-context";
 import { useResourceListQuery } from "./surface/resource-list-query";
 import type { RecordNavigation } from "./RecordPager";
@@ -77,7 +78,7 @@ export function useListRecordNavigation<TRow extends Row>({
   const resolvedPositionRef = React.useRef<ResolvedRecordPosition | null>(null);
   const navigationScope = isClientRowModel(model?.resource) ? null : controlledScope === undefined ? captured?.binding === binding ? captured.scope : null : controlledScope;
   const localSnapshot = local?.binding === binding && (controlledScope === undefined || isClientRowModel(model?.resource)) ? local.snapshot : null;
-  const scopeIdentity = stableSerialize(navigationScope);
+  const scopeIdentity = navigationScopeKey(navigationScope);
   const activeRecordRef = React.useRef({ recordId, binding, scopeIdentity });
   activeRecordRef.current = { recordId, binding, scopeIdentity };
   const current = useResourceListQuery({ resource: model?.resource, scope: navigationScope, fields: idFields, enabled: Boolean(recordId) });
@@ -89,7 +90,7 @@ export function useListRecordNavigation<TRow extends Row>({
       setLocal(null);
       scopeRef.current = { binding, scope: state.navigationScope };
       // A mounted drawer's collection cannot replace the record's independent page.
-      if (!recordId) setCaptured((previous) => previous?.binding === binding && stableSerialize(previous.scope) === stableSerialize(state.navigationScope) ? previous : { binding, scope: state.navigationScope! });
+      if (!recordId) setCaptured((previous) => previous?.binding === binding && navigationScopeKey(previous.scope) === navigationScopeKey(state.navigationScope) ? previous : { binding, scope: state.navigationScope! });
     } else {
       scopeRef.current = null;
       if (!recordId) setCaptured((previous) => previous?.scope ? { binding, scope: null } : previous);

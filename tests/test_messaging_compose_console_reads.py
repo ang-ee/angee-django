@@ -23,7 +23,7 @@ from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.messaging.testing.models import Channel, Message, Thread
 from tests.conftest import Feed, Integration, create_platform_admin, make_integration
 from tests.messaging_campaign import grant, make_user
-from tests.test_messaging_compose import _receive
+from tests.test_messaging_compose import MAILERS, NO_TRANSPORT, _receive
 from tests.test_messaging_compose import desk as desk
 from tests.test_messaging_compose_graphql import (
     COMPOSE,
@@ -68,7 +68,7 @@ DRAFT = {
 BUDGETS = {
     "owner": {"presence": (4, 0), "ids": (3, 0), "picker": (7, 2)},
     "replier": {"presence": (7, 3), "ids": (6, 3), "picker": (14, 9)},
-    "administrator": {"presence": (9, 4), "ids": (8, 4), "picker": (18, 12)},
+    "administrator": {"presence": (8, 3), "ids": (7, 3), "picker": (16, 10)},
 }
 """Each read's statements and repeated texts per seat, the same at 1 channel and at 25, on SQLite and PostgreSQL.
 
@@ -77,7 +77,10 @@ The presence read and the Reply gate cost what :data:`DRAFT` costs; selecting
 elevated vendor-branding read a channel's label falls back to. The picker's count
 is a second root over the same filter. Inside a test's transaction REBAC pins its
 policy revision for one compiled statement only, so that root reads the revision
-and the viewer's grants again: its repeated texts.
+and the viewer's grants again: its repeated texts. The administrator's reads cost
+one statement and one repeated text less (the picker two) since the system
+channel's seal rewrote the channel's ``read`` and ``reply`` around ``admin->member``
+(messaging's ``permissions.zed``); the other seats' are unchanged.
 """
 
 
@@ -142,7 +145,7 @@ def world(db: None, settings: Any) -> SimpleNamespace:
     """
 
     del db
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     feed_owner = make_user("compose-reads-feed-owner")
     channels = {
         "support": make_integration("compose-reads-support", model=Channel, backend_class="email"),
@@ -212,7 +215,7 @@ def test_sendable_lists_the_channels_composing_admits_for_each_seat(
     Reply gate those among the ids it names, the picker each with its count.
     """
 
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = configured == "mailer configured"
+    settings.MAILERS = MAILERS if configured == "mailer configured" else NO_TRANSPORT
     names = {channel.public_id: name for name, channel in world.channels.items()}
     ids = sorted(names)
     read = {}
@@ -274,7 +277,7 @@ def test_each_read_of_sendable_costs_what_reading_the_permissions_costs(
     """
 
     del db
-    settings.ANGEE_EMAIL_DELIVERY_CONFIGURED = True
+    settings.MAILERS = MAILERS
     viewer = create_platform_admin(f"compose-reads-{seat}") if seat == "administrator" else make_user(
         f"compose-reads-{seat}")
     created: list[Any] = []

@@ -54,7 +54,7 @@ describe("UsersPage", () => {
     expect(declarations().page.baseFilter).toEqual({ directory: { exact: true } });
   });
 
-  test("the form selects the revision and leaves account verbs to the record actions container", () => {
+  test("the form selects the revision and leaves account actions to the record actions container", () => {
     const { form } = declarations();
     const fields = parsePageFields(form.children);
     expect(fields.map((field) => field.name)).toContain("revision");

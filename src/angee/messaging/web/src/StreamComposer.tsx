@@ -23,6 +23,8 @@ export interface StreamComposerProps {
   actions?: React.ReactNode;
   attachments?: React.ReactNode;
   onFiles?: (files: FileList | readonly File[] | null) => void;
+  /** The text box, for a host that moves focus into it (a reply box opening on its row's Reply). */
+  inputRef?: React.Ref<HTMLTextAreaElement>;
 }
 
 /** One shortcut policy for record chatter and both stream composers. */
@@ -36,9 +38,9 @@ export function handleMessageSubmitKey(event: React.KeyboardEvent<HTMLTextAreaEl
 
 /** The open stream composer shared by a thread post and a child-record create verb. */
 export function StreamComposer({ value, onChange, onSubmit, disabled, ready, submitKey,
-  prompt, submitLabel, readerLine, audience, before, inputBefore, after, actions, attachments, onFiles }: StreamComposerProps): React.ReactElement {
+  prompt, submitLabel, readerLine, audience, before, inputBefore, after, actions, attachments, onFiles, inputRef }: StreamComposerProps): React.ReactElement {
   const t = useMessagingT();
-  const input = <Textarea value={value} onChange={(event) => onChange(event.currentTarget.value)}
+  const input = <Textarea ref={inputRef} value={value} onChange={(event) => onChange(event.currentTarget.value)}
     onKeyDown={(event) => handleMessageSubmitKey(event, submitKey, ready && !disabled, onSubmit)}
     rows={3} resize="none" readOnly={disabled} aria-label={t("composer.messageLabel")}
     placeholder={prompt} className={messageComposerInputClassName} />;

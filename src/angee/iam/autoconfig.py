@@ -5,17 +5,37 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict
 
 from django.conf import settings as django_settings
 
-SETTINGS = {
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_SERVER_COMMAND_CONTEXT:append": list[str],
+        "AUTH_USER_MODEL": str,
+        "REBAC_UNIVERSAL_ADMIN_ROLE": str,
+        "ANGEE_PROFILING_PERMISSION": str,
+        "ANGEE_IMPL_CHOICES_ADMISSION": str,
+        "MIDDLEWARE:append": list[str],
+        "AUTHENTICATION_BACKENDS:append": list[str],
+        "SILENCED_SYSTEM_CHECKS:append": list[str],
+        "AXES_COOLOFF_TIME": int,
+        "AXES_USERNAME_CALLABLE": str,
+        "AXES_WHITELIST_CALLABLE": str,
+    },
+)
+
+SETTINGS: _Settings = {
     "ANGEE_SERVER_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
     "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",
     # Only platform admins open the server's request profiling UI.
     "ANGEE_PROFILING_PERMISSION": "angee.iam.permissions.is_platform_admin",
+    # Only platform admins read implementation choices beyond a model's own policy (and so repair a
+    # record's selector): another intent than profiling, kept in its own setting.
+    "ANGEE_IMPL_CHOICES_ADMISSION": "angee.iam.permissions.is_platform_admin",
     "MIDDLEWARE:append": [
         "django.contrib.sessions.middleware.SessionMiddleware",
         "django.middleware.csrf.CsrfViewMiddleware",
@@ -27,24 +47,18 @@ SETTINGS = {
     "AUTHENTICATION_BACKENDS:append": [
         "axes.backends.AxesStandaloneBackend",
         "angee.iam.auth.ModelBackend",
-        "angee.iam.auth.SignInLinkBackend",
     ],
     # IAM calls REBAC actions directly and deliberately omits Django's optional
     # has_perm/codename bridge; its absence is not a configuration defect here.
     "SILENCED_SYSTEM_CHECKS:append": ["rebac.W001"],
-    # Seconds a sign-in link stays valid: Django's default for an emailed
-    # password-reset link, since the person cannot request a fresh one.
-    "ANGEE_IAM_SIGN_IN_LINK_TTL": 259_200,
-    # Seconds before an account may be sent another sign-in link.
-    "ANGEE_IAM_SIGN_IN_LINK_COOLDOWN": 60,
     # IAM's login throttling policy (django-axes): a lockout lifts after an
     # hour. A success clears nothing, so a client cannot interleave its own
     # sign-ins with guesses; each request makes one attempt (`authenticate_once`).
     "AXES_COOLOFF_TIME": 1,
-    # A sign-in link attempt is recorded under the account public id it names,
-    # never an empty username; a genuine but spent link is not a guess.
+    # A credential attempt is recorded under the account it names, never an
+    # empty username; a genuine but spent credential is not a guess.
     "AXES_USERNAME_CALLABLE": "angee.iam.auth.axes_username",
-    "AXES_WHITELIST_CALLABLE": "angee.iam.auth.spent_sign_in_link",
+    "AXES_WHITELIST_CALLABLE": "angee.iam.auth.spent_credential",
 }
 """Django settings contributed when IAM is installed."""
 

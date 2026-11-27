@@ -9,18 +9,22 @@ from typing import Any
 import pytest
 from django.db import connection, transaction
 from django.test import override_settings
-from rebac import system_context, to_subject_ref
+from rebac import actor_context, system_context, to_subject_ref
 
 from angee.messaging.testing.models import Channel, Handle, Message, Recipient, Thread
 from angee.parties.managers import HandleManager
 from angee.provenance.context import changeset_model
 from tests.conftest import make_integration
 from tests.lock_waits import submit, wait_for_lock
+from tests.messaging_campaign import make_user
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]
+
+TRANSPORT = {"transport": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}}
+"""Delivery configured: the test mailer is the transport mailer messaging sends through."""
 
 
 def test_a_thread_is_opened_outside_any_transaction() -> None:
@@ -36,7 +40,7 @@ def test_a_thread_is_opened_outside_any_transaction() -> None:
     assert (opened.external_id, opened.display_title) == ("msg:open@example.test", "Open")
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS=TRANSPORT)
 def test_a_second_keyed_compose_waits_on_the_first_claim_and_replays_its_message() -> None:
     """The contender has no earlier lock to wait on: it parks on the claim and then returns the first's message."""
 
@@ -63,7 +67,7 @@ def test_a_second_keyed_compose_waits_on_the_first_claim_and_replays_its_message
     assert claims.count() == 1
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS=TRANSPORT)
 def test_a_typed_name_waits_on_a_fill_of_the_blank_handle_and_keeps_what_it_wrote() -> None:
     """A name a person types only fills a blank handle, even when another transaction fills it first."""
 
@@ -130,7 +134,7 @@ def _recipient_keys(messages: list[Any]) -> list[list[str]]:
     return [list(rows.filter(message=message).values_list("handle__spelling_key", flat=True)) for message in messages]
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS=TRANSPORT)
 def test_two_composes_naming_the_same_addresses_in_opposite_orders_take_their_handles_in_one_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -153,7 +157,7 @@ def test_two_composes_naming_the_same_addresses_in_opposite_orders_take_their_ha
     assert Handle._base_manager.filter(value__in=("y@example.test", "z@example.test")).count() == 2
 
 
-@override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
+@override_settings(MAILERS=TRANSPORT)
 def test_two_composes_naming_one_address_in_two_letter_cases_take_their_handles_in_one_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -168,3 +172,51 @@ def test_two_composes_naming_one_address_in_two_letter_cases_take_their_handles_
     )
     assert _recipient_keys(messages) == [["zed@example.test", "alice@example.test"]] * 2
     assert Handle._base_manager.filter(spelling_key__in=("alice@example.test", "zed@example.test")).count() == 2
+
+
+@override_settings(MAILERS=TRANSPORT, DEFAULT_FROM_EMAIL="Angee <noreply@example.test>")
+def test_two_system_mails_naming_the_same_addresses_in_opposite_orders_take_their_handles_in_one_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """System work lands its handles through the same ordered writer, under the non-user attribution."""
+
+    from tests.test_messaging_system_mail import _install
+
+    system = _install()
+    Message.objects.compose_as_system(reason="tests.system_mail.warm", to=["warm@example.test"], text="Warm.")
+    upsert = HandleManager.upsert
+    first: dict[int, threading.Event] = {}
+    arrived = {"a": threading.Event(), "b": threading.Event()}
+
+    def pausing(self: Any, **fields: Any) -> Any:
+        handle = upsert(self, **fields)
+        mine = first.pop(threading.get_ident(), None)
+        if mine is not None:
+            mine.set()
+            other = next(event for event in arrived.values() if event is not mine)
+            other.wait(timeout=3)
+        return handle
+
+    monkeypatch.setattr(HandleManager, "upsert", pausing)
+
+    cause = make_user("system-race-cause")
+
+    def send(name: str, to: list[str]) -> Any:
+        def run() -> Any:
+            first[threading.get_ident()] = arrived[name]
+            with actor_context(cause):
+                return Message.objects.compose_as_system(reason="tests.system_mail.race", to=to, text=f"From {name}.")
+        return run
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one, _pid = submit(pool, send("a", ["Zed <z@example.test>", "Ann <y@example.test>"]))
+        two, _pid = submit(pool, send("b", ["Ann <y@example.test>", "Zed <z@example.test>"]))
+        messages = [one.result(timeout=30), two.result(timeout=30)]
+    assert {message.channel_id for message in messages} == {system.pk}
+    assert [
+        list(Recipient._base_manager.filter(message=message).order_by("pk").values_list("handle__value", flat=True))
+        for message in messages
+    ] == [["z@example.test", "y@example.test"], ["y@example.test", "z@example.test"]]
+    # The person who caused the mail becomes no handle's creator.
+    handles = Handle._base_manager.filter(value__in=("y@example.test", "z@example.test"))
+    assert list(handles.values_list("created_by_id", flat=True)) == [None, None]

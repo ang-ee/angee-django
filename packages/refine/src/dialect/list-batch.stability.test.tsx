@@ -23,7 +23,7 @@ const { Provider, dataProvider, clients, clearClients } = createRefineTestProvid
 afterEach(() => { cleanup(); clearClients(); });
 
 function scopes(): AngeeListBatchScope[] {
-  return [1, 2].map((page) => ({ key: String(page), page, pageSize: 10, where: { active: { _eq: true } }, orderBy: { id: "asc" } }));
+  return [1, 2].map((page) => ({ key: String(page), page, pageSize: 10, where: { active: { _eq: true } }, orderBy: [{ id: "asc" }] }));
 }
 
 describe("native list batch structural sharing", () => {
@@ -73,7 +73,7 @@ describe("native list batch structural sharing", () => {
     dataProvider.getList.mockImplementation(async ({ pagination }: { pagination?: { currentPage?: number } }) =>
       ({ data: [{ id: `note-${pagination?.currentPage}` }], total: 40 }));
     const page = (index: number): AngeeListBatchScope =>
-      ({ key: String(index), page: index, pageSize: 10, where: { active: { _eq: true } }, orderBy: { id: "asc" } });
+      ({ key: String(index), page: index, pageSize: 10, where: { active: { _eq: true } }, orderBy: [{ id: "asc" }] });
     const { result, rerender } = renderHook(
       ({ pages }) => useAngeeListBatch(target, pages.map(page), { fields: ["id"] }),
       { initialProps: { pages: [2, 3, 4] }, wrapper: Provider },
@@ -161,6 +161,21 @@ describe("native list batch structural sharing", () => {
     const pages = clients.at(-1)!.getQueryCache().findAll({ predicate: (query) => query.queryHash.includes('"list"') });
     expect(pages).toHaveLength(4);
     expect(pages.filter((query) => query.getObserversCount() > 0)).toHaveLength(2);
+  });
+
+  test("the same keys in another priority are another request, read again", async () => {
+    dataProvider.getList.mockResolvedValue({ data: [{ id: "note-a" }], total: 1 });
+    const page = (orderBy: AngeeListBatchScope["orderBy"]): AngeeListBatchScope[] =>
+      [{ key: "1", page: 1, pageSize: 10, where: undefined, orderBy }];
+    const { result, rerender } = renderHook(
+      ({ orderBy }) => useAngeeListBatch(target, page(orderBy), { fields: ["id"] }),
+      { initialProps: { orderBy: [{ due: "desc" }, { title: "asc" }] as AngeeListBatchScope["orderBy"] }, wrapper: Provider },
+    );
+    await waitFor(() => expect(result.current.get("1")?.total).toBe(1));
+    rerender({ orderBy: [{ title: "asc" }, { due: "desc" }] });
+    await waitFor(() => expect(dataProvider.getList).toHaveBeenCalledTimes(2));
+    expect(dataProvider.getList.mock.calls.map(([params]) => params.meta?.gqlVariables?.order_by))
+      .toEqual([[{ due: "desc" }, { title: "asc" }], [{ title: "asc" }, { due: "desc" }]]);
   });
 
   test("returns an empty stable Map when disabled and makes no requests", () => {

@@ -16,9 +16,9 @@ const resources = ["projects.Project", "proposals.Round", "proposals.Proposal"].
 /** A project record whose server projection carries its active round. */
 function renderProject(activeRound: Record<string, unknown>): GraphQLWireRequest[] {
   const requests: GraphQLWireRequest[] = [];
-  const schemas = { console: { ...storySchema({
+  const schemas = storySchema({
     open_proposal_round: (args) => ({ ok: true, message: "Round opened.", id: args.round, code: null, validation_errors: null }),
-  }, (request) => requests.push(request)).public!, metadata: { angee: { resources } } } };
+  }, { schema: "console", resources, onRequest: (request) => requests.push(request) });
   render(<RuntimeFixture activeSchema="console" schemas={schemas}>
     <RecordChromeProvider value={{ resource: "projects.Project", canonicalResource: "projects.Project", dataProviderName: "console",
       recordId: "project-1", record: { id: "project-1", active_proposal_round: activeRound }, formReadOnly: false }}>

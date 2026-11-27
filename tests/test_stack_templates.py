@@ -1245,6 +1245,7 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
     assert "angee.workflows_messaging" not in base["INSTALLED_APPS"]
     assert "angee.webforms" not in base["INSTALLED_APPS"]
     assert "angee.webforms_messaging" not in base["INSTALLED_APPS"]
+    assert "angee.iam_messaging" not in base["INSTALLED_APPS"]
     assert "ANGEE_ADDON_DIRS" not in base
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
@@ -1255,6 +1256,8 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "angee.tags",
         "angee.brandkit",
         "angee.messaging_templates",
+        "angee.iam_messaging",
+        "angee.decisions_messaging",
         "angee.checklists",
         "angee.agents",
         "angee.knowledge",

@@ -92,6 +92,13 @@ INSTALLED_APPS:
   # Message templates: the layouts, templates, blocks and parts outgoing mail is
   # written from, shipped by addons and overridden by the deployment.
   - angee.messaging_templates
+  # Emailed sign-in links: an administrator sends a person a single-use link
+  # that signs them in.
+  - angee.iam_messaging
+  # Open decisions mailed to the people they can be put to: when asked, when a
+  # reminder is due, and in a daily digest. It needs ANGEE_PUBLIC_ORIGIN and system
+  # mail; without them each of its tasks refuses once, in the worker's log.
+  - angee.decisions_messaging
   - angee.checklists
   - angee.agents
   - angee.knowledge

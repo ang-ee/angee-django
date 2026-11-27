@@ -1431,18 +1431,31 @@ class Handle(
         live = type(self)._base_manager.filter(platform=self.Platform.EMAIL, spelling_key=key, merged_into__isnull=True)
         return live.exclude(pk=self.pk).order_by("pk").first()
 
-    def is_spelling_of(self, value: str) -> bool:
+    def is_spelling_of(self, value: str, *, merged: bool = False) -> bool:
         """Whether ``value`` is this handle's address: its own ``value``, or on email another letter case or domain
-        spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column)."""
+        spelling of it (:meth:`spelling_key_of`, computed from ``value``, never the stored column).
+
+        ``merged`` also answers for every handle merged into this one, at any depth, by one read made only when
+        ``value`` is not this handle's own: a fold re-points the redirects of what it folds at the survivor, so
+        each handle merged into this one names it (``merged_into``), and :meth:`spellings_filter` finds a spelling
+        among them by its value or its stored key.
+        """
 
         key = self.spelling_key_of(self.platform, value)
-        return value == self.value or bool(key) and key == self.spelling_key_of(self.platform, self.value)
+        if value == self.value or bool(key) and key == self.spelling_key_of(self.platform, self.value):
+            return True
+        if not merged or self.pk is None:
+            return False
+        spelled = (self.spellings_filter((value,)) if self.platform == self.Platform.EMAIL
+                   else models.Q(platform=self.platform, value=value))
+        return type(self)._base_manager.filter(spelled, merged_into_id=self.pk).exists()
 
     def validate_merge(self, merged: Sequence[Any]) -> None:
         """A contact alias keeps its platform and the directory identity lock order; a person merges an alias.
 
-        Every later message to a merged handle's address goes to the kept one. So a
-        person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
+        A merge redirects the mail people later address to a merged handle's address to
+        the kept one, and never system mail, which goes exactly to the address its
+        caller gave. So a person's merge (:meth:`~angee.base.models.merge.MergeableMixin.merge`, which
         binds the kept handle to its actor) admits only another spelling or alias of
         the kept address, the same person-matching key, unless that actor is a
         contact administrator: an effective member of ``parties/role:contact_admin``,

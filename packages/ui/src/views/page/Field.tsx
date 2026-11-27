@@ -73,7 +73,11 @@ export interface FieldDescriptor extends FieldPresentation {
   maxItems?: number;
   objectTemplate?: readonly FieldDescriptor[];
   itemTemplate?: FieldDescriptor;
-  /** Editable only while creating; read-only (and never patched) on an edit. */
+  /**
+   * Editable only while creating; read-only (and never patched) on an edit, except a create-only
+   * implementation selector the model's metadata names, which a record whose stored key is not
+   * registered offers once more (a repair). A page cannot unlock what the model's metadata locks.
+   */
   createOnly?: boolean;
   /** Editable only while editing; read-only (and never sent) on a create. */
   editOnly?: boolean;
@@ -103,7 +107,8 @@ export interface FieldDescriptor extends FieldPresentation {
    * the targets it hides are dropped from the draft.
    * On save, each preset field whose value changed writes its preset's value for every target that
    * is hidden now and was loaded with a different value, in declaration order (the later wins).
-   * `prefill` therefore also runs at save and must be pure.
+   * `prefill` therefore also runs at save, and at each read of what Save would write (a record form's
+   * `nextSave`), and must be pure.
    */
   prefill?: (value: unknown, values: Row, loaded?: Row) => Record<string, unknown> | null | undefined;
   /** Keep dirty sibling values when applying a preset, except for names explicitly replaced below. */

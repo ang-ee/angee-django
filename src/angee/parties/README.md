@@ -342,11 +342,18 @@ part in any script (`jörg@`, `peña@`) with no whitespace, control or format
 character (a zero-width space, a direction mark), a domain that passes the
 domain rule of Django's `EmailValidator` (an internationalised one as typed or
 punycoded), and no longer than an address may be or the handle's value holds.
-An email handle is one address whatever its letter case or domain spelling.
+An email handle is one address whatever its letter case or domain spelling:
+the platform matches addresses case-insensitively, the part before the `@` as
+well as the domain, though a mail server may tell `Ada@` and `ada@` apart.
 `upsert` and `find_identities` land any such spelling on the one live handle,
-which keeps the spelling first written as its `value`, what a message to it is
-addressed to; its spelling key (`Handle.spelling_key_of`) is what a live email
-handle is unique by (`uq_handle_spelling_key`). One address, by that key, is
+which keeps the spelling first written as its `value`, what readers show and a
+message to it is addressed to unless its writer was handed another spelling
+(messaging's `Recipient.address`, which mail goes to); its spelling key (`Handle.spelling_key_of`) is what a live email
+handle is unique by (`uq_handle_spelling_key`). `Handle.is_spelling_of(value,
+merged=True)` also answers for every handle merged into it, in one read, as a
+fold re-points each redirect at the survivor; `HandleManager.find_identity_owners`
+returns the row owning each identity before its merge redirect, which
+`find_identities` resolves to the survivor. One address, by that key, is
 every letter case of it (lower-cased, not case-folded: `Straße@` and `STRASSE@`
 are two) and every spelling of its domain that the email backend sends as one
 domain (IDNA 2003, as Django's `punycode` writes it): a punycode label and its
@@ -574,8 +581,9 @@ same platform. Handle owns missing
 value carry and the directory identity lock order; the shared reference mover
 preserves statement decisions and evidence. The alias remains as a historized
 redirect, reserving its ingestion keys so later syncs resolve to the survivor.
-Every later message to a merged handle's address goes to the kept one, so a
-person's merge (`merge_records`) admits only another spelling or alias of the
+A merge redirects the mail people later address to a merged handle's address
+to the kept one, and never system mail, which goes exactly to the address its
+caller gave; so a person's merge (`merge_records`) admits only another spelling or alias of the
 kept address, the same platform and person-matching key as the rule computes it
 from each value (never the stored column, which the key repair may not have
 reached; a number the phone rule reads only as its digits, `Handle.is_fallback_key`,

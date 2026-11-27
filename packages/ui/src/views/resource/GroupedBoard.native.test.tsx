@@ -202,7 +202,7 @@ test("each channel pages its own records and links retain that leaf filter, orde
   expect(screen.getByRole("button", { name: "Groups 1-6 / 6 groups" })).toBeTruthy();
   const request = f.getList.mock.calls.at(-1)?.[0];
   expect(request).toMatchObject({ pagination: { currentPage: 2, pageSize: 20 },
-    meta: { gqlVariables: { where: { channel: { id: { _eq: "mail" } } }, order_by: { title: "desc" } } } });
+    meta: { gqlVariables: { where: { channel: { id: { _eq: "mail" } } }, order_by: [{ title: "desc" }] } } });
   const navigation = f.rowHref.mock.calls.findLast(([row]) => row.id === "mail-21")?.[1];
   const scope = { filter: { channel: { exact: "mail" } }, order: { title: "DESC" }, page: 2, pageSize: 20 };
   expect(navigation).toMatchObject(scope);

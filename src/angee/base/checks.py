@@ -111,7 +111,7 @@ def check_stored_impl_keys(
             for field in keyed:
                 if field.column not in columns:
                     continue
-                # Read the column as text: the field itself refuses a key it does not know.
+                # Read the column as stored text: the field reads an empty key as none.
                 stranded = (
                     model._base_manager.using(alias)
                     .annotate(stored_key=Cast(field.attname, models.CharField()))
@@ -176,6 +176,7 @@ def check_sealed_permissions(
     app_label: str,
     seals: Mapping[str, Collection[str]],
     check_id: str,
+    hint: str,
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
@@ -184,11 +185,12 @@ def check_sealed_permissions(
     ``seals`` maps resource types of ``app_label``'s ``permissions.zed`` to the
     permissions no fragment extends. A composed schema whose sealed expression
     differs from the declaration's was changed by a fragment, which then reaches
-    that permission alone: fragments widen the permissions a sealed expression
-    composes, or grant their need through their own records' reads. An owner
-    without its declaration, or a seal on a permission the declaration does not
-    state, is reported as well; the check reports and never raises. Owners
-    register it once, bound with ``functools.partial``, under the security tag.
+    that permission alone. ``hint`` is the seal's own remedy, which a refused
+    fragment's error carries: the extension points its owner offers instead. An
+    owner without its declaration, or a seal on a permission the declaration
+    does not state, is reported as well; the check reports and never raises.
+    Owners register it once, bound with ``functools.partial``, under the
+    security tag.
     """
 
     del kwargs
@@ -228,8 +230,7 @@ def check_sealed_permissions(
                 checks.Error(
                     f"{config.name}: {', '.join(changed)} differ from {owner.name}'s declaration "
                     f"(extended by {extended_by or 'no fragment'}).",
-                    hint="Union the fragment's arm into an extension point the sealed expression composes, "
-                    "or grant the need through the fragment's own record's read.",
+                    hint=hint,
                     obj=config,
                     id=check_id,
                 )

@@ -6,7 +6,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldError, ValidationError
 from django.db import models
 
 from angee.graphql.field_types import register_field_type
@@ -79,8 +79,11 @@ class FontStackField(models.CharField):
     Double quotes are stored as single quotes (:func:`normalize_font_stack`).
     ``full_clean`` refuses a stack :func:`validate_font_stack` does not admit, and
     so does every write that reaches the database, through
-    :meth:`get_db_prep_save`: ``save``, ``bulk_create``, ``bulk_update`` and
-    ``QuerySet.update``. Lookups take their operand as given.
+    :meth:`get_db_prep_save`: a value written by ``save``, ``bulk_create`` or
+    ``QuerySet.update`` is checked, whatever its type, and an expression
+    (``F()``, ``Value()``, a function, and ``bulk_update``, which writes through
+    ``Case``) is refused, since the database computes its result past the check.
+    Lookups take their operand as given.
     """
 
     description = "CSS font stack"
@@ -103,17 +106,25 @@ class FontStackField(models.CharField):
         return normalize_font_stack(value) if isinstance(value, str) else value
 
     def pre_save(self, model_instance: models.Model, add: bool) -> Any:
-        """Store the normalised stack on the instance it saves."""
+        """Store the normalised stack on the instance it saves; pass an expression on, for refusal."""
 
-        value = self.to_python(super().pre_save(model_instance, add))
+        value = super().pre_save(model_instance, add)
+        if hasattr(value, "resolve_expression"):
+            return value
+        value = self.to_python(value)
         setattr(model_instance, self.attname, value)
         return value
 
     def get_db_prep_save(self, value: Any, connection: Any) -> Any:
-        """Refuse a stack :func:`validate_font_stack` does not admit, whichever write reaches the database."""
+        """Refuse an expression and a stack :func:`validate_font_stack` does not admit, whichever write reaches it."""
 
-        if isinstance(value, str):
-            value = normalize_font_stack(value)
+        if hasattr(value, "as_sql"):
+            raise FieldError(
+                f"{self.name} stores a font stack written as text, which it checks; it refuses an expression "
+                "(F(), Value(), a function or bulk_update()), whose result reaches the database unchecked."
+            )
+        if value is not None:
+            value = self.to_python(value)
             try:
                 validate_font_stack(value)
             except ValidationError as error:

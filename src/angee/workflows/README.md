@@ -70,9 +70,19 @@ Pruning releases the step link and retains the question and verdict.
 `ctx.record(record, operation="read", label="")` stages one `StepRecord` for a
 read, created, changed, deleted or called record. `ctx.load` authorizes and loads;
 call `ctx.record` explicitly to retain evidence.
-Admission inputs use the same relation with no step. `step.records` and
-`WorkflowRun.objects.about(record_or_records)` provide both directions, including
-readable ancestors. `ctx.note(message, tone="info")` adds a small recorded note.
+Admission links the subject and each declared input relation the same way, with no
+step, so a run is about those records from admission, whatever step it waits on.
+`WorkflowRun.objects.about(record_or_records)` reads the runs about records, including
+readable ancestors. Its inverse, `runs.concerns(Model)`, reads the `Model` records those
+runs and all their readable descendants (child runs, their children and so on) are about
+(`descendants=False` keeps to the runs themselves), as the runs' reader may read them.
+Both walks are one recursive common table expression inside the read's one statement,
+however deep or wide the runs reach; `UNION` ends even a cycle. `concerns` reads the
+child runs that exist when it is evaluated. A system caller builds and evaluates it inside
+`system_context(...)`; a `system_queryset()` run set read outside it raises
+`MissingActorError`. A merged record answers as itself; `about(record.canonical())` reads
+back from its survivor. `step.records` lists one step's links.
+`ctx.note(message, tone="info")` adds a small recorded note.
 The three reader-facing `StepRun.hold` states are `decision`, `run` and `error`;
 timer, record-change and map scheduling remain internal wait mechanics.
 A run's `hold` is its most urgent step hold: `error`, then `run`, then `decision`.
@@ -115,8 +125,9 @@ current, certain, optional and not-run nodes. Guaranteed normal paths determine
 certain steps; other reachable future steps fold into one may-also entry.
 Stop cancels the run tree and withdraws its open decisions with `[]`, the stopper
 and time, leaving domain records alone. Open questions retain their run tree's
-audit regardless of age; deleting a touched record stops its runs and withdraws
-their questions after deletion commits.
+audit regardless of age; deleting a run's subject or a record it created or changed
+(`working_on`) stops the run and withdraws its questions after deletion commits. A
+record a run only read, including one its input names, stops nothing.
 `stopped_at` closes an error hold and its future plan while preserving the
 run's terminal failure audit; its steps cannot be retried after stopping.
 
@@ -258,4 +269,14 @@ Resource rows supply `key`, `name`, `subject_model`, `draft` and `publish`.
 [`WorkflowDefinitionResource`](resources.py) delegates to `install_definition`,
 which uses the same draft and publication owners as direct calls. Tests compose
 the abstract sources through [`workflows.testing`](testing/__init__.py) and can
-execute those same manager verbs synchronously through its drivers.
+execute those same manager verbs synchronously through its drivers. An entry never lists
+`draft` or `publish` under `create_only` (`WorkflowDefinitionResource.never_create_only`):
+the load refuses it. Trigger rows install disabled; a row re-applied without a change to
+the trigger's rule (`Trigger.rule_fields`) keeps its state: enabled or disabled, its
+reason, its grant, its schedule cursor and its pending occurrences. A rule change
+disables it, with its reason.
+
+**Named gap: a draft staff hold across a release.** A changed workflow row installs
+its declared `draft` over any draft staff saved, whatever `publish` says: `publish:
+false` only leaves the served version as it was. No owner keeps staff's draft across a
+release.

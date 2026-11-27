@@ -26,6 +26,7 @@ from rebac import PermissionDenied, RebacMixin
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from strawberry.extensions import FieldExtension
+from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
@@ -54,6 +55,7 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
+from angee.base.fields import create_only_selectors
 from angee.base.hooks import resolve_hook, resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
@@ -98,6 +100,7 @@ from angee.graphql.data.resource_fields import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
+from angee.graphql.impl import ImplChoice, repair_impl_choices, require_impl_choices_admitted
 from angee.graphql.introspection import (
     FieldPathError,
     django_model,
@@ -260,6 +263,25 @@ class AngeeHasuraWriteBackend:
 
         return write_queryset(self.model)
 
+    def authorize_update(self, info: strawberry.Info, pk: str) -> Any:
+        """The update's own decision on ``pk`` before it writes, without the row lock: the row in this
+        backend's write scope (not found otherwise), then the row's own write permission.
+
+        The update makes the same decision under the lock; a surface that must answer exactly as the
+        update would, before writing anything, asks this. A subclass that adds to the update's decision
+        adds to this, and its update calls it.
+        """
+
+        del info
+        return self._write_permitted(require_instance_for_id(self.model, pk, queryset=self.write_target_queryset()), pk)
+
+    def _write_permitted(self, instance: Any, pk: str) -> Any:
+        """Refuse ``instance`` unless the actor may write it, in the update's words."""
+
+        if isinstance(instance, RebacMixin) and not instance.has_access("write"):
+            raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
+        return instance
+
     def _locked_write_target(self, pk: str, values: Mapping[str, Any]) -> Any:
         """Delegate lock order to the model, then recheck this surface's write scope."""
 
@@ -274,9 +296,7 @@ class AngeeHasuraWriteBackend:
                 pk,
                 queryset=targets.select_for_update(of=row_lock_paths(self.model)),
             )
-        if isinstance(instance, RebacMixin) and not instance.has_access("write"):
-            raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
-        return instance
+        return self._write_permitted(instance, pk)
 
     def create(self, info: strawberry.Info, data: dict[str, Any], *, claim: CreationClaim | None = None) -> Any:
         """Create one row through this backend's native insertion contract; ``claim`` as :meth:`insert` takes it."""
@@ -352,6 +372,7 @@ class AngeeHasuraWriteBackend:
 
         if self.lines is None:
             raise ImproperlyConfigured(f"{self.model._meta.label} resource declares no editable lines.")
+        self.require_selectors_admitted(info, patch)
         with transaction.atomic():
             patch, extensions = self._split_input(patch)
             decoded = self._decode_public_id_fields(patch)
@@ -474,10 +495,37 @@ class AngeeHasuraWriteBackend:
             prepared.append((str(public_id) if public_id else None, values))
         return prepared
 
+    def require_selectors_admitted(self, info: strawberry.Info, data: Mapping[str, Any]) -> None:
+        """Refuse a write naming a create-only selector of this model unless the create flow admits the actor.
+
+        An update that names one chooses an implementation, as its repair read does, so it asks the same
+        admission (:func:`~angee.graphql.impl.require_impl_choices_admitted`, the one owner) before the
+        update's own decision on the row: the resource's ``write_permission_classes`` (asked before the
+        resolver), the admission, then ``authorize_update`` and the model's save. A write naming none asks
+        nothing more. Code-level saves are not affected: a worker or a sync job has no request and no actor
+        to admit, and the model's own rules on the selector stand.
+        """
+
+        for name in create_only_selectors(self.model):
+            if name in data:
+                require_impl_choices_admitted(info, self.model, name)
+
     def update(
         self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None
     ) -> Any:
-        """Patch one public-id-addressed row through the write queryset, then its input extensions."""
+        """Patch one public-id-addressed row: the selectors it names admitted first, then :meth:`_update_admitted`."""
+
+        self.require_selectors_admitted(info, data)
+        return self._update_admitted(info, pk, data, expected_revision=expected_revision)
+
+    def _update_admitted(
+        self, info: strawberry.Info, pk: str, data: dict[str, Any], *, expected_revision: int | None = None
+    ) -> Any:
+        """Patch an admitted update through the write queryset, then its input extensions.
+
+        A subclass adding to the update's own decision on the row overrides this, so the selectors' admission
+        stays first.
+        """
 
         with transaction.atomic():
             data, extensions = self._split_input(data)
@@ -1628,6 +1676,20 @@ def _first_rows_per_group(
     return pages
 
 
+def _with_create_only_selectors(model: type[models.Model], declared: Sequence[str] | None) -> list[str] | None:
+    """The update allowlist ``declared``, joined by the model's create-only selectors it lacks.
+
+    A create-only selector (:func:`angee.base.fields.create_only_selectors`) changes only when its
+    model's save allows it (a repair), so the update input always carries it and the model decides.
+    No allowlist (``None``) already means every editable column, the selectors among them.
+    """
+
+    if declared is None:
+        return None
+    named = list(declared)
+    return [*named, *(name for name in create_only_selectors(model) if name not in named)]
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
@@ -1653,6 +1715,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     get_queryset: Callable[[strawberry.Info], models.QuerySet[Any]] | None = None,
     get_aggregate_queryset: Callable[[strawberry.Info], models.QuerySet[Any]] | None = None,
     write_backend: WriteBackend | None = None,
+    write_permission_classes: Sequence[type[BasePermission]] = (),
     id_decode: Callable[[Any], Any] | None = None,
     id_column: str = "pk",
     model_label: str | None = None,
@@ -1677,6 +1740,17 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     An ``AngeeHasuraWriteBackend`` declares relation identities once through
     ``public_id_fields``. Those fields supply the native input/filter decoders;
     explicit ``field_id_decode`` entries override their scalar conversion.
+
+    An update input always carries the model's create-only implementation selectors
+    (:func:`_with_create_only_selectors`); the model's save refuses a change to one except
+    while its stored key is not registered, and the resource metadata publishes them.
+
+    ``write_permission_classes`` are the resource's own admission of a write, beside the row's:
+    Strawberry permission classes the insert, update and save roots ask before their write backend
+    (an administrator-only resource names IAM's ``ADMIN_PERMISSION_CLASSES``).
+
+    A resource with an update root over a model with a create-only implementation selector also
+    generates ``<res>_repair_choices(id, field)``, its repair read (:func:`_attach_repair_choices`).
 
     ``delete=True`` also generates ``<res>_delete(id, confirm=False)`` and its
     delete-preview metadata. The active write backend must implement
@@ -1908,6 +1982,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write_adapter = resolve_hook("ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER") if insert else None
     if write_adapter is not None:
         resource_write_backend, insert_arguments = write_adapter(model, active_write_backend)
+    if update:
+        updatable = _with_create_only_selectors(model, updatable if updatable is not None else writable)
     declared_writable = [seq for seq in (writable, insertable, updatable) if seq is not None]
     _check_writable_relations_decoded(
         model,
@@ -2030,6 +2106,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    if update and create_only_selectors(model):
+        resource = _attach_repair_choices(
+            resource, model=model, write_backend=active_write_backend,
+            write_permission_classes=tuple(write_permission_classes),
+        )
     if lifecycle_fields:
         resource.types.append(
             strawberry_django.type(model, name=node_definition.name, extend=True, fields=lifecycle_fields)(
@@ -2120,6 +2201,10 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         result_roots.add(f"{resource.name}_save")
     for graphql_field in get_object_definition(resource.mutation, strict=True).fields:
         if graphql_field.python_name in result_roots:
+            if write_permission_classes:
+                graphql_field.extensions.insert(0, PermissionExtension(
+                    permissions=[permission() for permission in write_permission_classes],
+                ))
             graphql_field.extensions.append(_MutationResultExtension(read_queryset))
 
     def compile_filter(where: Any) -> Callable[[Any], Any]:
@@ -2255,6 +2340,52 @@ def _nested_inserts(lines: HasuraLines) -> list[NestedInsert]:
             id_column=PUBLIC_ID_FIELD_NAME,
         )
     ]
+
+
+def _attach_repair_choices(
+    resource: HasuraResource,
+    *,
+    model: type[models.Model],
+    write_backend: WriteBackend,
+    write_permission_classes: tuple[type[BasePermission], ...],
+) -> HasuraResource:
+    """Generate ``<res>_repair_choices(id, field)``, the resource's repair read, beside its update.
+
+    What choosing each implementation of one of the model's create-only selectors sets on the record
+    ``id`` (the config each carries over), gated as :func:`angee.graphql.impl.repair_impl_choices` says:
+    the create flow's admission, this resource's ``write_permission_classes``, then its write backend's
+    ``authorize_update``. It rides the resource's query type, so a schema exposes it where it takes the
+    resource; composition refuses one that would expose it without the update root.
+    """
+
+    authorize_update = getattr(write_backend, "authorize_update", None)
+    if not callable(authorize_update):
+        raise ImproperlyConfigured(
+            f"{model._meta.label} has a create-only selector and an update root, so its resource generates "
+            f"a repair read: {type(write_backend).__name__} must implement authorize_update(info, pk)."
+        )
+    root = f"{resource.name}_repair_choices"
+
+    def resolve_repair_choices(self: Any, info: strawberry.Info, id: PublicID, field: str) -> list[ImplChoice]:
+        return repair_impl_choices(
+            info, model, field, str(id),
+            write_permission_classes=write_permission_classes, authorize_update=authorize_update,
+        )
+
+    holder = strawberry.type(
+        type(
+            f"{resource.name}__repair_choices_query",
+            (),
+            {root: strawberry.field(resolver=resolve_repair_choices, name=root, description=(
+                "What choosing each implementation of this resource's create-only selector `field` sets on the "
+                "record `id` (a repair): the config each carries over. Read by an actor the create flow's "
+                "choices read admits who may update that record."
+            ))},
+        )
+    )
+    name = get_object_definition(resource.query, strict=True).name
+    query = strawberry.type(type(f"{resource.name}__query", (resource.query, holder), {}), name=name)
+    return dataclasses.replace(resource, query=query)
 
 
 def _attach_delete_preview(

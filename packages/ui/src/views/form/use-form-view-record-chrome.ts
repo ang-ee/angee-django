@@ -7,7 +7,7 @@ import {
 
 import { useContainer, type ComposedContainerChild, modelChain } from "../../runtime";
 import type { RecordChromeContext } from "../resource/record-chrome-context";
-import { rowImplementations } from "./container-admission";
+import { rowImplementations } from "../resource/implementation-fields";
 
 export interface UseFormViewRecordChromeProps {
   dataResource: DataResourceMetadata | null;

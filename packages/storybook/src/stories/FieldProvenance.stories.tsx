@@ -22,11 +22,10 @@ const fields: readonly DescriptorField[] = [
   { name: "display_name", label: "Name", readOnly: true },
   { name: "language", label: "Language", readOnly: true },
 ];
-const schemas = storySchema({});
-schemas.public!.metadata = { angee: { resources: [
+const schemas = storySchema({}, { resources: [
   testDataResource("parties.Party", { schemaName: "public" }),
   testDataResource("parties.PartyStatement", { schemaName: "public" }),
-] } };
+] });
 const runtime = {
   routeHref: createRouteHref([
     { name: "parties.statements", path: "/parties/statements" },
@@ -51,6 +50,7 @@ function PartyFieldProvenance() {
   // A read-only record's fields: the action form only hosts them, nothing is submitted.
   const { form } = useActionForm({
     defaultValues: { display_name: "Ada Lovelace", language: "English" },
+    shownFieldNames: fields.map((field) => field.name),
     submit: () => ({ status: "ok", data: null }),
   });
   const publications = useMemo(() => [{

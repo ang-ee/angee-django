@@ -9,6 +9,7 @@ import type { ListQueryFieldArgument } from "@angee/refine";
 
 import { FieldDescription, FieldError, FieldLabel, FieldRoot } from "../../ui/field";
 import { relationValueId, type WidgetFocusTarget } from "../../widgets/types";
+import { relationSelectedOption } from "../relation/relation-options";
 import { FieldDescriptorControl } from "./field-descriptor-control";
 import type { FormSpecFieldDescriptor } from "./form-spec";
 import { relationFieldInfoForResource } from "../resource/model-metadata-defaults";
@@ -20,7 +21,9 @@ import { directDottedPathMessages } from "./validation-errors";
 import { fieldErrorMessages, isCompositeFieldDescriptor, missingDraftValues, pathHolding, seedPreset, visibleFields, type FormValues } from "./form-view-model";
 import { usePresetMemory } from "./ActionFormProvider";
 import { DescriptorPresenceControl } from "./descriptor-presence-control";
-import { RecordFieldMarkControl } from "./record-field-marks";
+import {
+  RecordFieldMarkControl, UnregisteredImplementationExplanation, explainsBeside, useUnregisteredImplementationExplanation,
+} from "./record-field-marks";
 
 /** What a descriptor field needs to offer (and optionally create) a related row. */
 export interface DescriptorFieldRelation {
@@ -220,6 +223,7 @@ export function LabeledDescriptorField({
   messages = [],
   showLabel = true,
   showDescription = true,
+  loading = false,
   onChange: changeValue,
   onCommit,
   controlRef,
@@ -239,6 +243,8 @@ export function LabeledDescriptorField({
   messages?: readonly string[];
   showLabel?: boolean;
   showDescription?: boolean;
+  /** The control's own pending state (the record form's repair: its answer, or a save, is pending). */
+  loading?: boolean;
   onChange: (value: unknown) => void;
   onCommit?: () => void;
   controlRef?: (target: WidgetFocusTarget | null) => void;
@@ -262,8 +268,10 @@ export function LabeledDescriptorField({
   const errorId = invalid
     ? `${controlId}-error`
     : undefined;
+  const explanation = useUnregisteredImplementationExplanation(field.name);
   const describedBy =
-    [descriptionId, errorId].filter(Boolean).join(" ") || undefined;
+    [descriptionId, explanation && explainsBeside(explanation, displayedMessages) ? explanation.id : null, errorId]
+      .filter(Boolean).join(" ") || undefined;
 
   return (
     <FieldRoot invalid={invalid}>
@@ -318,6 +326,7 @@ export function LabeledDescriptorField({
             ...(describedBy ? { "aria-describedby": describedBy } : {}),
             ...(groupLabel ? { "aria-labelledby": labelId } : {}),
             ...(field.required && !readOnly ? { "aria-required": true } : {}),
+            ...(loading ? { loading: true } : {}),
           }}
           onChange={onChange}
           onCommit={onCommit}
@@ -325,6 +334,7 @@ export function LabeledDescriptorField({
         />
       )}
       </DescriptorPresenceControl>
+      <UnregisteredImplementationExplanation explanation={explanation} messages={displayedMessages} />
       {showDescription && field.description ? (
         <FieldDescription id={descriptionId}>{field.description}</FieldDescription>
       ) : null}
@@ -342,7 +352,9 @@ export function LabeledDescriptorField({
  * related resource's list root (narrowed by the field's `filters`), and "Create …"
  * opens the field's own create form. The option query is deferred until the
  * popover first opens; an existing bare-id value resolves through its independent
- * record read. An empty untouched relation performs no work.
+ * record read, and a value that is the related row (`{ id, <label field> }`) shows its
+ * label with no read. An empty untouched relation performs no work. The field's
+ * `relationEdit: null` declines the picker's inline edit, as on a record form.
  */
 function DescriptorRelationControl({
   controlId,
@@ -432,6 +444,7 @@ function DescriptorRelationControl({
     relation: optionInfo,
     filters: field.filters ?? relation.filters,
     create: create ?? null,
+    fieldName: field.name,
     readOnly,
     onChange,
     onCommit,
@@ -443,6 +456,9 @@ function DescriptorRelationControl({
     ? <RelationMultiFieldWidget {...common} value={Array.isArray(value) ? value : []} />
     : <RelationFieldWidget {...common}
       value={relationValueId(value)}
+      // A value that is the related row carries its own label: shown without reading the record.
+      selectedOption={relationSelectedOption(value, optionInfo.labelField)}
+      edit={field.relationEdit}
       placeholder={field.placeholder}
       optionDescriptionField={relation.optionDescriptionField}
       optionStatusField={relation.optionStatusField}

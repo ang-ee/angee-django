@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { createUiTestProviders } from "@angee/ui/testing";
 import { formatDayLabel } from "@angee/ui";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -152,7 +153,8 @@ describe("ThreadTranscript", () => {
     mocks.transcriptRows = [
       message({ id: "in", direction: "INBOUND", parts: [{ role: "BODY", fragment: { text: "Inbound hello" }, file: null }] as never }),
       message({ id: "out", direction: "OUTBOUND", sender: { id: "hnd_2", display_name: "Support", value: "us@example.com", party_link_confirmed: false, party: null, avatar: null, merged_into: null }, parts: [{ role: "BODY", fragment: { text: "Outbound reply" }, file: null }] as never }),
-      message({ id: "note", direction: "INTERNAL", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
+      // A note written here, with the status every message has: it goes nowhere, so it shows no delivery.
+      message({ id: "note", direction: "INTERNAL", is_locally_written: true, status: "SENT", parts: [{ role: "BODY", fragment: { text: "Internal jotting" }, file: null }] as never }),
     ];
     mocks.total = mocks.transcriptRows.length;
 
@@ -160,9 +162,11 @@ describe("ThreadTranscript", () => {
 
     expect(screen.getByText("Inbound hello")).toBeTruthy();
     expect(screen.getByText("Outbound reply")).toBeTruthy();
-    expect(screen.getByText("Internal jotting")).toBeTruthy();
+    const note = screen.getByText("Internal jotting").closest("li");
+    if (!(note instanceof HTMLElement)) throw new Error("The internal note renders no row.");
     // The internal note carries its distinct label; inbound/outbound do not.
-    expect(screen.getByText("Internal note")).toBeTruthy();
+    expect(within(note).getByText("Internal note")).toBeTruthy();
+    expect(within(note).queryByText("Sent")).toBeNull();
   });
 
   test("keeps the envelope name for an unconfirmed 1.0 email-match auto-link", () => {
@@ -315,4 +319,30 @@ test("day separators and date anchors share the explicitly selected timezone", (
   expect(screen.getAllByText(day)).toHaveLength(1);
   fireEvent.change(screen.getByLabelText("Jump to date"), { target: { value: "2026-07-01" } });
   expect(onAnchorChange).toHaveBeenCalledWith("date:2026-07-01@America/New_York");
+});
+
+describe("ThreadTranscript's Reply gate", () => {
+  test("while the gate reads a window that adds a channel, the Replies it showed stay", async () => {
+    const { Provider, createClient } = createUiTestProviders();
+    const client = createClient({ defaultOptions: { queries: { retry: false } } });
+    const asked: string[][] = [];
+    // The gate answers the first window and never the wider one.
+    const custom = vi.fn(async ({ meta }: { meta?: { gqlVariables?: Record<string, unknown> } }) => {
+      const ids = (meta?.gqlVariables?.ids ?? []) as string[];
+      asked.push(ids);
+      if (ids.includes("chn_b")) return new Promise<never>(() => undefined);
+      return { data: { channels: [{ id: "chn_a" }] } };
+    });
+    const onA = message({ id: "msg_a", channel: { id: "chn_a", display_name: "Desk A" } } as Partial<ThreadTranscriptRow>);
+    const host = () => <Provider queryClient={client} dataProvider={{ custom }}>
+      <ThreadTranscript threadId="thr_1" reply={{ leaves: () => true }} />
+    </Provider>;
+    mocks.transcriptRows = [onA];
+    const view = render(host());
+    expect(await screen.findByRole("button", { name: /^Reply to / })).toBeTruthy();
+    mocks.transcriptRows = [onA, message({ id: "msg_b", feed_order_key: "v1:0002", channel: { id: "chn_b", display_name: "Desk B" } } as Partial<ThreadTranscriptRow>)];
+    view.rerender(host());
+    await waitFor(() => expect(asked.some((ids) => ids.includes("chn_b"))).toBe(true));
+    expect(screen.getAllByRole("button", { name: /^Reply to / })).toHaveLength(1);
+  });
 });

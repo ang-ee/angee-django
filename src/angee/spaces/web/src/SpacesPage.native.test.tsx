@@ -73,7 +73,7 @@ const scoped = (args: Record<string, unknown>) => {
 };
 
 function groupSchemas(requests: GraphQLWireRequest[]) {
-  const fixture = storySchema({
+  return storySchema({
     space_memberships: () => memberships,
     space_memberships_aggregate: () => count(memberships),
     update_space_memberships_by_pk: (args) => ({ id: (args.pk_columns as { id: string }).id, role: (args._set as { role: string }).role }),
@@ -86,8 +86,7 @@ function groupSchemas(requests: GraphQLWireRequest[]) {
     thread_message_feed: () => emptyFeed,
     parties: () => [{ id: "pty_alan", display_name: "Alan Turing" }],
     parties_aggregate: () => ({ aggregate: { count: 1 } }),
-  }, (request) => requests.push(request)).public!;
-  return { console: { ...fixture, metadata: { angee: { resources } } } };
+  }, { schema: "console", resources, onRequest: (request) => requests.push(request) });
 }
 
 /** One record tab as the group page mounts it, active, with the panel context FormView passes. */
@@ -95,7 +94,7 @@ function GroupTab({ tab, recordId, record }: { tab: "roster" | "threads"; record
   const entry = useGroupRecordTabs().find(({ id }) => id === tab)!;
   // The tabs read only the loaded group record from the form's save surface.
   const form = { displayRecord: record } as unknown as RecordPanelContext["form"];
-  return <>{entry.render({ recordId, reload: () => undefined, focusField: () => undefined, form, active: true })}</>;
+  return <>{entry.render({ recordId, reload: () => undefined, focusField: () => undefined, fieldLabel: () => undefined, form, active: true })}</>;
 }
 
 // The transcript's keyset feed reads only for a signed-in actor.

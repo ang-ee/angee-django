@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import pickle
+import subprocess
+import sys
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import pytest
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import models
+from django.db import models, transaction
+from django.db.migrations.state import ProjectState
+from django.db.models import Case, F, Value, When
 from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, AnyUrl, BaseModel, ConfigDict, Field, PlainSerializer, create_model, field_validator
-from rebac import system_context
+from rebac import actor_context, system_context
 
 from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.hooks import resolve_hook, resolve_hooks
@@ -32,9 +39,11 @@ from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.schemas.forms import config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
+from angee.provenance.context import changeset
+from angee.provenance.querysets import model_history
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import OAuthClient, VcsBridge, Vendor
-from tests.tables import model_tables
+from tests.conftest import OAuthClient, VcsBridge, Vendor, create_user, make_integration, vault_for
+from tests.tables import model_tables, store_column
 
 
 class _KeyedStorageBackend(StorageBackend):
@@ -280,6 +289,81 @@ def test_registry_enum_identity_tracks_keys_and_preserves_names() -> None:
         assert expanded is not enum
         assert expanded.choices == [("base", "base"), ("refined", "refined")]
     assert impl_choices_enum(_EnumImpl) is enum
+
+
+@override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
+def test_an_implementation_key_pickles_as_its_own_member() -> None:
+    """A runtime-built enum has no module name to pickle by, yet a key and a query filtering on it pickle."""
+
+    member = ImplClassField(_EnumImpl).to_python("base")
+    assert pickle.loads(pickle.dumps(member)) is member
+    query = VcsBridge.objects.filter(backend_class="stub").query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
+
+
+def test_an_implementation_key_unpickles_as_the_member_it_was_after_its_mapping_changed() -> None:
+    """Unpickling reads no settings: a key keeps its member, and the field over the new mapping accepts it."""
+
+    with override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"}):
+        member = ImplClassField(_EnumImpl).to_python("base")
+    with override_settings(
+        ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl", "refined": "tests.test_impl._EnumRefinedImpl"}
+    ):
+        field = ImplClassField(_EnumImpl)
+        current = field.to_python("base")
+        unpickled = pickle.loads(pickle.dumps(member))
+        assert current is not member
+        assert unpickled is member
+        assert field.to_python(unpickled) is current
+
+
+def test_a_row_holding_an_implementation_key_pickles() -> None:
+    """A loaded row holds its key as the member, and the row pickles with it."""
+
+    field = VcsBridge._meta.get_field("backend_class")
+    member = field.from_db_value("stub", None, None)
+    assert pickle.loads(pickle.dumps(VcsBridge(backend_class=member))).backend_class is member
+
+
+def test_an_implementation_key_unpickles_in_a_process_without_settings() -> None:
+    """Another interpreter, with no settings and no enum built yet, restores the key."""
+
+    member = VcsBridge._meta.get_field("backend_class").from_db_value("stub", None, None)
+    probe = (
+        "import pickle, sys\n"
+        "from django.conf import settings\n"
+        "key = pickle.loads(sys.stdin.buffer.read())\n"
+        "assert not settings.configured\n"
+        "print(type(key).__name__, key.value, key.label)\n"
+    )
+    env = {name: value for name, value in os.environ.items() if name != "DJANGO_SETTINGS_MODULE"}
+    result = subprocess.run(
+        [sys.executable, "-c", probe], input=pickle.dumps(member), capture_output=True, env=env, check=True
+    )
+    assert result.stdout.decode().split() == [type(member).__name__, "stub", "stub"]
+
+
+_IMPL_SELECTORS = sorted(
+    f"{model._meta.label}.{field.name}"
+    for model in apps.get_models()
+    for field in model._meta.concrete_fields
+    if isinstance(field, ImplClassField)
+)
+
+
+@pytest.mark.parametrize("selector", _IMPL_SELECTORS)
+def test_a_query_on_every_key_of_an_installed_selector_pickles(selector: str) -> None:
+    """A query on all of an installed selector's keys pickles back to the same SQL.
+
+    It compares SQL only, so it proves every selector's keys reduce at all; the
+    tests above pin what a key unpickles as.
+    """
+
+    label, name = selector.rsplit(".", 1)
+    model = apps.get_model(label)
+    keys = [member.value for member in model._meta.get_field(name).choices_enum]
+    query = model._base_manager.filter(**{f"{name}__in": keys}).query
+    assert str(pickle.loads(pickle.dumps(query))) == str(query)
 
 
 @override_settings(ANGEE_STORAGE_BACKEND_CLASSES={"local": "angee.storage.backends.LocalBackend"})
@@ -1425,3 +1509,584 @@ def test_a_config_only_save_is_validated_against_the_rows_implementation(registe
         with pytest.raises((ValidationError, ImproperlyConfigured)):
             loaded.save(update_fields=["config"])
     assert VcsBridge._base_manager.get(pk=row.pk).config == stored
+
+
+def _retired_bridge(slug: str) -> Any:
+    """A VCS bridge, a create-only selector's row whose model keeps its loaded keys, whose stored key is retired."""
+
+    bridge = make_integration(slug, model=VcsBridge, backend_class="local")
+    store_column(VcsBridge, bridge.pk, "backend_class", "retired")
+    with system_context(reason="test.impl.retired.bridge"):
+        return VcsBridge._base_manager.get(pk=bridge.pk)
+
+
+def _a_drive() -> Any:
+    """A drive on a local storage backend, which a mount needs."""
+
+    with system_context(reason="test.impl.drive"):
+        backend = apps.get_model("storage", "Backend").objects.create(
+            slug="repair-drive", label="Repair", backend_class="local",
+        )
+        return apps.get_model("storage", "Drive")._base_manager.create(
+            backend=backend, slug="repair", name="Repair", prefix="repair",
+        )
+
+
+def _retired_backend(slug: str) -> Any:
+    """A storage backend row whose stored key no implementation is registered under any more."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.retired.create"):
+        row = backend_model.objects.create(slug=slug, label=slug.title(), backend_class="local")
+    store_column(backend_model, row.pk, "backend_class", "retired")
+    return backend_model._base_manager.get(pk=row.pk)
+
+
+@pytest.mark.django_db
+def test_a_stored_key_its_choices_no_longer_name_loads_lists_and_filters_as_its_text() -> None:
+    """The row loads, lists, filters, displays and pickles; resolving its implementation raises, naming all three."""
+
+    retired = _retired_backend("retired")
+    backend_model = type(retired)
+    with system_context(reason="test.impl.retired.kept"):
+        kept = backend_model.objects.create(slug="kept", label="Kept", backend_class="local")
+    rows = backend_model._base_manager.filter(pk__in=(retired.pk, kept.pk))
+
+    assert type(retired.backend_class) is str and retired.backend_class == "retired"
+    choices = backend_model._meta.get_field("backend_class").choices_enum
+    assert backend_model._base_manager.get(pk=kept.pk).backend_class is choices("local")
+    assert sorted(rows.values_list("backend_class", flat=True)) == ["local", "retired"]
+    assert list(rows.filter(backend_class="retired")) == [retired]
+    assert list(rows.filter(backend_class__in=("retired",))) == [retired]
+    assert retired.get_backend_class_display() == "retired"
+    assert pickle.loads(pickle.dumps(retired)).backend_class == "retired"
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=r"^storage\.Backend\.backend_class: No impl for key 'retired' in settings\.ANGEE_STORAGE_BACKEND_CLASSES",
+    ):
+        retired.get_backend_class_impl()
+
+
+@pytest.mark.django_db
+def test_an_update_keeps_a_key_its_row_holds_and_nothing_writes_one_the_row_does_not_hold() -> None:
+    """A rename saves, whole or partial, and keeps the key; writing one the row does not hold is refused."""
+
+    retired = _retired_backend("unwritten")
+    backend_model = type(retired)
+    rows = backend_model._base_manager.filter(pk=retired.pk)
+
+    def choose(key: str) -> Callable[[], None]:
+        def write() -> None:
+            chosen = backend_model._base_manager.get(pk=retired.pk)
+            chosen.backend_class = key
+            chosen.save()
+        return write
+
+    writes = {
+        "choose another": choose("also-unknown"),
+        "re-spell the held key": choose("RETIRED"),
+        "QuerySet.update": lambda: rows.update(backend_class="also-unknown"),
+        "bulk_update": lambda: backend_model._base_manager.bulk_update([retired], ["backend_class"]),
+        "insert": lambda: backend_model.objects.create(slug="new", label="New", backend_class="retired"),
+    }
+    with system_context(reason="test.impl.retired.write"):
+        for path, write in writes.items():
+            with pytest.raises(ValidationError) as refused, transaction.atomic():
+                write()
+            assert "backend_class" in refused.value.message_dict, path
+        retired.label = "Renamed"
+        retired.full_clean()
+        retired.save()
+        # The update wrote the column as itself; the instance still reads its key, not an expression.
+        assert type(retired.backend_class) is str and retired.backend_class == "retired"
+        retired.label = "Again"
+        retired.save(update_fields=["label"])
+        retired.refresh_from_db()
+        assert retired.backend_class == "retired"
+
+    stored = backend_model._base_manager.get(pk=retired.pk)
+    assert (stored.label, stored.backend_class) == ("Again", "retired")
+    assert not backend_model._base_manager.filter(slug="new").exists()
+
+
+@pytest.mark.django_db
+def test_a_model_tracking_its_keys_saves_a_record_whose_key_is_not_registered_and_keeps_its_config() -> None:
+    """A create-only selector's row saves its other fields and its config as stored; a changed config is refused."""
+
+    bridge = _retired_bridge("held")
+    with system_context(reason="test.impl.retired.mixin"):
+        loaded = VcsBridge._base_manager.get(pk=bridge.pk)
+        loaded.display_name = "Renamed"
+        loaded.full_clean()
+        loaded.save()
+        loaded.config = {**loaded.config, "added": True}
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            loaded.save()
+    held_config = "The configuration cannot change while the backend class is not registered."
+    assert refused.value.message_dict == {"config": [held_config]}
+    stored = VcsBridge._base_manager.get(pk=bridge.pk)
+    assert (stored.display_name, stored.backend_class, stored.config) == ("Renamed", "retired", bridge.config)
+
+
+@pytest.mark.django_db
+def test_a_lookup_reads_spaces_and_a_member_name_as_the_key() -> None:
+    """A filter canonicalises once, alike for a key the choices name and for one they no longer name."""
+
+    retired = _retired_backend("canonical")
+    backend_model = type(retired)
+    with system_context(reason="test.impl.canonical.kept"):
+        kept = backend_model.objects.create(slug="canonical-kept", label="Kept", backend_class="local")
+    rows = backend_model._base_manager.filter(pk__in=(retired.pk, kept.pk))
+
+    for spelling in ("local", " local ", "LOCAL"):
+        assert list(rows.filter(backend_class=spelling)) == [kept]
+    assert list(rows.filter(backend_class=" retired ")) == [retired]
+
+
+@pytest.mark.django_db
+def test_a_top_level_value_is_written_as_its_literal_and_any_other_expression_unchecked() -> None:
+    """A ``Value``'s literal is a value the field prepares; ``F``, ``Case`` or a ``Value`` inside one is unchecked."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    field = backend_model._meta.get_field("backend_class")
+    with system_context(reason="test.impl.expression.write"):
+        row = backend_model.objects.create(slug="expressed", label="Expressed", backend_class="local")
+        rows = backend_model._base_manager.filter(pk=row.pk)
+        for refused in (Value("retired"), Value("retired", output_field=field), Value("LOCAL")):
+            with pytest.raises(ValidationError) as refusal, transaction.atomic():
+                rows.update(backend_class=refused)
+            assert refusal.value.message_dict == {"backend_class": [f"Value {refused.value!r} is not a valid choice."]}
+        rows.update(backend_class=Value("local"))
+        rows.update(backend_class=F("backend_class"))
+        assert rows.get().backend_class == "local"
+        rows.update(backend_class=Case(When(pk=row.pk, then=Value("retired")), output_field=field))
+
+    assert rows.get().backend_class == "retired"
+
+
+@pytest.mark.django_db
+def test_a_write_stores_only_the_registry_key_as_spelled_while_a_lookup_forgives() -> None:
+    """Every write path refuses the member's name and a padded key with the field's refusal; a lookup reads both."""
+
+    backend_model = apps.get_model("storage", "Backend")
+    with system_context(reason="test.impl.spelling.write"):
+        row = backend_model.objects.create(slug="spelled", label="Spelled", backend_class="local")
+        rows = backend_model._base_manager.filter(pk=row.pk)
+
+        def save(spelling: str) -> None:
+            row.backend_class = spelling
+            row.save()
+
+        def bulk_update(spelling: str) -> None:
+            row.backend_class = spelling
+            backend_model._base_manager.bulk_update([row], ["backend_class"])
+
+        writes = {
+            "create": lambda spelling: backend_model.objects.create(slug="new", label="New", backend_class=spelling),
+            "save": save,
+            "update": lambda spelling: rows.update(backend_class=spelling),
+            "bulk_create": lambda spelling: backend_model._base_manager.bulk_create(
+                [backend_model(slug="bulk", label="Bulk", backend_class=spelling)]
+            ),
+            "bulk_update": bulk_update,
+            "update_or_create": lambda spelling: backend_model.objects.update_or_create(
+                slug="spelled", defaults={"backend_class": spelling}
+            ),
+        }
+        for spelling in ("LOCAL", " local "):
+            for path, write in writes.items():
+                with pytest.raises(ValidationError) as refusal, transaction.atomic():
+                    write(spelling)
+                refused = {"backend_class": [f"Value {spelling!r} is not a valid choice."]}
+                assert refusal.value.message_dict == refused, path
+        row.refresh_from_db()
+        assert [list(rows.filter(backend_class=spelling)) for spelling in ("LOCAL", " local ")] == [[row], [row]]
+        rows.update(backend_class="local")
+
+    assert backend_model._base_manager.filter(slug__in=("new", "bulk")).count() == 0
+    assert rows.get().backend_class == "local"
+
+
+@pytest.mark.django_db
+def test_a_copy_that_writes_a_retired_key_still_refuses_another_spelling_of_a_registered_one() -> None:
+    """A migration's state model and a history copy write a key the choices no longer name, never "LOCAL"."""
+
+    state_model = ProjectState.from_apps(apps).apps.get_model("storage", "Backend")
+    owner = create_user("spelled-history-owner")
+    vault = vault_for(owner)
+    history_rows = type(vault.history.get())._base_manager.filter(id=vault.pk)
+    with system_context(reason="test.impl.spelling.exempt"):
+        state_row = state_model.objects.create(slug="state", label="State", backend_class="local")
+        state_rows = state_model.objects.filter(pk=state_row.pk)
+        for rows, field, spelling in (
+            (state_rows, "backend_class", "LOCAL"),
+            (state_rows, "backend_class", " local "),
+            (history_rows, "retrieval_class", "LEXICAL"),
+        ):
+            with pytest.raises(ValidationError) as refusal, transaction.atomic():
+                rows.update(**{field: spelling})
+            assert refusal.value.message_dict == {field: [f"Value {spelling!r} is not a valid choice."]}
+            rows.update(**{field: "retired"})
+            assert rows.values_list(field, flat=True).get() == "retired"
+
+
+def test_an_implementation_carries_the_config_keys_it_reads_defaults_the_rest_and_drops_the_others() -> None:
+    """``carried_config``: a shared key kept, a missing one defaulted, an unreadable one dropped."""
+
+    carried = LocalVCSBackend.carried_config({"local_root": "/srv/team", "retired_option": True})
+    assert carried == {
+        "local_root": "/srv/team", "local_name": "", "local_org": "local", "local_default_branch": "main",
+    }
+    assert _BaseImpl.carried_config({"untyped": 1}) == {"untyped": 1}
+
+
+def test_a_carried_config_is_valid_by_construction() -> None:
+    """A kept value its config refuses falls back to its default; a refusal naming no key, to the defaults alone."""
+
+    feed = apps.get_model("posts", "Feed")._meta.get_field("feed_backend_class").resolve_class("manual")
+    defaults = feed.carried_config({})
+    assert defaults == {
+        "quota_limit": 10000, "reply_reserve": 100, "active_thread_days": 30, "reobserve_units_per_cycle": 100,
+    }
+    # quota_limit must be at least 1: that value alone falls back, the valid one is kept.
+    assert feed.carried_config({"quota_limit": 0, "active_thread_days": 7}) == {**defaults, "active_thread_days": 7}
+    # reply_reserve must be smaller than quota_limit, a rule across both: the defaults alone.
+    assert feed.carried_config({"quota_limit": 5, "active_thread_days": 7}) == defaults
+
+
+@pytest.mark.django_db
+def test_a_create_only_selector_moves_off_a_key_not_registered_once_carrying_its_config() -> None:
+    """A repair saves with the config its new implementation carries over, then create-only holds."""
+
+    bridge = _retired_bridge("repaired")
+    with system_context(reason="test.impl.repair"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        row = VcsBridge._base_manager.get(pk=bridge.pk)
+        row.backend_class = "local"
+        row.save()
+        stored = VcsBridge._base_manager.get(pk=bridge.pk)
+        assert (stored.backend_class, stored.config["local_root"], stored.config["local_org"]) == (
+            "local", "/srv/team", "local",
+        )
+        stored.backend_class = "github"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stored.save()
+    assert refused.value.message_dict == {"backend_class": ["Implementation selection is create-only."]}
+
+    # Choosing an implementation chooses its config's shape: a key it does not read is dropped.
+    dropping = _retired_bridge("dropping")
+    with system_context(reason="test.impl.repair.drop"):
+        VcsBridge._base_manager.filter(pk=dropping.pk).update(
+            config={"local_root": "/srv/team", "retired_option": True},
+        )
+        row = VcsBridge._base_manager.get(pk=dropping.pk)
+        row.backend_class = "local"
+        row.save()
+        carried = VcsBridge._base_manager.values_list("backend_class", "config").get(pk=dropping.pk)
+    assert carried == ("local", LocalVCSBackend.carried_config({"local_root": "/srv/team"}))
+    assert "retired_option" not in carried[1]
+
+    # A config sent with the selector is the one validated and saved, never replaced by the carried one.
+    sending = _retired_bridge("sending")
+    with system_context(reason="test.impl.repair.sent"):
+        VcsBridge._base_manager.filter(pk=sending.pk).update(config={"local_root": "/srv/team"})
+        row = VcsBridge._base_manager.get(pk=sending.pk)
+        row.backend_class = "local"
+        row.config = {"local_root": 5}
+        with pytest.raises(ValidationError) as invalid, transaction.atomic():
+            row.save()
+        assert list(invalid.value.message_dict) == ["config.local_root"]
+        row = VcsBridge._base_manager.get(pk=sending.pk)
+        row.backend_class = "local"
+        row.config = {"local_root": "/srv/sent"}
+        row.save()
+        sent = VcsBridge._base_manager.values_list("backend_class", "config__local_root").get(pk=sending.pk)
+    assert sent == ("local", "/srv/sent")
+
+
+@pytest.mark.django_db
+def test_a_row_loaded_through_its_model_answers_holds_from_its_loaded_key_reading_nothing(
+    django_assert_num_queries: Any,
+) -> None:
+    """The loaded key decides; a row built without loading reads the stored column, with the context's audit row."""
+
+    bridge = _retired_bridge("holds-loaded")
+    field = VcsBridge._meta.get_field("backend_class")
+    with system_context(reason="test.impl.holds"):
+        loaded = VcsBridge._base_manager.get(pk=bridge.pk)
+    built = VcsBridge(pk=bridge.pk)
+    built._state.adding = False
+    built._state.db = loaded._state.db
+
+    with django_assert_num_queries(0):
+        assert field.holds(loaded, "retired")
+        assert not field.holds(loaded, "other")
+    with django_assert_num_queries(2):
+        assert field.holds(built, "retired")
+
+
+_CREATE_ONLY_SELECTORS = (
+    ("agents", "InferenceProvider", "backend_class"),
+    ("calendar", "CalendarSource", "backend_class"),
+    ("integrate_vcs", "VcsBridge", "backend_class"),
+    ("knowledge_integrate_notion", "NotionConnection", "backend_class"),
+    ("messaging", "Channel", "backend_class"),
+    ("parties", "Directory", "backend_class"),
+    ("posts", "Feed", "feed_backend_class"),
+    ("storage_integrate", "Mount", "backend_class"),
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("app_label", "model_name", "selector"), _CREATE_ONLY_SELECTORS)
+def test_each_create_only_selector_is_repaired_once_then_create_only(
+    app_label: str, model_name: str, selector: str,
+) -> None:
+    """Through each model's own class: a rename keeps the retired key, a repair saves once, then create-only holds."""
+
+    model = apps.get_model(app_label, model_name)
+    field = model._meta.get_field(selector)
+    first, *others = field.registered_keys()
+    extra = {"drive": _a_drive()} if model_name == "Mount" else {}
+    row = make_integration(f"repair-{model_name.lower()}", model=model, **{selector: first}, **extra)
+    store_column(model, row.pk, field.column, "retired")
+    with system_context(reason="test.impl.repair.each"):
+        renamed = model._base_manager.get(pk=row.pk)
+        renamed.display_name = "Renamed"
+        renamed.save()
+        repaired = model._base_manager.get(pk=row.pk)
+        assert getattr(repaired, field.attname) == "retired"
+        setattr(repaired, field.attname, first)
+        repaired.save()
+        assert model._base_manager.values_list(field.attname, flat=True).get(pk=row.pk) == first
+        again = model._base_manager.get(pk=row.pk)
+        setattr(again, field.attname, others[0] if others else "retired")
+        with pytest.raises(ValidationError), transaction.atomic():
+            again.save()
+    assert model._base_manager.values_list(field.attname, flat=True).get(pk=row.pk) == first
+
+
+@pytest.mark.django_db
+def test_a_repair_saved_with_update_fields_must_name_the_config_its_new_class_reads() -> None:
+    """Naming the selector alone is refused and moves nothing; naming the config too reshapes it."""
+
+    bridge = _retired_bridge("repair-update-fields")
+    with system_context(reason="test.impl.repair.update_fields"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        row = VcsBridge._base_manager.get(pk=bridge.pk)
+        row.backend_class = "local"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            row.save(update_fields=["backend_class"])
+        assert refused.value.message_dict == {
+            "config": ["A save that changes the backend class with update_fields must name config too."],
+        }
+        assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "retired"
+        row.save(update_fields=["backend_class", "config"])
+        stored = VcsBridge._base_manager.values_list("backend_class", "config__local_root", "config__local_org")
+        assert stored.get(pk=bridge.pk) == ("local", "/srv/team", "local")
+
+
+@pytest.mark.django_db
+def test_a_stale_rename_after_a_repair_that_reshaped_the_config_is_refused_as_stale() -> None:
+    """A row loaded before a repair holds its loaded key; the stored row moved, so its old config is refused, stale."""
+
+    bridge = _retired_bridge("stale-after-repair")
+    with system_context(reason="test.impl.repair.stale"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        repairer = VcsBridge._base_manager.get(pk=bridge.pk)
+        stale = VcsBridge._base_manager.get(pk=bridge.pk)
+        repairer.backend_class = "local"
+        repairer.save()
+        stale.display_name = "Renamed after the repair"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            stale.save()
+        assert [(error.code, error.message) for error in refused.value.error_list] == [
+            ("stale", "This record changed after it was loaded. Load it again, then make the change again."),
+        ]
+        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config__local_org")
+        assert stored.get(pk=bridge.pk) == ("local", bridge.display_name, "local")
+
+
+@pytest.mark.django_db
+def test_a_repair_loaded_before_a_committed_rename_lands_and_writes_the_name_it_loaded() -> None:
+    """Pinned: the stale row is the repair's; it still holds the old key, so it repairs, and its whole-row save wins."""
+
+    bridge = _retired_bridge("repair-after-rename")
+    with system_context(reason="test.impl.repair.after_rename"):
+        VcsBridge._base_manager.filter(pk=bridge.pk).update(config={"local_root": "/srv/team"})
+        renamer = VcsBridge._base_manager.get(pk=bridge.pk)
+        repairer = VcsBridge._base_manager.get(pk=bridge.pk)
+        renamer.display_name = "Renamed before the repair"
+        renamer.save()
+        repairer.backend_class = "local"
+        repairer.save()
+        stored = VcsBridge._base_manager.values_list("backend_class", "display_name", "config__local_org")
+        assert stored.get(pk=bridge.pk) == ("local", bridge.display_name, "local")
+
+
+@pytest.mark.django_db
+def test_a_feed_s_own_selector_is_repaired_leaving_the_channel_s_selector_and_its_repair_alone() -> None:
+    """The feed's selector owns the config: its repair reshapes it and leaves the channel's key, repaired after."""
+
+    feed_model = apps.get_model("posts", "Feed")
+    feed = make_integration("feed-two-selectors", model=feed_model, feed_backend_class="manual")
+    store_column(feed_model, feed.pk, "feed_backend_class", "retired")
+    # The channel's selector lives on the parent row (``inherits="messaging.Channel"``).
+    store_column(feed_model._meta.get_field("backend_class").model, feed.pk, "backend_class", "retired_channel")
+    with system_context(reason="test.impl.repair.feed"):
+        row = feed_model._base_manager.get(pk=feed.pk)
+        stored_config = row.config
+        row.feed_backend_class = "stub"
+        row.save()
+        assert feed_model._base_manager.values_list("feed_backend_class", "backend_class").get(pk=feed.pk) == (
+            "stub", "retired_channel",
+        )
+        row = feed_model._base_manager.get(pk=feed.pk)
+        reshaped = row.config
+        row.backend_class = "feed"
+        row.save()
+        stored = feed_model._base_manager.values_list("feed_backend_class", "backend_class", "config").get(pk=feed.pk)
+    assert stored == ("stub", "feed", reshaped)
+    stub = feed_model._meta.get_field("feed_backend_class").resolve_class("stub")
+    assert reshaped == stub.carried_config(stored_config)
+
+
+@pytest.mark.django_db
+def test_a_feed_whose_extra_keyed_config_is_repaired_by_its_selector_alone_keeps_what_the_new_class_reads() -> None:
+    """A YouTube-shaped config repaired to manual: the save writes what manual carries over, recheck_interval gone."""
+
+    feed_model = apps.get_model("posts", "Feed")
+    feed = make_integration("feed-youtube-shaped", model=feed_model, feed_backend_class="manual")
+    stored = {"quota_limit": 20000, "reply_reserve": 1000, "active_thread_days": 30,
+              "reobserve_units_per_cycle": 100, "recheck_interval": 3600}
+    store_column(feed_model, feed.pk, "feed_backend_class", "retired")
+    with system_context(reason="test.impl.repair.youtube"):
+        feed_model._base_manager.filter(pk=feed.pk).update(config=stored)
+        row = feed_model._base_manager.get(pk=feed.pk)
+        choices = row.repair_impl_defaults("feed_backend_class")
+        row.feed_backend_class = "manual"
+        row.save()
+        saved = feed_model._base_manager.values_list("feed_backend_class", "config").get(pk=feed.pk)
+    kept = {key: value for key, value in stored.items() if key != "recheck_interval"}
+    assert choices["manual"] == {"config": kept}
+    assert saved == ("manual", kept)
+
+
+@pytest.mark.django_db
+def test_a_repair_read_of_a_jointly_invalid_stored_config_answers_the_defaults_and_the_repair_saves_them() -> None:
+    """Values that fail together no longer refuse the read or the save: the class's defaults take their place."""
+
+    feed_model = apps.get_model("posts", "Feed")
+    feed = make_integration("feed-jointly-invalid", model=feed_model, feed_backend_class="manual")
+    store_column(feed_model, feed.pk, "feed_backend_class", "retired")
+    manual = feed_model._meta.get_field("feed_backend_class").resolve_class("manual")
+    with system_context(reason="test.impl.repair.joint"):
+        feed_model._base_manager.filter(pk=feed.pk).update(config={"quota_limit": 5})
+        row = feed_model._base_manager.get(pk=feed.pk)
+        choices = row.repair_impl_defaults("feed_backend_class")
+        row.feed_backend_class = "manual"
+        row.save()
+        saved = feed_model._base_manager.values_list("config", flat=True).get(pk=feed.pk)
+    assert choices["manual"] == {"config": manual.carried_config({})}
+    assert saved == manual.carried_config({})
+
+
+@pytest.mark.django_db
+def test_a_create_only_selector_holding_a_registered_key_is_as_create_only_as_before() -> None:
+    """No repair is offered off a registered key: the change is refused and the stored key stays."""
+
+    bridge = make_integration("registered", model=VcsBridge, backend_class="local")
+    with system_context(reason="test.impl.repair.registered"):
+        row = VcsBridge._base_manager.get(pk=bridge.pk)
+        row.backend_class = "stub"
+        with pytest.raises(ValidationError) as refused, transaction.atomic():
+            row.save()
+    assert refused.value.message_dict == {"backend_class": ["Implementation selection is create-only."]}
+    assert VcsBridge._base_manager.values_list("backend_class", flat=True).get(pk=bridge.pk) == "local"
+
+
+@pytest.mark.django_db
+def test_history_recorded_under_a_key_retired_later_loads_displays_and_keeps_recording_it() -> None:
+    """History loads under the retired key, shows it and keeps recording it; the live row refuses another one."""
+
+    owner = create_user("retired-history-owner")
+    vault = vault_for(owner)
+    with actor_context(owner), changeset(fresh=True, change_reason="Rename vault"):
+        vault.name = "Renamed"
+        vault.save(update_fields=("name",))
+    vault_model = type(vault)
+    first, renamed = vault.history.order_by("history_id")
+    store_column(type(first), first.history_id, "retrieval_class", "retired")
+    store_column(vault_model, vault.pk, "retrieval_class", "retired")
+    with (
+        actor_context(owner),
+        pytest.raises(ValidationError) as refused,
+        transaction.atomic(),
+        changeset(fresh=True, change_reason="Refused"),
+    ):
+        chosen = vault_model._base_manager.get(pk=vault.pk)
+        chosen.retrieval_class = "also-retired"
+        chosen.save()
+    assert "retrieval_class" in refused.value.message_dict
+
+    history = model_history(vault_model)
+    assert history is not None
+    changes = {change.field: (change.old, change.new) for change in history.diff(renamed, renamed).changes}
+    assert changes["retrieval_class"] == ("retired", "lexical")
+    with actor_context(owner), changeset(fresh=True, change_reason="Rename again"):
+        stored = vault_model._base_manager.get(pk=vault.pk)
+        stored.name = "Again"
+        stored.save(update_fields=("name",))
+    assert [version.retrieval_class for version in vault.history.order_by("history_id")] == [
+        "retired", "lexical", "retired",
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+@isolate_apps()
+def test_a_release_whose_registry_lacks_a_key_reads_and_saves_its_rows_and_refuses_to_resolve_or_insert_it() -> None:
+    """Two releases share one table in a rolling deploy; each field's choices are its own release's registry."""
+
+    both = {"base": "tests.test_impl._BaseImpl", "refined": "tests.test_impl._RefinedImpl"}
+    older = {"base": "tests.test_impl._BaseImpl"}
+    with override_settings(ANGEE_TEST_IMPLS=both):
+
+        class NewRelease(models.Model):
+            adapter = ImplClassField(_BaseImpl)
+            label = models.CharField(max_length=20, default="")
+
+            class Meta:
+                app_label = "tests"
+                db_table = "test_impl_rolling_release"
+
+    with override_settings(ANGEE_TEST_IMPLS=older):
+
+        class OldRelease(models.Model):
+            adapter = ImplClassField(_BaseImpl)
+            label = models.CharField(max_length=20, default="")
+
+            class Meta:
+                app_label = "tests"
+                db_table = "test_impl_rolling_release"
+
+    with model_tables((NewRelease,)):
+        with override_settings(ANGEE_TEST_IMPLS=both):
+            written = NewRelease.objects.create(adapter="refined", label="new")
+            NewRelease.objects.create(adapter="base", label="shared")
+        with override_settings(ANGEE_TEST_IMPLS=older):
+            row = OldRelease.objects.get(pk=written.pk)
+            assert type(row.adapter) is str and row.adapter == "refined"
+            assert sorted(OldRelease.objects.values_list("adapter", flat=True)) == ["base", "refined"]
+            assert list(OldRelease.objects.filter(adapter="refined")) == [row]
+            with pytest.raises(
+                ImproperlyConfigured,
+                match=r"^tests\.OldRelease\.adapter: No impl for key 'refined' in settings\.ANGEE_TEST_IMPLS ",
+            ):
+                row.get_adapter_impl()
+            with pytest.raises(ValidationError, match="Value 'refined' is not a valid choice"):
+                OldRelease.objects.create(adapter="refined")
+            row.label = "renamed"
+            row.save()
+        with override_settings(ANGEE_TEST_IMPLS=both):
+            current = NewRelease.objects.get(pk=written.pk)
+            assert (current.label, current.get_adapter_impl()) == ("renamed", _RefinedImpl)

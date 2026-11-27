@@ -98,7 +98,7 @@ test("unknown totals retain disabled next/last controls despite native unknown p
 test("a Notes descending declaration can clear and cycle without restoring the default", async () => {
   const order = { updated_at: "DESC" } as const;
   const f = await fixture({ initialPath: "/?keep=external", order });
-  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual({ updated_at: "desc" });
+  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual([{ updated_at: "desc" }]);
 
   for (const expected of [false, "asc", "desc", false] as const) {
     await act(async () => f.surface().table.getColumn("updated_at")!.toggleSorting());
@@ -112,7 +112,7 @@ test("a Notes descending declaration can clear and cycle without restoring the d
 
 test("an explicit URL sort takes precedence over a Notes descending declaration", async () => {
   const f = await fixture({ initialPath: "/?sort=title:asc&keep=external", order: { updated_at: "DESC" } });
-  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual({ title: "asc" });
+  expect(f.calls.at(-1)?.meta?.gqlVariables?.order_by).toEqual([{ title: "asc" }]);
   expect(f.surface().table.getColumn("title")!.getIsSorted()).toBe("asc");
 });
 
@@ -162,7 +162,7 @@ test("unknown totals and pending or failed reads do not rewrite the requested pa
   expect(f.router.state.location.search).toMatchObject({ page: "3", keep: "external" });
 });
 
-test("native Router preserves page-one and favorite clears with a later initial page", async () => {
+test("native Router preserves page one, and a favorite with no order keeps the declared one", async () => {
   const f = await fixture({
     initialPath: "/?keep=external",
     initialState: { page: 3, sort: { field: "title", dir: "asc" }, filter: { title: { iContains: "alpha" } } },
@@ -181,9 +181,11 @@ test("native Router preserves page-one and favorite clears with a later initial 
     { id: "favorite:all", label: "All notes", pageSize: 20 },
   ]));
   await act(async () => f.view().applyFavorite(favorite!));
-  expect(f.router.state.location.search).toEqual({ page: "1", sort: "", filter: "", keep: "external" });
-  expect(f.view().state).toMatchObject({ pagination: { pageIndex: 0 }, sorting: [], filter: {}, groupStack: [] });
-  await waitFor(() => expect(f.calls.at(-1)).toMatchObject({ pagination: { currentPage: 1 }, filters: [], sorters: [] }));
+  // The favorite names no order: it keeps the one the list declares, so the URL names none.
+  expect(f.router.state.location.search).toEqual({ page: "1", filter: "", keep: "external" });
+  expect(f.view().state).toMatchObject({ pagination: { pageIndex: 0 }, sorting: [{ id: "title", desc: false }], filter: {}, groupStack: [] });
+  await waitFor(() => expect(f.calls.at(-1)).toMatchObject({ pagination: { currentPage: 1 }, filters: [] }));
+  expect(f.calls.at(-1)?.meta?.gqlVariables).toMatchObject({ order_by: [{ title: "asc" }] });
   expect(f.history.length).toBe(1);
 });
 
@@ -200,11 +202,11 @@ test("native Router preserves calendar resets relative to page-owned defaults", 
 
   await act(async () => f.view().applyFavorite({ id: "favorite:calendar", label: "Calendar", pageSize: 20, view: "calendar" }));
   expect(f.view().state).toMatchObject({ mode: "month", anchor: today, pagination: { pageIndex: 0 }, groupStack: [] });
-  expect(f.router.state.location.search).toEqual({ page: "1", sort: "", mode: "month", anchor: today, keep: "external" });
+  expect(f.router.state.location.search).toEqual({ page: "1", mode: "month", anchor: today, keep: "external" });
 
   await act(async () => f.view().setMode("week"));
   await act(async () => f.view().setAnchor("2000-01-01"));
   expect(f.view().state).toMatchObject({ mode: "week", anchor: "2000-01-01" });
-  expect(f.router.state.location.search).toEqual({ page: "1", sort: "", keep: "external" });
+  expect(f.router.state.location.search).toEqual({ page: "1", keep: "external" });
   expect(f.history.length).toBe(1);
 });
