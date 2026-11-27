@@ -28,7 +28,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta
 from email.utils import getaddresses
 from functools import partial, reduce
@@ -52,6 +52,7 @@ from django.db.models.functions import MD5, Coalesce, Greatest
 from django.db.models.lookups import In
 from django.utils import timezone
 from django.utils.html import strip_tags
+from django.views.decorators.debug import sensitive_variables
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -94,14 +95,17 @@ from angee.messaging.backends import (
     OutboundEmailNotConfigured,
     PairingActionError,
     ParsedPart,
+    SystemChannelMissing,
 )
 from angee.messaging.constants import (
     DELIVERY_TASK_EXPIRES,
     MAX_DELIVERY_ATTEMPTS,
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
+    SYSTEM_CHANNEL_BACKEND,
+    SYSTEM_CHANNEL_XREF,
 )
-from angee.messaging.email import header_text
+from angee.messaging.email import carries_address, header_text, require_carried
 from angee.messaging.events import message_ingested
 from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.mixins import NotificationPreference, ThreadedModelMixin
@@ -117,6 +121,7 @@ if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
     from angee.messaging.backends import ParsedMessage, ParsedThread
+    from angee.messaging.email import SystemChannelBackend
     from angee.messaging.inbox import MessageInbox
     from angee.messaging.models import (
         Channel,
@@ -256,7 +261,7 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         return self.filter(backend_class=backend_class)
 
     def outbound_email(self, *, backend_class: str | None = None) -> Self:
-        """Connected channels whose declared backend currently offers configured outbound email.
+        """Connected channels people send from whose declared backend has outbound email configured.
 
         ``backend_class`` narrows the selection to one declared backend. This
         predicate remains lazy and chainable; ``require_outbound_email`` refuses
@@ -280,11 +285,14 @@ class ChannelQuerySet[ChannelT: Channel](IntegrationQuerySet[ChannelT]):
         )
 
     def _outbound_email_backends(self, backend_class: str | None) -> list[str]:
-        """Configured email implementations in the channel's declared registry."""
+        """Configured email implementations people send from, in the channel's declared registry."""
 
         field = self.model.backend_class.field
         candidates = field.registered_keys() if backend_class is None else (backend_class,)
-        return [key for key in candidates if field.resolve_class(key).outbound_email_configured()]
+        return [
+            key for key in candidates
+            if not (backend := field.resolve_class(key)).system_only and backend.outbound_email_configured()
+        ]
 
     def require_outbound_email(self, *, backend_class: str | None = None) -> Self:
         """Require configured transport and at least one connected channel in this selection."""
@@ -365,6 +373,50 @@ class ChannelManager[ChannelT: Channel](_ChannelManagerBase[ChannelT]):
     ingested and forecasts the same scope for the delete-confirmation preview — one
     owner for both the destructive path and its forecast, so the preview cannot drift.
     """
+
+    def system_channel(self) -> ChannelT:
+        """Return the system channel, messaging's install row, read as named system work; its one lookup.
+
+        Elevated, because the ledger loads its target through the actor-scoped
+        manager and administrators alone read the row; the row serves system work
+        and is never handed to a viewer. Absent, it refuses with
+        :class:`SystemChannelMissing` (``SYSTEM_CHANNEL_MISSING``, under ``channel``).
+        """
+
+        with system_context(reason="messaging.system_channel"):
+            try:
+                return apps.get_model("resources", "Resource").objects.resolve(SYSTEM_CHANNEL_XREF, model=self.model)
+            except ValueError as error:
+                raise SystemChannelMissing from error
+
+    def system_mail_configured(self) -> bool:
+        """Whether system mail can be sent, from settings alone: the one answer callers ask.
+
+        The backend the channel's registry binds to the system key
+        (``SYSTEM_CHANNEL_BACKEND``, which a host may rebind) decides, through its
+        ``system_mail_configured()``; :meth:`MessageManager.compose_as_system` refuses
+        exactly when this is false. It reads no row, so a projection may ask it per record.
+        """
+
+        try:
+            self._require_system_mail()
+        except ValidationError:
+            return False
+        return True
+
+    def _require_system_mail(self) -> None:
+        """Refuse unless the registered system backend answers that system mail can be sent.
+
+        The refusal is the sender rule's coded one (under ``channel``) where it is the
+        reason, else :class:`OutboundEmailNotConfigured`.
+        """
+
+        backend = cast("type[SystemChannelBackend]", self.model.backend_class.field.resolve_class(
+            SYSTEM_CHANNEL_BACKEND,
+        ))
+        if not backend.system_mail_configured():
+            backend.default_sender()
+            raise OutboundEmailNotConfigured
 
     def create_disconnected(
         self,
@@ -3060,12 +3112,17 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
 
 class _Addressee(NamedTuple):
-    """One recipient of an outgoing message: an address landed by value, or a handle already known."""
+    """One recipient of an outgoing message: an address landed by value, or a handle already known.
+
+    ``given`` says the caller handed this address (a compose's own To/Cc/Bcc), so its row records it; a
+    recipient a reply inherits from its parent, or one known only as a handle, is not given.
+    """
 
     role: str
     address: str = ""
     name: str = ""
     handle_id: Any = None
+    given: bool = False
 
 
 @dataclass(frozen=True)
@@ -3099,7 +3156,8 @@ _OUTGOING_ACTOR = SubjectRef.of("messaging/system", "outgoing")
 """Non-user attribution for handles messaging lands on nobody's behalf: a handle it creates there has no creator.
 
 A channel's own sender handle is the channel's, not the first composer's; a recipient a
-person types keeps that person as creator, by the handle owner's rule.
+person types keeps that person as creator, by the handle owner's rule; a recipient of
+system mail (:meth:`MessageManager.compose_as_system`) is nobody's.
 """
 
 
@@ -3235,6 +3293,65 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 outgoing, actor=actor, fingerprint=intent, idempotency_key=idempotency_key, admit=admit,
             )
 
+    # System mail carries credentials: an error report (Django's filter, with DEBUG off) hides
+    # every local of this frame and of every frame below it, down to the ORM's and the SQL's.
+    @sensitive_variables()
+    def compose_as_system(
+        self,
+        *,
+        reason: str,
+        to: Sequence[str] = (),
+        cc: Sequence[str] = (),
+        bcc: Sequence[str] = (),
+        subject: str = "",
+        text: str = "",
+        html: str = "",
+    ) -> MessageT:
+        """Write one email on the system channel as named system work, queued for delivery; return the row unbound.
+
+        The system channel's one writer, as nobody sends on that channel as a person.
+        System mail is named system work (each email Django sends, through the system
+        mailer, among it): the caller's own gate authorized it, so a caller whose own
+        permission decided the send may be a person's button, and no grant is consulted
+        here. Its direct callers are listed, each with that permission, in
+        ``tests/test_messaging_system_mail_callers.py``. It runs in the caller's context
+        and transaction, through the writer :meth:`compose` uses: the rows record the causing actor as
+        ``created_by`` (empty with none), which grants nothing on them, and join
+        the caller's changeset; a handle it creates, the system sender's or a
+        recipient's, has no creator. It is sent from the system channel's sender,
+        the deployment's ``DEFAULT_FROM_EMAIL``.
+
+        Refusals come before any write, in this order: a blank ``reason``
+        (``ValueError``); compose's checks of the arguments (more recipients than
+        ``ANGEE_MESSAGING_MAX_RECIPIENTS``, and each argument keyed ``to``,
+        ``cc``, ``bcc``, ``subject`` or ``text``); a recipient the transport cannot
+        carry (:meth:`clean_system_recipient`), under its role with code ``cannot_carry``,
+        so a mail that could never leave is never recorded as sent; system mail not configured,
+        from settings (``OUTBOUND_EMAIL_NOT_CONFIGURED``, or the sender under
+        ``channel``), none of which writes a permission audit row; then, after
+        the lookup's own audit row, :class:`SystemChannelMissing` and a channel
+        that is not connected (``OUTBOUND_EMAIL_CHANNEL_MISSING``). Each call is
+        a new message with its own Message-ID.
+        """
+
+        if not reason.strip():
+            raise ValueError("System mail requires a named reason.")
+        _require_at_most(settings.ANGEE_MESSAGING_MAX_RECIPIENTS, "recipients", (("to", to), ("cc", cc), ("bcc", bcc)))
+        outgoing = self._validate_outgoing(
+            channel=None, parent=None, record=None, sender=None, to=to, cc=cc, bcc=bcc, subject=subject,
+            text=text, html=html, attachments=(), local={}, queued=True, scheduled_at=None,
+        )
+        for addressee in outgoing.recipients:
+            self.clean_system_recipient(addressee.address, key=addressee.role)
+        channel_model = apps.get_model("messaging", "Channel")
+        channels = channel_model.objects
+        channels._require_system_mail()
+        channel = channels.system_channel()
+        return self._write_outgoing(
+            replace(outgoing, channel=channel), actor=None, fingerprint={}, idempotency_key=None, admit=None,
+            reason=reason,
+        )
+
     def clean_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
         """Return the display name and the address :meth:`compose` sends ``entry`` to, or refuse it under ``key``.
 
@@ -3247,10 +3364,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         write stores, a control character, or an encoded-word opener, which a mail
         library decodes into another address or name. The handle owner then decides
         whether the address can be one and can be stored on a handle
-        (``Handle.is_email_address``, ``HandleManager.clean_identity``). It reads
-        nothing, so a caller can ask it before expensive work, and ``compose``
-        lands exactly what it returns. The refusal is ``invalid``, naming the
-        entry as typed.
+        (``Handle.is_email_address``, ``HandleManager.clean_identity``). The
+        address is returned as typed: the handle owner lands any letter case or
+        domain spelling of a stored address on its handle, and a handle compose
+        creates first keeps the typed spelling; the recipient row records the
+        address as returned, which the message is mailed at (``Recipient.address``). It reads nothing, so a caller can
+        ask it before expensive work, and ``compose`` lands exactly what it
+        returns. The refusal is ``invalid``, naming the entry as typed.
         """
 
         handle_model = apps.get_model("parties", "Handle")
@@ -3265,8 +3385,20 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             raise ValidationError({key: ValidationError(
                 "%(entry)s is not one email address.", code="invalid", params={"entry": str(entry or "") or "An entry"},
             )})
-        address = handle_model.email_value(address)
         _require_landable(handle_model, ((key, address),))
+        return name, address
+
+    def clean_system_recipient(self, entry: str, *, key: str = "to") -> tuple[str, str]:
+        """Return the display name and the address system mail sends ``entry`` to, or refuse it under ``key``.
+
+        System mail's one recipient rule, which :meth:`compose_as_system` applies to
+        each recipient: :meth:`clean_recipient` (``invalid``), then the transport's
+        (:func:`~angee.messaging.email.require_carried`, ``cannot_carry``). It reads
+        and writes nothing, so a caller asks it before offering a send.
+        """
+
+        name, address = self.clean_recipient(entry, key=key)
+        require_carried(address, key=key)
         return name, address
 
     def _validate_outgoing(
@@ -3331,7 +3463,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         else:
             kind, platform = email_kind, handle_model.Platform.EMAIL
             recipients = tuple(
-                _Addressee(role, address, name)
+                _Addressee(role, address, name, given=True)
                 for role, entries in (("to", to), ("cc", cc), ("bcc", bcc))
                 for name, address in (self.clean_recipient(entry, key=role) for entry in entries)
             )
@@ -3374,14 +3506,18 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             scheduled_at=scheduled_at,
         )
 
+    # A mail's text travels below the writer under the ORM's names too (rows, defaults, SQL
+    # params), so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def _write_outgoing(
         self,
         outgoing: _Outgoing,
         *,
-        actor: Any,
+        actor: Any | None,
         fingerprint: Mapping[str, Any],
         idempotency_key: str | None,
         admit: Callable[[], None] | None,
+        reason: str = "messaging.compose",
     ) -> MessageT:
         """Claim, replay, read what present state decides, admit, write and hand off; it consults no grant.
 
@@ -3390,15 +3526,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         and changed content raises ``CreationKeyConflict``. An answer's envelope
         (:meth:`Message.reply_envelope`) or a new email's sender is read next and
         its addresses checked; a refusal there rolls the claim back. Then
-        ``admit()`` runs, and the rows are written under ``system_context``: the
-        thread, the sender handle, the row with its Message-ID (minted as Django
-        mints one for an email, a client token otherwise) and preview, its title,
-        body and attachment parts, its recipients, the thread's counter, and a
-        queued message's hand-off (:meth:`Message.deliver`, published when the
-        outermost transaction commits).
+        ``admit()`` runs, and the rows are written under ``system_context``
+        named ``reason``: the thread, the sender handle, the row with its
+        Message-ID (minted as Django mints one for an email, a client token
+        otherwise) and preview, its title, body and attachment parts, its
+        recipients, the thread's counter, and a queued message's hand-off
+        (:meth:`Message.deliver`, published when the outermost transaction commits).
+
+        With no ``actor`` it is system work (:meth:`compose_as_system`): its rows
+        take the ambient, causing actor as ``created_by``, or none, every handle
+        lands under the non-user attribution, and the row is returned unbound.
         """
 
-        actor_ref = to_subject_ref(actor)
+        actor_ref = to_subject_ref(actor) if actor is not None else None
         created_by_id = actor_user_id(actor_ref)
         handle_model = apps.get_model("parties", "Handle")
         email = outgoing.kind == self.model.MessageKind.EMAIL
@@ -3432,11 +3572,10 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             elif email:
                 sender_address = outgoing.channel.outbound_sender()
             if sender_address is not None:
-                sender_address = (sender_address[0], handle_model.email_value(sender_address[1]))
                 _require_landable(handle_model, (("channel", sender_address[1]),))
             if admit is not None:
                 admit()
-            with system_context(reason="messaging.compose"):
+            with system_context(reason=reason):
                 external_id = make_msgid(domain=DNS_NAME).strip("<>") if email else str(uuid4())
                 if outgoing.parent is not None:
                     thread_id = outgoing.parent.thread_id
@@ -3469,43 +3608,85 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     apps.get_model("messaging", "Part").objects.attach_files(
                         message, outgoing.attachments, position=position + 1, created_by_id=created_by_id,
                     )
-                rows = self._land_addressees(recipients, created_by_id=created_by_id)
+                # A person's recipients keep that person as their creator; system work's have none.
+                with actor_context(_OUTGOING_ACTOR) if actor is None else nullcontext():
+                    rows = self._land_addressees(recipients, actor=actor, created_by_id=created_by_id)
                 self._write_recipients(message, rows, created_by_id=created_by_id)
                 self.advance_thread(message)
                 if outgoing.queued:
                     message.deliver()
             if idempotency_key is not None:
                 require_changeset().record_created(message)
-        return message.with_actor(actor)
+        return message if actor is None else message.with_actor(actor)
 
     @staticmethod
-    def _land_addressees(recipients: Sequence[_Addressee], *, created_by_id: Any) -> list[tuple[Any, str]]:
-        """Return each recipient's ``(handle id, role)`` in the order given, its addresses resolved in one read.
+    def _land_addressees(
+        recipients: Sequence[_Addressee], *, actor: Any, created_by_id: Any,
+    ) -> list[tuple[Any, str, str, Any]]:
+        """Return each recipient's ``(handle, role, address, addressed handle)`` in the order given, in one read.
+
+        ``address`` is the address the caller handed for that recipient
+        (``_Addressee.given``: a compose's own To/Cc/Bcc, as its recipient rule
+        cleaned it), when the transport can carry it as handed
+        (``email.carries_address``), which the row records and the message is mailed
+        at (``Recipient.envelope_address``); an address it cannot carry records
+        nothing, and the mail goes to the handle's value. It is empty for a recipient
+        the caller did not hand as an address: one a reply inherits from its parent,
+        which is answered as its handle stores it, and one known only as a handle.
+        ``handle`` is where the address lands, the survivor of any merge; ``addressed
+        handle`` is the handle owning the address before that redirect
+        (``HandleManager.find_identity_owners``). Both are instances, so the row's
+        write and its check read nothing more.
+
+        Who writes decides what a merge does, here and nowhere else. A person's
+        compose (an ``actor``: ``compose`` refuses to write without one) records a
+        given address only when it spells the handle it landed on: mail a person
+        addresses to an address a contact administrator merged into another follows
+        the merge to the kept handle's value, which is what a merge is for, and why
+        only a contact administrator may merge two addresses. System work (no
+        ``actor``: ``compose_as_system``, the one writer without one, so Django's
+        ``send_mail``) records it when it spells the handle the lookup found, merged
+        away or not, on the kept handle's row: system mail goes exactly where its
+        caller said, so a merge never redirects an account's or a workflow's mail.
 
         Known handles resolve through the handle owner's batch lookup
-        (``HandleManager.find_identities``); an address with no handle, or with a
+        (``HandleManager.find_identity_owners``, each owner resolved to its survivor
+        by ``canonical``, a read only for a merged one); an address with no handle, or with a
         name typed beside it, goes through ``upsert``, where a typed name fills
         only a handle that has none and never renames a shared one. Those writes
-        take the handles in one order, by their identity key, so two composes
-        naming the same addresses in different orders take their row locks in the
-        same order and do not deadlock each other; another writer that takes the
-        same handles in its own order still can.
+        take the handles in one order, by their spelling key
+        (``Handle.spelling_key_of``), so two composes naming the same addresses in
+        different orders or spellings take their row locks in the same order and
+        do not deadlock each other; another writer that takes the same handles in
+        its own order still can. Spellings of one address keep the order given, so
+        a new address is stored as it was first given.
         """
 
         handle_model = apps.get_model("parties", "Handle")
         email = handle_model.Platform.EMAIL
-        found = handle_model.objects.find_identities(
+        owners = handle_model.objects.find_identity_owners(
             (email, addressee.address) for addressee in recipients if addressee.handle_id is None
         )
-        for addressee in sorted(recipients, key=lambda addressee: addressee.address):
+        found = {identity: owner.canonical() for identity, owner in owners.items()}
+        for addressee in sorted(recipients, key=lambda each: handle_model.spelling_key_of(email, each.address)):
             if addressee.handle_id is None and (found.get((email, addressee.address)) is None or addressee.name):
                 found[(email, addressee.address)] = handle_model.objects.upsert(
                     platform=email, value=addressee.address, display_name=addressee.name,
                     fill_only=("display_name",), created_by_id=created_by_id,
                 )
-        return [
-            (addressee.handle_id or found[(email, addressee.address)].pk, addressee.role) for addressee in recipients
-        ]
+        rows: list[tuple[Any, str, str, Any]] = []
+        for addressee in recipients:
+            if addressee.handle_id is not None:
+                rows.append((addressee.handle_id, addressee.role, "", None))
+                continue
+            identity = (email, addressee.address)
+            handle, owner = found[identity], owners.get(identity)
+            spelled = handle.is_spelling_of(addressee.address) or (
+                actor is None and owner is not None and owner.is_spelling_of(addressee.address)
+            )
+            recorded = addressee.given and spelled and carries_address(addressee.address)
+            rows.append((handle, addressee.role, addressee.address if recorded else "", owner))
+        return rows
 
     def cancel_delivery(self, message: Any) -> None:
         """Disarm a removed outbound draft/queue under the same settlement row lock."""
@@ -3885,6 +4066,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     self._recount_thread(thread)
             return results
 
+    # A row's str is its preview, so an error report (DEBUG off) hides every local from here down, for any mail.
+    @sensitive_variables()
     def release_held_messages(self, *, now: datetime | None = None, limit: int = 200) -> int:
         """SQL-scoped skip-locked release, with a savepoint for every row."""
 
@@ -4717,7 +4900,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 for recipient in parsed.recipients
             ]
             self._write_recipients(
-                message, ((handle.pk, role) for handle, role in recipients), created_by_id=created_by_id,
+                message, ((handle, role, "", None) for handle, role in recipients), created_by_id=created_by_id,
             )
             handles = [*([] if sender is None else [sender]), *(handle for handle, _role in recipients)]
         if expected_thread is not None:
@@ -4919,17 +5102,37 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         )
         return file
 
-    def _write_recipients(self, message: Any, rows: Iterable[tuple[Any, str]], *, created_by_id: Any) -> None:
-        """Create ``message``'s recipient rows from ``(handle id, role)`` pairs, once per pair.
+    def _write_recipients(
+        self, message: Any, rows: Iterable[tuple[Any, str, str, Any]], *, created_by_id: Any,
+    ) -> None:
+        """Create ``message``'s recipient rows from ``(handle or handle id, role, address, addressed handle)``, once per
+        handle and role.
 
         The write path owns envelope dedup (the unique constraint is the
-        backstop): any producer may repeat an address within one role. Each row
-        takes its thread from ``message`` (``Recipient.save``).
+        backstop): any producer may repeat an address within one role, and two
+        spellings of one address in one role are one row. That row records the
+        first spelling a caller handed for it, wherever it came in the order: a
+        handed address wins over the same handle inherited without one (a reply's
+        parent's recipient), since the caller gave it. Each row takes its thread
+        from ``message`` (``Recipient.save``); ``address`` is empty for a row whose
+        recipient no caller handed as an address. The addressed handle, the handle
+        owning the address before a merge redirect, goes to the row's check
+        (``Recipient.addressed_handle``) and is not stored.
         """
 
         recipient_model = apps.get_model("messaging", "Recipient")
-        for handle_id, role in dict.fromkeys((handle_id, str(role)) for handle_id, role in rows):
-            recipient_model.objects.create(message=message, handle_id=handle_id, role=role, created_by_id=created_by_id)
+        written: dict[tuple[Any, str], tuple[Any, str, Any]] = {}
+        for handle, role, address, owner in rows:
+            key = (getattr(handle, "pk", handle), str(role))
+            if key not in written or (address and not written[key][1]):
+                written[key] = (handle, address, owner)
+        for (_handle_id, role), (handle, address, owner) in written.items():
+            row = recipient_model(
+                message=message, role=role, address=address, created_by_id=created_by_id,
+                **({"handle": handle} if isinstance(handle, models.Model) else {"handle_id": handle}),
+            )
+            row.addressed_handle = owner
+            row.save(force_insert=True)
 
 
 class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):

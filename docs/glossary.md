@@ -393,9 +393,35 @@ a sender is read; the message's source keeps its `From` header. See
 
 **Recipient** — whom a message is addressed to: one concept at two levels. As
 addresses, the message's `Recipient` rows, one per handle and envelope role
-(`to`, `cc`, `bcc`); as accounts, chatter's direct addressees
+(`to`, `cc`, `bcc`), each recording the address a compose was given for it
+(`Recipient.address`, empty for one no caller handed as an address), which the message
+is mailed at; as accounts, chatter's direct addressees
 (`recipient_user_ids`, `suggested_recipients`). See
 [messaging's contracts](../src/angee/messaging/README.md).
+
+**Transport mailer** — the one mailer that sends, `MAILERS["transport"]`:
+messaging delivers every email through it, and without it delivery is not
+configured. Not Django's default mailer, which is the **System mailer**. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mail** — mail the framework writes as named system work, each email
+Django sends among it: one queued message written on the **System channel** by
+`MessageManager.compose_as_system`, its causing actor recorded in the changeset,
+and delivered through the **Transport mailer**. Nobody sends it as a person on a
+channel they send from. See
+[messaging's contracts](../src/angee/messaging/README.md).
+
+**System mailer** — Django's default mailer wherever messaging is installed,
+`SystemMailer`: it records each email Django sends as **System mail** and sends
+nothing itself. A consumer's own mail sent straight through the **Transport
+mailer** by name is a deliberate exception, outside messaging. See [messaging's contracts](../src/angee/messaging/README.md).
+
+**System channel** — messaging's install row `messaging.system_channel` (backend
+`system`), where **System mail** is written. Administrators alone read it, no
+verb shares its threads or grants on its messages, and it is system-only: nobody
+chooses it to send from or to watch. A person finds it in a
+list of channels under the label "System mail", which the row is given once, when
+it is created. See [messaging's contracts](../src/angee/messaging/README.md).
 
 **Compose (a message)** — write one outgoing message through
 `MessageManager.compose`: its row, parts, recipients, sender, thread and delivery

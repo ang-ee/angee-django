@@ -637,17 +637,25 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         return handle.canonical() if handle is not None else None
 
     def find_identities(self, identities: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Any]:
-        """Return the handle each ``(platform, value)`` lands on, for the identities that have one, keyed as asked.
+        """Return the handle each ``(platform, value)`` lands on, for the identities that have one, keyed as asked:
+        :meth:`find_identity_owners`, each resolved to its merge survivor (``canonical``, a read only for a merged
+        row)."""
+
+        return {identity: owner.canonical() for identity, owner in self.find_identity_owners(identities).items()}
+
+    def find_identity_owners(self, identities: Iterable[tuple[str, str]]) -> dict[tuple[str, str], Any]:
+        """Return the row owning each ``(platform, value)``, live or merged away, before its merge redirect.
 
         :meth:`find_identity`'s rule without an external id, for many identities in
         one read: the row owning ``(platform, value)``; else, for an email address,
         the live handle owning its spelling key (``Handle.spelling_key_of``: any
         letter case or domain spelling of a stored address), else the oldest
-        merged-away row owning it; each resolved to its merge survivor
-        (``canonical``, a read only for a merged row). Read-only, for a caller that
-        resolves a whole batch (a sync page's attendees) at once. Each platform's
-        values are one arm naming that platform (the email arm is
-        ``Handle.spellings_filter``), so an index serves every arm.
+        merged-away row owning it. :meth:`find_identities` resolves each to the
+        handle it lands on; a caller that also needs the row an address named,
+        merged away or not, reads this. Read-only, for a caller that resolves a whole batch (a
+        sync page's attendees) at once. Each platform's values are one arm naming
+        that platform (the email arm is ``Handle.spellings_filter``), so an index
+        serves every arm.
         """
 
         values: defaultdict[str, set[str]] = defaultdict(set)
@@ -673,9 +681,9 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         found = {}
         for platform, spelled in values.items():
             for value in spelled:
-                landed = exact.get((platform, value)) or owners.get(self.model.spelling_key_of(platform, value))
-                if landed is not None:
-                    found[(platform, value)] = landed.canonical()
+                owner = exact.get((platform, value)) or owners.get(self.model.spelling_key_of(platform, value))
+                if owner is not None:
+                    found[(platform, value)] = owner
         return found
 
     @staticmethod

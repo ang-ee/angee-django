@@ -12,6 +12,10 @@ dynamic = ["entry-points"]
 
 [tool.angee.resources]
 retired_models = ["messaging.ActivityType"]
+[[tool.angee.resources.master]]
+path = "master/010_integrate.vendor.yaml"
+adopt = "slug"
+
 [[tool.angee.resources.install]]
 path = "install/030_provenance.rule.yaml"
 adopt = "key"
@@ -20,6 +24,11 @@ adopt = "key"
 path = "install/040_source_identity_grants.yaml"
 kind = "grants"
 depends_on = ["install/030_provenance.rule.yaml"]
+
+[[tool.angee.resources.install]]
+path = "install/050_messaging.channel.yaml"
+depends_on = "master/010_integrate.vendor.yaml"
+create_only = ["display_name"]
 
 [tool.angee.platform]
 category = "Data"

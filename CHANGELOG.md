@@ -10,6 +10,187 @@ live in code docstrings.
 
 ## Unreleased — shared addon contracts, native embeddings and graph retrieval
 
+- `angee.messaging`, `angee.workflows_messaging`, `angee.iam_messaging`: **System mail: each email
+  Django sends is recorded on a system channel and sent through one transport mailer.**
+  - **Upgrade first:** stop the serving processes and workers through the operator
+    before editing settings: with messaging installed, start-up refuses a
+    deployment that states its own `MAILERS.default` until it is renamed
+    `MAILERS.transport` (keeping its `BACKEND` and `OPTIONS`; remove it instead
+    when a transport is stated), and the refusal names the edit; a process that
+    reloads before the edit stops at settings load. Django itself refuses legacy
+    `EMAIL_*` settings beside the `MAILERS` messaging states: move them into
+    `MAILERS.transport` `OPTIONS`. Then provision: it loads the system channel's
+    rows and runs `rebac sync` for schema revision 34. Without that load, every
+    email Django sends raises `SystemChannelMissing` at the sender (a password
+    reset answers with a server error). Regenerate the SDL and `@angee/gql`: the
+    channel backend enums gain `SYSTEM`.
+    A host that authors `LOGGING` restates the `django` logger with a
+    `mail_admins` naming `using: transport` (messaging's README gives the block). Tests that observed
+    delivery through `MAILERS={"default": ...}` override `transport`. With
+    messaging installed, `"default" in mailers` and `MAILERS["default"]` no longer
+    say mail can be sent: ask `Channel.objects.system_mail_configured()`.
+    The emailed sign-in link (`angee.iam_messaging`) still asks the default
+    mailer, so a host with no transport offers a link whose send raises and
+    stamps nothing, and a recorded link whose delivery later fails is stamped as
+    sent.
+  - **New.** `SystemMailer` (`angee.messaging.email`) is Django's default mailer
+    wherever messaging is installed, contributed by messaging's autoconfig. It
+    records each email (a password reset, `sendtestemail`, a link an addon mails)
+    as one queued message on the system channel through the new
+    `MessageManager.compose_as_system(*, reason, to, cc, bcc, subject, text, html)`,
+    in the caller's transaction, and sends nothing itself. Its rows record the
+    causing actor as `created_by`; the handles it lands have no creator, and their
+    history is a changeset of their own under messaging's non-user attribution
+    (`messaging/system:outgoing`), beside the caller's. The system channel is
+    messaging's install row `messaging.system_channel` (backend `system`,
+    `SystemChannelBackend`, vendor `messaging.email`), found through
+    `ChannelManager.system_channel()`, which refuses with `SystemChannelMissing`
+    (`SYSTEM_CHANNEL_MISSING`, under `channel`) when it is absent.
+    `AnymailEmailChannelBackend.default_sender()` is the deployment's sender
+    (`DEFAULT_FROM_EMAIL`) from settings alone, and
+    `ChannelManager.system_mail_configured()` answers whether system mail can be
+    sent, as the backend the registry binds to the system key decides.
+    `MessageManager.clean_system_recipient(entry, key=...)` is system mail's
+    recipient rule, which reads nothing. `carries_address(address)`
+    (`angee.messaging.email`) is the one rule for what the transport can carry,
+    and `require_carried(address, key=...)` its refusal. With `DEBUG` off, an
+    error report hides every local of the system write's frames, and of the
+    shared writer's, the delivery path's and the operator's retry and
+    acknowledge frames for any mail. A transport's error never leaves the delivery task: when recording its
+    failure fails too, that failure is raised on its own and the transport's error is logged by its types;
+    a database error's own text is not filtered. `ChannelBackend.system_only` (read
+    through `Channel.system_only`) declares a backend that serves the system
+    channel alone, which people never choose to send from or to watch. `messaging.E004`
+    (`check --deploy`) reports a development-only transport mailer. Messaging
+    contributes `LOGGING` when the host states none: Django's `DEFAULT_LOGGING`
+    with `mail_admins` sending through `transport`. `messaging.W001` reports an
+    `AdminEmailHandler` on any configured logger that would send through the
+    system mailer, Django's own `mail_admins` included, which a host `LOGGING`
+    that does not name the `django` logger keeps.
+  - **Changed.** Messaging delivers through `MAILERS["transport"]`, never Django's
+    default mailer; delivery is configured exactly when it is stated. System mail
+    is queued, so mail sent in a transaction that rolls back is never sent; it
+    goes from `DEFAULT_FROM_EMAIL`, a caller's `from_email` (`SERVER_EMAIL` on a
+    direct `mail_admins` too) and `Message-ID` are not kept, and attachments,
+    `reply_to`, extra headers, an empty body and a recipient the transport cannot
+    carry (`cannot_carry`, under its role) are refused, so such a mail is never
+    recorded as sent. A
+    transport that hands a delivery back to the system mailer fails that delivery
+    instead of recording it again. Administrators alone read, write, annotate
+    and delete the system channel (schema revision 34), and nobody sends on it
+    as a person, administrators included: `compose` and answering refuse it, as
+    the framework writes it as named system work (`compose_as_system`). No channel,
+    integration, team, project or ownership grant reaches it. No verb shares its
+    threads or grants on its messages: nobody shares a system thread or writes a
+    system message, administrators included, and none of messaging's own arms
+    writes a system thread, so a group or project binding of one is refused;
+    nobody retries or acknowledges a system mail whose delivery failed or is
+    uncertain either (the release task sends a lost one again): it stays so,
+    and the feature that sent it sends a new one.
+    Without any verb, a `reader` or `editor` tuple written directly and the
+    source-identity rule's principal read system mail, and another addon's arm on
+    the thread's `read_granted`, `chatter_read` or `write` holds whenever a system
+    thread carries what it keys on (messaging's README). `messaging.E003` refuses a fragment arm on the
+    channel's `read`, `reply`, `write`, `annotate` or `delete`, the thread's
+    `share`, `delete` or `annotate`, or the message's `write`, `delete` or
+    `annotate`. Its threads show in administrators' inbox lists. A channel whose
+    backend is system-only (the system channel) is never selected to send from
+    (`ChannelQuerySet.outbound_email`), and enabling a `message_ingested` trigger
+    on it is refused under `channel` (`system_only`) before any grant. A channel's
+    default sender is checked by `MessageManager.clean_recipient`, the check every
+    address messaging lands takes, and must be an address the transport carries,
+    where it was Django's `validate_email`. Error mail goes through the transport,
+    never the system channel. The sign-in link's mail is recorded on the system channel
+    with the rest of Django's mail.
+  - **Removed.** `ANGEE_EMAIL_DELIVERY_CONFIGURED`; `outbound_email_configured()`
+    reads `MAILERS["transport"]` itself.
+
+- `angee.messaging`, `angee.messaging_integrate_imap`, `angee.calendar`,
+  `angee.intake`: **Changed behaviour.** Compose and answers land an address as
+  given; inbound mail keeps the parser's lower-cased form.
+  `Message.reply_addresses` returns each address its `Reply-To` names once, by
+  its spelling key (`Handle.spelling_key_of`), as the header first spells it,
+  with that entry's display name, where it lower-cased each. An answer to an
+  address no handle holds yet stores and sends it in that spelling; an address a
+  handle holds is sent as that handle stores it, with its display name, as every
+  recipient written from a handle is. The IMAP parser still emits an address trimmed and lower-cased,
+  the form every stored sync hash covers, so a message already synced hashes as
+  it did. An IMAP account's own addresses (its `own_addresses`, its username and
+  its external account's email) compare with a message's by spelling key, any
+  configured display name dropped, so its own mail is outbound, or internal, in
+  any letter case or domain spelling; a configured display name, or a domain
+  spelled in Unicode against the header's punycode, left it inbound. The email
+  backend's wire dedupe reads the spelling key instead of `casefold()`; every
+  mailbox it writes has an ASCII part before the `@` and an ASCII domain, where
+  the two agree, so nothing is sent differently.
+  `angee.calendar.backends.normalized_address` is renamed `attendee_key`:
+  calendar's one rule for which addresses are one attendee before a handle
+  exists, still the person-matching key, so a provider's two aliases on one
+  invitation stay one attendee. `organizer_first` finds the organizer in its
+  list by it, so an organizer listed in another domain spelling carries the
+  answer it is listed with. `Need.requester_address` returns an emailed
+  request's sender as its handle stores it; requests are one requester when
+  their addresses are one account email as iam keys it (`normalize_email`), as
+  before. Statement counts are unchanged. **Upgrade:** nothing to run, and
+  nothing is sent. A message an IMAP channel synced from the account's own
+  address in another spelling keeps the direction it was stored with until the
+  mailbox is fetched again in full (a new stream generation, which a changed
+  `UIDVALIDITY` starts); that fetch rewrites the row in place once, with its
+  direction corrected and its status still synced, and later syncs write
+  nothing.
+
+- `angee.messaging`: **Changed behaviour. A message is mailed at the address its
+  writer was given, and from its channel's sender as configured.** A compose's
+  own recipients, a person's and the system's (`compose`, `compose_as_system`,
+  so Django's `send_mail`), still land on the one handle of any spelling of
+  their address, and each recipient row now records the address it was given,
+  as its recipient rule cleaned it (`Recipient.address`): mail goes to that
+  spelling (`Recipient.envelope_address`), where it went to the spelling the
+  handle was first stored in. Only an address the caller handed is recorded; a
+  recipient no caller handed as an address records nothing and is mailed at the
+  handle's `value`, as before: one a reply inherits from its parent, still
+  answered as its handle stores it (a reply is handed no address of its own:
+  To, Cc and Bcc on one are refused, `reply_addressed`), and an ingested one,
+  whose raw envelope stays in the message's metadata. A recorded address is
+  always, as written, a spelling of its handle's address or of a handle merged
+  into it (`Handle.is_spelling_of(value, merged=True)`, which reads the merged
+  handles once, only for an address that is not the handle's own). Who writes
+  decides what a merge does: a person's compose to a merged handle's address
+  (a contact administrator's merge of two addresses, an alias folded) records
+  nothing and follows the merge to the kept handle's value, as before; system
+  mail (`compose_as_system`, so `send_mail`) records it on the kept handle's row
+  and is mailed exactly there, so a merge never redirects an account's or a
+  workflow's mail.
+  `Recipient.save` and `full_clean` refuse any other, or one with surrounding
+  space, with a `ValidationError` on `address` (`not_its_handle`) before
+  writing. The reader (`Recipient.envelope_address`) asks the message's channel
+  what a recorded address the handle's merges no longer name means (a merge
+  reverted after the row was written, a row written past those checks): the
+  system channel's message is refused whole, settled failed with "A recipient of
+  this message no longer names the address it was written for.", so system mail
+  is exact or not sent, and the release does not hand it off again; a person's
+  row is mailed at the handle's value with a warning naming the row. An address the
+  transport cannot carry as given (`carries_address`) records nothing and is
+  mailed at the handle's value, as before. `HandleManager.find_identity_owners`
+  returns the row owning each identity before its merge redirect;
+  `find_identities` is it resolved to each survivor. From is written as the
+  channel configures it (`AnymailEmailChannelBackend.outbound_sender`: its
+  `from_email`, else `DEFAULT_FROM_EMAIL`) whenever the message's sender handle
+  is that address, whatever spelling the handle keeps, and from the sender's own
+  while the sender rule refuses the configured one. What a message shows and what
+  search finds are unchanged: the handle; the GraphQL types and the resource
+  metadata do not expose the column. The recorded address leaves with its row:
+  with its handle, its message and its channel's purge.
+  - **Upgrade:** after compose, run `uv run --no-sync python manage.py
+    makemigrations messaging` and commit it: one added field on the recipients
+    table, `address`, with no backfill, empty meaning the handle's own spelling.
+    On PostgreSQL it is `ALTER TABLE "messaging_recipient" ADD COLUMN "address"
+    varchar(512) DEFAULT '' NOT NULL;`, a catalogue change with no table rewrite
+    (PostgreSQL 11 and later keep a constant default in the catalogue). Messages
+    queued before it are mailed at their handle's spelling, as they would have
+    been. Reversing it drops the column, which loses the given spellings and
+    nothing else: the messages are then mailed at their handles' spellings.
+
 - `@angee/ui`, projects, workflows, messaging: **Changed contract.** An inline
   action form says a refused field's reason at that field and brings the person
   to the refusal. The option of `applyFormErrors` that lists the fields a
@@ -1176,7 +1357,7 @@ live in code docstrings.
   address on the row owning its exact value, else on the live handle owning its
   spelling key, else on the survivor of the oldest merged-away row owning it;
   the handle keeps the spelling first written as its `value`, what a message to
-  it is addressed to. A save that would keep a second live handle of an address
+  it shows (a compose's recipient is mailed at the spelling it was given, above). A save that would keep a second live handle of an address
   (an insert, a history revert, a resource load, a rewrite behind an
   `external_id`) is refused before it writes with
   `angee.parties.managers.ValueOwned`, a `ValidationError` on `value`
@@ -1199,12 +1380,9 @@ live in code docstrings.
   bound to an email handle now meets that handle for mail from every letter
   case and domain spelling of its address, and an account signing in with
   another letter case of a contact's address takes that handle as its own, as
-  it already did for the exact spelling. `Handle.email_value` no longer decides
-  which handle an address lands on; it still decides the spelling a handle
-  that compose, a channel's sender or inbound mail creates first stores, and
-  the keys of `Message.reply_addresses`, and is removed with its callers in a
-  following change. `HandleManager.clean_identity` returns `None`; nothing read
-  the key it returned.
+  it already did for the exact spelling.
+  `HandleManager.clean_identity` returns `None`; nothing read the key it
+  returned.
   `renormalize_handles` folds each live email handle that spells the address
   of an older one into it (`KeyRepair.folded`) and reports a fold the merge
   refuses (`KeyRepair.refused`); its log lines are "Saved the keys of N
@@ -1369,10 +1547,9 @@ live in code docstrings.
     never re-read. A caller
     asks `clean_recipient` before expensive work. A message takes at most
     `ANGEE_MESSAGING_MAX_RECIPIENTS` addresses across `to`, `cc` and `bcc`
-    (default 50, the strictest common provider's per-message limit; each new
-    address costs a call about 34 statements) and
-    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20, about 17
-    statements each); more is refused (`too_many`) under the argument that
+    (default 50, the strictest common provider's per-message limit) and
+    `ANGEE_MESSAGING_MAX_ATTACHMENTS` attachments (default 20), each setting's
+    comment saying what one more costs; more is refused (`too_many`) under the argument that
     crosses the bound, before anything is read. An answer is bound the same way
     by the addresses its parent's `Reply-To` names: over the bound it is refused
     under `reply_to` (`too_many`), which `Message.reply_error` reports. A `scheduled_at` without an
@@ -1391,8 +1568,7 @@ live in code docstrings.
     decide. `HandleManager.clean_identity` validates a handle
     identity without writing, `HandleManager.upsert(fill_only=...)` names display
     fields it only fills while blank (a fill locks and reads the row again, so
-    it never overwrites a value another transaction has just written), and `Handle.email_value` is the lower-cased
-    form compose and inbound mail pass. `PartManager.attach_files` attaches
+    it never overwrites a value another transaction has just written). `PartManager.attach_files` attaches
     several files under one message lock. `HandleManager.find_identities` (and so
     `find_identity`, `upsert` and every compose lookup) names the platform in each
     arm of its one statement, so the `(platform, value)` key's index serves it; it
@@ -1466,8 +1642,11 @@ live in code docstrings.
     deployment can clear `created_by` on its channels' sender handles. A recipient row's thread
     is its message's, set by the model on insert (`Recipient.save`), which
     refuses a different one. `Message.reply_addresses` keeps only what
-    `Handle.is_email_address` accepts, in the form `Handle.email_value` gives. A
-    channel's default sender lands on the handle its lower-cased address names.
+    `Handle.is_email_address` accepts, one entry per address as the header
+    first spells it. A channel's default sender lands on the handle its
+    configured address names.
+    A recipient address no handle holds yet is stored and sent as first typed,
+    and every other letter case or domain spelling of it lands on that handle.
     A name typed with a recipient address fills only a handle that has none.
     Inbound mail joins a thread by its subject only when the thread was grouped
     by subject: a conversation a person composed is joined through its threading
