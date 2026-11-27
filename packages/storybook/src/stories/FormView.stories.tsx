@@ -310,6 +310,8 @@ const backendField = { name: "backend_class", label: "Backend" } satisfies FormF
  * Backend keeps its mark.
  */
 export const ImplementationKeyNotRegistered: Story = {
+  // Its save writes the backend: its own store, so no other story reads what it saved.
+  parameters: { angeeFixture: { schemas: storySchema({ ...storyOperations, ...backendOperationsFor() }, { resources: storyResources }) } },
   render: () => (
     <FormView resource="storage.Backend" id={unregistered.id} fields={[{ name: "label", label: "Name", title: true }, backendField]} />
   ),

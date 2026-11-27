@@ -106,5 +106,5 @@ export function backendOperationsFor(): Readonly<Record<string, GraphQLWireOpera
   };
 }
 
-/** The backends' roots most stories share (a story that saves a backend takes its own, `backendOperationsFor`). */
+/** The backends' roots shared by stories that never save a backend; a story that saves one takes its own (`backendOperationsFor`). */
 export const backendOperations = backendOperationsFor();

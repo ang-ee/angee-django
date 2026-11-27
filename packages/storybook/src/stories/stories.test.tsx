@@ -13,7 +13,7 @@ import type { ComponentType } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import preview from "../../.storybook/preview";
 import * as FormViewStories from "./FormView.stories";
-import { backendOperationsFor, repairDefaults } from "./implementation-fixtures";
+import { repairDefaults } from "./implementation-fixtures";
 import * as ListViewStories from "./ListView.stories";
 import * as RefusedSubmitStories from "./RefusedSubmit.stories";
 
@@ -180,15 +180,6 @@ test("Views/FormView / Implementation Key Not Registered marks Backend, says it 
 
 test("Views/FormView / Implementation Key Not Registered, Create-only offers Backend once more, switches its config fields as the read answers, and saves what is shown", async () => {
   const said = consoleMessages();
-  // The fixture answers the read in the contract's shape the server's read pins: per choice, defaults holding the
-  // config field alone; a registered backend is refused as the write is.
-  const backendOperations = backendOperationsFor();
-  const asked = await Promise.resolve(backendOperations.impl_choices!({
-    model: "storage.Backend", field: "backend_class", record: "backend-2" }, {} as never));
-  expect((asked as { key: string; defaults: unknown }[]).map(({ key, defaults }) => [key, defaults]))
-    .toEqual([["local", repairDefaults.local], ["s3", repairDefaults.s3]]);
-  expect(() => backendOperations.impl_choices!({ model: "storage.Backend", field: "backend_class", record: "backend-1" },
-    {} as never)).toThrow("Implementation selection is create-only.");
   // The composed story's own schema (merged over the file's), whose store this story's save writes.
   const ownSchema = formView.ImplementationKeyNotRegisteredCreateOnly.parameters.angeeFixture.schemas.public!;
   const writes = vi.spyOn(ownSchema as { fetch: typeof fetch }, "fetch");
@@ -220,10 +211,14 @@ test("Views/FormView / Implementation Key Not Registered, Create-only offers Bac
 
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull());
-  // The wire request's body: the update's input is exactly the selector and the config the form showed.
-  const update = writes.mock.calls.map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as {
+  const requests = writes.mock.calls.map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as {
     query?: string; variables?: Record<string, unknown>;
-  }).find((request) => request.query?.includes("update_backends_by_pk"));
+  });
+  // The form asked what choosing each implementation sets on this record, the backend it shows.
+  expect(requests.find((request) => request.query?.includes("BaseImplRepairChoices"))?.variables)
+    .toEqual({ model: "storage.Backend", field: "backend_class", record: "backend-2" });
+  // The wire request's body: the update's input is exactly the selector and the config the form showed.
+  const update = requests.find((request) => request.query?.includes("update_backends_by_pk"));
   const input = Object.values(update?.variables ?? {}).find((value) => typeof value === "object" && value !== null
     && "backend_class" in value);
   expect(input).toEqual({ backend_class: "S3", config: repairDefaults.s3.config });
