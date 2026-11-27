@@ -1847,6 +1847,7 @@
     "groups": "brand_kits_groups",
     "groupsCount": "brand_kits_groups_count",
     "list": "brand_kits",
+    "repairChoices": null,
     "save": null,
     "update": "update_brand_kits_by_pk"
    },
@@ -3369,6 +3370,7 @@
     "groups": "message_templates_groups",
     "groupsCount": "message_templates_groups_count",
     "list": "message_templates",
+    "repairChoices": null,
     "save": null,
     "update": "update_message_templates_by_pk"
    },

@@ -1938,7 +1938,7 @@ def test_a_repair_read_answers_as_the_update_does_for_whom_the_create_flow_admit
     """
 
     def side_by_side(actor_kind: str) -> tuple[tuple[str, str] | str, tuple[str, str] | str]:
-        slug = f"agree-{root}-{selector}-{admission}-{actor_kind}".replace("_", "-")
+        slug = f"agree-{root[:12]}-{selector[:4]}-{admission}-{actor_kind}".replace("_", "-")
         row = make_integration(slug, model=model)
         store_column(field.model, row.pk, field.column, "retired")
         actor = {
