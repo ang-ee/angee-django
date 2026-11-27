@@ -32,6 +32,7 @@ from rebac.testing import install_schema
 from angee.base.models.identity import public_id_of
 from angee.graphql.testing.documents import GraphQLDocumentRead, execute_schema, measure_graphql_document, result_data
 from angee.iam.roles import subject_permitted
+from angee.messaging_templates.engine import NOT_A_TEMPLATE
 from angee.messaging_templates.models import (
     BASE_LAYOUT,
     SHIPPED_DEFAULT_MESSAGE,
@@ -297,7 +298,7 @@ def test_the_test_send_answers_as_the_frameworks_actions_do(installed: Any) -> N
         message = apps.get_model("messaging", "Message")._base_manager.get(sqid=sent["id"])
     assert sent == {"ok": True, "message": "A test of this message template is queued.", "code": None,
                     "id": message.sqid, "validation_errors": None}
-    assert {key: answer(admin, block)[key] for key in ("ok", "code")} == {"ok": False, "code": "not_a_template"}
+    assert {key: answer(admin, block)[key] for key in ("ok", "code")} == {"ok": False, "code": NOT_A_TEMPLATE}
     refused = answer(admin, unrenderable)
     assert (refused["ok"], refused["id"]) == (False, None) and refused["message"].startswith("name ")
     unknown_kit = answer(admin, template, kit="bkt_unknown")

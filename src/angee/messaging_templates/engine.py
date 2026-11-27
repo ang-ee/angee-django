@@ -159,7 +159,7 @@ class RenderBudget:
         """Raise :class:`RenderBudgetExceeded` if the budget was ever passed."""
 
         if self.exceeded:
-            raise RenderBudgetExceeded(BUDGET_EXCEEDED_MESSAGE, code="render_budget", params=self.limits)
+            raise RenderBudgetExceeded(BUDGET_EXCEEDED_MESSAGE, code=RENDER_BUDGET_EXCEEDED, params=self.limits)
 
     @contextmanager
     def spend(self) -> Iterator[RenderBudget]:
@@ -325,6 +325,30 @@ VALUE_NOT_PRINTED = "value_not_printed"
 INVALID_VALUES = "invalid_values"
 """The code of the values a render refuses to read: not JSON, a shape or a value its declarations do not admit, a
 required value missing, a number a float does not hold, a moment the date rules refuse."""
+
+NOT_A_TEMPLATE = "not_a_template"
+"""The code of a send of a layout, block or part, which only a template can be (``send_refusal``)."""
+
+NOT_EFFECTIVE = "not_effective"
+"""The code of a send of a row that is not what renders for its kind, key and language (``send_refusal``)."""
+
+VALUES_TOO_LARGE = "values_too_large"
+"""The code of values over the JSON size a render reads."""
+
+MESSAGE_TEMPLATE_REFUSED = "message_template_refused"
+"""The code of a row the walk refuses to render."""
+
+RENDER_BUDGET_EXCEEDED = "render_budget"
+"""The code of a render pass that spent its ``RenderBudget`` (:class:`RenderBudgetExceeded`)."""
+
+SUBJECT_TOO_LONG = "subject_too_long"
+"""The code of a rendered subject longer than a mail carries."""
+
+NO_BRAND_KIT = "no_brand_kit"
+"""The code of a render with no kit named and no default kit the reader reads."""
+
+RENDER_FAILED = "render_failed"
+"""The code of any other failure of a render, logged with its traceback first."""
 
 
 def _link(value: Any) -> tuple[str, str | None]:

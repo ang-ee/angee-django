@@ -41,7 +41,13 @@ from angee.messaging.constants import DELIVER_MESSAGE_TASK
 from angee.messaging.managers import ChannelManager, MessageManager
 from angee.messaging.tasks import deliver_message
 from angee.messaging.testing.models import Channel, Handle, Message, Part, Recipient
-from angee.messaging_templates.engine import INVALID_VALUES, VALUE_NOT_LINKABLE, VALUE_NOT_PRINTED
+from angee.messaging_templates.engine import (
+    INVALID_VALUES,
+    NOT_A_TEMPLATE,
+    NOT_EFFECTIVE,
+    VALUE_NOT_LINKABLE,
+    VALUE_NOT_PRINTED,
+)
 from angee.messaging_templates.testing.models import MessageTemplate
 from angee.messaging_templates.walker import TemplateWalker, TemplateWarningCode
 from angee.provenance.context import changeset_model
@@ -220,8 +226,8 @@ def test_a_layout_block_or_overridden_default_is_refused_before_anything_renders
     _greeting(key="tests.shipped")
     with system_context(reason="tests.messaging_templates.send.load"):
         refused = {
-            "not_a_template": [MessageTemplate.objects.get(kind="layout"), _row("block", "card"), _row("part", "end")],
-            "not_effective": [MessageTemplate._base_manager.get(pk=shipped.pk)],
+            NOT_A_TEMPLATE: [MessageTemplate.objects.get(kind="layout"), _row("block", "card"), _row("part", "end")],
+            NOT_EFFECTIVE: [MessageTemplate._base_manager.get(pk=shipped.pk)],
         }
     walked, audits = _walks(monkeypatch), _audits()
     for code, rows in refused.items():

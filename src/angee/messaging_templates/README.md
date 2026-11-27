@@ -213,10 +213,13 @@ walk), `value_not_linkable` (a value printed through `url` that gives no link),
 `value_not_printed` (a value passed in `must_print` that a body does not
 print; see [Sending as system work](#sending-as-system-work)), `render_budget` (a pass's `RenderBudget`; the subject and preheader get a
 tenth of a body's), `subject_too_long`, `no_brand_kit`, and `render_failed` for
-any other failure, which is logged with its traceback first. The three value
-refusals a sender is told to handle are the engine's constants, to compare against
-rather than retype: `INVALID_VALUES`, `VALUE_NOT_LINKABLE` and `VALUE_NOT_PRINTED`
-(`angee.messaging_templates.engine`). Every string value,
+any other failure, which is logged with its traceback first. Every code
+`send_as_system` returns from this addon is a constant of
+`angee.messaging_templates.engine`, to compare against rather than retype: the
+row's `NOT_A_TEMPLATE` and `NOT_EFFECTIVE`, and the render's `INVALID_VALUES`,
+`VALUES_TOO_LARGE`, `MESSAGE_TEMPLATE_REFUSED`, `VALUE_NOT_LINKABLE`,
+`VALUE_NOT_PRINTED`, `RENDER_BUDGET_EXCEEDED`, `SUBJECT_TOO_LONG`, `NO_BRAND_KIT` and
+`RENDER_FAILED`; what compose refuses is messaging's. Every string value,
 and the subject and preheader, drop the control characters and the bidirectional
 overrides and isolates (`UNPRINTED`). A sender picks the row with
 `effective("template", key, person=recipient)` and renders it in its own scope:
