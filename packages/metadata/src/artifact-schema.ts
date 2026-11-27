@@ -26,6 +26,11 @@ const ResourceFieldSchema = v.looseObject({
   aggregatable: v.boolean(),
   creatable: v.boolean(),
   updatable: v.boolean(),
+  /**
+   * A create-only implementation selector (`ImplClassField(create_only=True)`): its update input
+   * carries it, and its model's save allows a change only while the stored key is not registered.
+   */
+  createOnly: v.optional(v.boolean()),
   requiredOnCreate: v.boolean(),
   nullable: v.optional(v.boolean()),
   /** The backend `TrashMixin` flag: its resource offers the shared trash verbs. */

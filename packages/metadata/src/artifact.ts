@@ -44,6 +44,7 @@ export type ModelFieldMetadata =
     | "aggregatable"
     | "creatable"
     | "updatable"
+    | "createOnly"
     | "requiredOnCreate"
     | "nullable"
     | "trashable"

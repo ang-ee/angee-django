@@ -1381,6 +1381,21 @@ describe("FormView", () => {
       expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
       expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
     }
+    // Create-only is the model's own fact in its metadata: the page states nothing and the field locks the same.
+    {
+      cleanup();
+      const createOnly = { ...backend, createOnly: true };
+      const published = testDataResource("notes.Note", { fields: [createOnly], implFields: ["backend"] });
+      renderWithProviders(<FormView resource="notes.Note" id="note-1"
+        fields={[{ name: "title", title: true }, { name: "backend", label: "Backend" }]}
+        acknowledgedSource={{ record, values: record }} />,
+      { types: { NoteType: { resource: published, fields: { backend: createOnly } } } });
+      expect(await screen.findByLabelText("Not registered: Backend")).toBeTruthy();
+      const note = screen.getByText("Its implementation cannot run. It cannot be changed here.");
+      expect(note.className).toContain("sr-only");
+      expect(document.querySelector(`[aria-describedby~="${note.id}"]`)).not.toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Backend" })).toBeNull();
+    }
   });
 
   test("a create form never marks an implementation key; a picked registered one clears the mark until discarded", async () => {

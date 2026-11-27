@@ -320,7 +320,7 @@ function columnWithMetadataDefaults<TRow extends object>(
   };
 }
 
-/** Apply metadata-derived field labels and enum options without overriding props. */
+/** Apply metadata-derived field labels, enum options and create-only selectors without overriding props. */
 export function fieldsWithMetadataDefaults(
   fields: readonly FieldDescriptor[],
   metadata: ModelMetadata | null,
@@ -343,6 +343,8 @@ export function fieldsWithMetadataDefaults(
       ...field,
       // A parent record's generated update cannot write another model's fields.
       ...(resolved && field.name.includes(".") ? { readOnly: true } : {}),
+      // A create-only selector is the model's fact, so no page restates it.
+      ...(field.createOnly === undefined && fieldMetadata?.createOnly ? { createOnly: true } : {}),
       ...(widget !== field.widget ? { widget } : {}),
       label: fieldLabel(field.name, fieldMetadata, field.label),
       ...(field.currencyField === undefined && fieldMetadata?.currencyField

@@ -101,6 +101,14 @@ describe("resource metadata defaults", () => {
     expect(fieldsWithMetadataDefaults([{ name: "title", label: "Title" }], scoped)[0]?.label).toBe("Subject");
     expect(NOTE_METADATA.fields.title?.label).toBeUndefined();
   });
+  test("a create-only selector the metadata publishes is create-only in the form, unless the page says otherwise", () => {
+    const published: ModelMetadata = { ...NOTE_METADATA, fields: {
+      ...NOTE_METADATA.fields, title: { ...NOTE_METADATA.fields.title!, createOnly: true },
+    } };
+    expect(fieldsWithMetadataDefaults([{ name: "title" }], published)[0]?.createOnly).toBe(true);
+    expect(fieldsWithMetadataDefaults([{ name: "title", createOnly: false }], published)[0]?.createOnly).toBe(false);
+    expect(fieldsWithMetadataDefaults([{ name: "title" }], NOTE_METADATA)[0]?.createOnly).toBeUndefined();
+  });
   test("resolves an authored subline through the same column descriptor owner", () => {
     const [column] = columnsWithMetadataDefaults(
       [{ field: "title", subline: "vendor.name" }],
