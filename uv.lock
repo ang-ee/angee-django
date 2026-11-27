@@ -2179,6 +2179,7 @@ dependencies = [
     { name = "angee-timeline" },
     { name = "angee-web" },
     { name = "django-compose" },
+    { name = "django-cte" },
 ]
 
 [package.metadata]
@@ -2194,6 +2195,7 @@ requires-dist = [
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev14,<0.2" },
+    { name = "django-cte", specifier = ">=5,<6" },
 ]
 
 [[package]]

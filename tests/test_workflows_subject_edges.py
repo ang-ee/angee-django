@@ -16,7 +16,6 @@ from angee.workflows.testing.models import StepRun, Trigger, TriggerEvent, Workf
 from angee.workflows.triggers import RecordChanged
 from tests.conftest import make_addon
 from tests.mtidemo.models import MtiChild, MtiParent
-from tests.test_workflows_children import child_graph as child_graph
 from tests.workflow_steps import document
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("workflow_step_classes")]

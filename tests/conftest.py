@@ -86,6 +86,7 @@ from tests import (
     integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
 )
 from tests.extcontrib.models import Role
+from tests.workflow_steps import child_graph as child_graph
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 # Settings reloads in the suite compose through ProjectContract, which starts
