@@ -188,7 +188,10 @@ export function headerPresses<TRow extends Row>(column: TableColumn<TRow, unknow
  * in the order the list's order holds it: a press on a grouping column keeps every key its axis
  * does not share, the records' keys and another level's, so turning the groups leaves the
  * records' order alone; a press on another column keeps the keys a group axis shares, so it
- * never drops them and never turns the groups. Given `desc`, it is the order choosing a column
+ * never drops them and never turns those groups. A level of buckets (a date's months, quarters
+ * or weeks) shares no key: its groups follow the date they bucket, a key the records order by,
+ * so a press on another column drops it as it drops any records' key, and those groups fall back
+ * to ascending. Given `desc`, it is the order choosing a column
  * no group shares in that direction sets (the pane toolbar's Order select, `listOrderChoice`).
  */
 export function pressedSorting<TRow extends Row>(

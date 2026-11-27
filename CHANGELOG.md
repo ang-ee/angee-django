@@ -107,7 +107,10 @@ live in code docstrings.
   focus while the columns are built again for the turned groups (a header is a
   stable component). A date's months, quarters and weeks follow the date they
   bucket, while the date's own header keeps its sort and its three-state press,
-  since a bucket's records do not share it. A list grouped by a field no read
+  since a bucket's records do not share it. For the same reason a press on
+  another column still drops that date with the records' other keys, so on a
+  list grouped by month it turns the months back to ascending; keeping the date
+  there is a later change. A list grouped by a field no read
   can sort by still orders its groups in the table: `buildColumns` sorts every
   axis's column there and keeps its header's press as `meta.pressable`, which
   only the sort button reads (`headerPresses`). Parties: a list's "Select all"
